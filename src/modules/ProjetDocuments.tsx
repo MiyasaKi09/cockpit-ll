@@ -9,59 +9,17 @@ import { useCallback, useEffect, useState } from 'react'
 import type { Projet } from '../types'
 import { useStore } from '../store'
 import { Badge, Btn, Card, EmptyState, Field, Select, TextInput } from '../ui'
-import { fold, todayISO } from '../util'
-
-// ---------- File System Access : petites déclarations ----------
-
-interface FSFileHandle {
-  kind: 'file'
-  name: string
-  getFile(): Promise<File>
-}
-interface FSDirHandle {
-  kind: 'directory'
-  name: string
-  values(): AsyncIterable<FSFileHandle | FSDirHandle>
-  getDirectoryHandle(name: string, opts?: { create?: boolean }): Promise<FSDirHandle>
-  getFileHandle(name: string, opts?: { create?: boolean }): Promise<FSFileHandle & { createWritable(): Promise<{ write(d: Blob): Promise<void>; close(): Promise<void> }> }>
-  queryPermission?(d: { mode: string }): Promise<string>
-  requestPermission?(d: { mode: string }): Promise<string>
-}
-
-const supporte = typeof window !== 'undefined' && 'showDirectoryPicker' in window
-
-// persistance du handle racine en IndexedDB (localStorage ne peut pas)
-const DB = 'cockpit-ll-fs'
-function idb(): Promise<IDBDatabase> {
-  return new Promise((res, rej) => {
-    const req = indexedDB.open(DB, 1)
-    req.onupgradeneeded = () => req.result.createObjectStore('handles')
-    req.onsuccess = () => res(req.result)
-    req.onerror = () => rej(req.error)
-  })
-}
-async function sauverRacine(h: FSDirHandle) {
-  const db = await idb()
-  await new Promise((res, rej) => {
-    const tx = db.transaction('handles', 'readwrite')
-    tx.objectStore('handles').put(h, 'racine')
-    tx.oncomplete = () => res(null)
-    tx.onerror = () => rej(tx.error)
-  })
-}
-async function lireRacine(): Promise<FSDirHandle | null> {
-  try {
-    const db = await idb()
-    return await new Promise((res, rej) => {
-      const tx = db.transaction('handles', 'readonly')
-      const req = tx.objectStore('handles').get('racine')
-      req.onsuccess = () => res((req.result as FSDirHandle) || null)
-      req.onerror = () => rej(req.error)
-    })
-  } catch {
-    return null
-  }
-}
+import { todayISO } from '../util'
+import {
+  choisirRacine as choisirRacineFS,
+  lireRacine,
+  nomConforme as nomConformeFS,
+  rangerFichier,
+  slugProjet,
+  supporteFS,
+  verifierPermission,
+  type FSDirHandle,
+} from '../fsdrive'
 
 // ---------- arborescence normalisée de l'agence ----------
 
@@ -81,9 +39,7 @@ const ARBORESCENCE: { dossier: string; description: string; phases?: string[] }[
 
 const TYPES_DOC = ['ADM', 'PC', 'CR', 'DCE', 'PLAN', 'FACT', 'DEVIS', 'PHOTO', 'MAIL', 'NOTE', 'CCTP', 'SITU']
 
-function slugProjet(p: Projet): string {
-  return `${p.id}_${fold(p.nom).replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40)}`
-}
+
 
 interface EtatDossier {
   dossier: string
@@ -112,12 +68,9 @@ export default function ProjetDocuments({ projet: p }: { projet: Projet }) {
 
   const scanner = useCallback(async (h: FSDirHandle) => {
     try {
-      if (h.requestPermission) {
-        const perm = await h.requestPermission({ mode: 'readwrite' })
-        if (perm !== 'granted') {
-          setMessage('Accès au dossier refusé.')
-          return
-        }
+      if (!(await verifierPermission(h))) {
+        setMessage('Accès au dossier refusé.')
+        return
       }
       const dossierProjet = await h.getDirectoryHandle(slugProjet(p), { create: false }).catch(() => null)
       if (!dossierProjet) {
@@ -152,13 +105,10 @@ export default function ProjetDocuments({ projet: p }: { projet: Projet }) {
   }, [racine, scanner])
 
   const choisirRacine = async () => {
-    try {
-      const h = (await (window as unknown as { showDirectoryPicker(o?: object): Promise<FSDirHandle> }).showDirectoryPicker({ mode: 'readwrite' }))
-      await sauverRacine(h)
+    const h = await choisirRacineFS()
+    if (h) {
       setRacine(h)
       setMessage('')
-    } catch {
-      /* annulé */
     }
   }
 
@@ -174,24 +124,13 @@ export default function ProjetDocuments({ projet: p }: { projet: Projet }) {
     }
   }
 
-  const nomConforme = (f: File): string => {
-    const date = todayISO().replaceAll('-', '')
-    const o = fold(objet || f.name.replace(/\.[^.]+$/, '')).replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
-    const ext = f.name.includes('.') ? f.name.slice(f.name.lastIndexOf('.')) : ''
-    return `${date}_${p.id}_${type}_${o}${ext}`
-  }
+  const nomConforme = (f: File): string => nomConformeFS(p, type, objet, f.name)
 
   const deposer = async () => {
     if (!racine || !fichier) return
     try {
-      const dossierProjet = await racine.getDirectoryHandle(slugProjet(p), { create: true })
-      const sous = await dossierProjet.getDirectoryHandle(dossierCible, { create: true })
-      const nom = nomConforme(fichier)
-      const fh = await sous.getFileHandle(nom, { create: true })
-      const w = await fh.createWritable()
-      await w.write(fichier)
-      await w.close()
-      setMessage(`Rangé : ${dossierCible}/${nom}`)
+      const chemin = await rangerFichier(racine, p, dossierCible, fichier, nomConforme(fichier))
+      setMessage(`Rangé : ${chemin}`)
       setFichier(null)
       setObjet('')
       await scanner(racine)
@@ -205,7 +144,7 @@ export default function ProjetDocuments({ projet: p }: { projet: Projet }) {
     ?.filter((x) => x.nbFichiers > 0 && x.dernier)
     .sort((a, b) => (b.dernier || '').localeCompare(a.dernier || ''))[0]
 
-  if (!supporte) {
+  if (!supporteFS) {
     return (
       <Card titre="Documents du projet">
         <div className="pill-note">

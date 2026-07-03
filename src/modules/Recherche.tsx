@@ -62,7 +62,7 @@ function chercher(state: AppState, q: string): Resultat[] {
         groupe: 'Artisans',
         titre: a.nom,
         detail: a.lots.join(', '),
-        lien: '#/ressources',
+        lien: `#/ressources/artisan/${a.id}`,
         projets: projetsUtilisantArtisan(state, a.id, a.nom),
       })
   }
@@ -73,7 +73,7 @@ function chercher(state: AppState, q: string): Resultat[] {
         groupe: 'Matériaux',
         titre: m.nom,
         detail: m.tags.join(', '),
-        lien: '#/ressources',
+        lien: `#/ressources/materiau/${m.id}`,
         projets: projetsUtilisantMateriau(state, m.id),
       })
   }

@@ -137,6 +137,20 @@ function itemsATraiter(state: ReturnType<typeof useStore>['state'], today: strin
       date: r.date,
     })
   }
+  // notes de journal « à faire » non réglées
+  for (const p of state.projets) {
+    for (const n of p.journal) {
+      if (!n.tags.includes('a-faire') || n.fait) continue
+      items.push({
+        id: `note-${n.id}`,
+        action: n.texte.length > 90 ? n.texte.slice(0, 90) + '…' : n.texte,
+        detail: `${p.id} · note du ${fmtDate(n.date)}${n.auteur ? ` (${n.auteur})` : ''} · à cocher dans le journal`,
+        lien: `#/projets/${p.id}/journal`,
+        date: n.date,
+        pour: n.auteur,
+      })
+    }
+  }
   items.sort((a, b) => (a.date || '9999').localeCompare(b.date || '9999'))
   return items
 }

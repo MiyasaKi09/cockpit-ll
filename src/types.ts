@@ -36,6 +36,10 @@ export interface NoteJournal {
   auteur?: string
   texte: string
   tags: string[]
+  /** pour les notes « à faire » (tag a-faire) : cochée quand c'est réglé */
+  fait?: boolean
+  /** chemin du fichier rangé dans le Drive (photos importées) */
+  fichier?: string
 }
 
 export interface Projet {

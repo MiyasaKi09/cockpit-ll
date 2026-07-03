@@ -32,7 +32,7 @@ import {
   useToday,
 } from '../ui'
 import type { Tone } from '../ui'
-import { fmtHeures, fmtMoney, fmtPct, fold } from '../util'
+import { fmtHeures, fmtMoney, fmtPct, fold, todayISO, uid } from '../util'
 import {
   CRITERES_COMPLEXITE,
   LIBELLES_PHASES,
@@ -820,6 +820,7 @@ function ModalEditionProjet({ projet, onClose }: { projet: Projet; onClose: () =
 
   const enregistrer = () => {
     if (nom.trim() === '') return
+    const livraison = statut === 'Livré' && projet.statut !== 'Livré'
     update((d) => {
       const pr = d.projets.find((x) => x.id === projet.id)
       if (!pr) return
@@ -832,7 +833,33 @@ function ModalEditionProjet({ projet, onClose }: { projet: Projet; onClose: () =
       pr.ouvrage = ouvrage || null
       pr.montantTravauxHT = montant
       pr.notes = notes.trim() || undefined
+
+      // à la livraison, le projet devient automatiquement une référence
+      if (livraison && !d.references.some((r) => fold(r.nom) === fold(pr.nom))) {
+        const finAOR = pr.phases.find((ph) => ph.code === 'AOR')?.fin
+        const tagsJournal = [...new Set(pr.journal.flatMap((n) => n.tags))]
+          .filter((t) => !['a-faire', 'mail', 'photo'].includes(t))
+          .slice(0, 4)
+        d.references.push({
+          id: uid('ref'),
+          nom: pr.nom,
+          lieu: pr.adresse,
+          annee: Number((finAOR || todayISO()).slice(0, 4)),
+          typeMO: pr.typeMO,
+          moa: pr.moa,
+          montantTravauxHT: pr.montantTravauxHT,
+          surfaceM2: null,
+          mission: pr.missionsComplHT > 0 ? 'Base + missions compl.' : 'Base',
+          motsCles: [...new Set([...(pr.ouvrage ? [fold(pr.ouvrage.replace(/^\d+-\s*/, '')).split(' ')[0]] : []), ...tagsJournal])],
+          attestation: false,
+          notes: `Référence créée automatiquement à la livraison de ${pr.id} — compléter surface et photos, réclamer l'attestation de bonne exécution.`,
+        })
+      }
     })
+    if (livraison)
+      alert(
+        `${projet.id} livré : la référence « ${nom.trim()} » a été créée dans la base (surface et attestation à compléter).`,
+      )
     onClose()
   }
 

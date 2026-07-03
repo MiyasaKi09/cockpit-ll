@@ -6,7 +6,7 @@ import { useState } from 'react'
 import type { Projet } from '../types'
 import { useStore } from '../store'
 import { Badge, Btn, Card, EmptyState, Field, Modal, Select, Table, TextInput } from '../ui'
-import { fmtDate, uid } from '../util'
+import { fmtDate, fold, todayISO, uid } from '../util'
 
 export default function ProjetRessources({ projet: p }: { projet: Projet }) {
   const { state, update } = useStore()
@@ -33,6 +33,74 @@ export default function ProjetRessources({ projet: p }: { projet: Projet }) {
 }
 
 type Maj = (fn: (pr: Projet) => void) => void
+
+/** rattachement en un geste : tape le nom → Entrée. Existant = rattaché,
+ *  inconnu = créé puis rattaché. Suggestions au fil de la frappe. */
+function QuickAttach({
+  placeholder,
+  disponibles,
+  onExistant,
+  onCreer,
+}: {
+  placeholder: string
+  disponibles: { id: string; nom: string; detail?: string }[]
+  onExistant: (id: string) => void
+  onCreer: (nom: string) => void
+}) {
+  const [q, setQ] = useState('')
+  const cible = fold(q)
+  const matches = cible
+    ? disponibles.filter((d) => fold(d.nom).includes(cible)).slice(0, 5)
+    : []
+  const exact = disponibles.find((d) => fold(d.nom) === cible)
+
+  const valider = () => {
+    if (!q.trim()) return
+    if (exact) onExistant(exact.id)
+    else if (matches.length === 1) onExistant(matches[0].id)
+    else onCreer(q.trim())
+    setQ('')
+  }
+
+  return (
+    <div style={{ marginTop: 10 }}>
+      <div className="toolbar" style={{ marginBottom: 0 }}>
+        <input
+          className="input"
+          value={q}
+          placeholder={placeholder}
+          style={{ maxWidth: 320 }}
+          onChange={(e) => setQ(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') valider()
+          }}
+        />
+        <Btn small kind="primary" onClick={valider} disabled={!q.trim()}>
+          {exact || matches.length === 1 ? 'Rattacher' : q.trim() ? 'Créer & rattacher' : 'Ajouter'}
+        </Btn>
+      </div>
+      {matches.length > 0 && !exact && (
+        <div className="small" style={{ marginTop: 6 }}>
+          {matches.map((m) => (
+            <button
+              key={m.id}
+              className="badge badge-info"
+              style={{ border: 'none', cursor: 'pointer', marginRight: 4 }}
+              onClick={() => {
+                onExistant(m.id)
+                setQ('')
+              }}
+            >
+              + {m.nom}
+              {m.detail ? ` (${m.detail})` : ''}
+            </button>
+          ))}
+          <span className="muted"> — ou Entrée pour créer « {q.trim()} »</span>
+        </div>
+      )}
+    </div>
+  )
+}
 
 // ------------------------------------------------------------------
 // Liens & documents
@@ -95,9 +163,7 @@ function CarteLiens({ projet: p, maj }: { projet: Projet; maj: Maj }) {
 // ------------------------------------------------------------------
 
 function CarteMateriauxLies({ projet: p, maj }: { projet: Projet; maj: Maj }) {
-  const { state } = useStore()
-  const [choix, setChoix] = useState('')
-  const [modalCreation, setModalCreation] = useState(false)
+  const { state, update } = useStore()
 
   const lies = p.materiauxIds
     .map((id) => state.materiaux.find((m) => m.id === id))
@@ -113,7 +179,7 @@ function CarteMateriauxLies({ projet: p, maj }: { projet: Projet; maj: Maj }) {
           {lies.map((m) => (
             <tr key={m.id}>
               <td>
-                <strong>{m.nom}</strong>
+                <a href={`#/ressources/materiau/${m.id}`}><strong>{m.nom}</strong></a>
                 {m.coutM2 != null && <div className="muted small">{m.coutM2} €/m²{m.fournisseur ? ` · ${m.fournisseur}` : ''}</div>}
               </td>
               <td>
@@ -140,75 +206,23 @@ function CarteMateriauxLies({ projet: p, maj }: { projet: Projet; maj: Maj }) {
           ))}
         </Table>
       )}
-      <div className="toolbar" style={{ marginTop: 10, marginBottom: 0 }}>
-        <Select
-          value={choix}
-          onChange={setChoix}
-          options={[{ value: '', label: '— rattacher un matériau —' }, ...disponibles.map((m) => ({ value: m.id, label: m.nom }))]}
-          style={{ maxWidth: 240 }}
-        />
-        <Btn
-          small
-          kind="primary"
-          disabled={!choix}
-          onClick={() => {
-            maj((pr) => { if (choix && !pr.materiauxIds.includes(choix)) pr.materiauxIds.push(choix) })
-            setChoix('')
-          }}
-        >
-          Rattacher
-        </Btn>
-        <Btn small onClick={() => setModalCreation(true)}>+ Nouveau</Btn>
-      </div>
-      {modalCreation && (
-        <CreationRapideMateriau
-          onClose={() => setModalCreation(false)}
-          onCree={(id) => maj((pr) => { pr.materiauxIds.push(id) })}
-        />
-      )}
-    </Card>
-  )
-}
-
-function CreationRapideMateriau({ onClose, onCree }: { onClose: () => void; onCree: (id: string) => void }) {
-  const { update } = useStore()
-  const [nom, setNom] = useState('')
-  const [tags, setTags] = useState('')
-
-  return (
-    <Modal titre="Nouveau matériau (création rapide)" onClose={onClose}>
-      <Field label="Nom">
-        <TextInput value={nom} onChange={setNom} placeholder="Ex. Bardage mélèze à claire-voie" />
-      </Field>
-      <Field label="Tags (virgules)">
-        <TextInput value={tags} onChange={setTags} placeholder="bois, façade, biosourcé" />
-      </Field>
-      <p className="muted small" style={{ marginTop: 8 }}>
-        La fiche complète (fournisseur, coût, FDES) se complète plus tard dans Matériaux & artisans.
+      <QuickAttach
+        placeholder="Tapez un matériau (ex. « bardage mélèze ») puis Entrée…"
+        disponibles={disponibles.map((m) => ({ id: m.id, nom: m.nom, detail: m.tags.slice(0, 2).join(', ') }))}
+        onExistant={(id) => maj((pr) => { if (!pr.materiauxIds.includes(id)) pr.materiauxIds.push(id) })}
+        onCreer={(nom) => {
+          const id = uid('ma')
+          update((d) => {
+            d.materiaux.push({ id, nom, tags: ['à compléter'], notes: `Créé depuis ${p.id} (${fmtDate(todayISO())}).` })
+            const pr = d.projets.find((x) => x.id === p.id)
+            if (pr) pr.materiauxIds.push(id)
+          })
+        }}
+      />
+      <p className="muted small" style={{ marginTop: 6 }}>
+        Fiche complète (coût, FDES…) : cliquez le nom du matériau.
       </p>
-      <div className="form-foot">
-        <Btn onClick={onClose}>Annuler</Btn>
-        <Btn
-          kind="primary"
-          disabled={!nom.trim()}
-          onClick={() => {
-            const id = uid('ma')
-            update((d) => {
-              d.materiaux.push({
-                id,
-                nom: nom.trim(),
-                tags: tags.split(',').map((t) => t.trim()).filter(Boolean),
-                notes: `Créé depuis l'espace projet (${fmtDate(new Date().toISOString().slice(0, 10))}).`,
-              })
-            })
-            onCree(id)
-            onClose()
-          }}
-        >
-          Créer et rattacher
-        </Btn>
-      </div>
-    </Modal>
+    </Card>
   )
 }
 
@@ -217,8 +231,7 @@ function CreationRapideMateriau({ onClose, onCree }: { onClose: () => void; onCr
 // ------------------------------------------------------------------
 
 function CarteArtisansLies({ projet: p, maj }: { projet: Projet; maj: Maj }) {
-  const { state } = useStore()
-  const [choix, setChoix] = useState('')
+  const { state, update } = useStore()
 
   const lies = p.artisanIds
     .map((id) => state.artisans.find((a) => a.id === id))
@@ -234,7 +247,7 @@ function CarteArtisansLies({ projet: p, maj }: { projet: Projet; maj: Maj }) {
           {lies.map((a) => (
             <tr key={a.id}>
               <td>
-                <strong>{a.nom}</strong>
+                <a href={`#/ressources/artisan/${a.id}`}><strong>{a.nom}</strong></a>
                 {a.contactNom && <div className="muted small">{a.contactNom}{a.tel ? ` · ${a.tel}` : ''}</div>}
               </td>
               <td>
@@ -255,26 +268,22 @@ function CarteArtisansLies({ projet: p, maj }: { projet: Projet; maj: Maj }) {
           ))}
         </Table>
       )}
-      <div className="toolbar" style={{ marginTop: 10, marginBottom: 0 }}>
-        <Select
-          value={choix}
-          onChange={setChoix}
-          options={[{ value: '', label: '— rattacher un artisan —' }, ...disponibles.map((a) => ({ value: a.id, label: `${a.nom} (${a.lots.join(', ')})` }))]}
-          style={{ maxWidth: 260 }}
-        />
-        <Btn
-          small
-          kind="primary"
-          disabled={!choix}
-          onClick={() => {
-            maj((pr) => { if (choix && !pr.artisanIds.includes(choix)) pr.artisanIds.push(choix) })
-            setChoix('')
-          }}
-        >
-          Rattacher
-        </Btn>
-        <a href="#/ressources" className="small" style={{ marginLeft: 6 }}>Annuaire complet →</a>
-      </div>
+      <QuickAttach
+        placeholder="Tapez une entreprise (ex. « Martin BTP ») puis Entrée…"
+        disponibles={disponibles.map((a) => ({ id: a.id, nom: a.nom, detail: a.lots.slice(0, 2).join(', ') }))}
+        onExistant={(id) => maj((pr) => { if (!pr.artisanIds.includes(id)) pr.artisanIds.push(id) })}
+        onCreer={(nom) => {
+          const id = uid('ar')
+          update((d) => {
+            d.artisans.push({ id, nom, lots: [], notes: `Créé depuis ${p.id} (${fmtDate(todayISO())}).` })
+            const pr = d.projets.find((x) => x.id === p.id)
+            if (pr) pr.artisanIds.push(id)
+          })
+        }}
+      />
+      <p className="muted small" style={{ marginTop: 6 }}>
+        Fiche complète (lots, décennale…) : cliquez le nom. <a href="#/ressources">Annuaire complet →</a>
+      </p>
     </Card>
   )
 }

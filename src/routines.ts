@@ -33,6 +33,7 @@ export const CONTRAT_SITUATIONS = `{
       "montantCumulHT": 13725,
       "confiance": 0.85,
       "source": "mail du 02/07/2027 — « Situation n°3 juillet »",
+      "pour": "Julien",
       "notes": "révision de prix mentionnée mais non chiffrée"
     }
   ]
@@ -49,6 +50,7 @@ export const CONTRAT_CONSULTATIONS = `{
       "budgetTravaux": 1800000,
       "dateLimite": "2026-09-15",
       "source": "BOAMP n°26-123456 — alerte du 07/07/2026",
+      "pour": "Zoé",
       "notes": "visite obligatoire, mission base + EXE, jugement 60/40"
     }
   ]

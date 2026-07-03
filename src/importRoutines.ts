@@ -15,6 +15,8 @@ export interface RetourSituation {
   montantCumulHT?: number | null
   confiance?: number | null
   source?: string
+  /** personne concernée (ex. "Julien") — filtre la boîte « À traiter » */
+  pour?: string
   notes?: string
 }
 
@@ -26,6 +28,8 @@ export interface RetourConsultation {
   budgetTravaux?: number | null
   dateLimite?: string | null
   source?: string
+  /** personne concernée (ex. "Zoé") */
+  pour?: string
   notes?: string
 }
 
@@ -77,6 +81,7 @@ export function parseRetourRoutine(brut: string): { retour?: RetourRoutine; erre
         confiance:
           typeof r.confiance === 'number' ? Math.max(0, Math.min(1, r.confiance)) : null,
         source: typeof r.source === 'string' ? r.source : undefined,
+        pour: typeof r.pour === 'string' ? r.pour : undefined,
         notes: typeof r.notes === 'string' ? r.notes : undefined,
       })
     }
@@ -99,6 +104,7 @@ export function parseRetourRoutine(brut: string): { retour?: RetourRoutine; erre
           ? r.dateLimite
           : null,
       source: typeof r.source === 'string' ? r.source : undefined,
+      pour: typeof r.pour === 'string' ? r.pour : undefined,
       notes: typeof r.notes === 'string' ? r.notes : undefined,
     })
   }
@@ -167,6 +173,7 @@ export function importerSituations(draft: AppState, items: RetourSituation[]): R
       confiance: item.confiance ?? null,
       source: item.source || 'import routine',
       dateReception: todayISO(),
+      pour: item.pour,
       notes: item.notes,
     }
     draft.situations.push(sit)
@@ -198,6 +205,7 @@ export function importerConsultations(draft: AppState, items: RetourConsultation
       dateLimite: item.dateLimite ?? null,
       statut: 'a_etudier',
       source: item.source || 'import routine',
+      pour: item.pour,
       notes: item.notes,
     }
     draft.consultations.push(c)

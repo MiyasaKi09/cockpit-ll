@@ -5,6 +5,7 @@ import { useRoute, useToday } from './ui'
 import { alertesActives } from './alerts'
 
 import Cockpit from './modules/Cockpit'
+import BienDemarrer from './modules/BienDemarrer'
 import Projets from './modules/Projets'
 import Situations from './modules/Situations'
 import Facturation from './modules/Facturation'
@@ -23,6 +24,7 @@ const NAV: { groupe: string; items: { path: string; label: string }[] }[] = [
     groupe: 'Pilotage',
     items: [
       { path: '', label: 'Cockpit' },
+      { path: 'demarrer', label: 'Bien démarrer' },
       { path: 'projets', label: 'Projets & marchés' },
       { path: 'situations', label: 'Situations de travaux' },
       { path: 'facturation', label: 'Honoraires & relances' },
@@ -69,6 +71,9 @@ export default function App() {
   switch (section) {
     case '':
       page = <Cockpit />
+      break
+    case 'demarrer':
+      page = <BienDemarrer />
       break
     case 'projets':
       page = <Projets />

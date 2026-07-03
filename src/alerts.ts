@@ -160,6 +160,21 @@ export function computeAlertes(state: AppState, today: string): Alerte[] {
     })
   }
 
+  // --- CR de chantier en attente : réunion passée, CR ni relu ni diffusé.
+  for (const r of state.reunions) {
+    if (r.statut === 'diffuse' || r.date > today) continue
+    const dj = diffDays(r.date, today)
+    alertes.push({
+      id: `cr:${r.id}`,
+      type: 'cr_en_attente',
+      gravite: dj > 3 ? 3 : 2,
+      titre: `CR à sortir — ${r.titre} (${nomProjet(state, r.projetId)})`,
+      detail: `réunion du ${fmtDate(r.date)} · ${r.statut === 'cr_a_relire' ? 'CR en relecture' : 'CR à générer'} · assistant dans l'onglet Chantier`,
+      lien: `#/projets/${r.projetId}/chantier`,
+      date: r.date,
+    })
+  }
+
   // --- Décennales artisans expirées ou expirant sous 30 jours.
   for (const a of state.artisans) {
     if (!a.decennaleFin) continue

@@ -4,6 +4,7 @@
 // Tout est dérivé de l'état : aucune donnée propre au module.
 // ============================================================
 
+import { useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import type { Alerte } from '../types'
 import { useStore } from '../store'
@@ -85,6 +86,115 @@ function RienASignaler({ children }: { children: ReactNode }) {
   return <div className="muted small">{children}</div>
 }
 
+// ---------- boîte « À traiter » ----------
+
+interface ItemATraiter {
+  id: string
+  action: string
+  detail: string
+  lien: string
+  date?: string
+  pour?: string
+}
+
+function itemsATraiter(state: ReturnType<typeof useStore>['state'], today: string): ItemATraiter[] {
+  const items: ItemATraiter[] = []
+  for (const s of state.situations.filter((x) => x.statut === 'a_verifier')) {
+    items.push({
+      id: `sit-${s.id}`,
+      action: `Vérifier la situation — ${s.entreprise} (${s.mois})`,
+      detail: `${s.projetId || 'projet à rattacher'}${s.montantMoisHT != null ? ` · ${fmtMoney(s.montantMoisHT)} HT` : ''} · déposée par la routine situations@`,
+      lien: '#/situations',
+      date: s.dateReception,
+      pour: s.pour,
+    })
+  }
+  for (const c of state.consultations.filter((x) => x.statut === 'a_etudier')) {
+    items.push({
+      id: `ao-${c.id}`,
+      action: `Étudier la consultation — ${c.intitule}`,
+      detail: `${c.acheteur || 'acheteur ?'}${c.dateLimite ? ` · remise le ${fmtDate(c.dateLimite)}` : ''} · avis Go/No-Go à donner`,
+      lien: '#/ao',
+      date: c.dateLimite || undefined,
+      pour: c.pour,
+    })
+  }
+  for (const f of state.factures.filter((x) => x.statut === 'prevue' && x.emission <= today)) {
+    items.push({
+      id: `fac-${f.id}`,
+      action: `Émettre la facture ${f.id} — ${fmtMoney(f.montantHT)} HT`,
+      detail: `${f.projetId} · ${f.libelle} · prévue le ${fmtDate(f.emission)}`,
+      lien: '#/facturation',
+      date: f.emission,
+    })
+  }
+  for (const r of state.reunions.filter((x) => x.statut !== 'diffuse' && x.date <= today)) {
+    items.push({
+      id: `cr-${r.id}`,
+      action: `Sortir le CR — ${r.titre}`,
+      detail: `${r.projetId} · réunion du ${fmtDate(r.date)} · assistant CR dans l'onglet Chantier`,
+      lien: `#/projets/${r.projetId}/chantier`,
+      date: r.date,
+    })
+  }
+  items.sort((a, b) => (a.date || '9999').localeCompare(b.date || '9999'))
+  return items
+}
+
+function BoiteATraiter() {
+  const { state } = useStore()
+  const today = useToday()
+  const [personne, setPersonne] = useState('')
+
+  const tous = itemsATraiter(state, today)
+  const items = personne ? tous.filter((i) => !i.pour || i.pour === personne) : tous
+
+  return (
+    <Card
+      titre="À traiter"
+      actions={
+        <span style={{ display: 'inline-flex', gap: 4 }}>
+          {['', ...state.settings.personnes].map((p) => (
+            <button
+              key={p || 'tous'}
+              className={`btn btn-small ${personne === p ? 'btn-primary' : ''}`}
+              onClick={() => setPersonne(p)}
+            >
+              {p || 'Tout'}
+            </button>
+          ))}
+        </span>
+      }
+    >
+      <p className="muted small" style={{ marginBottom: 10 }}>
+        Tout ce que les routines et les échéances ont déposé — trié, rangé, prêt à traiter. Chaque ligne
+        mène directement au bon endroit.
+      </p>
+      {items.length === 0 ? (
+        <EmptyState>Rien à traiter — la boîte est vide. Les mails peuvent attendre.</EmptyState>
+      ) : (
+        items.map((i) => (
+          <div key={i.id} className="alert-item">
+            <span className="alert-dot" style={{ background: 'var(--accent)' }} />
+            <div style={{ minWidth: 0 }}>
+              <div className="alert-titre">
+                {i.action}{' '}
+                {i.pour && <span className="badge badge-info">{i.pour}</span>}
+              </div>
+              <div className="alert-detail">{i.detail}</div>
+            </div>
+            <div className="alert-actions">
+              <a className="btn btn-small btn-primary" href={i.lien}>
+                Traiter →
+              </a>
+            </div>
+          </div>
+        ))
+      )}
+    </Card>
+  )
+}
+
 // ---------- module ----------
 
 export default function Cockpit() {
@@ -162,6 +272,9 @@ export default function Cockpit() {
           </p>
         )}
       </div>
+
+      {/* ---------- boîte à traiter ---------- */}
+      <BoiteATraiter />
 
       {/* ---------- fil d'urgences ---------- */}
       <Card

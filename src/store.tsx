@@ -8,15 +8,28 @@ import { seedState, STATE_VERSION } from './seed'
 
 const STORAGE_KEY = 'cockpit-ll-v1'
 
+/** migration sans perte : complète les champs apparus depuis la v1 */
+function migrate(parsed: AppState): AppState {
+  const etat: AppState = { ...seedState(), ...parsed, version: STATE_VERSION }
+  etat.reunions = Array.isArray(parsed.reunions) ? parsed.reunions : []
+  etat.projets = (parsed.projets || []).map((p) => ({
+    ...p,
+    liens: Array.isArray(p.liens) ? p.liens : [],
+    materiauxIds: Array.isArray(p.materiauxIds) ? p.materiauxIds : [],
+    artisanIds: Array.isArray(p.artisanIds) ? p.artisanIds : [],
+    journal: Array.isArray(p.journal) ? p.journal : [],
+  }))
+  return etat
+}
+
 function load(): AppState {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
     if (raw) {
       const parsed = JSON.parse(raw) as AppState
       if (parsed && parsed.version === STATE_VERSION) return parsed
-      // version différente : on repart du seed en conservant ce qui matche
-      if (parsed && typeof parsed === 'object') {
-        return { ...seedState(), ...parsed, version: STATE_VERSION }
+      if (parsed && typeof parsed === 'object' && Array.isArray(parsed.projets)) {
+        return migrate(parsed)
       }
     }
   } catch {
@@ -56,7 +69,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const replace = useCallback((next: AppState) => {
-    const withVersion = { ...next, version: STATE_VERSION }
+    // une sauvegarde d'une version antérieure passe par la migration
+    const withVersion = next.version === STATE_VERSION ? next : migrate(next)
     persist(withVersion)
     setState(withVersion)
   }, [])

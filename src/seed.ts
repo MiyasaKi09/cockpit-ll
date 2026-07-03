@@ -6,7 +6,7 @@
 
 import type { AppState, Facture, PromptTemplate } from './types'
 
-export const STATE_VERSION = 1
+export const STATE_VERSION = 2
 
 const P = (v: number) => Math.round(v * 100) / 100
 
@@ -288,6 +288,20 @@ export function seedState(): AppState {
         tauxRetenu: null,
         missionsComplHT: 18000,
         notes: 'EXEMPLE — à remplacer par un vrai projet. Mission de base + DIAG + OPC.',
+        liens: [
+          { id: 'lien-p01-1', titre: 'Dossier Drive du projet (exemple)', url: 'https://drive.google.com/' },
+        ],
+        materiauxIds: ['ma-1'],
+        artisanIds: ['ar-1', 'ar-2'],
+        journal: [
+          {
+            id: 'jr-p01-1',
+            date: '2026-06-20',
+            auteur: 'Julien',
+            texte: 'EXEMPLE — Visite du site avec la MOA : sous-sol humide côté nord, prévoir diagnostic structure renforcé sur cage B.',
+            tags: ['visite', 'structure'],
+          },
+        ],
         phases: [
           { code: 'DIAG', pctBase: null, montantHT: 9000, debut: '2026-10-01', fin: '2026-10-31', heuresPrevues: 100 },
           { code: 'ESQ', pctBase: 0.05, montantHT: P(8632.23), debut: '2026-11-01', fin: '2026-11-30', heuresPrevues: 96 },
@@ -315,6 +329,10 @@ export function seedState(): AppState {
         tauxRetenu: 0.12,
         missionsComplHT: 0,
         notes: 'EXEMPLE — taux retenu saisi à la main (petit projet, barème non pertinent : temps passé).',
+        liens: [],
+        materiauxIds: [],
+        artisanIds: [],
+        journal: [],
         phases: [
           { code: 'DIAG', pctBase: null, montantHT: 0, debut: null, fin: null, heuresPrevues: 0 },
           { code: 'ESQ', pctBase: 0.05, montantHT: 1080, debut: '2026-10-01', fin: '2026-11-15', heuresPrevues: 12 },
@@ -563,5 +581,7 @@ export function seedState(): AppState {
     ],
 
     prompts: GABARITS,
+
+    reunions: [],
   }
 }

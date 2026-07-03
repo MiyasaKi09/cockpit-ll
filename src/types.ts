@@ -22,6 +22,22 @@ export interface Phase {
   heuresPrevues: number
 }
 
+/** lien utile rattaché au projet (Drive, plateforme, DCE…) */
+export interface LienProjet {
+  id: string
+  titre: string
+  url: string
+}
+
+/** note datée du journal de projet (détails, solutions, décisions) */
+export interface NoteJournal {
+  id: string
+  date: string // ISO
+  auteur?: string
+  texte: string
+  tags: string[]
+}
+
 export interface Projet {
   id: string // 'P01'…
   nom: string
@@ -41,6 +57,25 @@ export interface Projet {
   missionsComplHT: number
   notes?: string
   phases: Phase[]
+  /** rattachements de l'espace projet — tout s'ajoute au fil de l'eau */
+  liens: LienProjet[]
+  materiauxIds: string[]
+  artisanIds: string[]
+  journal: NoteJournal[]
+}
+
+export type StatutReunion = 'a_preparer' | 'cr_a_generer' | 'cr_a_relire' | 'diffuse'
+
+/** réunion de chantier — support du circuit audio → transcription → CR */
+export interface ReunionChantier {
+  id: string
+  projetId: string
+  date: string // ISO
+  titre: string
+  /** liste des convoqués, pré-remplie depuis les marchés + MOA */
+  participants: string
+  statut: StatutReunion
+  notes?: string
 }
 
 /** Marché de travaux (une entreprise, un lot) — support des situations */
@@ -83,6 +118,8 @@ export interface Situation {
   /** traçabilité : mail source, routine, date */
   source?: string
   dateReception: string // ISO
+  /** personne concernée (facultatif — fourni par la routine ou à la main) */
+  pour?: string
   notes?: string
 }
 
@@ -197,6 +234,8 @@ export interface Consultation {
   avisGoNoGo?: string
   classement?: number | null
   motifsResultat?: string
+  /** personne concernée (facultatif) */
+  pour?: string
   notes?: string
 }
 
@@ -226,6 +265,7 @@ export type TypeAlerte =
   | 'obligation'
   | 'crm'
   | 'decennale'
+  | 'cr_en_attente'
 
 /** Alerte du fil d'urgences — calculée, jamais stockée (hors snooze) */
 export interface Alerte {
@@ -270,6 +310,8 @@ export interface Settings {
   /** alerteId → ISO « en sommeil jusqu'au » */
   snoozes: Record<string, string>
   dernierImportExcel?: ImportExcelMeta | null
+  /** étapes cochées du guide « Bien démarrer » */
+  onboarding?: Record<string, boolean>
 }
 
 export interface AppState {
@@ -287,4 +329,5 @@ export interface AppState {
   materiaux: Materiau[]
   consultations: Consultation[]
   prompts: PromptTemplate[]
+  reunions: ReunionChantier[]
 }

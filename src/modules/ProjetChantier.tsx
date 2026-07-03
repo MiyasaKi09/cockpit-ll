@@ -23,6 +23,7 @@ import {
 } from '../ui'
 import type { Tone } from '../ui'
 import { fmtDate, fmtMoney, fmtPct, todayISO, uid } from '../util'
+import { MODELES_WHISPER, transcrireFichier, type ProgresTranscription } from '../transcription'
 
 // ============================================================
 // Marchés de travaux
@@ -340,6 +341,34 @@ function AssistantCR({
 }) {
   const { state, update } = useStore()
   const [transcript, setTranscript] = useState('')
+  const [modele, setModele] = useState(MODELES_WHISPER[0].id)
+  const [progres, setProgres] = useState<ProgresTranscription | null>(null)
+  const [erreurAudio, setErreurAudio] = useState('')
+  const enCours = progres !== null
+
+  const transcrire = async (file: File) => {
+    setErreurAudio('')
+    const dureeSuspecte = file.size > 250 * 1024 * 1024
+    if (
+      dureeSuspecte &&
+      !confirm(
+        'Fichier volumineux : pour une réunion de plus de ~1 h 30, préférez un enregistrement mono compressé (m4a) ou coupez le fichier en deux. Tenter quand même ?',
+      )
+    )
+      return
+    setProgres({ etape: 'Préparation…' })
+    try {
+      const texte = await transcrireFichier(file, modele, setProgres)
+      setTranscript((prev) => (prev.trim() ? prev + '\n\n' : '') + texte)
+      if (reunion.statut === 'a_preparer') maj((r) => { r.statut = 'cr_a_generer' })
+    } catch (e) {
+      setErreurAudio(
+        `Transcription impossible : ${e instanceof Error ? e.message : String(e)} — vous pouvez transcrire avec un outil local (MacWhisper, Vibe) et coller le texte ci-dessous.`,
+      )
+    } finally {
+      setProgres(null)
+    }
+  }
 
   const maj = (fn: (r: ReunionChantier) => void) =>
     update((d) => {
@@ -387,12 +416,10 @@ function AssistantCR({
       </Field>
 
       <div className="pill-note" style={{ marginTop: 12 }}>
-        <strong>1 · Capturer.</strong> Réunion courte : dictez directement dans l'app Claude (micro).
-        Réunion de 1 à 2 h : enregistrez l'audio (téléphone / dictaphone).
+        <strong>1 · Capturer.</strong> Enregistrez la réunion (téléphone / dictaphone), même 1 à 2 h.
         <br />
-        <strong>2 · Transcrire (sans API).</strong> Transcription locale et gratuite sur l'ordinateur de
-        l'agence : MacWhisper, Vibe ou whisper.cpp (hors-ligne, l'audio ne quitte pas la machine) — ou
-        l'enregistreur du téléphone s'il transcrit tout seul. Collez le texte ci-dessous.
+        <strong>2 · Transcrire ICI.</strong> Importez le fichier audio ci-dessous : la transcription
+        (Whisper) tourne <em>dans le navigateur</em>, gratuitement — l'audio ne quitte pas votre machine.
         <br />
         <strong>3 · Générer.</strong> Le bouton copie le prompt complet (contexte projet + convoqués +
         transcription) → collez-le dans le Projet Claude « {gabarit?.projetClaude || 'CR de chantier'} ».
@@ -400,6 +427,36 @@ function AssistantCR({
         <strong>4 · Relire & diffuser.</strong> Relecture humaine, envoi, archivage Drive — puis marquez
         le CR diffusé ici.
       </div>
+
+      <Field label="Fichier audio de la réunion (m4a, mp3, wav…)">
+        <div className="toolbar" style={{ marginBottom: 0 }}>
+          <input
+            className="input"
+            type="file"
+            accept="audio/*,.m4a,.mp3,.wav,.ogg,.aac"
+            disabled={enCours}
+            style={{ maxWidth: 320 }}
+            onChange={(e) => {
+              const f = e.target.files?.[0]
+              if (f) void transcrire(f)
+              e.target.value = ''
+            }}
+          />
+          <Select
+            value={modele}
+            onChange={setModele}
+            options={MODELES_WHISPER.map((m) => ({ value: m.id, label: m.label }))}
+            style={{ maxWidth: 300 }}
+          />
+        </div>
+      </Field>
+      {progres && (
+        <p className="small" style={{ marginTop: 6 }}>
+          <Badge tone="info">en cours</Badge> {progres.etape}
+          {progres.pct != null ? ` — ${progres.pct} %` : ''}
+        </p>
+      )}
+      {erreurAudio && <p className="danger-text small" style={{ marginTop: 6 }}>{erreurAudio}</p>}
 
       <Field label="Transcription / dictée brute (collée ici, elle est intégrée au prompt — rien n'est stocké)">
         <TextArea

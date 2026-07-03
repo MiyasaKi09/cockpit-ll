@@ -141,6 +141,77 @@ function itemsATraiter(state: ReturnType<typeof useStore>['state'], today: strin
   return items
 }
 
+function LigneCourrier({ personne }: { personne: string }) {
+  const { state, update } = useStore()
+  const courriers = state.courriers
+    .filter((c) => c.statut === 'a_traiter')
+    .filter((c) => !personne || !c.pour || c.pour === personne)
+    .sort((a, b) => (b.urgence || 0) - (a.urgence || 0) || a.dateReception.localeCompare(b.dateReception))
+
+  if (courriers.length === 0) return null
+
+  const traiter = (id: string) =>
+    update((d) => {
+      const c = d.courriers.find((x) => x.id === id)
+      if (c) c.statut = 'traite'
+    })
+
+  const versJournal = (id: string) =>
+    update((d) => {
+      const c = d.courriers.find((x) => x.id === id)
+      if (!c || !c.projetId) return
+      const p = d.projets.find((x) => x.id === c.projetId)
+      if (!p) return
+      p.journal.push({
+        id: `note-${id}`,
+        date: c.dateReception,
+        auteur: c.pour,
+        texte: `Mail de ${c.de} — ${c.objet}\n${c.resume}${c.actionProposee ? `\nAction : ${c.actionProposee}` : ''}`,
+        tags: ['mail', c.type],
+      })
+      c.statut = 'traite'
+    })
+
+  return (
+    <>
+      {courriers.map((c) => (
+        <div key={c.id} className={`alert-item ${c.urgence === 3 ? 'alert-3' : ''}`}>
+          <span className="alert-dot" style={{ background: c.urgence === 3 ? 'var(--danger)' : 'var(--accent)' }} />
+          <div style={{ minWidth: 0 }}>
+            <div className="alert-titre">
+              ✉ {c.objet} {c.pour && <span className="badge badge-info">{c.pour}</span>}{' '}
+              {c.projetId ? (
+                <a href={`#/projets/${c.projetId}`} className="badge badge-muted">
+                  {c.projetId}
+                </a>
+              ) : (
+                <span className="badge badge-warn">projet ?</span>
+              )}
+            </div>
+            <div className="alert-detail">
+              de {c.de} · {c.resume}
+              {c.actionProposee && (
+                <>
+                  <br />
+                  <strong>Action proposée :</strong> {c.actionProposee}
+                </>
+              )}
+            </div>
+          </div>
+          <div className="alert-actions">
+            {c.projetId && (
+              <Btn small kind="ghost" onClick={() => versJournal(c.id)} title="Archive le mail dans le journal du projet et le marque traité">
+                → Journal
+              </Btn>
+            )}
+            <Btn small onClick={() => traiter(c.id)}>✓ Fait</Btn>
+          </div>
+        </div>
+      ))}
+    </>
+  )
+}
+
 function BoiteATraiter() {
   const { state } = useStore()
   const today = useToday()
@@ -148,6 +219,9 @@ function BoiteATraiter() {
 
   const tous = itemsATraiter(state, today)
   const items = personne ? tous.filter((i) => !i.pour || i.pour === personne) : tous
+  const nbCourriers = state.courriers.filter(
+    (c) => c.statut === 'a_traiter' && (!personne || !c.pour || c.pour === personne),
+  ).length
 
   return (
     <Card
@@ -170,7 +244,8 @@ function BoiteATraiter() {
         Tout ce que les routines et les échéances ont déposé — trié, rangé, prêt à traiter. Chaque ligne
         mène directement au bon endroit.
       </p>
-      {items.length === 0 ? (
+      <LigneCourrier personne={personne} />
+      {items.length === 0 && nbCourriers === 0 ? (
         <EmptyState>Rien à traiter — la boîte est vide. Les mails peuvent attendre.</EmptyState>
       ) : (
         items.map((i) => (

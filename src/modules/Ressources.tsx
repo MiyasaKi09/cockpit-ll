@@ -29,6 +29,31 @@ import {
 } from '../ui'
 import { diffDays, fmtDate, fold, todayISO, uid } from '../util'
 
+/** liens inverses : projets où l'artisan intervient (rattachement ou marché) */
+function projetsArtisan(state: ReturnType<typeof useStore>['state'], id: string, nom: string): string[] {
+  const parRattachement = state.projets.filter((p) => p.artisanIds.includes(id)).map((p) => p.id)
+  const parMarche = state.marches.filter((m) => fold(m.entreprise) === fold(nom)).map((m) => m.projetId)
+  return [...new Set([...parRattachement, ...parMarche])].sort()
+}
+
+/** liens inverses : projets où le matériau est employé */
+function projetsMateriau(state: ReturnType<typeof useStore>['state'], id: string): string[] {
+  return state.projets.filter((p) => p.materiauxIds.includes(id)).map((p) => p.id).sort()
+}
+
+function BadgesProjets({ ids }: { ids: string[] }) {
+  if (ids.length === 0) return <span className="muted">—</span>
+  return (
+    <>
+      {ids.map((pid) => (
+        <a key={pid} href={`#/projets/${pid}`} className="badge badge-info" onClick={(e) => e.stopPropagation()}>
+          {pid}
+        </a>
+      ))}
+    </>
+  )
+}
+
 export default function Ressources() {
   const [onglet, setOnglet] = useState('artisans')
   return (
@@ -118,7 +143,7 @@ function OngletArtisans() {
         {artisans.length === 0 ? (
           <EmptyState>Aucun artisan — l'annuaire se remplit chantier après chantier.</EmptyState>
         ) : (
-          <Table head={['Entreprise', 'Lots', 'Zone', 'Fourchette', 'Décennale', 'Contact', 'Notes', '']}>
+          <Table head={['Entreprise', 'Lots', 'Projets', 'Zone', 'Fourchette', 'Décennale', 'Contact', 'Notes', '']}>
             {artisans.map((a) => (
               <tr key={a.id} className="clickable" onClick={() => setEdition(structuredClone(a))}>
                 <td>
@@ -131,6 +156,7 @@ function OngletArtisans() {
                     </Badge>
                   ))}
                 </td>
+                <td><BadgesProjets ids={projetsArtisan(state, a.id, a.nom)} /></td>
                 <td>{a.zone || '—'}</td>
                 <td>{a.fourchette || '—'}</td>
                 <td>{badgeDecennale(a.decennaleFin, today)}</td>
@@ -342,13 +368,14 @@ function OngletMateriaux() {
         {materiaux.length === 0 ? (
           <EmptyState>Aucun matériau. Le tagging à l'ingestion commence dès maintenant — il prépare la recherche future.</EmptyState>
         ) : (
-          <Table head={['Matériau', 'Fournisseur', 'Coût €/m²', 'FDES', 'Tags', 'Notes', '']}>
+          <Table head={['Matériau', 'Fournisseur', 'Projets', 'Coût €/m²', 'FDES', 'Tags', 'Notes', '']}>
             {materiaux.map((m) => (
               <tr key={m.id} className="clickable" onClick={() => setEdition(structuredClone(m))}>
                 <td>
                   <strong>{m.nom}</strong>
                 </td>
                 <td>{m.fournisseur || '—'}</td>
+                <td><BadgesProjets ids={projetsMateriau(state, m.id)} /></td>
                 <td className="right num">{m.coutM2 != null ? `${m.coutM2} €` : '—'}</td>
                 <td onClick={(e) => e.stopPropagation()}>
                   {m.lienFDES ? (

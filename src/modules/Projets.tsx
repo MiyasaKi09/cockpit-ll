@@ -51,6 +51,7 @@ import ProjetNouveau from './ProjetNouveau'
 import ProjetChantier from './ProjetChantier'
 import ProjetRessources from './ProjetRessources'
 import ProjetJournal from './ProjetJournal'
+import ProjetDocuments from './ProjetDocuments'
 
 // ---------- constantes & petits helpers ----------
 
@@ -202,6 +203,7 @@ const ONGLETS = [
   { id: 'chantier', label: 'Chantier & CR' },
   { id: 'ressources', label: 'Ressources & liens' },
   { id: 'journal', label: 'Journal' },
+  { id: 'documents', label: 'Documents (Drive)' },
   { id: 'finances', label: 'Factures & temps' },
 ]
 
@@ -295,6 +297,7 @@ function EspaceProjet({ projetId, onglet }: { projetId: string; onglet?: string 
       {actif === 'chantier' && <ProjetChantier projet={p} />}
       {actif === 'ressources' && <ProjetRessources projet={p} />}
       {actif === 'journal' && <ProjetJournal projet={p} />}
+      {actif === 'documents' && <ProjetDocuments projet={p} />}
       {actif === 'finances' && <OngletFinances projet={p} />}
 
       {modalEdition && <ModalEditionProjet projet={p} onClose={() => setModalEdition(false)} />}
@@ -809,6 +812,7 @@ function ModalEditionProjet({ projet, onClose }: { projet: Projet; onClose: () =
   const [typeMO, setTypeMO] = useState<string>(projet.typeMO)
   const [statut, setStatut] = useState<string>(projet.statut)
   const [moa, setMoa] = useState(projet.moa || '')
+  const [emailMOA, setEmailMOA] = useState(projet.emailMOA || '')
   const [adresse, setAdresse] = useState(projet.adresse || '')
   const [ouvrage, setOuvrage] = useState(projet.ouvrage || '')
   const [montant, setMontant] = useState<number | null>(projet.montantTravauxHT ?? null)
@@ -823,6 +827,7 @@ function ModalEditionProjet({ projet, onClose }: { projet: Projet; onClose: () =
       pr.typeMO = typeMO as TypeMO
       pr.statut = statut as StatutProjet
       pr.moa = moa.trim() || undefined
+      pr.emailMOA = emailMOA.trim() || undefined
       pr.adresse = adresse.trim() || undefined
       pr.ouvrage = ouvrage || null
       pr.montantTravauxHT = montant
@@ -849,6 +854,9 @@ function ModalEditionProjet({ projet, onClose }: { projet: Projet; onClose: () =
       <div className="form-row">
         <Field label="Maître d’ouvrage">
           <TextInput value={moa} onChange={setMoa} />
+        </Field>
+        <Field label="E-mail MOA (facturation)" hint="pré-remplit les e-mails sortants">
+          <TextInput value={emailMOA} onChange={setEmailMOA} />
         </Field>
         <Field label="Adresse / localisation">
           <TextInput value={adresse} onChange={setAdresse} />

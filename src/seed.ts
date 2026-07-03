@@ -6,7 +6,7 @@
 
 import type { AppState, Facture, PromptTemplate } from './types'
 
-export const STATE_VERSION = 2
+export const STATE_VERSION = 3
 
 const P = (v: number) => Math.round(v * 100) / 100
 
@@ -583,5 +583,22 @@ export function seedState(): AppState {
     prompts: GABARITS,
 
     reunions: [],
+
+    courriers: [
+      {
+        id: 'mail-exemple-1',
+        projetId: 'P01',
+        de: 'lefevre@opac-oise.example',
+        objet: 'Question sur le planning du DIAG',
+        resume: 'La MOA demande si le diagnostic amiante peut être avancé de deux semaines pour caler le vote du budget.',
+        type: 'question',
+        actionProposee: 'Répondre avec le planning DIAG mis à jour — brouillon préparé par la routine dans Gmail.',
+        urgence: 2,
+        pour: 'Julien',
+        statut: 'a_traiter',
+        dateReception: '2026-07-02',
+        source: 'EXEMPLE — routine tri du matin du 02/07/2026',
+      },
+    ],
   }
 }

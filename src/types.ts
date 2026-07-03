@@ -44,6 +44,8 @@ export interface Projet {
   typeMO: TypeMO
   statut: StatutProjet
   moa?: string
+  /** e-mail de facturation / contact MOA (pré-remplit les e-mails sortants) */
+  emailMOA?: string
   adresse?: string
   /** clé du référentiel OUVRAGES (ex. '12- Logements collectifs') */
   ouvrage: string | null
@@ -62,6 +64,23 @@ export interface Projet {
   materiauxIds: string[]
   artisanIds: string[]
   journal: NoteJournal[]
+}
+
+/** courrier trié par la routine mail du matin — rangé au bon projet */
+export interface Courrier {
+  id: string
+  projetId: string | null
+  de: string
+  objet: string
+  resume: string
+  /** question / document / administratif / commercial / autre */
+  type: string
+  actionProposee?: string
+  urgence?: 1 | 2 | 3
+  pour?: string
+  statut: 'a_traiter' | 'traite'
+  dateReception: string // ISO
+  source?: string
 }
 
 export type StatutReunion = 'a_preparer' | 'cr_a_generer' | 'cr_a_relire' | 'diffuse'
@@ -330,4 +349,5 @@ export interface AppState {
   consultations: Consultation[]
   prompts: PromptTemplate[]
   reunions: ReunionChantier[]
+  courriers: Courrier[]
 }

@@ -12,6 +12,7 @@ const STORAGE_KEY = 'cockpit-ll-v1'
 function migrate(parsed: AppState): AppState {
   const etat: AppState = { ...seedState(), ...parsed, version: STATE_VERSION }
   etat.reunions = Array.isArray(parsed.reunions) ? parsed.reunions : []
+  etat.courriers = Array.isArray(parsed.courriers) ? parsed.courriers : []
   etat.projets = (parsed.projets || []).map((p) => ({
     ...p,
     liens: Array.isArray(p.liens) ? p.liens : [],

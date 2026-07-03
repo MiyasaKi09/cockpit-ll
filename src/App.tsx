@@ -6,6 +6,7 @@ import { alertesActives } from './alerts'
 
 import Cockpit from './modules/Cockpit'
 import BienDemarrer from './modules/BienDemarrer'
+import Recherche from './modules/Recherche'
 import Projets from './modules/Projets'
 import Situations from './modules/Situations'
 import Facturation from './modules/Facturation'
@@ -24,6 +25,7 @@ const NAV: { groupe: string; items: { path: string; label: string }[] }[] = [
     groupe: 'Pilotage',
     items: [
       { path: '', label: 'Cockpit' },
+      { path: 'recherche', label: 'Recherche' },
       { path: 'demarrer', label: 'Bien démarrer' },
       { path: 'projets', label: 'Projets & marchés' },
       { path: 'situations', label: 'Situations de travaux' },
@@ -71,6 +73,9 @@ export default function App() {
   switch (section) {
     case '':
       page = <Cockpit />
+      break
+    case 'recherche':
+      page = <Recherche />
       break
     case 'demarrer':
       page = <BienDemarrer />

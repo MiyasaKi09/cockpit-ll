@@ -17,7 +17,7 @@ export interface RoutineSpec {
   promptRoutine: string
   /** contrat de sortie JSON attendu par l'import du Cockpit */
   formatJSON?: string
-  importCible?: 'situations' | 'consultations' | null
+  importCible?: 'situations' | 'consultations' | 'courriers' | null
 }
 
 export const CONTRAT_SITUATIONS = `{
@@ -52,6 +52,23 @@ export const CONTRAT_CONSULTATIONS = `{
       "source": "BOAMP n°26-123456 — alerte du 07/07/2026",
       "pour": "Zoé",
       "notes": "visite obligatoire, mission base + EXE, jugement 60/40"
+    }
+  ]
+}`
+
+export const CONTRAT_COURRIERS = `{
+  "type": "courriers",
+  "items": [
+    {
+      "de": "lefevre@opac-oise.example",
+      "objet": "Question sur le planning du DIAG",
+      "resume": "La MOA demande si le diagnostic peut être avancé de deux semaines (vote du budget).",
+      "projet": "P01",
+      "type": "question",
+      "actionProposee": "Répondre avec le planning mis à jour — brouillon préparé dans Gmail.",
+      "urgence": 2,
+      "pour": "Julien",
+      "source": "mail du 02/07/2026 08:41"
     }
   ]
 }`
@@ -110,23 +127,27 @@ Si rien ne passe le filtre : « Rien à signaler cette semaine », sans bloc jso
     importCible: 'consultations',
   },
   {
-    id: 'digest-matin',
-    titre: 'Digest e-mails du matin',
+    id: 'tri-matin',
+    titre: 'Tri du matin — mails rangés, boîte « À traiter » alimentée',
     frequence: 'Tous les jours ouvrés, 7 h 45',
     description:
-      "Synthèse de la boîte : 3 à 5 priorités du jour et projets de réponse pour les demandes récurrentes. Pas d'import Cockpit : le digest se lit dans Claude, les brouillons partent dans Gmail après relecture.",
-    promptRoutine: `Tu es l'assistant de tri matinal de l'agence d'architecture L&L.
+      "La routine range la boîte Gmail (libellés par projet, archivage du bruit, brouillons de réponse) ET amène chaque mail actionnable dans le Cockpit : rangé au bon projet, avec l'action proposée et la personne concernée. Résultat : on ouvre le Cockpit, pas la boîte mail.",
+    promptRoutine: `Tu es l'assistant de tri matinal de l'agence d'architecture L&L (2 personnes : Julien et Zoé).
 
 Chaque matin :
-1. Parcours les e-mails reçus depuis hier 18 h (boîte principale, dossiers Administratif / Chantier / Client des filtres Gmail).
-2. Produis un digest en 3 parties :
-   — PRIORITÉS DU JOUR : 3 à 5 messages qui exigent une action aujourd'hui, avec pour chacun : de qui, quoi, pour quand, action suggérée en une ligne.
-   — À SUIVRE : ce qui peut attendre mais mérite un œil cette semaine.
-   — BRUIT : ce que tu as ignoré (newsletters, notifications), en une ligne.
-3. Pour les demandes récurrentes simples (demande de disponibilité, envoi de document, question administrative), prépare un PROJET DE RÉPONSE en brouillon Gmail — ne jamais envoyer : l'envoi reste une décision humaine.
-4. Ne traite pas les messages adressés à situations@ (routine dédiée).
+1. Parcours les e-mails reçus depuis hier 18 h (hors situations@, routine dédiée).
+2. RANGE la boîte Gmail au fur et à mesure : applique le libellé du projet concerné (« Projets/P01 », « Projets/P02 »…) ou le libellé de catégorie (Administratif / Chantier / Client / Veille AO), et archive le bruit (newsletters, notifications). Si ton accès Gmail ne permet pas de poser les libellés, liste en fin de réponse les rangements à faire à la main (2 minutes).
+3. Pour les demandes récurrentes simples, prépare un PROJET DE RÉPONSE en brouillon Gmail — ne jamais envoyer : l'envoi reste une décision humaine.
+4. Produis un court digest lisible : priorités du jour, à suivre, bruit ignoré.
+5. Termine par UN SEUL bloc de code json au format ci-dessous : chaque mail qui demande une action devient une ligne, rattachée au projet (champ "projet" : l'ID Pxx si tu le connais, sinon le nom du projet tel qu'écrit dans le mail), avec "pour" = la personne concernée (Julien ou Zoé) et "urgence" de 1 à 3. Ce bloc sera importé dans le Cockpit (boîte « À traiter »).
 
-Règle d'or : tout ce qui est financier, contractuel ou sortant reste à l'état de brouillon jusqu'à relecture.`,
-    importCible: null,
+Format de sortie :
+\`\`\`json
+${CONTRAT_COURRIERS}
+\`\`\`
+
+Règle d'or : tout ce qui est financier, contractuel ou sortant reste à l'état de brouillon jusqu'à relecture. Si rien d'actionnable : digest seul, sans bloc json.`,
+    formatJSON: CONTRAT_COURRIERS,
+    importCible: 'courriers',
   },
 ]

@@ -1,7 +1,8 @@
 // Coquille de l'application : barre latérale + routage hash.
 
+import { useEffect } from 'react'
 import { useStore } from './store'
-import { useRoute, useToday } from './ui'
+import { navigate, useRoute, useToday } from './ui'
 import { alertesActives } from './alerts'
 
 import Cockpit from './modules/Cockpit'
@@ -20,32 +21,33 @@ import Classement from './modules/Classement'
 import Ressources from './modules/Ressources'
 import Agenda from './modules/Agenda'
 import Parametres from './modules/Parametres'
+import Sante from './modules/Sante'
 
 const NAV: { groupe: string; items: { path: string; label: string }[] }[] = [
   {
     groupe: 'Pilotage',
     items: [
       { path: '', label: 'Cockpit' },
-      { path: 'recherche', label: 'Recherche' },
+      { path: 'recherche', label: 'Recherche ( / )' },
       { path: 'demarrer', label: 'Bien démarrer' },
-      { path: 'projets', label: 'Projets & marchés' },
+      { path: 'projets', label: 'Projets' },
       { path: 'situations', label: 'Situations de travaux' },
-      { path: 'facturation', label: 'Honoraires & relances' },
-      { path: 'temps', label: 'Saisie des temps' },
+      { path: 'facturation', label: 'Factures & relances' },
+      { path: 'temps', label: 'Temps' },
       { path: 'analyse', label: 'Analyse €/jour' },
     ],
   },
   {
     groupe: 'Développement',
     items: [
-      { path: 'ao', label: 'Veille AO & Go/No-Go' },
-      { path: 'references', label: 'Base de références' },
+      { path: 'ao', label: "Appels d'offres" },
+      { path: 'references', label: 'Références' },
     ],
   },
   {
-    groupe: 'Claude (sans API)',
+    groupe: 'Claude',
     items: [
-      { path: 'prompts', label: 'Bibliothèque de prompts' },
+      { path: 'prompts', label: 'Prompts' },
       { path: 'routines', label: 'Routines & imports' },
     ],
   },
@@ -54,12 +56,15 @@ const NAV: { groupe: string; items: { path: string; label: string }[] }[] = [
     items: [
       { path: 'classement', label: 'Classement documentaire' },
       { path: 'ressources', label: 'Matériaux & artisans' },
-      { path: 'agenda', label: 'Réglementaire & CRM' },
+      { path: 'agenda', label: 'Obligations & contacts' },
     ],
   },
   {
     groupe: 'Agence',
-    items: [{ path: 'parametres', label: 'Paramètres & données' }],
+    items: [
+      { path: 'sante', label: 'Santé des branchements' },
+      { path: 'parametres', label: 'Paramètres & données' },
+    ],
   },
 ]
 
@@ -68,6 +73,19 @@ export default function App() {
   const { state } = useStore()
   const today = useToday()
   const nbAlertes = alertesActives(state, today).filter((a) => a.gravite >= 2).length
+
+  // « / » depuis n'importe où (hors champ de saisie) → Recherche
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey) return
+      const cible = e.target as HTMLElement | null
+      if (cible && (['INPUT', 'TEXTAREA', 'SELECT'].includes(cible.tagName) || cible.isContentEditable)) return
+      e.preventDefault()
+      navigate('/recherche')
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
 
   const [section] = route
 
@@ -120,6 +138,9 @@ export default function App() {
       break
     case 'parametres':
       page = <Parametres />
+      break
+    case 'sante':
+      page = <Sante />
       break
     default:
       page = <Cockpit />

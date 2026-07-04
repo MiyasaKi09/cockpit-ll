@@ -4,22 +4,15 @@
 // Tout est dérivé de l'état : aucune donnée propre au module.
 // ============================================================
 
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import type { Alerte } from '../types'
 import { useStore } from '../store'
 import { Btn, Card, DateF, EmptyState, Money, Page, Stat, useToday } from '../ui'
 import { alertesActives } from '../alerts'
 import { STATUTS_ACTIFS, meteoFinanciere } from '../derive'
-import { addDays, fmtDate, fmtMoney, fold, uid, todayISO } from '../util'
-import {
-  estConnecte,
-  listerEvenements,
-  listerMailsRecents,
-  mailsDejaVus,
-  marquerVus,
-  type EvenementAgenda,
-} from '../google'
+import { addDays, fmtDate, fmtMoney } from '../util'
+import { useSurveillance } from '../surveillance'
 
 // ---------- petits composants locaux ----------
 
@@ -92,79 +85,6 @@ function Ligne({ children }: { children: ReactNode }) {
 
 function RienASignaler({ children }: { children: ReactNode }) {
   return <div className="muted small">{children}</div>
-}
-
-// ---------- surveillance en direct (Gmail + Agenda, API gratuites) ----------
-
-/** devine le projet d'un mail : ID Pxx cité, nom de projet, ou entreprise d'un marché */
-function devinerProjet(state: ReturnType<typeof useStore>['state'], texte: string): string | null {
-  const t = fold(texte)
-  for (const p of state.projets) {
-    if (t.includes(fold(p.id)) || (p.nom.length > 8 && t.includes(fold(p.nom)))) return p.id
-  }
-  for (const m of state.marches) {
-    if (t.includes(fold(m.entreprise))) return m.projetId
-  }
-  return null
-}
-
-function useSurveillance() {
-  const { state, update } = useStore()
-  const [evenements, setEvenements] = useState<EvenementAgenda[]>([])
-  const [direct, setDirect] = useState(false)
-  const sv = state.settings.surveillance
-
-  useEffect(() => {
-    let arret = false
-
-    const tick = async () => {
-      if (!estConnecte()) {
-        setDirect(false)
-        return
-      }
-      setDirect(true)
-      try {
-        const [mails, evts] = await Promise.all([
-          listerMailsRecents(sv?.email?.trim() || ''),
-          listerEvenements(),
-        ])
-        if (arret) return
-        setEvenements(evts)
-        const vus = mailsDejaVus()
-        const nouveaux = mails.filter((m) => !vus.has(m.id))
-        if (nouveaux.length > 0) {
-          update((d) => {
-            for (const m of nouveaux) {
-              if (d.courriers.some((c) => c.source === `gmail:${m.id}`)) continue
-              d.courriers.push({
-                id: uid('mail'),
-                projetId: devinerProjet(d, `${m.objet} ${m.extrait} ${m.de}`),
-                de: m.de.replace(/<[^>]*>/g, '').trim() || m.de,
-                objet: m.objet,
-                resume: m.extrait,
-                type: 'mail reçu',
-                statut: 'a_traiter',
-                dateReception: m.date || todayISO(),
-                source: `gmail:${m.id}`,
-              })
-            }
-          })
-          marquerVus(nouveaux.map((m) => m.id))
-        }
-      } catch {
-        // session expirée ou hors-ligne : le badge repasse à « off » au tick suivant
-      }
-    }
-
-    void tick()
-    const iv = setInterval(tick, 60_000)
-    return () => {
-      arret = true
-      clearInterval(iv)
-    }
-  }, [sv?.email, sv?.clientId]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  return { evenements, direct }
 }
 
 // ---------- boîte « À traiter » ----------
@@ -370,7 +290,7 @@ function BoiteATraiter() {
 export default function Cockpit() {
   const { state, update } = useStore()
   const today = useToday()
-  const { evenements, direct } = useSurveillance()
+  const { evenements, direct } = useSurveillance(state, update)
 
   const meteo = meteoFinanciere(state, today)
   const excel = state.settings.dernierImportExcel
@@ -412,7 +332,10 @@ export default function Cockpit() {
             state.settings.surveillance?.clientId && (
               <a href="#/parametres" className="badge badge-muted">surveillance coupée — reconnecter</a>
             )
-          )}
+          )}{' '}
+          <a href="#/sante" className="badge badge-muted" title="Tester chaque branchement en un clic">
+            ✚ santé des branchements
+          </a>
         </>
       }
     >

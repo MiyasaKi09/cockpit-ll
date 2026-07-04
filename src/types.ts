@@ -335,6 +335,13 @@ export interface Settings {
   dernierImportExcel?: ImportExcelMeta | null
   /** étapes cochées du guide « Bien démarrer » */
   onboarding?: Record<string, boolean>
+  /** surveillance en direct Gmail/Agenda (API Google gratuites, lecture seule) */
+  surveillance?: {
+    /** adresse surveillée (vide = toute la boîte de réception) */
+    email: string
+    /** identifiant OAuth « Web » créé sur console.cloud.google.com (gratuit) */
+    clientId: string
+  }
 }
 
 export interface AppState {

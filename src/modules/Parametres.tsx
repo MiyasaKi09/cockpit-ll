@@ -20,8 +20,80 @@ import {
   useToday,
 } from '../ui'
 import { download, fmtDate, fmtMoney, fold, todayISO } from '../util'
+import { connecterGoogle, deconnecter, estConnecte } from '../google'
 
 const TYPES_MO: TypeMO[] = ['Public', 'Privé pro', 'Particulier']
+
+/** Gmail & Agenda en direct — API Google gratuites, lecture seule */
+function CarteSurveillance() {
+  const { state, update } = useStore()
+  const sv = state.settings.surveillance || { email: '', clientId: '' }
+  const [message, setMessage] = useState('')
+  const [, forcer] = useState(0)
+
+  const majSv = (champ: 'email' | 'clientId', v: string) =>
+    update((d) => {
+      d.settings.surveillance = { ...(d.settings.surveillance || { email: '', clientId: '' }), [champ]: v }
+    })
+
+  const connecter = async () => {
+    setMessage('')
+    if (!sv.clientId.trim()) {
+      setMessage('Renseignez d’abord le Client ID Google (guide ci-dessous).')
+      return
+    }
+    try {
+      await connecterGoogle(sv.clientId.trim())
+      setMessage('Connecté — le Cockpit surveille maintenant Gmail et l’Agenda tant qu’un onglet est ouvert (~1 min de latence).')
+      forcer((x) => x + 1)
+    } catch (e) {
+      setMessage(`Connexion impossible : ${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
+
+  return (
+    <Card titre="Surveillance en direct — Gmail & Agenda (API Google gratuites)">
+      <p className="small muted" style={{ marginBottom: 10 }}>
+        Onglet ouvert, le Cockpit interroge Gmail et Google Agenda toutes les ~60 secondes en lecture
+        seule : chaque nouveau mail vers l’adresse surveillée arrive dans « À traiter », les prochains
+        événements s’affichent sur le Cockpit. Complète la routine du matin (qui, elle, trie et résume).
+        Le jeton reste dans le navigateur — rien ne transite ailleurs, et les quotas gratuits de Google
+        sont sans commune mesure avec l’usage d’une agence de deux personnes.
+      </p>
+      <div className="form-row">
+        <Field label="Adresse surveillée" hint="vide = toute la boîte de réception du compte connecté">
+          <TextInput value={sv.email} onChange={(v) => majSv('email', v)} placeholder="situations@agence-ll.fr" />
+        </Field>
+        <Field label="Client ID Google (OAuth)" hint="création gratuite en ~5 min, guide ci-dessous">
+          <TextInput value={sv.clientId} onChange={(v) => majSv('clientId', v)} placeholder="1234…apps.googleusercontent.com" />
+        </Field>
+      </div>
+      <div className="toolbar" style={{ marginTop: 8, marginBottom: 0 }}>
+        {estConnecte() ? (
+          <>
+            <Badge tone="ok">connecté — surveillance active</Badge>
+            <Btn small onClick={() => { deconnecter(); forcer((x) => x + 1) }}>Déconnecter</Btn>
+          </>
+        ) : (
+          <Btn kind="primary" onClick={connecter}>Connecter Google</Btn>
+        )}
+        {message && <span className="small">{message}</span>}
+      </div>
+      <details style={{ marginTop: 10 }}>
+        <summary className="small" style={{ cursor: 'pointer', color: 'var(--accent)' }}>
+          Guide : créer le Client ID Google (une fois, gratuit)
+        </summary>
+        <ol className="small" style={{ margin: '8px 0 0', paddingLeft: 18, lineHeight: 1.8 }}>
+          <li>console.cloud.google.com → créer un projet « Cockpit LL » (compte Google de l’agence).</li>
+          <li>« API et services » → activer <strong>Gmail API</strong> et <strong>Google Calendar API</strong>.</li>
+          <li>« Écran de consentement OAuth » : type Externe, mode <strong>Test</strong>, ajoutez vos deux adresses comme utilisateurs test (pas besoin de validation Google pour un outil interne).</li>
+          <li>« Identifiants » → « Créer des identifiants » → <strong>ID client OAuth</strong>, type « Application Web » ; dans « Origines JavaScript autorisées », ajoutez les adresses du site (ex. http://localhost:5173 et votre URL vercel.app).</li>
+          <li>Copiez l’ID client ci-dessus, « Connecter Google », choisissez le compte : c’est fini.</li>
+        </ol>
+      </details>
+    </Card>
+  )
+}
 
 export default function Parametres() {
   const { state, update, replace } = useStore()
@@ -316,6 +388,8 @@ export default function Parametres() {
           )}
         </Card>
       </div>
+
+      <CarteSurveillance />
 
       <Card titre="Données & confidentialité">
         <ul className="small" style={{ margin: 0, paddingLeft: 18, lineHeight: 1.8 }}>

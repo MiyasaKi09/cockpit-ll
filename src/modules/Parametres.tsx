@@ -284,7 +284,13 @@ export default function Parametres() {
   // ---------- sauvegarde / restauration ----------
 
   const exporterJSON = () => {
-    download(`cockpit-ll-${todayISO()}.json`, JSON.stringify(state, null, 2))
+    // l'horodatage part AVEC l'export : le fichier sait qu'il est la dernière sauvegarde
+    const copie = structuredClone(state)
+    copie.settings.derniereSauvegarde = todayISO()
+    download(`cockpit-ll-${todayISO()}.json`, JSON.stringify(copie, null, 2))
+    update((d) => {
+      d.settings.derniereSauvegarde = todayISO()
+    })
   }
 
   const importerJSON = async (file: File) => {

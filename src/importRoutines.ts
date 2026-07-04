@@ -185,9 +185,15 @@ export interface ResultatImport {
   nonRattaches: number
 }
 
+/** horodate le dernier import d'un type de routine (lu par la page Santé) */
+function marquerImport(draft: AppState, type: 'situations' | 'consultations' | 'courriers'): void {
+  draft.settings.derniersImports = { ...(draft.settings.derniersImports || {}), [type]: todayISO() }
+}
+
 /** importe les situations (mutation du draft passé par store.update) */
 export function importerSituations(draft: AppState, items: RetourSituation[]): ResultatImport {
   const res: ResultatImport = { ajoutes: 0, doublons: 0, nonRattaches: 0 }
+  marquerImport(draft, 'situations')
   for (const item of items) {
     const { marcheId, projetId } = rapprocherMarche(draft, item)
     if (situationExiste(draft, item, marcheId)) {
@@ -231,6 +237,7 @@ export function rapprocherProjet(state: AppState, ref?: string): string | null {
 /** importe les courriers triés par la routine mail (dédoublonnage de + objet) */
 export function importerCourriers(draft: AppState, items: RetourCourrier[]): ResultatImport {
   const res: ResultatImport = { ajoutes: 0, doublons: 0, nonRattaches: 0 }
+  marquerImport(draft, 'courriers')
   for (const item of items) {
     const existe = draft.courriers.some(
       (c) => fold(c.objet) === fold(item.objet) && fold(c.de) === fold(item.de) && c.statut === 'a_traiter',
@@ -264,6 +271,7 @@ export function importerCourriers(draft: AppState, items: RetourCourrier[]): Res
 /** importe les consultations (dédoublonnage sur intitulé + acheteur) */
 export function importerConsultations(draft: AppState, items: RetourConsultation[]): ResultatImport {
   const res: ResultatImport = { ajoutes: 0, doublons: 0, nonRattaches: 0 }
+  marquerImport(draft, 'consultations')
   for (const item of items) {
     const existe = draft.consultations.some(
       (c) =>

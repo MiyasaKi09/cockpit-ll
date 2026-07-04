@@ -343,6 +343,7 @@ export type TypeAlerte =
   | 'crm'
   | 'decennale'
   | 'cr_en_attente'
+  | 'sauvegarde'
 
 /** Alerte du fil d'urgences — calculée, jamais stockée (hors snooze) */
 export interface Alerte {
@@ -401,6 +402,17 @@ export interface Settings {
     /** identifiant OAuth « Web » créé sur console.cloud.google.com (gratuit) */
     clientId: string
   }
+  /** critères de la veille BOAMP intégrée (API DILA gratuite) */
+  veilleBoamp?: {
+    motsCles: string
+    departements: string
+    typeMarche: string
+    depuisJours: number
+  }
+  /** dernier import par routine (« situations », « consultations », « courriers ») → date ISO */
+  derniersImports?: Record<string, string>
+  /** dernier export JSON de sauvegarde (date ISO) */
+  derniereSauvegarde?: string | null
 }
 
 export interface AppState {

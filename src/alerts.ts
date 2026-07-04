@@ -193,6 +193,22 @@ export function computeAlertes(state: AppState, today: string): Alerte[] {
     })
   }
 
+  // --- Sauvegarde : tout vit dans ce navigateur — rappel doux si
+  // aucun export JSON depuis 14 jours (ou jamais).
+  const sauve = s.derniereSauvegarde
+  if (!sauve || diffDays(sauve, today) > 14) {
+    alertes.push({
+      id: `sauvegarde:${sauve || 'jamais'}`,
+      type: 'sauvegarde',
+      gravite: 1,
+      titre: sauve
+        ? `Sauvegarde JSON datée du ${fmtDate(sauve)} — pensez à exporter`
+        : 'Aucune sauvegarde JSON — exportez une première fois',
+      detail: 'Les données vivent dans ce navigateur : un export JSON régulier les met à l’abri (30 secondes).',
+      lien: '#/parametres',
+    })
+  }
+
   // tri : gravité décroissante puis date croissante
   alertes.sort((x, y) => y.gravite - x.gravite || (x.date || '9999').localeCompare(y.date || '9999'))
   return alertes

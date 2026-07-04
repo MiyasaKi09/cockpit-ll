@@ -20,6 +20,7 @@ export interface FSDirHandle {
   ): Promise<FSFileHandle & { createWritable(): Promise<{ write(d: Blob): Promise<void>; close(): Promise<void> }> }>
   queryPermission?(d: { mode: string }): Promise<string>
   requestPermission?(d: { mode: string }): Promise<string>
+  removeEntry?(name: string): Promise<void>
 }
 
 export const supporteFS = typeof window !== 'undefined' && 'showDirectoryPicker' in window
@@ -87,6 +88,19 @@ export function nomConforme(p: Projet, type: string, objet: string, nomFichier: 
     .replace(/^-+|-+$/g, '')
   const ext = nomFichier.includes('.') ? nomFichier.slice(nomFichier.lastIndexOf('.')) : ''
   return `${date}_${p.id}_${type}_${o}${ext}`
+}
+
+/** test de bout en bout : écrit, relit puis supprime un fichier témoin à la racine */
+export async function testerEcriture(racine: FSDirHandle): Promise<void> {
+  if (!(await verifierPermission(racine))) throw new Error('Accès au dossier refusé — recliquez et acceptez.')
+  const nom = '_test-cockpit.tmp'
+  const fh = await racine.getFileHandle(nom, { create: true })
+  const w = await fh.createWritable()
+  await w.write(new Blob(['cockpit-ok']))
+  await w.close()
+  const relu = await (await fh.getFile()).text()
+  await racine.removeEntry?.(nom).catch(() => undefined)
+  if (relu !== 'cockpit-ok') throw new Error('Le fichier relu diffère de ce qui a été écrit.')
 }
 
 /** écrit le fichier dans <racine>/<projet>/<sousDossier>/<nomFinal> */

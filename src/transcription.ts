@@ -95,3 +95,20 @@ export async function transcrireFichier(
   const texte = Array.isArray(sortie) ? sortie.map((s) => s.text).join(' ') : sortie.text
   return texte.trim()
 }
+
+/**
+ * Test de santé : charge le modèle (téléchargé puis mis en cache) et fait
+ * une inférence sur 1 s de silence. Si ça passe, la transcription d'une
+ * vraie réunion passera aussi — même moteur, même chemin.
+ */
+export async function testerModele(
+  modele: string,
+  onProgres: (p: ProgresTranscription) => void,
+): Promise<void> {
+  const asr = (await getPipeline(modele, onProgres)) as (
+    entree: Float32Array,
+    options: Record<string, unknown>,
+  ) => Promise<unknown>
+  onProgres({ etape: 'Modèle chargé — inférence d’essai…' })
+  await asr(new Float32Array(16000), { language: 'french', task: 'transcribe' })
+}

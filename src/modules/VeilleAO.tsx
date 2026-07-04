@@ -6,7 +6,7 @@
 // avis suivants. Claude propose, l'humain décide.
 // ============================================================
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { AppState, Consultation, StatutConsultation } from '../types'
 import { useStore } from '../store'
@@ -30,10 +30,12 @@ import {
   useToday,
 } from '../ui'
 import type { Tone } from '../ui'
-import { diffDays, fmtPct, fold, uid } from '../util'
+import { diffDays, fmtPct, fold, todayISO, uid } from '../util'
 import { assemble, contexteConsultation } from '../prompts'
 import { importerConsultations, parseRetourRoutine } from '../importRoutines'
 import type { RetourConsultation } from '../importRoutines'
+import { CRITERES_DEFAUT, rechercherBoamp } from '../boamp'
+import type { AnnonceBoamp, CriteresBoamp } from '../boamp'
 
 // ---------- référentiel des statuts ----------
 
@@ -124,6 +126,173 @@ function PromptConsultation({
       label={`${t.titre} → coller dans « ${t.projetClaude} »`}
       text={() => assemble(t.corps, contexteConsultation(state, consultation))}
     />
+  )
+}
+
+// ---------- veille BOAMP intégrée (API officielle gratuite) ----------
+
+/** l'annonce est-elle déjà dans le pipeline ? (idweb tracé dans la source, sinon intitulé+acheteur) */
+function dejaSuivie(state: AppState, a: AnnonceBoamp): boolean {
+  return state.consultations.some(
+    (c) =>
+      (c.source || '').includes(a.idweb) ||
+      (fold(c.intitule) === fold(a.objet) && fold(c.acheteur || '') === fold(a.acheteur || '')),
+  )
+}
+
+function CarteBoamp() {
+  const { state, update } = useStore()
+  const today = useToday()
+  const criteres: CriteresBoamp = { ...CRITERES_DEFAUT, ...(state.settings.veilleBoamp || {}) }
+  const [annonces, setAnnonces] = useState<AnnonceBoamp[] | null>(null)
+  const [erreur, setErreur] = useState('')
+  const [enCours, setEnCours] = useState(false)
+  const lanceAuto = useRef(false)
+
+  const majCriteres = (patch: Partial<CriteresBoamp>) =>
+    update((d) => {
+      d.settings.veilleBoamp = { ...criteres, ...patch }
+    })
+
+  const rechercher = async (c: CriteresBoamp) => {
+    setEnCours(true)
+    setErreur('')
+    try {
+      setAnnonces(await rechercherBoamp(c, todayISO()))
+    } catch (e) {
+      setErreur(e instanceof Error ? e.message : 'Recherche BOAMP impossible.')
+      setAnnonces(null)
+    } finally {
+      setEnCours(false)
+    }
+  }
+
+  // critères déjà réglés → la veille se lance toute seule à l'ouverture de la page
+  useEffect(() => {
+    if (lanceAuto.current || !state.settings.veilleBoamp) return
+    lanceAuto.current = true
+    void rechercher(criteres)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const suivre = (a: AnnonceBoamp) =>
+    update((d) => {
+      if (dejaSuivie(d, a)) return
+      d.consultations.push({
+        id: uid('ao'),
+        intitule: a.objet,
+        acheteur: a.acheteur,
+        lieu: a.departements.join(', '),
+        typologie: a.typeMarche,
+        budgetTravaux: null,
+        dateLimite: a.dateLimite,
+        statut: 'a_etudier',
+        source: `BOAMP ${a.idweb}`,
+        notes: `Avis officiel : ${a.url}`,
+      })
+    })
+
+  return (
+    <Card titre="Veille BOAMP automatique — les avis officiels arrivent tout seuls">
+      <p className="small muted" style={{ marginBottom: 10 }}>
+        Le site interroge directement l'API ouverte du BOAMP (gratuite, sans compte). Réglez les
+        critères une fois : à chaque visite de cette page, les annonces récentes s'affichent, et un
+        clic les met « À étudier » dans le pipeline. La routine Claude reste utile pour TED et les
+        sources privées.
+      </p>
+      <div className="toolbar" style={{ flexWrap: 'wrap' }}>
+        <Field label="Mots-clés (OU entre chaque, virgules)">
+          <TextInput
+            value={criteres.motsCles}
+            onChange={(v) => majCriteres({ motsCles: v })}
+            placeholder="maîtrise d'oeuvre, réhabilitation…"
+            style={{ minWidth: 280 }}
+          />
+        </Field>
+        <Field label="Départements">
+          <TextInput
+            value={criteres.departements}
+            onChange={(v) => majCriteres({ departements: v })}
+            placeholder="60, 80, 02 (vide = France)"
+            style={{ width: 140 }}
+          />
+        </Field>
+        <Field label="Type">
+          <Select
+            value={criteres.typeMarche}
+            onChange={(v) => majCriteres({ typeMarche: v })}
+            options={[
+              { value: 'Services', label: 'Services (MOE)' },
+              { value: 'Travaux', label: 'Travaux' },
+              { value: '', label: 'Tous' },
+            ]}
+          />
+        </Field>
+        <Field label="Parution">
+          <Select
+            value={String(criteres.depuisJours)}
+            onChange={(v) => majCriteres({ depuisJours: Number(v) || 30 })}
+            options={[
+              { value: '15', label: '15 derniers jours' },
+              { value: '30', label: '30 derniers jours' },
+              { value: '60', label: '60 derniers jours' },
+              { value: '90', label: '90 derniers jours' },
+            ]}
+          />
+        </Field>
+        <Field label=" ">
+          <Btn kind="primary" onClick={() => rechercher(criteres)} disabled={enCours}>
+            {enCours ? 'Recherche…' : 'Rechercher'}
+          </Btn>
+        </Field>
+      </div>
+      {erreur && <p className="small danger-text">{erreur}</p>}
+      {annonces && annonces.length === 0 && (
+        <EmptyState>Aucune annonce récente pour ces critères — élargissez les mots-clés ou la période.</EmptyState>
+      )}
+      {annonces && annonces.length > 0 && (
+        <Table compact head={['Parution', 'Objet', 'Acheteur', 'Dép.', 'Date limite', '']}>
+          {annonces.map((a) => {
+            const suivie = dejaSuivie(state, a)
+            const dj = a.dateLimite ? diffDays(today, a.dateLimite) : null
+            return (
+              <tr key={a.idweb}>
+                <td className="small">
+                  <DateF d={a.dateParution} />
+                </td>
+                <td>
+                  <a href={a.url} target="_blank" rel="noreferrer" title="Ouvrir l'avis officiel sur boamp.fr">
+                    {a.objet.length > 110 ? a.objet.slice(0, 110) + '…' : a.objet}
+                  </a>
+                  {a.nature && <span className="muted small"> — {a.nature}</span>}
+                </td>
+                <td className="small">{a.acheteur || '—'}</td>
+                <td className="small">{a.departements.join(', ') || '—'}</td>
+                <td className="small">
+                  {a.dateLimite ? (
+                    <>
+                      <DateF d={a.dateLimite} />{' '}
+                      {dj !== null && dj >= 0 && dj < 10 && <Badge tone="danger">J−{dj}</Badge>}
+                      {dj !== null && dj < 0 && <Badge tone="muted">close</Badge>}
+                    </>
+                  ) : (
+                    '—'
+                  )}
+                </td>
+                <td className="right">
+                  {suivie ? (
+                    <Badge tone="ok">déjà suivie</Badge>
+                  ) : (
+                    <Btn small kind="primary" onClick={() => suivre(a)} title="Ajouter au pipeline en « À étudier »">
+                      + À étudier
+                    </Btn>
+                  )}
+                </td>
+              </tr>
+            )
+          })}
+        </Table>
+      )}
+    </Card>
   )
 }
 
@@ -513,14 +682,15 @@ export default function VeilleAO() {
 
   return (
     <Page
-      titre="Veille AO"
-      sousTitre="Consultations repérées par la routine hebdomadaire, avis Go / No-Go outillés par Claude — décision et bilan restent humains."
+      titre="Appels d'offres"
+      sousTitre="Le BOAMP arrive tout seul (API officielle gratuite) ; la routine hebdo complète avec TED et les sources privées. Avis Go / No-Go outillés par Claude — décision et bilan restent humains."
       actions={
         <Btn kind="primary" onClick={() => setFiche({ c: nouvelleConsultation(), nouveau: true })}>
           Nouvelle consultation
         </Btn>
       }
     >
+      <CarteBoamp />
       <ImportVeille />
 
       <Card titre="Pipeline des consultations">

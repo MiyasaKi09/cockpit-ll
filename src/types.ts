@@ -311,6 +311,8 @@ export interface Consultation {
   avisGoNoGo?: string
   classement?: number | null
   motifsResultat?: string
+  /** projet créé automatiquement quand la consultation est gagnée */
+  projetId?: string | null
   /** personne concernée (facultatif) */
   pour?: string
   notes?: string

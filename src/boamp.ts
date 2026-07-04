@@ -8,7 +8,8 @@
 
 const BASE = 'https://boamp-datadila.opendatasoft.com/api/explore/v2.1/catalog/datasets/boamp/records'
 
-export interface AnnonceBoamp {
+/** une annonce, quelle que soit la plateforme (BOAMP direct, TED via relais…) */
+export interface AnnonceExterne {
   idweb: string
   objet: string
   acheteur: string
@@ -20,7 +21,10 @@ export interface AnnonceBoamp {
   typeMarche: string
   nature: string
   url: string
+  plateforme: 'BOAMP' | 'TED'
 }
+
+export type AnnonceBoamp = AnnonceExterne
 
 export interface CriteresBoamp {
   /** mots-clés séparés par des virgules — un OU entre chaque */
@@ -152,6 +156,7 @@ export async function rechercherBoamp(
         : x.type_marche_facette || '',
       nature: x.nature_libelle || '',
       url: x.url_avis || `https://www.boamp.fr/pages/avis/?q=idweb:${x.idweb}`,
+      plateforme: 'BOAMP' as const,
     }))
   memoriser({ date: new Date().toISOString(), nb: annonces.length })
   return annonces

@@ -35,7 +35,9 @@ import { assemble, contexteConsultation } from '../prompts'
 import { importerConsultations, parseRetourRoutine } from '../importRoutines'
 import type { RetourConsultation } from '../importRoutines'
 import { CRITERES_DEFAUT, rechercherBoamp } from '../boamp'
-import type { AnnonceBoamp, CriteresBoamp } from '../boamp'
+import type { AnnonceExterne, CriteresBoamp } from '../boamp'
+import { rechercherTed } from '../ted'
+import { relaisDisponible } from '../relais'
 import { genererDocxCandidature, nomFichierCandidature, referencesPertinentes } from '../candidature'
 import { ecrireFichierRacine, lireRacine } from '../fsdrive'
 
@@ -134,7 +136,7 @@ function PromptConsultation({
 // ---------- veille BOAMP intégrée (API officielle gratuite) ----------
 
 /** l'annonce est-elle déjà dans le pipeline ? (idweb tracé dans la source, sinon intitulé+acheteur) */
-function dejaSuivie(state: AppState, a: AnnonceBoamp): boolean {
+function dejaSuivie(state: AppState, a: AnnonceExterne): boolean {
   return state.consultations.some(
     (c) =>
       (c.source || '').includes(a.idweb) ||
@@ -146,8 +148,9 @@ function CarteBoamp() {
   const { state, update } = useStore()
   const today = useToday()
   const criteres: CriteresBoamp = { ...CRITERES_DEFAUT, ...(state.settings.veilleBoamp || {}) }
-  const [annonces, setAnnonces] = useState<AnnonceBoamp[] | null>(null)
+  const [annonces, setAnnonces] = useState<AnnonceExterne[] | null>(null)
   const [erreur, setErreur] = useState('')
+  const [noteTed, setNoteTed] = useState('')
   const [enCours, setEnCours] = useState(false)
   const lanceAuto = useRef(false)
 
@@ -159,14 +162,21 @@ function CarteBoamp() {
   const rechercher = async (c: CriteresBoamp) => {
     setEnCours(true)
     setErreur('')
-    try {
-      setAnnonces(await rechercherBoamp(c, todayISO()))
-    } catch (e) {
-      setErreur(e instanceof Error ? e.message : 'Recherche BOAMP impossible.')
-      setAnnonces(null)
-    } finally {
-      setEnCours(false)
-    }
+    setNoteTed('')
+    const [boamp, ted] = await Promise.allSettled([
+      rechercherBoamp(c, todayISO()),
+      relaisDisponible().then((d) =>
+        d ? rechercherTed(c, todayISO()) : Promise.reject(new Error('relais indisponible (site déployé uniquement)')),
+      ),
+    ])
+    const liste: AnnonceExterne[] = []
+    if (boamp.status === 'fulfilled') liste.push(...boamp.value)
+    else setErreur(boamp.reason instanceof Error ? boamp.reason.message : 'Recherche BOAMP impossible.')
+    if (ted.status === 'fulfilled') liste.push(...ted.value)
+    else setNoteTed(`TED non interrogé — ${ted.reason instanceof Error ? ted.reason.message : 'erreur inconnue'}.`)
+    liste.sort((a, b) => b.dateParution.localeCompare(a.dateParution))
+    setAnnonces(boamp.status === 'fulfilled' || ted.status === 'fulfilled' ? liste : null)
+    setEnCours(false)
   }
 
   // critères déjà réglés → la veille se lance toute seule à l'ouverture de la page
@@ -176,7 +186,7 @@ function CarteBoamp() {
     void rechercher(criteres)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const suivre = (a: AnnonceBoamp) =>
+  const suivre = (a: AnnonceExterne) =>
     update((d) => {
       if (dejaSuivie(d, a)) return
       d.consultations.push({
@@ -188,17 +198,17 @@ function CarteBoamp() {
         budgetTravaux: null,
         dateLimite: a.dateLimite,
         statut: 'a_etudier',
-        source: `BOAMP ${a.idweb}`,
+        source: `${a.plateforme} ${a.idweb}`,
         notes: `Avis officiel : ${a.url}`,
       })
     })
 
   return (
-    <Card titre="Veille BOAMP automatique — les avis officiels arrivent tout seuls">
+    <Card titre="Veille automatique — BOAMP + TED, les avis officiels arrivent tout seuls">
       <p className="small muted" style={{ marginBottom: 10 }}>
-        Le site interroge directement l'API ouverte du BOAMP (gratuite, sans compte) — uniquement les
-        <strong> avis de marché en cours</strong> (résultats, rectificatifs et avis expirés sont filtrés),
-        mots-clés cherchés dans l'objet de l'annonce. Un clic met l'annonce « À étudier » dans le pipeline.
+        BOAMP (national) interrogé en direct, TED (marchés européens, France entière) via le relais du
+        site — uniquement les <strong>avis de marché en cours</strong> : résultats, rectificatifs et avis
+        expirés sont filtrés, mots-clés cherchés dans l'objet. Un clic met l'annonce « À étudier ».
       </p>
       <div className="toolbar" style={{ flexWrap: 'wrap' }}>
         <Field label="Mots-clés (OU entre chaque, virgules)">
@@ -247,24 +257,17 @@ function CarteBoamp() {
         </Field>
       </div>
       {erreur && <p className="small danger-text">{erreur}</p>}
+      {noteTed && <p className="small muted">{noteTed}</p>}
       {annonces && annonces.length === 0 && (
         <EmptyState>Aucune annonce récente pour ces critères — élargissez les mots-clés ou la période.</EmptyState>
       )}
       <p className="muted small" style={{ marginBottom: 10 }}>
-        Chercher aussi sur :{' '}
+        Chercher aussi sur{' '}
         <a href="https://www.marches-publics.info/" target="_blank" rel="noreferrer">
           AWS / marches-publics.info
         </a>{' '}
-        ·{' '}
-        <a
-          href={`https://ted.europa.eu/fr/search/result?FT=${encodeURIComponent(criteres.motsCles.split(',')[0]?.trim() || "maîtrise d'oeuvre")}`}
-          target="_blank"
-          rel="noreferrer"
-        >
-          TED (marchés européens)
-        </a>{' '}
-        — ces plateformes n'ouvrent pas leurs données aux navigateurs : lien direct, ou routine Claude hebdo
-        pour un import trié.
+        (pas de flux exploitable — lien direct ou routine Claude hebdo). TED ne s'affiche que sur le site
+        déployé : c'est le relais du site qui l'interroge.
       </p>
       {annonces && annonces.length > 0 && (
         <Table compact head={['Parution', 'Objet', 'Acheteur', 'Dép.', 'Date limite', '']}>
@@ -277,7 +280,8 @@ function CarteBoamp() {
                   <DateF d={a.dateParution} />
                 </td>
                 <td>
-                  <a href={a.url} target="_blank" rel="noreferrer" title="Ouvrir l'avis officiel sur boamp.fr">
+                  <Badge tone={a.plateforme === 'TED' ? 'info' : 'muted'}>{a.plateforme}</Badge>{' '}
+                  <a href={a.url} target="_blank" rel="noreferrer" title="Ouvrir l'avis officiel">
                     {a.objet.length > 110 ? a.objet.slice(0, 110) + '…' : a.objet}
                   </a>
                 </td>

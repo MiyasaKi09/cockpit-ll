@@ -14,6 +14,8 @@ import { diffDays, fmtDate, todayISO } from '../util'
 import { estConnecte } from '../google'
 import { dernierScan, journalSurveillance, scannerUneFois } from '../surveillance'
 import { CRITERES_DEFAUT, derniereRechercheBoamp, rechercherBoamp } from '../boamp'
+import { relaisDisponible } from '../relais'
+import { rechercherTed } from '../ted'
 import { choisirRacine, lireRacine, supporteFS, testerEcriture, verifierPermission } from '../fsdrive'
 import type { FSDirHandle } from '../fsdrive'
 import { MODELES_WHISPER, testerModele } from '../transcription'
@@ -214,6 +216,69 @@ function SanteBoamp() {
       <CommentTester>
         cliquez « Tester la connexion » — un résultat en moins d'une seconde confirme que la veille
         marchera aussi depuis la page Appels d'offres.
+      </CommentTester>
+    </Branchement>
+  )
+}
+
+// ---------- relais Vercel (TED & sources sans CORS) ----------
+
+function SanteRelais() {
+  const { state } = useStore()
+  const [dispo, setDispo] = useState<boolean | null>(null)
+  const [verdict, setVerdict] = useState<{ ok: boolean; texte: string } | null>(null)
+  const [enCours, setEnCours] = useState(false)
+
+  useEffect(() => {
+    void relaisDisponible().then(setDispo)
+  }, [])
+
+  const tester = async () => {
+    setEnCours(true)
+    setVerdict(null)
+    const debut = performance.now()
+    try {
+      const criteres = state.settings.veilleBoamp || CRITERES_DEFAUT
+      const annonces = await rechercherTed(criteres, todayISO(), 3)
+      setVerdict({
+        ok: true,
+        texte: `TED répond via le relais en ${Math.round(performance.now() - debut)} ms — ${annonces.length} avis européen(s) récent(s) pour vos mots-clés.`,
+      })
+    } catch (e) {
+      setVerdict({ ok: false, texte: e instanceof Error ? e.message : 'Échec du test TED.' })
+    } finally {
+      setEnCours(false)
+    }
+  }
+
+  return (
+    <Branchement
+      etat={dispo === null ? 'attention' : dispo ? 'ok' : 'attention'}
+      titre="Relais du site — TED & plateformes sans accès navigateur"
+      actions={
+        <Btn small kind="primary" onClick={tester} disabled={!dispo || enCours}>
+          {enCours ? 'Test…' : 'Tester TED via le relais'}
+        </Btn>
+      }
+    >
+      <p className="small">
+        {dispo === null ? (
+          'Vérification…'
+        ) : dispo ? (
+          <Badge tone="ok">relais actif — TED alimente la veille Appels d'offres</Badge>
+        ) : (
+          <Badge tone="warn">relais injoignable</Badge>
+        )}{' '}
+        <span className="muted">
+          Une seule petite fonction gratuite hébergée avec le site (Vercel) : elle va chercher les
+          plateformes fermées aux navigateurs (TED — marchés européens). Rien n'est stocké, domaines
+          en liste blanche. En local (hors site déployé), il est normal qu'elle soit injoignable.
+        </span>
+      </p>
+      <Verdict v={verdict} />
+      <CommentTester>
+        cliquez le test : quelques avis européens doivent remonter. Ensuite, page Appels d'offres →
+        « Rechercher » : les lignes marquées TED viennent du relais.
       </CommentTester>
     </Branchement>
   )
@@ -462,6 +527,7 @@ export default function Sante() {
     >
       <SanteGoogle />
       <SanteBoamp />
+      <SanteRelais />
       <SanteDrive />
       <SanteWhisper />
       <SanteRoutines />

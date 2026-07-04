@@ -6,7 +6,7 @@
 
 import type { AppState, Facture, PromptTemplate } from './types'
 
-export const STATE_VERSION = 4
+export const STATE_VERSION = 5
 
 const P = (v: number) => Math.round(v * 100) / 100
 
@@ -257,8 +257,8 @@ export function seedState(): AppState {
       delaisPaiement: { Public: 30, 'Privé pro': 45, Particulier: 15 },
       personnes: ['Julien', 'Zoé'],
       equipe: [
-        { id: 'pers-julien', nom: 'Julien', brutMensuel: 3000, coefCharges: 1.45, heuresAnnuelles: 1720, facturablePct: 0.6 },
-        { id: 'pers-zoe', nom: 'Zoé', brutMensuel: 3000, coefCharges: 1.45, heuresAnnuelles: 1720, facturablePct: 0.6 },
+        { id: 'pers-julien', nom: 'Julien', remuMensuelle: 3000, modeRemu: 'brut', statut: 'dirigeant', coefCharges: 1.55, heuresAnnuelles: 1720, facturablePct: 0.6 },
+        { id: 'pers-zoe', nom: 'Zoé', remuMensuelle: 3000, modeRemu: 'brut', statut: 'dirigeant', coefCharges: 1.55, heuresAnnuelles: 1720, facturablePct: 0.6 },
       ],
       fraisGenerauxAnnuels: 30040,
       nomenclature: 'AAAAMMJJ_PROJET_TYPE_objet_vNN',
@@ -489,9 +489,9 @@ export function seedState(): AppState {
       { id: 'ob-multi', libelle: 'Assurance multirisque locaux', organisme: 'Assureur', echeance: '2026-09-15', periodiciteMois: 12, rappelJours: 21 },
       { id: 'ob-ordre', libelle: 'Cotisation Ordre des architectes', organisme: 'CROA Hauts-de-France', echeance: '2027-01-15', periodiciteMois: 12, rappelJours: 30 },
       { id: 'ob-tva', libelle: 'Déclaration et reversement TVA', organisme: 'DGFiP', echeance: '2026-10-12', periodiciteMois: 1, rappelJours: 7, notes: 'Régime réel normal : mensuelle. Exigible à l’encaissement.' },
-      { id: 'ob-urssaf', libelle: 'Cotisations TNS gérants', organisme: 'URSSAF', echeance: '2026-11-05', periodiciteMois: 3, rappelJours: 10, notes: 'Année 1 : forfaitaires, régularisation N+1.' },
+      { id: 'ob-urssaf', libelle: 'Cotisations sociales (DSN) — salaires SAS', organisme: 'URSSAF', echeance: '2026-11-15', periodiciteMois: 1, rappelJours: 5, notes: 'SAS : président·e assimilé salarié — DSN mensuelle comme pour un salarié.' },
       { id: 'ob-cfe', libelle: 'CFE', organisme: 'DGFiP', echeance: '2027-12-15', periodiciteMois: 12, rappelJours: 30, notes: 'Exonération 2026 (création) ; base réduite de 50 % en 2027.' },
-      { id: 'ob-ag', libelle: 'AG annuelle SARL — approbation des comptes', organisme: 'Greffe', echeance: '2027-06-30', periodiciteMois: 12, rappelJours: 45 },
+      { id: 'ob-ag', libelle: 'AG annuelle SAS — approbation des comptes', organisme: 'Greffe', echeance: '2027-06-30', periodiciteMois: 12, rappelJours: 45 },
       { id: 'ob-is', libelle: 'IS — solde exercice 1', organisme: 'DGFiP', echeance: '2027-05-15', periodiciteMois: 12, rappelJours: 30, notes: 'Pas d’acomptes la 1re année.' },
     ],
 

@@ -3,7 +3,7 @@
 
 import { createContext, useCallback, useContext, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { AppState } from './types'
+import type { AppState, Personne } from './types'
 import { seedState, STATE_VERSION } from './seed'
 
 const STORAGE_KEY = 'cockpit-ll-v1'
@@ -20,12 +20,29 @@ function migrate(parsed: AppState): AppState {
     etat.settings.equipe = noms.map((nom, i) => ({
       id: `pers-${i}-${nom.toLowerCase()}`,
       nom,
-      brutMensuel: 3000,
-      coefCharges: 1.45,
+      remuMensuelle: 3000,
+      modeRemu: 'brut',
+      statut: 'dirigeant',
       heuresAnnuelles: 1720,
       facturablePct: 0.6,
+      coefCharges: 1.55,
     }))
   }
+  // v4 → v5 : saisie net OU brut + statut SAS — l'ancien brutMensuel devient
+  // remuMensuelle en mode brut, coefficient conservé (aucun coût ne bouge)
+  etat.settings.equipe = etat.settings.equipe.map((p) => {
+    const ancien = p as Personne & { brutMensuel?: number }
+    return {
+      id: p.id,
+      nom: p.nom,
+      remuMensuelle: typeof p.remuMensuelle === 'number' ? p.remuMensuelle : ancien.brutMensuel ?? 0,
+      modeRemu: p.modeRemu === 'net' ? 'net' : 'brut',
+      statut: p.statut === 'salarie' ? 'salarie' : 'dirigeant',
+      coefCharges: typeof p.coefCharges === 'number' ? p.coefCharges : 1.55,
+      heuresAnnuelles: p.heuresAnnuelles,
+      facturablePct: p.facturablePct,
+    }
+  })
   if (typeof parsed.settings?.fraisGenerauxAnnuels !== 'number') etat.settings.fraisGenerauxAnnuels = 30040
   etat.projets = (parsed.projets || []).map((p) => ({
     ...p,

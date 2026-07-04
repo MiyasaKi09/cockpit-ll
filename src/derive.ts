@@ -122,11 +122,24 @@ export function delaiMoyenPaiement(state: AppState, typeMO?: string): number | n
 // chacun découle de sa rémunération réelle (brut × charges / heures).
 // ------------------------------------------------------------------
 
-import type { Personne } from './types'
+import type { ModeRemu, Personne, StatutRemu } from './types'
 
-/** coût annuel chargé d'une personne */
+/** SAS — coefficients indicatifs : montant saisi × coef ≈ coût employeur
+ *  complet. Sur le brut : ~1,55 président (pas de chômage mais tranches
+ *  cadres), ~1,42 salarié. Sur le net versé : ~2,05 président, ~1,82 salarié. */
+export const COEFS_SAS: Record<StatutRemu, Record<ModeRemu, number>> = {
+  dirigeant: { brut: 1.55, net: 2.05 },
+  salarie: { brut: 1.42, net: 1.82 },
+}
+
+export function coefSuggere(statut: StatutRemu, mode: ModeRemu): number {
+  return COEFS_SAS[statut][mode]
+}
+
+/** coût annuel chargé d'une personne (le coef s'applique au montant saisi,
+ *  net ou brut — il est suggéré en conséquence) */
 export function coutAnnuelPersonne(p: Personne): number {
-  return p.brutMensuel * 12 * p.coefCharges
+  return p.remuMensuelle * 12 * p.coefCharges
 }
 
 /** coût horaire réel d'une personne (rémunération chargée / heures annuelles) */

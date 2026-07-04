@@ -90,6 +90,17 @@ export function nomConforme(p: Projet, type: string, objet: string, nomFichier: 
   return `${date}_${p.id}_${type}_${o}${ext}`
 }
 
+/** écrit un fichier dans <racine>/<sousDossier>/ (hors arborescence projet — ex. candidatures AO) */
+export async function ecrireFichierRacine(racine: FSDirHandle, sousDossier: string, file: File): Promise<string> {
+  if (!(await verifierPermission(racine))) throw new Error('Accès au dossier refusé.')
+  const sous = await racine.getDirectoryHandle(sousDossier, { create: true })
+  const fh = await sous.getFileHandle(file.name, { create: true })
+  const w = await fh.createWritable()
+  await w.write(file)
+  await w.close()
+  return `${sousDossier}/${file.name}`
+}
+
 /** test de bout en bout : écrit, relit puis supprime un fichier témoin à la racine */
 export async function testerEcriture(racine: FSDirHandle): Promise<void> {
   if (!(await verifierPermission(racine))) throw new Error('Accès au dossier refusé — recliquez et acceptez.')

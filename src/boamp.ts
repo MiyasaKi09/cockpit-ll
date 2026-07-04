@@ -8,7 +8,8 @@
 
 const BASE = 'https://boamp-datadila.opendatasoft.com/api/explore/v2.1/catalog/datasets/boamp/records'
 
-export interface AnnonceBoamp {
+/** une annonce, quelle que soit la plateforme (BOAMP direct, TED via relais…) */
+export interface AnnonceExterne {
   idweb: string
   objet: string
   acheteur: string
@@ -20,7 +21,10 @@ export interface AnnonceBoamp {
   typeMarche: string
   nature: string
   url: string
+  plateforme: 'BOAMP' | 'TED'
 }
+
+export type AnnonceBoamp = AnnonceExterne
 
 export interface CriteresBoamp {
   /** mots-clés séparés par des virgules — un OU entre chaque */
@@ -46,10 +50,14 @@ function q(v: string): string {
 }
 
 function clauseWhere(c: CriteresBoamp, aujourdhui: string): string {
-  const clauses: string[] = []
+  // uniquement les vrais avis de marché : les « résultats », rectificatifs
+  // et annulations sont du bruit pour la prospection
+  const clauses: string[] = ['nature_libelle = "Avis de marché"']
 
+  // mots-clés cherchés dans l'OBJET seulement — le plein-texte global
+  // remontait n'importe quoi (un cahier des charges qui cite « architecte »…)
   const mots = c.motsCles.split(',').map((m) => m.trim()).filter(Boolean)
-  if (mots.length > 0) clauses.push(`(${mots.map(q).join(' OR ')})`)
+  if (mots.length > 0) clauses.push(`(${mots.map((m) => `search(objet,${q(m)})`).join(' OR ')})`)
 
   const deps = c.departements
     .split(',')
@@ -130,6 +138,8 @@ export async function rechercherBoamp(
   const data = (await r.json()) as { results?: RecordBoamp[] }
   const annonces = (data.results || [])
     .filter((x) => x.idweb && x.objet)
+    // date limite dépassée = plus la peine d'y penser
+    .filter((x) => !x.datelimitereponse || x.datelimitereponse.slice(0, 10) >= aujourdhui)
     .map((x) => ({
       idweb: x.idweb!,
       objet: x.objet!,
@@ -146,6 +156,7 @@ export async function rechercherBoamp(
         : x.type_marche_facette || '',
       nature: x.nature_libelle || '',
       url: x.url_avis || `https://www.boamp.fr/pages/avis/?q=idweb:${x.idweb}`,
+      plateforme: 'BOAMP' as const,
     }))
   memoriser({ date: new Date().toISOString(), nb: annonces.length })
   return annonces

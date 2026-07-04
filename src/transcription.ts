@@ -12,8 +12,9 @@ export interface ProgresTranscription {
 }
 
 export const MODELES_WHISPER = [
-  { id: 'onnx-community/whisper-base', label: 'Rapide (base — bon compromis)' },
-  { id: 'onnx-community/whisper-small', label: 'Précis (small — plus lent, meilleur français)' },
+  { id: 'onnx-community/whisper-small', label: 'Standard (small — bon français, ~250 Mo)' },
+  { id: 'onnx-community/whisper-large-v3-turbo', label: 'Très précis (large-v3-turbo — ~600 Mo, machine récente conseillée)' },
+  { id: 'onnx-community/whisper-base', label: 'Rapide (base — dépannage, qualité moyenne)' },
 ]
 
 let chargement: Promise<unknown> | null = null

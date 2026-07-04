@@ -24,6 +24,9 @@ import {
 import type { Tone } from '../ui'
 import { fmtDate, fmtMoney, fmtPct, todayISO, uid } from '../util'
 import { MODELES_WHISPER, transcrireFichier, type ProgresTranscription } from '../transcription'
+import { CONTRAT_CR, genererDocxCR, parseRetourCR } from '../crdocx'
+import { lireRacine, nomConforme, rangerFichier, supporteFS } from '../fsdrive'
+import { copier } from '../prompts'
 
 // ============================================================
 // Marchés de travaux
@@ -344,6 +347,8 @@ function AssistantCR({
   const [modele, setModele] = useState(MODELES_WHISPER[0].id)
   const [progres, setProgres] = useState<ProgresTranscription | null>(null)
   const [erreurAudio, setErreurAudio] = useState('')
+  const [retourClaude, setRetourClaude] = useState('')
+  const [messageDocx, setMessageDocx] = useState('')
   const enCours = progres !== null
 
   const transcrire = async (file: File) => {
@@ -359,8 +364,13 @@ function AssistantCR({
     setProgres({ etape: 'Préparation…' })
     try {
       const texte = await transcrireFichier(file, modele, setProgres)
-      setTranscript((prev) => (prev.trim() ? prev + '\n\n' : '') + texte)
+      const complet = (transcript.trim() ? transcript + '\n\n' : '') + texte
+      setTranscript(complet)
       if (reunion.statut === 'a_preparer') maj((r) => { r.statut = 'cr_a_generer' })
+      // le prompt complet part tout seul dans le presse-papier : il ne reste qu'à le coller dans Claude
+      if (await copier(construirePrompt(complet))) {
+        setMessageDocx('Transcription terminée — le prompt CR est DÉJÀ dans votre presse-papier : collez-le dans le Projet Claude, puis rapportez sa réponse ci-dessous.')
+      }
     } catch (e) {
       setErreurAudio(
         `Transcription impossible : ${e instanceof Error ? e.message : String(e)} — vous pouvez transcrire avec un outil local (MacWhisper, Vibe) et coller le texte ci-dessous.`,
@@ -378,11 +388,12 @@ function AssistantCR({
 
   const gabarit = state.prompts.find((t) => t.id === 'tpl-cr-chantier')
 
-  const construirePrompt = (): string => {
+  const construirePrompt = (texteTranscript?: string): string => {
+    const t = (texteTranscript ?? transcript).trim()
     const ctx = contexteProjet(state, p)
     let corps = gabarit
       ? assemble(gabarit.corps, ctx)
-      : `Compte-rendu de la réunion de chantier — ${p.nom} (${p.id}).\n\n${ctx.fiche}\n\nDictée brute :\n« ⟦coller ici⟧ »\n\nStructure le CR selon le template du Projet et génère le DOCX à relire.`
+      : `Compte-rendu de la réunion de chantier — ${p.nom} (${p.id}).\n\n${ctx.fiche}\n\nDictée brute :\n« ⟦coller ou dicter ici⟧ »`
     const blocReunion = [
       `Réunion : ${reunion.titre} du ${fmtDate(reunion.date)}.`,
       `Convoqués :`,
@@ -390,10 +401,45 @@ function AssistantCR({
       '',
     ].join('\n')
     corps = blocReunion + '\n' + corps
-    if (transcript.trim()) {
-      corps = corps.replace('« ⟦coller ou dicter ici⟧ »', transcript.trim())
-    }
+    if (t) corps = corps.replace('« ⟦coller ou dicter ici⟧ »', t)
+    corps += `\n\nIMPORTANT — la transcription est automatique et peut contenir des erreurs : corrige les noms propres d'après la liste des convoqués et le contexte. La mise en page est gérée par le Cockpit : termine ta réponse par UN SEUL bloc de code json strictement conforme à ce format (le Cockpit fabriquera le DOCX officiel) :\n\n\`\`\`json\n${CONTRAT_CR}\n\`\`\``
     return corps
+  }
+
+  const fabriquerDocx = async () => {
+    setMessageDocx('')
+    const { retour, erreur } = parseRetourCR(retourClaude)
+    if (erreur || !retour) {
+      setMessageDocx(`Impossible de lire le retour : ${erreur}`)
+      return
+    }
+    try {
+      const blob = await genererDocxCR(state.settings, p, reunion, retour)
+      const nom = nomConforme(p, 'CR', reunion.titre, 'cr.docx')
+      const file = new File([blob], nom, { type: blob.type })
+      let chemin = ''
+      if (supporteFS) {
+        const racine = await lireRacine()
+        if (racine) chemin = await rangerFichier(racine, p, '07_CHANTIER', file, nom)
+      }
+      if (!chemin) {
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = nom
+        a.click()
+        URL.revokeObjectURL(url)
+      }
+      maj((r) => { r.statut = 'cr_a_relire' })
+      setRetourClaude('')
+      setMessageDocx(
+        chemin
+          ? `DOCX fabriqué et rangé dans le Drive : ${chemin} — relisez avant diffusion.`
+          : 'DOCX fabriqué et téléchargé (configurez le Drive dans l’onglet Documents pour le rangement automatique) — relisez avant diffusion.',
+      )
+    } catch (e) {
+      setMessageDocx(`Fabrication impossible : ${e instanceof Error ? e.message : String(e)}`)
+    }
   }
 
   return (
@@ -421,11 +467,12 @@ function AssistantCR({
         <strong>2 · Transcrire ICI.</strong> Importez le fichier audio ci-dessous : la transcription
         (Whisper) tourne <em>dans le navigateur</em>, gratuitement — l'audio ne quitte pas votre machine.
         <br />
-        <strong>3 · Générer.</strong> Le bouton copie le prompt complet (contexte projet + convoqués +
-        transcription) → collez-le dans le Projet Claude « {gabarit?.projetClaude || 'CR de chantier'} ».
+        <strong>3 · Un aller-retour Claude.</strong> À la fin de la transcription, le prompt complet est
+        copié automatiquement : collez-le dans « {gabarit?.projetClaude || 'CR de chantier'} », puis
+        rapportez la réponse ci-dessous.
         <br />
-        <strong>4 · Relire & diffuser.</strong> Relecture humaine, envoi, archivage Drive — puis marquez
-        le CR diffusé ici.
+        <strong>4 · Le site fabrique le DOCX.</strong> Mise en page de l'agence, codée en dur, et
+        rangement direct dans 07_CHANTIER du Drive. Relecture humaine, diffusion, terminé.
       </div>
 
       <Field label="Fichier audio de la réunion (m4a, mp3, wav…)">
@@ -484,6 +531,22 @@ function AssistantCR({
           </Btn>
         )}
         {reunion.statut === 'diffuse' && <Badge tone="ok">CR diffusé</Badge>}
+      </div>
+
+      <Field label="Retour de Claude (collez sa réponse — le bloc JSON est détecté tout seul)">
+        <TextArea
+          value={retourClaude}
+          onChange={setRetourClaude}
+          rows={4}
+          mono
+          placeholder="Collez ici la réponse complète de Claude…"
+        />
+      </Field>
+      <div className="toolbar" style={{ marginTop: 6 }}>
+        <Btn kind="primary" onClick={fabriquerDocx} disabled={!retourClaude.trim()}>
+          Fabriquer le DOCX → Drive (07_CHANTIER)
+        </Btn>
+        {messageDocx && <span className="small">{messageDocx}</span>}
       </div>
 
       <Field label="Notes (points en attente, absents…)">

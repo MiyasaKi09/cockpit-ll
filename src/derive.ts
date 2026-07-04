@@ -46,7 +46,7 @@ export function heuresPrevues(projet: Projet, phase?: PhaseCode): number {
 }
 
 export function coutEngage(state: AppState, projetId: string): number {
-  return heuresReelles(state, projetId) * state.settings.coutHoraireRevient
+  return coutReelTemps(state, projetId)
 }
 
 /** date d'encaissement prévue d'une facture */
@@ -115,4 +115,80 @@ export function delaiMoyenPaiement(state: AppState, typeMO?: string): number | n
   if (encaissees.length === 0) return null
   const total = encaissees.reduce((s, f) => s + diffDays(f.emission, f.encaissementReel!), 0)
   return Math.round(total / encaissees.length)
+}
+
+// ------------------------------------------------------------------
+// Coûts RÉELS par personne — plus de forfait : le coût horaire de
+// chacun découle de sa rémunération réelle (brut × charges / heures).
+// ------------------------------------------------------------------
+
+import type { Personne } from './types'
+
+/** coût annuel chargé d'une personne */
+export function coutAnnuelPersonne(p: Personne): number {
+  return p.brutMensuel * 12 * p.coefCharges
+}
+
+/** coût horaire réel d'une personne (rémunération chargée / heures annuelles) */
+export function coutHorairePersonne(p: Personne): number {
+  return p.heuresAnnuelles > 0 ? coutAnnuelPersonne(p) / p.heuresAnnuelles : 0
+}
+
+/** coût horaire d'un nom (fallback : coût moyen de l'équipe, puis réglage historique) */
+export function coutHoraireDe(state: AppState, nom: string): number {
+  const p = state.settings.equipe.find((x) => x.nom === nom)
+  if (p) return coutHorairePersonne(p)
+  return coutHoraireMoyen(state)
+}
+
+/** coût horaire moyen pondéré de l'équipe (remplace l'ancien forfait) */
+export function coutHoraireMoyen(state: AppState): number {
+  const eq = state.settings.equipe
+  if (eq.length === 0) return state.settings.coutHoraireRevient
+  const total = eq.reduce((s, p) => s + coutAnnuelPersonne(p), 0)
+  const heures = eq.reduce((s, p) => s + p.heuresAnnuelles, 0)
+  return heures > 0 ? total / heures : state.settings.coutHoraireRevient
+}
+
+/** coût RÉEL du temps passé sur un projet : Σ heures × coût horaire de LA personne */
+export function coutReelTemps(state: AppState, projetId: string, phase?: PhaseCode): number {
+  return state.temps
+    .filter((t) => t.projetId === projetId && (phase === undefined || t.phase === phase))
+    .reduce((s, t) => s + t.heures * coutHoraireDe(state, t.personne), 0)
+}
+
+/** coûts externes saisis sur les phases (BET, sous-traitance, débours) */
+export function coutsExternes(state: AppState, projetId: string, phase?: PhaseCode): number {
+  const p = projetById(state, projetId)
+  if (!p) return 0
+  return p.phases
+    .filter((ph) => phase === undefined || ph.code === phase)
+    .reduce((s, ph) => s + (ph.coutExterneHT || 0), 0)
+}
+
+/** coût complet engagé sur un projet = temps réel valorisé + coûts externes */
+export function coutCompletProjet(state: AppState, projetId: string): number {
+  return coutReelTemps(state, projetId) + coutsExternes(state, projetId)
+}
+
+/** coût d'agence complet par an (équipe chargée + frais généraux) */
+export function coutAgenceAnnuel(state: AppState): number {
+  const equipe = state.settings.equipe.reduce((s, p) => s + coutAnnuelPersonne(p), 0)
+  return equipe + state.settings.fraisGenerauxAnnuels
+}
+
+/** seuil de rentabilité : € de marge à produire par JOUR facturable
+ *  pour payer tous les coûts fixes (l'« objectif » de la feuille Analyse) */
+export function coutJourObjectif(state: AppState): number {
+  const s = state.settings
+  const joursFacturables = s.equipe.reduce(
+    (t, p) => t + (p.heuresAnnuelles * p.facturablePct) / s.heuresParJour,
+    0,
+  )
+  return joursFacturables > 0 ? coutAgenceAnnuel(state) / joursFacturables : 0
+}
+
+/** heures → jours (heuresParJour des réglages) */
+export function enJours(state: AppState, heures: number): number {
+  return state.settings.heuresParJour > 0 ? heures / state.settings.heuresParJour : 0
 }

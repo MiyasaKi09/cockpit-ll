@@ -44,7 +44,7 @@ import {
   seuilPlancherActualise,
   totalPointsComplexite,
 } from '../miqcp'
-import { encaissementPrevu, factureHT, heuresPrevues, heuresReelles, retardFacture, ttc } from '../derive'
+import { coutJourObjectif, coutReelTemps, coutsExternes, encaissementPrevu, enJours, factureHT, heuresPrevues, heuresReelles, retardFacture, ttc } from '../derive'
 import { assemble, contexteProjet } from '../prompts'
 import { facturesParDefaut } from '../echeancier'
 import ProjetNouveau from './ProjetNouveau'
@@ -253,8 +253,11 @@ function EspaceProjet({ projetId, onglet }: { projetId: string; onglet?: string 
       sousTitre={
         <>
           <Badge tone={toneStatut(p.statut)}>{p.statut}</Badge> <Badge tone="info">{p.typeMO}</Badge>
+          {p.responsable && <Badge tone="muted">resp. {p.responsable}</Badge>}
+          {p.plaisir != null && <Badge tone={p.plaisir >= 4 ? 'ok' : p.plaisir <= 2 ? 'danger' : 'muted'}>{'★'.repeat(p.plaisir)}</Badge>}
           {p.moa && <> · {p.moa}</>}
           {p.adresse && <> · {p.adresse}</>}
+          {p.numeroEngagement && <span className="muted small"> · engagement {p.numeroEngagement}</span>}
         </>
       }
       actions={
@@ -382,12 +385,40 @@ function OngletFinances({ projet: p }: { projet: Projet }) {
     })
   }
 
+  const coutTemps = coutReelTemps(state, p.id)
+  const externes = coutsExternes(state, p.id)
+  const factTotal = factureHT(state, p.id)
+  const margeReelle = factTotal - coutTemps - externes
+  const joursPointes = enJours(state, heuresReelles(state, p.id))
+  const objectifJour = coutJourObjectif(state)
+
   const heuresParPhase = p.phases
     .map((ph) => ({ code: ph.code, prevu: ph.heuresPrevues, reel: heuresReelles(state, p.id, ph.code) }))
     .filter((x) => x.prevu > 0 || x.reel > 0)
 
   return (
     <>
+      <div className="grid4" style={{ marginBottom: 16 }}>
+        <Stat
+          label="Coût du temps (réel)"
+          value={<Money v={coutTemps} />}
+          sub="heures pointées × coût horaire de chaque personne"
+        />
+        <Stat label="Coûts externes" value={<Money v={externes} />} sub="BET, sous-traitance (onglet Pilotage, par phase)" />
+        <Stat
+          label="Marge réelle à date"
+          value={<Money v={margeReelle} />}
+          tone={margeReelle < 0 ? 'danger' : 'ok'}
+          sub={<>facturé {fmtMoney(factTotal)} − coûts</>}
+        />
+        <Stat
+          label="€ / jour réel"
+          value={joursPointes > 0.05 ? fmtMoney(factTotal / joursPointes) : '—'}
+          tone={joursPointes > 0.05 ? (factTotal / joursPointes >= objectifJour ? 'ok' : 'warn') : undefined}
+          sub={<>objectif {fmtMoney(objectifJour)} · <a href="#/analyse">Analyse →</a></>}
+        />
+      </div>
+
       <Card
         titre={`Échéancier du projet (${factures.length} factures)`}
         actions={
@@ -531,6 +562,16 @@ function CarteHonoraires({ projet: p }: { projet: Projet }) {
 
         <dt><strong>Honoraires totaux HT</strong></dt>
         <dd><strong><Money v={h.honorairesTotauxHT} /></strong></dd>
+
+        {p.surfacePlancher != null && p.surfacePlancher > 0 && (
+          <>
+            <dt>Ratios (SP {p.surfacePlancher} m²)</dt>
+            <dd className="muted small">
+              travaux {p.montantTravauxHT ? fmtMoney(p.montantTravauxHT / p.surfacePlancher) : '—'}/m² ·
+              honoraires {h.honorairesTotauxHT > 0 ? fmtMoney(h.honorairesTotauxHT / p.surfacePlancher) : '—'}/m²
+            </dd>
+          </>
+        )}
 
         <dt>Équivalent temps passé (vente)</dt>
         <dd>
@@ -697,6 +738,11 @@ function CartePhases({ projet: p }: { projet: Projet }) {
     })
   }
 
+  const encaissePhase = (code: PhaseCode) =>
+    state.factures
+      .filter((f) => f.projetId === p.id && f.phase === code && f.statut === 'encaissee')
+      .reduce((s2, f) => s2 + f.montantHT, 0)
+
   const totaux = p.phases.reduce(
     (t, ph) => {
       const fact = factureHT(state, p.id, ph.code)
@@ -706,9 +752,10 @@ function CartePhases({ projet: p }: { projet: Projet }) {
         reste: t.reste + (ph.montantHT - fact),
         hPrev: t.hPrev + ph.heuresPrevues,
         hReel: t.hReel + heuresReelles(state, p.id, ph.code),
+        externe: t.externe + (ph.coutExterneHT || 0),
       }
     },
-    { montant: 0, facture: 0, reste: 0, hPrev: 0, hReel: 0 },
+    { montant: 0, facture: 0, reste: 0, hPrev: 0, hReel: 0, externe: 0 },
   )
 
   return (
@@ -728,7 +775,9 @@ function CartePhases({ projet: p }: { projet: Projet }) {
             'Début',
             'Fin',
             <span key="hp" className="right">H. prévues</span>,
-            <span key="f" className="right">Facturé HT</span>,
+            <span key="ce" className="right" title="BET cotraitants, sous-traitance, débours — vient en moins de la marge">Coût ext. HT</span>,
+            <span key="f" className="right">% fact.</span>,
+            <span key="pay" className="right">% payé</span>,
             <span key="r" className="right">Reste HT</span>,
             <span key="hr" className="right">H. réelles</span>,
             'Écart heures',
@@ -772,8 +821,25 @@ function CartePhases({ projet: p }: { projet: Projet }) {
                     onChange={(v) => majPhase(ph.code, (x) => { x.heuresPrevues = v ?? 0 })}
                     style={{ width: 64 }}
                   />
+                  {ph.montantHT > 0 && coutJourObjectif(state) > 0 && (
+                    <div className="muted small" title="jours objectif = budget de phase ÷ seuil de rentabilité par jour">
+                      obj. {Math.round((ph.montantHT / coutJourObjectif(state)) * 10) / 10} j
+                    </div>
+                  )}
                 </td>
-                <td className="right"><Money v={fact} /></td>
+                <td className="right">
+                  <NumInput
+                    value={ph.coutExterneHT ?? null}
+                    onChange={(v) => majPhase(ph.code, (x) => { x.coutExterneHT = v ?? undefined })}
+                    style={{ width: 80 }}
+                  />
+                </td>
+                <td className="right num" title={fmtMoney(fact) + ' facturés'}>
+                  {ph.montantHT > 0 ? fmtPct(fact / ph.montantHT, 0) : '—'}
+                </td>
+                <td className="right num">
+                  {ph.montantHT > 0 ? fmtPct(encaissePhase(ph.code) / ph.montantHT, 0) : '—'}
+                </td>
                 <td className={`right ${reste < 0 ? 'danger-text' : ''}`}><Money v={reste} /></td>
                 <td className="right num">{fmtHeures(hReel)}</td>
                 <td><EcartHeures reel={hReel} prevu={ph.heuresPrevues} seuil={seuil} /></td>
@@ -787,7 +853,9 @@ function CartePhases({ projet: p }: { projet: Projet }) {
             <td />
             <td />
             <td className="right"><strong>{fmtHeures(totaux.hPrev)}</strong></td>
-            <td className="right"><strong><Money v={totaux.facture} /></strong></td>
+            <td className="right"><strong><Money v={totaux.externe} /></strong></td>
+            <td className="right num"><strong>{totaux.montant > 0 ? fmtPct(totaux.facture / totaux.montant, 0) : '—'}</strong></td>
+            <td />
             <td className={`right ${totaux.reste < 0 ? 'danger-text' : ''}`}>
               <strong><Money v={totaux.reste} /></strong>
             </td>
@@ -806,7 +874,7 @@ function CartePhases({ projet: p }: { projet: Projet }) {
 // ============================================================
 
 function ModalEditionProjet({ projet, onClose }: { projet: Projet; onClose: () => void }) {
-  const { update } = useStore()
+  const { state, update } = useStore()
 
   const [nom, setNom] = useState(projet.nom)
   const [typeMO, setTypeMO] = useState<string>(projet.typeMO)
@@ -816,6 +884,10 @@ function ModalEditionProjet({ projet, onClose }: { projet: Projet; onClose: () =
   const [adresse, setAdresse] = useState(projet.adresse || '')
   const [ouvrage, setOuvrage] = useState(projet.ouvrage || '')
   const [montant, setMontant] = useState<number | null>(projet.montantTravauxHT ?? null)
+  const [surface, setSurface] = useState<number | null>(projet.surfacePlancher ?? null)
+  const [responsable, setResponsable] = useState(projet.responsable || '')
+  const [plaisir, setPlaisir] = useState<number | null>(projet.plaisir ?? null)
+  const [numEng, setNumEng] = useState(projet.numeroEngagement || '')
   const [notes, setNotes] = useState(projet.notes || '')
 
   const enregistrer = () => {
@@ -832,6 +904,10 @@ function ModalEditionProjet({ projet, onClose }: { projet: Projet; onClose: () =
       pr.adresse = adresse.trim() || undefined
       pr.ouvrage = ouvrage || null
       pr.montantTravauxHT = montant
+      pr.surfacePlancher = surface
+      pr.responsable = responsable || undefined
+      pr.plaisir = plaisir
+      pr.numeroEngagement = numEng.trim() || undefined
       pr.notes = notes.trim() || undefined
 
       // à la livraison, le projet devient automatiquement une référence
@@ -902,6 +978,28 @@ function ModalEditionProjet({ projet, onClose }: { projet: Projet; onClose: () =
         </Field>
         <Field label="Montant de travaux HT (€)">
           <NumInput value={montant} onChange={setMontant} />
+        </Field>
+      </div>
+      <div className="form-row">
+        <Field label="Surface plancher (m²)" hint="active les ratios €/m²">
+          <NumInput value={surface} onChange={setSurface} />
+        </Field>
+        <Field label="Responsable interne">
+          <Select
+            value={responsable}
+            onChange={setResponsable}
+            options={[{ value: '', label: '—' }, ...state.settings.personnes.map((x) => ({ value: x, label: x }))]}
+          />
+        </Field>
+        <Field label="Plaisir (note /5)" hint="oui, ça compte">
+          <Select
+            value={plaisir === null ? '' : String(plaisir)}
+            onChange={(v) => setPlaisir(v === '' ? null : Number(v))}
+            options={[{ value: '', label: '—' }, ...[1, 2, 3, 4, 5].map((n) => ({ value: String(n), label: '★'.repeat(n) }))]}
+          />
+        </Field>
+        <Field label="N° marché / engagement">
+          <TextInput value={numEng} onChange={setNumEng} placeholder="ex. 220216" />
         </Field>
       </div>
       <div className="form-row">

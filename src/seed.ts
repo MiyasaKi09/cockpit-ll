@@ -6,7 +6,7 @@
 
 import type { AppState, Facture, PromptTemplate } from './types'
 
-export const STATE_VERSION = 3
+export const STATE_VERSION = 4
 
 const P = (v: number) => Math.round(v * 100) / 100
 
@@ -256,6 +256,11 @@ export function seedState(): AppState {
       seuilDeriveHeures: 0.9,
       delaisPaiement: { Public: 30, 'Privé pro': 45, Particulier: 15 },
       personnes: ['Julien', 'Zoé'],
+      equipe: [
+        { id: 'pers-julien', nom: 'Julien', brutMensuel: 3000, coefCharges: 1.45, heuresAnnuelles: 1720, facturablePct: 0.6 },
+        { id: 'pers-zoe', nom: 'Zoé', brutMensuel: 3000, coefCharges: 1.45, heuresAnnuelles: 1720, facturablePct: 0.6 },
+      ],
+      fraisGenerauxAnnuels: 30040,
       nomenclature: 'AAAAMMJJ_PROJET_TYPE_objet_vNN',
       snoozes: {},
       dernierImportExcel: null,
@@ -583,6 +588,8 @@ export function seedState(): AppState {
     prompts: GABARITS,
 
     reunions: [],
+
+    tempsHorsProjet: [],
 
     courriers: [
       {

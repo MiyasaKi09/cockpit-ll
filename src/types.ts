@@ -203,14 +203,23 @@ export interface TempsHorsProjet {
   heures: number
 }
 
+/** le montant saisi est-il le brut ou le net versé ? */
+export type ModeRemu = 'brut' | 'net'
+/** statut social en SAS : président·e assimilé salarié, ou salarié·e */
+export type StatutRemu = 'dirigeant' | 'salarie'
+
 /** membre de l'équipe — le coût horaire RÉEL se calcule depuis sa
  *  rémunération, plus aucun forfait */
 export interface Personne {
   id: string
   nom: string
-  /** rémunération mensuelle brute (salarié) ou net versé (gérant TNS) */
-  brutMensuel: number
-  /** coefficient de charges : ~1,45 TNS, ~1,42 salarié */
+  /** montant mensuel saisi — brut ou net selon modeRemu */
+  remuMensuelle: number
+  /** ce que représente le montant saisi */
+  modeRemu: ModeRemu
+  /** statut social (SAS) — pilote le coefficient suggéré */
+  statut: StatutRemu
+  /** coefficient de charges : montant saisi × coef = coût employeur complet */
   coefCharges: number
   /** heures travaillées par an (1720 ≈ temps plein) */
   heuresAnnuelles: number

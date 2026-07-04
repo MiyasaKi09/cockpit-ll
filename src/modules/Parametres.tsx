@@ -3,7 +3,7 @@
 // financière la première année), sauvegarde/restauration JSON.
 
 import { useRef, useState } from 'react'
-import type { AppState, TypeMO } from '../types'
+import type { AppState, ModeRemu, StatutRemu, TypeMO } from '../types'
 import { useStore } from '../store'
 import { seedState } from '../seed'
 import { computeAlertes } from '../alerts'
@@ -15,12 +15,13 @@ import {
   Money,
   NumInput,
   Page,
+  Select,
   Table,
   TextInput,
   useToday,
 } from '../ui'
 import { download, fmtDate, fmtMoney, fmtPct, fold, todayISO, uid } from '../util'
-import { coutAgenceAnnuel, coutAnnuelPersonne, coutHorairePersonne, coutHoraireMoyen, coutJourObjectif } from '../derive'
+import { coefSuggere, coutAgenceAnnuel, coutAnnuelPersonne, coutHorairePersonne, coutHoraireMoyen, coutJourObjectif } from '../derive'
 import { connecterGoogle, deconnecter, estConnecte } from '../google'
 
 const TYPES_MO: TypeMO[] = ['Public', 'Privé pro', 'Particulier']
@@ -31,7 +32,7 @@ function CarteEquipe() {
   const { state, update } = useStore()
   const eq = state.settings.equipe
 
-  const majPersonne = (id: string, champ: 'nom' | 'brutMensuel' | 'coefCharges' | 'heuresAnnuelles' | 'facturablePct', v: string | number | null) =>
+  const majPersonne = (id: string, champ: 'nom' | 'remuMensuelle' | 'coefCharges' | 'heuresAnnuelles' | 'facturablePct', v: string | number | null) =>
     update((d) => {
       const p = d.settings.equipe.find((x) => x.id === id)
       if (!p) return
@@ -40,9 +41,20 @@ function CarteEquipe() {
       d.settings.personnes = d.settings.equipe.map((x) => x.nom).filter(Boolean)
     })
 
+  /** changer Net/Brut ou le statut recale le coefficient sur la
+   *  suggestion SAS — sinon le coût serait silencieusement faux */
+  const majProfil = (id: string, champ: 'modeRemu' | 'statut', v: string) =>
+    update((d) => {
+      const p = d.settings.equipe.find((x) => x.id === id)
+      if (!p) return
+      if (champ === 'modeRemu') p.modeRemu = v as ModeRemu
+      else p.statut = v as StatutRemu
+      p.coefCharges = coefSuggere(p.statut, p.modeRemu)
+    })
+
   const ajouter = () =>
     update((d) => {
-      d.settings.equipe.push({ id: uid('pers'), nom: 'Nouveau', brutMensuel: 2500, coefCharges: 1.42, heuresAnnuelles: 1720, facturablePct: 0.6 })
+      d.settings.equipe.push({ id: uid('pers'), nom: 'Nouveau', remuMensuelle: 2500, modeRemu: 'brut', statut: 'salarie', coefCharges: coefSuggere('salarie', 'brut'), heuresAnnuelles: 1720, facturablePct: 0.6 })
       d.settings.personnes = d.settings.equipe.map((x) => x.nom)
     })
 
@@ -63,20 +75,48 @@ function CarteEquipe() {
         annuelles). La marge d'un projet et l'<a href="#/analyse">Analyse €/jour</a> reposent sur ces
         chiffres — pas sur un forfait.
       </p>
-      <Table compact head={['Personne', <span key="b" className="right">Rému. mensuelle (brut / net TNS)</span>, <span key="c" className="right">Coef. charges</span>, <span key="h" className="right">Heures / an</span>, <span key="f" className="right">% facturable</span>, <span key="ch" className="right">Coût horaire</span>, <span key="ca" className="right">Coût annuel chargé</span>, '']}>
+      <Table compact head={['Personne', 'Statut (SAS)', 'Saisie', <span key="b" className="right">€ / mois</span>, <span key="c" className="right">Coef. charges</span>, <span key="h" className="right">Heures / an</span>, <span key="f" className="right">% facturable</span>, <span key="ch" className="right">Coût horaire</span>, <span key="ca" className="right">Coût annuel chargé</span>, '']}>
         {eq.map((p) => (
           <tr key={p.id}>
-            <td><TextInput value={p.nom} onChange={(v) => majPersonne(p.id, 'nom', v)} style={{ width: 110 }} /></td>
-            <td className="right"><NumInput value={p.brutMensuel} onChange={(v) => majPersonne(p.id, 'brutMensuel', v)} style={{ width: 90 }} /></td>
-            <td className="right"><NumInput value={p.coefCharges} onChange={(v) => majPersonne(p.id, 'coefCharges', v)} style={{ width: 70 }} /></td>
-            <td className="right"><NumInput value={p.heuresAnnuelles} onChange={(v) => majPersonne(p.id, 'heuresAnnuelles', v)} style={{ width: 76 }} /></td>
-            <td className="right"><NumInput value={p.facturablePct} onChange={(v) => majPersonne(p.id, 'facturablePct', v)} style={{ width: 64 }} /></td>
+            <td><TextInput value={p.nom} onChange={(v) => majPersonne(p.id, 'nom', v)} style={{ width: 100 }} /></td>
+            <td>
+              <Select
+                value={p.statut}
+                onChange={(v) => majProfil(p.id, 'statut', v)}
+                options={[
+                  { value: 'dirigeant', label: 'Président·e' },
+                  { value: 'salarie', label: 'Salarié·e' },
+                ]}
+                style={{ width: 110 }}
+              />
+            </td>
+            <td>
+              <Select
+                value={p.modeRemu}
+                onChange={(v) => majProfil(p.id, 'modeRemu', v)}
+                options={[
+                  { value: 'brut', label: 'Brut' },
+                  { value: 'net', label: 'Net' },
+                ]}
+                style={{ width: 74 }}
+              />
+            </td>
+            <td className="right"><NumInput value={p.remuMensuelle} onChange={(v) => majPersonne(p.id, 'remuMensuelle', v)} style={{ width: 84 }} /></td>
+            <td className="right"><NumInput value={p.coefCharges} onChange={(v) => majPersonne(p.id, 'coefCharges', v)} style={{ width: 64 }} /></td>
+            <td className="right"><NumInput value={p.heuresAnnuelles} onChange={(v) => majPersonne(p.id, 'heuresAnnuelles', v)} style={{ width: 72 }} /></td>
+            <td className="right"><NumInput value={p.facturablePct} onChange={(v) => majPersonne(p.id, 'facturablePct', v)} style={{ width: 60 }} /></td>
             <td className="right num"><strong>{fmtMoney(coutHorairePersonne(p), true)}</strong></td>
             <td className="right num">{fmtMoney(coutAnnuelPersonne(p))}</td>
             <td className="right"><Btn small kind="danger" onClick={() => retirer(p.id)}>✕</Btn></td>
           </tr>
         ))}
       </Table>
+      <p className="muted small" style={{ marginTop: 8, marginBottom: 0 }}>
+        Saisissez le <strong>net versé</strong> ou le <strong>brut</strong>, au choix : le coefficient
+        transforme le montant en coût employeur complet et se recale tout seul quand vous changez le
+        statut ou la saisie. Indicatifs SAS — sur le brut : ×1,55 président·e · ×1,42 salarié·e ; sur
+        le net : ×2,05 président·e · ×1,82 salarié·e. Affinez-le avec les chiffres de votre expert-comptable.
+      </p>
       <div className="toolbar" style={{ marginTop: 10, marginBottom: 0 }}>
         <Btn small onClick={ajouter}>+ Ajouter une personne</Btn>
         <span className="spacer" />
@@ -94,7 +134,7 @@ function CarteEquipe() {
         <dt>Seuil de rentabilité par jour facturable</dt>
         <dd><strong>{fmtMoney(coutJourObjectif(state))}</strong> <span className="muted small">— l'objectif de l'Analyse €/jour</span></dd>
         <dt>Coût horaire moyen pondéré</dt>
-        <dd>{fmtMoney(coutHoraireMoyen(state), true)} <span className="muted small">(coefs indicatifs : ~1,45 gérant TNS · ~1,42 salarié)</span></dd>
+        <dd>{fmtMoney(coutHoraireMoyen(state), true)} <span className="muted small">(rémunérations chargées ÷ heures annuelles de l'équipe)</span></dd>
       </dl>
     </Card>
   )

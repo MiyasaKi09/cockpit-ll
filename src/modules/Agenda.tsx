@@ -126,7 +126,7 @@ function OngletObligations({ today }: { today: string }) {
   return (
     <>
       <div className="toolbar">
-        <span className="muted small">MAF, décennale, URSSAF, TVA, CFE, AG de la SARL… tout ce qui ne pardonne pas l'oubli.</span>
+        <span className="muted small">MAF, décennale, URSSAF, TVA, CFE, AG de la SAS… tout ce qui ne pardonne pas l'oubli.</span>
         <span className="spacer" />
         <Btn kind="primary" onClick={() => setCreation(true)}>
           Nouvelle obligation

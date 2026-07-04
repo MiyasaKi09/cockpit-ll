@@ -8,7 +8,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { AppState, Consultation, StatutConsultation } from '../types'
+import type { AppState, Consultation, Projet, StatutConsultation } from '../types'
 import { useStore } from '../store'
 import {
   Badge,
@@ -27,9 +27,11 @@ import {
   Table,
   TextArea,
   TextInput,
+  navigate,
   useToday,
 } from '../ui'
 import type { Tone } from '../ui'
+import { calculHonoraires, phasesParDefaut } from '../miqcp'
 import { diffDays, fmtPct, fold, todayISO, uid } from '../util'
 import { assemble, contexteConsultation } from '../prompts'
 import { importerConsultations, parseRetourRoutine } from '../importRoutines'
@@ -446,6 +448,52 @@ function ImportVeille() {
   )
 }
 
+// ---------- gagnée → le projet se crée tout seul ----------
+
+function prochainIdProjet(ids: string[]): string {
+  let max = 0
+  for (const id of ids) {
+    const m = /^P(\d+)$/.exec(id)
+    if (m) max = Math.max(max, Number(m[1]))
+  }
+  return `P${String(max + 1).padStart(2, '0')}`
+}
+
+/** crée le projet depuis la consultation gagnée (mutation du draft) — renvoie son id */
+function creerProjetDepuisConsultation(d: AppState, c: Consultation): string {
+  const id = prochainIdProjet(d.projets.map((p) => p.id))
+  const projet: Projet = {
+    id,
+    nom: c.intitule.length > 120 ? c.intitule.slice(0, 120) + '…' : c.intitule,
+    typeMO: 'Public',
+    statut: 'Signé',
+    moa: c.acheteur || undefined,
+    adresse: c.lieu || undefined,
+    ouvrage: null,
+    montantTravauxHT: c.budgetTravaux ?? null,
+    notesComplexite: {},
+    coefManuel: null,
+    tauxRetenu: null,
+    missionsComplHT: 0,
+    notes: `Créé automatiquement — consultation gagnée${c.source ? ` (${c.source})` : ''}.${c.notes ? `\n${c.notes}` : ''}`,
+    phases: [],
+    liens: [],
+    materiauxIds: [],
+    artisanIds: [],
+    journal: [],
+  }
+  // budget connu → répartition des honoraires par phase déjà posée (dates et
+  // échéancier se règlent ensuite dans la fiche projet) ; sans type d'ouvrage
+  // encore choisi, le taux barème seul sert de repère de départ
+  if (projet.montantTravauxHT) {
+    const h = calculHonoraires(projet, d.settings)
+    const base = h.honorairesBaseHT > 0 ? h.honorairesBaseHT : h.tauxBareme !== null ? projet.montantTravauxHT * h.tauxBareme : 0
+    if (base > 0) projet.phases = phasesParDefaut(base, d.settings.tauxHoraireVente)
+  }
+  d.projets.push(projet)
+  return id
+}
+
 // ---------- fiche / édition (Modal) ----------
 
 function nouvelleConsultation(): Consultation {
@@ -616,12 +664,20 @@ function FicheModal({
       return
     }
     const propre: Consultation = { ...c, intitule }
+    let projetCree: string | null = null
     update((d) => {
-      const i = d.consultations.findIndex((x) => x.id === propre.id)
-      if (i >= 0) d.consultations[i] = propre
-      else d.consultations.push(propre)
+      let finale = propre
+      // gagnée et pas encore de projet → il se crée tout seul
+      if (propre.statut === 'gagnee' && !propre.projetId) {
+        projetCree = creerProjetDepuisConsultation(d, propre)
+        finale = { ...propre, projetId: projetCree }
+      }
+      const i = d.consultations.findIndex((x) => x.id === finale.id)
+      if (i >= 0) d.consultations[i] = finale
+      else d.consultations.push(finale)
     })
     onClose()
+    if (projetCree) navigate(`/projets/${projetCree}`)
   }
 
   const supprimer = () => {
@@ -694,6 +750,21 @@ function FicheModal({
       </div>
       {resultatConnu && (
         <>
+          {c.statut === 'gagnee' && (
+            <p className="small" style={{ marginTop: 10 }}>
+              {c.projetId ? (
+                <>
+                  <Badge tone="ok">projet créé</Badge>{' '}
+                  <a href={`#/projets/${c.projetId}`}>ouvrir l'espace projet {c.projetId} →</a>
+                </>
+              ) : (
+                <span className="muted">
+                  🎉 À l'enregistrement, l'espace projet sera créé automatiquement (nom, MOA, budget,
+                  phases d'honoraires) — vous y serez amené directement.
+                </span>
+              )}
+            </p>
+          )}
           <div className="form-row" style={{ marginTop: 10 }}>
             <Field label="Classement" hint="Rang obtenu (1 = lauréat).">
               <NumInput value={c.classement ?? null} onChange={(v) => maj({ classement: v })} />

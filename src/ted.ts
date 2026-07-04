@@ -66,7 +66,7 @@ export async function rechercherTed(
         departements: [],
         typeMarche: '',
         nature: 'Avis TED',
-        url: `https://ted.europa.eu/fr/notice/${num}`,
+        url: `https://ted.europa.eu/fr/notice/-/detail/${num}`,
         plateforme: 'TED' as const,
       }
     })

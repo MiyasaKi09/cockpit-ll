@@ -2,7 +2,7 @@
 // Déterministe et méfiant : validation stricte, jamais d'écrasement —
 // tout arrive en « à vérifier » ou « à étudier », traçable via `source`.
 
-import type { AppState, Consultation, Situation } from './types'
+import type { AppState, Consultation, Courrier, Situation } from './types'
 import { fold, todayISO, uid } from './util'
 
 export interface RetourSituation {
@@ -15,6 +15,8 @@ export interface RetourSituation {
   montantCumulHT?: number | null
   confiance?: number | null
   source?: string
+  /** personne concernée (ex. "Julien") — filtre la boîte « À traiter » */
+  pour?: string
   notes?: string
 }
 
@@ -26,12 +28,27 @@ export interface RetourConsultation {
   budgetTravaux?: number | null
   dateLimite?: string | null
   source?: string
+  /** personne concernée (ex. "Zoé") */
+  pour?: string
   notes?: string
+}
+
+export interface RetourCourrier {
+  de: string
+  objet: string
+  resume: string
+  projet?: string
+  type?: string
+  actionProposee?: string
+  urgence?: number
+  pour?: string
+  source?: string
 }
 
 export type RetourRoutine =
   | { type: 'situations'; items: RetourSituation[] }
   | { type: 'consultations'; items: RetourConsultation[] }
+  | { type: 'courriers'; items: RetourCourrier[] }
 
 /** extrait le JSON d'un collage brut (tolère le bloc ```json ... ``` et le texte autour) */
 export function extraireJSON(brut: string): string | null {
@@ -54,8 +71,8 @@ export function parseRetourRoutine(brut: string): { retour?: RetourRoutine; erre
   }
   if (typeof data !== 'object' || data === null) return { erreur: 'Le JSON doit être un objet.' }
   const obj = data as { type?: unknown; items?: unknown }
-  if (obj.type !== 'situations' && obj.type !== 'consultations')
-    return { erreur: 'Champ « type » attendu : "situations" ou "consultations".' }
+  if (obj.type !== 'situations' && obj.type !== 'consultations' && obj.type !== 'courriers')
+    return { erreur: 'Champ « type » attendu : "situations", "consultations" ou "courriers".' }
   if (!Array.isArray(obj.items)) return { erreur: 'Champ « items » attendu : un tableau.' }
 
   if (obj.type === 'situations') {
@@ -77,10 +94,34 @@ export function parseRetourRoutine(brut: string): { retour?: RetourRoutine; erre
         confiance:
           typeof r.confiance === 'number' ? Math.max(0, Math.min(1, r.confiance)) : null,
         source: typeof r.source === 'string' ? r.source : undefined,
+        pour: typeof r.pour === 'string' ? r.pour : undefined,
         notes: typeof r.notes === 'string' ? r.notes : undefined,
       })
     }
     return { retour: { type: 'situations', items } }
+  }
+
+  if (obj.type === 'courriers') {
+    const items: RetourCourrier[] = []
+    for (const [i, raw] of (obj.items as unknown[]).entries()) {
+      const r = raw as Record<string, unknown>
+      if (typeof r?.objet !== 'string' || !r.objet.trim())
+        return { erreur: `items[${i}] : « objet » manquant.` }
+      if (typeof r?.resume !== 'string' || !r.resume.trim())
+        return { erreur: `items[${i}] : « resume » manquant.` }
+      items.push({
+        de: typeof r.de === 'string' ? r.de : '?',
+        objet: r.objet.trim(),
+        resume: r.resume.trim(),
+        projet: typeof r.projet === 'string' ? r.projet : undefined,
+        type: typeof r.type === 'string' ? r.type : undefined,
+        actionProposee: typeof r.actionProposee === 'string' ? r.actionProposee : undefined,
+        urgence: typeof r.urgence === 'number' ? r.urgence : undefined,
+        pour: typeof r.pour === 'string' ? r.pour : undefined,
+        source: typeof r.source === 'string' ? r.source : undefined,
+      })
+    }
+    return { retour: { type: 'courriers', items } }
   }
 
   const items: RetourConsultation[] = []
@@ -99,6 +140,7 @@ export function parseRetourRoutine(brut: string): { retour?: RetourRoutine; erre
           ? r.dateLimite
           : null,
       source: typeof r.source === 'string' ? r.source : undefined,
+      pour: typeof r.pour === 'string' ? r.pour : undefined,
       notes: typeof r.notes === 'string' ? r.notes : undefined,
     })
   }
@@ -167,9 +209,53 @@ export function importerSituations(draft: AppState, items: RetourSituation[]): R
       confiance: item.confiance ?? null,
       source: item.source || 'import routine',
       dateReception: todayISO(),
+      pour: item.pour,
       notes: item.notes,
     }
     draft.situations.push(sit)
+    res.ajoutes++
+  }
+  return res
+}
+
+/** rattache un courrier à un projet : id exact, sinon nom de projet contenu */
+export function rapprocherProjet(state: AppState, ref?: string): string | null {
+  if (!ref) return null
+  const brut = ref.trim()
+  if (state.projets.some((p) => p.id === brut)) return brut
+  const cible = fold(brut)
+  const parNom = state.projets.filter((p) => fold(p.nom).includes(cible) || cible.includes(fold(p.nom)))
+  return parNom.length === 1 ? parNom[0].id : null
+}
+
+/** importe les courriers triés par la routine mail (dédoublonnage de + objet) */
+export function importerCourriers(draft: AppState, items: RetourCourrier[]): ResultatImport {
+  const res: ResultatImport = { ajoutes: 0, doublons: 0, nonRattaches: 0 }
+  for (const item of items) {
+    const existe = draft.courriers.some(
+      (c) => fold(c.objet) === fold(item.objet) && fold(c.de) === fold(item.de) && c.statut === 'a_traiter',
+    )
+    if (existe) {
+      res.doublons++
+      continue
+    }
+    const projetId = rapprocherProjet(draft, item.projet)
+    if (!projetId) res.nonRattaches++
+    const courrier: Courrier = {
+      id: uid('mail'),
+      projetId,
+      de: item.de,
+      objet: item.objet,
+      resume: item.resume,
+      type: item.type || 'autre',
+      actionProposee: item.actionProposee,
+      urgence: item.urgence === 3 ? 3 : item.urgence === 1 ? 1 : item.urgence === 2 ? 2 : undefined,
+      pour: item.pour,
+      statut: 'a_traiter',
+      dateReception: todayISO(),
+      source: item.source || 'routine tri du matin',
+    }
+    draft.courriers.push(courrier)
     res.ajoutes++
   }
   return res
@@ -198,6 +284,7 @@ export function importerConsultations(draft: AppState, items: RetourConsultation
       dateLimite: item.dateLimite ?? null,
       statut: 'a_etudier',
       source: item.source || 'import routine',
+      pour: item.pour,
       notes: item.notes,
     }
     draft.consultations.push(c)

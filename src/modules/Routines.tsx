@@ -11,6 +11,7 @@ import {
   parseRetourRoutine,
   importerSituations,
   importerConsultations,
+  importerCourriers,
   type RetourRoutine,
   type ResultatImport,
 } from '../importRoutines'
@@ -105,7 +106,9 @@ function ImportUniversel() {
       res =
         apercu.type === 'situations'
           ? importerSituations(d, apercu.items)
-          : importerConsultations(d, apercu.items)
+          : apercu.type === 'courriers'
+            ? importerCourriers(d, apercu.items)
+            : importerConsultations(d, apercu.items)
     })
     setResultat({ type: apercu.type, res })
     setApercu(null)
@@ -140,7 +143,9 @@ function ImportUniversel() {
               <li key={i}>
                 {'entreprise' in it
                   ? `${it.entreprise} — ${it.mois}${it.montantMoisHT != null ? ` — ${it.montantMoisHT} € HT` : ''}`
-                  : `${it.intitule}${it.acheteur ? ` — ${it.acheteur}` : ''}`}
+                  : 'objet' in it
+                    ? `${it.objet} — ${it.de}${it.projet ? ` (${it.projet})` : ''}`
+                    : `${it.intitule}${it.acheteur ? ` — ${it.acheteur}` : ''}`}
               </li>
             ))}
             {apercu.items.length > 8 && <li>… et {apercu.items.length - 8} de plus</li>}
@@ -160,8 +165,8 @@ function ImportUniversel() {
             <> , {resultat.res.nonRattaches} à rattacher à un marché</>
           )}{' '}
           →{' '}
-          <a href={resultat.type === 'situations' ? '#/situations' : '#/ao'}>
-            ouvrir {resultat.type === 'situations' ? 'Situations' : 'Veille AO'}
+          <a href={resultat.type === 'situations' ? '#/situations' : resultat.type === 'courriers' ? '#/' : '#/ao'}>
+            ouvrir {resultat.type === 'situations' ? 'Situations' : resultat.type === 'courriers' ? 'le Cockpit (À traiter)' : 'Veille AO'}
           </a>
         </p>
       )}

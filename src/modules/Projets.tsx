@@ -1,16 +1,19 @@
 // ============================================================
-// Projets — liste + fiche (MIQCP, complexité, phases, marchés).
-// Le plus gros module : tout le pilotage d'un projet passe ici.
+// Projets — liste + espace projet (hub à onglets).
+// Tout ce qui concerne un projet se rattache ICI, au fil de
+// l'eau : pilotage MIQCP, chantier (marchés, CR), ressources
+// (matériaux, artisans, liens), journal, finances & temps.
 // ============================================================
 
 import { useState } from 'react'
-import type { MarcheTravaux, Phase, PhaseCode, Projet, StatutProjet, TypeMO } from '../types'
+import type { Phase, PhaseCode, Projet, StatutProjet, TypeMO } from '../types'
 import { useStore } from '../store'
 import {
   Badge,
   Btn,
   Card,
   CopyBtn,
+  DateF,
   DateInput,
   EmptyState,
   Field,
@@ -19,14 +22,17 @@ import {
   NumInput,
   Page,
   Select,
+  Stat,
   Table,
+  Tabs,
   TextArea,
   TextInput,
   navigate,
   useRoute,
+  useToday,
 } from '../ui'
 import type { Tone } from '../ui'
-import { fmtHeures, fmtMoney, fmtPct, fold, uid } from '../util'
+import { fmtHeures, fmtMoney, fmtPct, fold, todayISO, uid } from '../util'
 import {
   CRITERES_COMPLEXITE,
   LIBELLES_PHASES,
@@ -38,8 +44,14 @@ import {
   seuilPlancherActualise,
   totalPointsComplexite,
 } from '../miqcp'
-import { factureHT, heuresPrevues, heuresReelles } from '../derive'
+import { encaissementPrevu, factureHT, heuresPrevues, heuresReelles, retardFacture, ttc } from '../derive'
 import { assemble, contexteProjet } from '../prompts'
+import { facturesParDefaut } from '../echeancier'
+import ProjetNouveau from './ProjetNouveau'
+import ProjetChantier from './ProjetChantier'
+import ProjetRessources from './ProjetRessources'
+import ProjetJournal from './ProjetJournal'
+import ProjetDocuments from './ProjetDocuments'
 
 // ---------- constantes & petits helpers ----------
 
@@ -67,16 +79,6 @@ function fmtCoef(c: number | null | undefined): string {
   return c === null || c === undefined ? '—' : c.toFixed(2).replace('.', ',')
 }
 
-/** prochain identifiant libre de la forme P01, P02… */
-function prochainId(projets: Projet[]): string {
-  let max = 0
-  for (const p of projets) {
-    const m = /^P(\d+)$/.exec(p.id)
-    if (m) max = Math.max(max, Number(m[1]))
-  }
-  return `P${String(max + 1).padStart(2, '0')}`
-}
-
 /** badge d'écart heures réelles / prévues (cohérent avec le fil d'urgences) */
 function EcartHeures({ reel, prevu, seuil }: { reel: number; prevu: number; seuil: number }) {
   if (reel <= 0) return <span className="muted">—</span>
@@ -87,13 +89,14 @@ function EcartHeures({ reel, prevu, seuil }: { reel: number; prevu: number; seui
 }
 
 // ============================================================
-// Routage interne : #/projets = liste, #/projets/P01 = fiche
+// Routage interne : #/projets = liste, #/projets/P01 = espace,
+// #/projets/P01/<onglet> = onglet direct
 // ============================================================
 
 export default function Projets() {
   const route = useRoute()
   const id = route[1]
-  if (id) return <FicheProjet projetId={id} />
+  if (id) return <EspaceProjet projetId={id} onglet={route[2]} />
   return <ListeProjets />
 }
 
@@ -105,7 +108,7 @@ function ListeProjets() {
   const { state } = useStore()
   const [recherche, setRecherche] = useState('')
   const [filtreStatut, setFiltreStatut] = useState('')
-  const [modalCreation, setModalCreation] = useState(false)
+  const [wizard, setWizard] = useState(false)
 
   const projets = state.projets
     .filter((p) => {
@@ -119,8 +122,8 @@ function ListeProjets() {
   return (
     <Page
       titre="Projets"
-      sousTitre="Honoraires MIQCP, phases de mission et marchés de travaux — une fiche par projet."
-      actions={<Btn kind="primary" onClick={() => setModalCreation(true)}>Nouveau projet</Btn>}
+      sousTitre="Un espace par projet : pilotage, chantier, ressources, journal — tout s'ajoute au fil de l'eau, tout est interconnecté."
+      actions={<Btn kind="primary" onClick={() => setWizard(true)}>Nouveau projet</Btn>}
     >
       <div className="toolbar">
         <TextInput
@@ -140,7 +143,7 @@ function ListeProjets() {
         <Card>
           <EmptyState>
             {state.projets.length === 0
-              ? 'Aucun projet — créez le premier avec « Nouveau projet ».'
+              ? 'Aucun projet — « Nouveau projet » : 3 étapes, 2 minutes, phases et factures générées automatiquement.'
               : 'Aucun projet ne correspond à la recherche ou au filtre.'}
           </EmptyState>
         </Card>
@@ -186,19 +189,29 @@ function ListeProjets() {
         </Card>
       )}
 
-      {modalCreation && <ModalProjet onClose={() => setModalCreation(false)} />}
+      {wizard && <ProjetNouveau onClose={() => setWizard(false)} />}
     </Page>
   )
 }
 
 // ============================================================
-// Fiche projet
+// Espace projet — bandeau + onglets
 // ============================================================
 
-function FicheProjet({ projetId }: { projetId: string }) {
+const ONGLETS = [
+  { id: 'pilotage', label: 'Pilotage & honoraires' },
+  { id: 'chantier', label: 'Chantier & CR' },
+  { id: 'ressources', label: 'Ressources & liens' },
+  { id: 'journal', label: 'Journal' },
+  { id: 'documents', label: 'Documents (Drive)' },
+  { id: 'finances', label: 'Factures & temps' },
+]
+
+function EspaceProjet({ projetId, onglet }: { projetId: string; onglet?: string }) {
   const { state, update } = useStore()
   const [modalEdition, setModalEdition] = useState(false)
   const p = state.projets.find((x) => x.id === projetId)
+  const actif = ONGLETS.some((o) => o.id === onglet) ? onglet! : 'pilotage'
 
   if (!p) {
     return (
@@ -224,11 +237,12 @@ function FicheProjet({ projetId }: { projetId: string }) {
       )
       return
     }
-    if (!confirm(`Supprimer définitivement le projet ${p.id} — ${p.nom} (et ses marchés de travaux) ?`)) return
+    if (!confirm(`Supprimer définitivement le projet ${p.id} — ${p.nom} (et ses marchés, réunions, notes) ?`)) return
     update((d) => {
       d.projets = d.projets.filter((x) => x.id !== p.id)
       d.marches = d.marches.filter((m) => m.projetId !== p.id)
       d.temps = d.temps.filter((t) => t.projetId !== p.id)
+      d.reunions = d.reunions.filter((r) => r.projetId !== p.id)
     })
     navigate('/projets')
   }
@@ -250,7 +264,7 @@ function FicheProjet({ projetId }: { projetId: string }) {
               key={t.id}
               kind="default"
               text={() => assemble(t.corps, contexteProjet(state, p))}
-              label={`${t.titre} → coller dans « ${t.projetClaude} »`}
+              label={`${t.titre} → « ${t.projetClaude} »`}
             />
           ))}
           <Btn onClick={() => setModalEdition(true)}>Modifier</Btn>
@@ -263,16 +277,181 @@ function FicheProjet({ projetId }: { projetId: string }) {
         {p.notes && <span className="muted"> — {p.notes}</span>}
       </p>
 
-      <div className="grid2">
-        <CarteHonoraires projet={p} />
-        <CarteComplexite projet={p} />
-      </div>
+      <BandeauProjet projet={p} />
 
-      <CartePhases projet={p} />
-      <CarteMarches projet={p} />
+      <Tabs
+        tabs={ONGLETS.map((o) => ({ id: o.id, label: o.label }))}
+        actif={actif}
+        onSelect={(id) => navigate(`/projets/${p.id}/${id}`)}
+      />
 
-      {modalEdition && <ModalProjet projet={p} onClose={() => setModalEdition(false)} />}
+      {actif === 'pilotage' && (
+        <>
+          <div className="grid2">
+            <CarteHonoraires projet={p} />
+            <CarteComplexite projet={p} />
+          </div>
+          <CartePhases projet={p} />
+        </>
+      )}
+      {actif === 'chantier' && <ProjetChantier projet={p} />}
+      {actif === 'ressources' && <ProjetRessources projet={p} />}
+      {actif === 'journal' && <ProjetJournal projet={p} />}
+      {actif === 'documents' && <ProjetDocuments projet={p} />}
+      {actif === 'finances' && <OngletFinances projet={p} />}
+
+      {modalEdition && <ModalEditionProjet projet={p} onClose={() => setModalEdition(false)} />}
     </Page>
+  )
+}
+
+/** bandeau : les 4 chiffres qui résument le projet, toujours visibles */
+function BandeauProjet({ projet: p }: { projet: Projet }) {
+  const { state } = useStore()
+  const today = useToday()
+  const h = calculHonoraires(p, state.settings)
+  const fact = factureHT(state, p.id)
+  const reste = h.honorairesTotauxHT - fact
+  const hReel = heuresReelles(state, p.id)
+  const hPrev = heuresPrevues(p)
+
+  const prochainePhase = p.phases
+    .filter((ph) => ph.fin && ph.fin >= today && ph.montantHT > 0)
+    .sort((a, b) => (a.fin || '').localeCompare(b.fin || ''))[0]
+  const enRetard = state.factures.filter((f) => f.projetId === p.id && retardFacture(f, today) > 0)
+
+  return (
+    <div className="grid4" style={{ marginBottom: 16 }}>
+      <Stat label="Honoraires totaux" value={<Money v={h.honorairesTotauxHT} />} sub={`taux ${fmtPct(h.tauxFinal, 2)}`} />
+      <Stat
+        label="Facturé / reste"
+        value={<Money v={fact} />}
+        sub={<>reste à facturer {fmtMoney(Math.max(0, reste))}</>}
+        tone={enRetard.length > 0 ? 'danger' : undefined}
+      />
+      <Stat
+        label="Heures réel / prévu"
+        value={`${Math.round(hReel)} / ${Math.round(hPrev)} h`}
+        tone={hPrev > 0 && hReel >= hPrev ? 'danger' : hPrev > 0 && hReel >= hPrev * state.settings.seuilDeriveHeures ? 'warn' : undefined}
+        sub={<a href="#/temps">pointer les heures →</a>}
+      />
+      <Stat
+        label="Prochaine échéance"
+        value={prochainePhase ? prochainePhase.code : '—'}
+        sub={
+          enRetard.length > 0 ? (
+            <span className="danger-text">{enRetard.length} facture(s) en retard — <a href="#/facturation">relancer</a></span>
+          ) : prochainePhase ? (
+            <>rendu le <DateF d={prochainePhase.fin} /></>
+          ) : (
+            'aucune phase datée à venir'
+          )
+        }
+      />
+    </div>
+  )
+}
+
+// ============================================================
+// Onglet Finances — factures du projet (auto) + temps
+// ============================================================
+
+function OngletFinances({ projet: p }: { projet: Projet }) {
+  const { state, update } = useStore()
+  const today = useToday()
+
+  const factures = state.factures
+    .filter((f) => f.projetId === p.id)
+    .sort((a, b) => a.emission.localeCompare(b.emission))
+
+  const generer = () => {
+    const nouvelles = facturesParDefaut(p, state.settings, state.factures)
+    if (nouvelles.length === 0) {
+      alert('Rien à générer : datez d’abord les phases (onglet Pilotage) — l’échéancier se construit sur les fins de phases.')
+      return
+    }
+    if (
+      !confirm(
+        `Générer ${nouvelles.length} facture(s) prévisionnelle(s) selon le modèle « ${p.typeMO} » ?\n` +
+          `Les ${factures.length} facture(s) existantes du projet ne sont pas touchées — attention aux doublons si l’échéancier a déjà été généré.`,
+      )
+    )
+      return
+    update((d) => {
+      d.factures.push(...facturesParDefaut(p, d.settings, d.factures))
+    })
+  }
+
+  const heuresParPhase = p.phases
+    .map((ph) => ({ code: ph.code, prevu: ph.heuresPrevues, reel: heuresReelles(state, p.id, ph.code) }))
+    .filter((x) => x.prevu > 0 || x.reel > 0)
+
+  return (
+    <>
+      <Card
+        titre={`Échéancier du projet (${factures.length} factures)`}
+        actions={
+          <>
+            <a href="#/facturation" className="small">Module Facturation →</a>
+            <Btn small kind="primary" onClick={generer}>(Re)générer l'échéancier</Btn>
+          </>
+        }
+      >
+        {factures.length === 0 ? (
+          <EmptyState>
+            Aucune facture — « (Re)générer l'échéancier » les crée automatiquement depuis les phases datées
+            (modèle {p.typeMO}).
+          </EmptyState>
+        ) : (
+          <Table
+            compact
+            head={['N°', 'Phase', 'Libellé', <span key="h" className="right">HT</span>, <span key="t" className="right">TTC</span>, 'Émission', 'Statut']}
+          >
+            {factures.map((f) => {
+              const retard = retardFacture(f, today)
+              return (
+                <tr key={f.id}>
+                  <td className="mono">{f.id}</td>
+                  <td>{f.phase}</td>
+                  <td>{f.libelle}</td>
+                  <td className="right"><Money v={f.montantHT} /></td>
+                  <td className="right"><Money v={ttc(f)} /></td>
+                  <td><DateF d={f.emission} /></td>
+                  <td>
+                    {retard > 0 ? (
+                      <Badge tone="danger">en retard {retard} j</Badge>
+                    ) : f.statut === 'encaissee' ? (
+                      <Badge tone="ok">encaissée</Badge>
+                    ) : f.statut === 'emise' ? (
+                      <Badge tone="info">émise · échéance {encaissementPrevu(f)}</Badge>
+                    ) : (
+                      <Badge tone="muted">prévue</Badge>
+                    )}
+                  </td>
+                </tr>
+              )
+            })}
+          </Table>
+        )}
+      </Card>
+
+      <Card titre="Temps passé par phase" actions={<a href="#/temps" className="small">Saisie des temps →</a>}>
+        {heuresParPhase.length === 0 ? (
+          <EmptyState>Aucune heure prévue ni pointée.</EmptyState>
+        ) : (
+          <Table compact head={['Phase', <span key="p" className="right">Prévu</span>, <span key="r" className="right">Pointé</span>, 'Écart']}>
+            {heuresParPhase.map((x) => (
+              <tr key={x.code}>
+                <td>{x.code} <span className="muted small">{LIBELLES_PHASES[x.code]}</span></td>
+                <td className="right num">{fmtHeures(x.prevu)}</td>
+                <td className="right num">{fmtHeures(x.reel)}</td>
+                <td><EcartHeures reel={x.reel} prevu={x.prevu} seuil={state.settings.seuilDeriveHeures} /></td>
+              </tr>
+            ))}
+          </Table>
+        )}
+      </Card>
+    </>
   )
 }
 
@@ -379,7 +558,7 @@ function CarteHonoraires({ projet: p }: { projet: Projet }) {
 // ============================================================
 
 function CarteComplexite({ projet: p }: { projet: Projet }) {
-  const { state, update } = useStore()
+  const { update } = useStore()
   const [ouverte, setOuverte] = useState(false)
 
   const plage = plageOuvrage(p.ouvrage)
@@ -622,158 +801,73 @@ function CartePhases({ projet: p }: { projet: Projet }) {
 }
 
 // ============================================================
-// Carte Marchés de travaux — CRUD
+// Modal d'édition (l'identité du projet — la création passe par
+// l'assistant ProjetNouveau)
 // ============================================================
 
-function CarteMarches({ projet: p }: { projet: Projet }) {
-  const { state, update } = useStore()
-  const [modal, setModal] = useState<{ marche?: MarcheTravaux } | null>(null)
+function ModalEditionProjet({ projet, onClose }: { projet: Projet; onClose: () => void }) {
+  const { update } = useStore()
 
-  const marches = state.marches.filter((m) => m.projetId === p.id)
-
-  const supprimer = (m: MarcheTravaux) => {
-    const nbSits = state.situations.filter((s) => s.marcheId === m.id).length
-    const question =
-      nbSits > 0
-        ? `Supprimer le marché « ${m.lot} — ${m.entreprise} » ?\n${nbSits} situation(s) y sont rattachées : elles seront conservées mais détachées du marché.`
-        : `Supprimer le marché « ${m.lot} — ${m.entreprise} » ?`
-    if (!confirm(question)) return
-    update((d) => {
-      d.marches = d.marches.filter((x) => x.id !== m.id)
-      for (const s of d.situations) if (s.marcheId === m.id) s.marcheId = null
-    })
-  }
-
-  return (
-    <Card
-      titre="Marchés de travaux"
-      actions={
-        <>
-          <a href="#/situations" className="small">Situations de travaux →</a>
-          <Btn small kind="primary" onClick={() => setModal({})}>Ajouter un marché</Btn>
-        </>
-      }
-    >
-      {marches.length === 0 ? (
-        <EmptyState>
-          Aucun marché de travaux — ajoutez les lots à la signature des marchés (support du suivi des situations).
-        </EmptyState>
-      ) : (
-        <Table
-          compact
-          head={[
-            'Lot',
-            'Entreprise',
-            <span key="m" className="right">Montant HT (avenants inclus)</span>,
-            'RG',
-            'Révision',
-            'Chantier',
-            'Contact',
-            'Délai vérif.',
-            '',
-          ]}
-        >
-          {marches.map((m) => (
-            <tr key={m.id}>
-              <td><strong>{m.lot}</strong></td>
-              <td>
-                {m.entreprise}
-                {m.notes && <div className="muted small">{m.notes}</div>}
-              </td>
-              <td className="right">
-                <Money v={m.montantInitialHT + m.avenantsHT} />
-                {m.avenantsHT !== 0 && (
-                  <div className="muted small">dont avenants {fmtMoney(m.avenantsHT)}</div>
-                )}
-              </td>
-              <td className="num">{fmtPct(m.tauxRG, 0)}</td>
-              <td>{m.revision ? 'oui' : '—'}</td>
-              <td>{m.actif ? <Badge tone="ok">en cours</Badge> : <span className="muted">—</span>}</td>
-              <td className="small">
-                {m.contactNom || <span className="muted">—</span>}
-                {m.contactEmail && <div className="muted">{m.contactEmail}</div>}
-              </td>
-              <td className="num">{m.delaiVerifJours} j</td>
-              <td className="right">
-                <span style={{ display: 'inline-flex', gap: 6 }}>
-                  <Btn small onClick={() => setModal({ marche: m })}>Modifier</Btn>
-                  <Btn small kind="danger" onClick={() => supprimer(m)}>Supprimer</Btn>
-                </span>
-              </td>
-            </tr>
-          ))}
-        </Table>
-      )}
-
-      {modal && <ModalMarche projetId={p.id} marche={modal.marche} onClose={() => setModal(null)} />}
-    </Card>
-  )
-}
-
-// ============================================================
-// Modal projet — création & édition
-// ============================================================
-
-function ModalProjet({ projet, onClose }: { projet?: Projet; onClose: () => void }) {
-  const { state, update } = useStore()
-  const creation = !projet
-  const idAuto = prochainId(state.projets)
-
-  const [nom, setNom] = useState(projet?.nom || '')
-  const [typeMO, setTypeMO] = useState<string>(projet?.typeMO || 'Public')
-  const [statut, setStatut] = useState<string>(projet?.statut || 'Prospect')
-  const [moa, setMoa] = useState(projet?.moa || '')
-  const [adresse, setAdresse] = useState(projet?.adresse || '')
-  const [ouvrage, setOuvrage] = useState(projet?.ouvrage || '')
-  const [montant, setMontant] = useState<number | null>(projet?.montantTravauxHT ?? null)
-  const [notes, setNotes] = useState(projet?.notes || '')
+  const [nom, setNom] = useState(projet.nom)
+  const [typeMO, setTypeMO] = useState<string>(projet.typeMO)
+  const [statut, setStatut] = useState<string>(projet.statut)
+  const [moa, setMoa] = useState(projet.moa || '')
+  const [emailMOA, setEmailMOA] = useState(projet.emailMOA || '')
+  const [adresse, setAdresse] = useState(projet.adresse || '')
+  const [ouvrage, setOuvrage] = useState(projet.ouvrage || '')
+  const [montant, setMontant] = useState<number | null>(projet.montantTravauxHT ?? null)
+  const [notes, setNotes] = useState(projet.notes || '')
 
   const enregistrer = () => {
     if (nom.trim() === '') return
-    if (creation) {
-      const nouveau: Projet = {
-        id: idAuto,
-        nom: nom.trim(),
-        typeMO: typeMO as TypeMO,
-        statut: statut as StatutProjet,
-        moa: moa.trim() || undefined,
-        adresse: adresse.trim() || undefined,
-        ouvrage: ouvrage || null,
-        montantTravauxHT: montant,
-        notesComplexite: {},
-        coefManuel: null,
-        tauxRetenu: null,
-        missionsComplHT: 0,
-        notes: notes.trim() || undefined,
-        phases: [],
+    const livraison = statut === 'Livré' && projet.statut !== 'Livré'
+    update((d) => {
+      const pr = d.projets.find((x) => x.id === projet.id)
+      if (!pr) return
+      pr.nom = nom.trim()
+      pr.typeMO = typeMO as TypeMO
+      pr.statut = statut as StatutProjet
+      pr.moa = moa.trim() || undefined
+      pr.emailMOA = emailMOA.trim() || undefined
+      pr.adresse = adresse.trim() || undefined
+      pr.ouvrage = ouvrage || null
+      pr.montantTravauxHT = montant
+      pr.notes = notes.trim() || undefined
+
+      // à la livraison, le projet devient automatiquement une référence
+      if (livraison && !d.references.some((r) => fold(r.nom) === fold(pr.nom))) {
+        const finAOR = pr.phases.find((ph) => ph.code === 'AOR')?.fin
+        const tagsJournal = [...new Set(pr.journal.flatMap((n) => n.tags))]
+          .filter((t) => !['a-faire', 'mail', 'photo'].includes(t))
+          .slice(0, 4)
+        d.references.push({
+          id: uid('ref'),
+          nom: pr.nom,
+          lieu: pr.adresse,
+          annee: Number((finAOR || todayISO()).slice(0, 4)),
+          typeMO: pr.typeMO,
+          moa: pr.moa,
+          montantTravauxHT: pr.montantTravauxHT,
+          surfaceM2: null,
+          mission: pr.missionsComplHT > 0 ? 'Base + missions compl.' : 'Base',
+          motsCles: [...new Set([...(pr.ouvrage ? [fold(pr.ouvrage.replace(/^\d+-\s*/, '')).split(' ')[0]] : []), ...tagsJournal])],
+          attestation: false,
+          notes: `Référence créée automatiquement à la livraison de ${pr.id} — compléter surface et photos, réclamer l'attestation de bonne exécution.`,
+        })
       }
-      const base = calculHonoraires(nouveau, state.settings).honorairesBaseHT
-      nouveau.phases = phasesParDefaut(base, state.settings.tauxHoraireVente)
-      update((d) => { d.projets.push(nouveau) })
-      onClose()
-      navigate(`/projets/${nouveau.id}`)
-    } else {
-      update((d) => {
-        const pr = d.projets.find((x) => x.id === projet.id)
-        if (!pr) return
-        pr.nom = nom.trim()
-        pr.typeMO = typeMO as TypeMO
-        pr.statut = statut as StatutProjet
-        pr.moa = moa.trim() || undefined
-        pr.adresse = adresse.trim() || undefined
-        pr.ouvrage = ouvrage || null
-        pr.montantTravauxHT = montant
-        pr.notes = notes.trim() || undefined
-      })
-      onClose()
-    }
+    })
+    if (livraison)
+      alert(
+        `${projet.id} livré : la référence « ${nom.trim()} » a été créée dans la base (surface et attestation à compléter).`,
+      )
+    onClose()
   }
 
   return (
-    <Modal titre={creation ? `Nouveau projet — ${idAuto}` : `Modifier ${projet.id}`} onClose={onClose}>
+    <Modal titre={`Modifier ${projet.id}`} onClose={onClose}>
       <div className="form-row">
         <Field label="Nom du projet">
-          <TextInput value={nom} onChange={setNom} placeholder="Ex. Réhabilitation 12 logements — Oise" />
+          <TextInput value={nom} onChange={setNom} />
         </Field>
       </div>
       <div className="form-row">
@@ -787,6 +881,9 @@ function ModalProjet({ projet, onClose }: { projet?: Projet; onClose: () => void
       <div className="form-row">
         <Field label="Maître d’ouvrage">
           <TextInput value={moa} onChange={setMoa} />
+        </Field>
+        <Field label="E-mail MOA (facturation)" hint="pré-remplit les e-mails sortants">
+          <TextInput value={emailMOA} onChange={setEmailMOA} />
         </Field>
         <Field label="Adresse / localisation">
           <TextInput value={adresse} onChange={setAdresse} />
@@ -812,135 +909,10 @@ function ModalProjet({ projet, onClose }: { projet?: Projet; onClose: () => void
           <TextArea value={notes} onChange={setNotes} rows={3} />
         </Field>
       </div>
-      {creation && (
-        <p className="muted small" style={{ marginTop: 10 }}>
-          Les phases de la mission de base seront pré-remplies (répartition MIQCP sur les honoraires
-          estimés) — ajustables ensuite dans la fiche.
-        </p>
-      )}
       <div className="form-foot">
         <Btn onClick={onClose}>Annuler</Btn>
         <Btn kind="primary" onClick={enregistrer} disabled={nom.trim() === ''}>
-          {creation ? 'Créer le projet' : 'Enregistrer'}
-        </Btn>
-      </div>
-    </Modal>
-  )
-}
-
-// ============================================================
-// Modal marché de travaux — création & édition
-// ============================================================
-
-function ModalMarche({
-  projetId,
-  marche,
-  onClose,
-}: {
-  projetId: string
-  marche?: MarcheTravaux
-  onClose: () => void
-}) {
-  const { update } = useStore()
-  const creation = !marche
-
-  const [lot, setLot] = useState(marche?.lot || '')
-  const [entreprise, setEntreprise] = useState(marche?.entreprise || '')
-  const [montantInitial, setMontantInitial] = useState<number | null>(marche?.montantInitialHT ?? null)
-  const [avenants, setAvenants] = useState<number | null>(marche?.avenantsHT ?? 0)
-  const [tauxRG, setTauxRG] = useState<number | null>(marche?.tauxRG ?? 0.05)
-  const [revision, setRevision] = useState(marche?.revision ? 'oui' : 'non')
-  const [delaiVerif, setDelaiVerif] = useState<number | null>(marche?.delaiVerifJours ?? 15)
-  const [contactNom, setContactNom] = useState(marche?.contactNom || '')
-  const [contactEmail, setContactEmail] = useState(marche?.contactEmail || '')
-  const [actif, setActif] = useState(marche?.actif ? 'oui' : 'non')
-  const [notes, setNotes] = useState(marche?.notes || '')
-
-  const valide = lot.trim() !== '' && entreprise.trim() !== ''
-
-  const enregistrer = () => {
-    if (!valide) return
-    update((d) => {
-      const champs = {
-        lot: lot.trim(),
-        entreprise: entreprise.trim(),
-        montantInitialHT: montantInitial ?? 0,
-        avenantsHT: avenants ?? 0,
-        tauxRG: tauxRG ?? 0.05,
-        revision: revision === 'oui',
-        delaiVerifJours: delaiVerif ?? 15,
-        contactNom: contactNom.trim() || undefined,
-        contactEmail: contactEmail.trim() || undefined,
-        actif: actif === 'oui',
-        notes: notes.trim() || undefined,
-      }
-      if (creation) {
-        d.marches.push({ id: uid('marche'), projetId, ...champs })
-      } else {
-        const m = d.marches.find((x) => x.id === marche.id)
-        if (m) Object.assign(m, champs)
-      }
-    })
-    onClose()
-  }
-
-  return (
-    <Modal titre={creation ? 'Nouveau marché de travaux' : `Modifier ${marche.lot}`} onClose={onClose}>
-      <div className="form-row">
-        <Field label="Lot">
-          <TextInput value={lot} onChange={setLot} placeholder="Ex. Lot 01 — Gros œuvre" />
-        </Field>
-        <Field label="Entreprise">
-          <TextInput value={entreprise} onChange={setEntreprise} />
-        </Field>
-      </div>
-      <div className="form-row">
-        <Field label="Montant initial HT (€)">
-          <NumInput value={montantInitial} onChange={setMontantInitial} />
-        </Field>
-        <Field label="Avenants HT (€)">
-          <NumInput value={avenants} onChange={setAvenants} />
-        </Field>
-      </div>
-      <div className="form-row">
-        <Field label="Retenue de garantie" hint="0,05 = 5 %">
-          <NumInput value={tauxRG} onChange={setTauxRG} />
-        </Field>
-        <Field label="Révision de prix">
-          <Select
-            value={revision}
-            onChange={setRevision}
-            options={[{ value: 'non', label: 'Non' }, { value: 'oui', label: 'Oui' }]}
-          />
-        </Field>
-        <Field label="Délai de vérification (j)" hint="Délai contractuel MOE sur les situations.">
-          <NumInput value={delaiVerif} onChange={setDelaiVerif} />
-        </Field>
-      </div>
-      <div className="form-row">
-        <Field label="Contact">
-          <TextInput value={contactNom} onChange={setContactNom} />
-        </Field>
-        <Field label="E-mail du contact">
-          <TextInput value={contactEmail} onChange={setContactEmail} />
-        </Field>
-        <Field label="Chantier en cours" hint="Oui = une situation mensuelle est attendue.">
-          <Select
-            value={actif}
-            onChange={setActif}
-            options={[{ value: 'non', label: 'Non' }, { value: 'oui', label: 'Oui' }]}
-          />
-        </Field>
-      </div>
-      <div className="form-row">
-        <Field label="Notes">
-          <TextArea value={notes} onChange={setNotes} rows={2} />
-        </Field>
-      </div>
-      <div className="form-foot">
-        <Btn onClick={onClose}>Annuler</Btn>
-        <Btn kind="primary" onClick={enregistrer} disabled={!valide}>
-          {creation ? 'Ajouter le marché' : 'Enregistrer'}
+          Enregistrer
         </Btn>
       </div>
     </Modal>

@@ -31,7 +31,8 @@ import {
 import { delaiMoyenPaiement, encaissementPrevu, nomProjet, projetById, retardFacture, ttc } from '../derive'
 import { LIBELLES_PHASES, PHASES_ORDRE } from '../miqcp'
 import { assemble, contexteFacture } from '../prompts'
-import { fmtDate } from '../util'
+import { fmtDate, fmtMoney, ouvrirGmail } from '../util'
+import { ouvrirFacturePDF } from '../pdf'
 
 // ---------- helpers locaux ----------
 
@@ -330,6 +331,25 @@ function CarteRelances({ state, today }: { state: AppState; today: string }) {
   )
 }
 
+/** e-mail d'envoi de facture, prêt dans Gmail — l'envoi reste un clic humain */
+function emailFacture(state: AppState, f: Facture): void {
+  const p = projetById(state, f.projetId)
+  const sujet = `${state.settings.nomAgence} — facture ${f.id} · ${p ? p.nom : f.projetId}`
+  const corps = [
+    'Bonjour,',
+    '',
+    `Veuillez trouver ci-joint notre facture n° ${f.id} — ${f.libelle} —`,
+    `d'un montant de ${fmtMoney(ttc(f), true)} TTC (${fmtMoney(f.montantHT, true)} HT),`,
+    `payable au ${fmtDate(encaissementPrevu(f))}.`,
+    '',
+    'Nous restons à votre disposition,',
+    `${state.settings.nomAgence}`,
+    '',
+    '⚠ Pense-bête : joindre le PDF de la facture (bouton PDF du Cockpit) avant envoi.',
+  ].join('\n')
+  ouvrirGmail(p?.emailMOA || '', sujet, corps)
+}
+
 // ---------- module ----------
 
 export default function Facturation() {
@@ -583,6 +603,12 @@ export default function Facturation() {
                           Encaisser
                         </Btn>
                       )}
+                      <Btn small kind="ghost" onClick={() => ouvrirFacturePDF(state, f)} title="Vue imprimable — Ctrl+P pour enregistrer en PDF">
+                        PDF
+                      </Btn>
+                      <Btn small kind="ghost" onClick={() => emailFacture(state, f)} title="Ouvre Gmail avec l'e-mail pré-rempli — l'envoi reste votre clic">
+                        E-mail
+                      </Btn>
                       <Btn small kind="ghost" onClick={() => setEdition(f)}>
                         Modifier
                       </Btn>

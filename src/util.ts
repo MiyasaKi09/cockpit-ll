@@ -116,3 +116,13 @@ export function download(nomFichier: string, contenu: string, type = 'applicatio
   a.click()
   URL.revokeObjectURL(url)
 }
+
+/** URL Gmail « nouveau message » pré-rempli — l'envoi reste un clic humain */
+export function gmailComposeUrl(to: string, sujet: string, corps: string): string {
+  const p = new URLSearchParams({ view: 'cm', fs: '1', to, su: sujet, body: corps })
+  return `https://mail.google.com/mail/?${p.toString()}`
+}
+
+export function ouvrirGmail(to: string, sujet: string, corps: string): void {
+  window.open(gmailComposeUrl(to, sujet, corps), '_blank', 'noopener')
+}

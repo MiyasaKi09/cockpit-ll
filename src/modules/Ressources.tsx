@@ -28,9 +28,42 @@ import {
   useToday,
 } from '../ui'
 import { diffDays, fmtDate, fold, todayISO, uid } from '../util'
+import { navigate, useRoute } from '../ui'
+
+/** liens inverses : projets où l'artisan intervient (rattachement ou marché) */
+function projetsArtisan(state: ReturnType<typeof useStore>['state'], id: string, nom: string): string[] {
+  const parRattachement = state.projets.filter((p) => p.artisanIds.includes(id)).map((p) => p.id)
+  const parMarche = state.marches.filter((m) => fold(m.entreprise) === fold(nom)).map((m) => m.projetId)
+  return [...new Set([...parRattachement, ...parMarche])].sort()
+}
+
+/** liens inverses : projets où le matériau est employé */
+function projetsMateriau(state: ReturnType<typeof useStore>['state'], id: string): string[] {
+  return state.projets.filter((p) => p.materiauxIds.includes(id)).map((p) => p.id).sort()
+}
+
+function BadgesProjets({ ids }: { ids: string[] }) {
+  if (ids.length === 0) return <span className="muted">—</span>
+  return (
+    <>
+      {ids.map((pid) => (
+        <a key={pid} href={`#/projets/${pid}`} className="badge badge-info" onClick={(e) => e.stopPropagation()}>
+          {pid}
+        </a>
+      ))}
+    </>
+  )
+}
 
 export default function Ressources() {
-  const [onglet, setOnglet] = useState('artisans')
+  const route = useRoute()
+  if (route[1] === 'materiau' && route[2]) return <FicheMateriauPage id={route[2]} />
+  if (route[1] === 'artisan' && route[2]) return <FicheArtisanPage id={route[2]} />
+  return <ListeRessources ongletInitial={route[1] === 'materiaux' ? 'materiaux' : 'artisans'} />
+}
+
+function ListeRessources({ ongletInitial }: { ongletInitial: string }) {
+  const [onglet, setOnglet] = useState(ongletInitial)
   return (
     <Page
       titre="Matériaux & artisans"
@@ -48,6 +81,191 @@ export default function Ressources() {
     </Page>
   )
 }
+
+// ------------------------------------------------------------------
+// Fiches dédiées — chaque matériau / artisan a sa page, avec ses
+// infos, ses projets et son édition. La recherche pointe ici.
+// ------------------------------------------------------------------
+
+function FicheMateriauPage({ id }: { id: string }) {
+  const { state, update } = useStore()
+  const [edition, setEdition] = useState(false)
+  const m = state.materiaux.find((x) => x.id === id)
+
+  if (!m)
+    return (
+      <Page titre="Matériau introuvable">
+        <Card><EmptyState>Fiche inconnue. <a href="#/ressources">← Matériaux & artisans</a></EmptyState></Card>
+      </Page>
+    )
+
+  const projets = projetsMateriau(state, m.id)
+  const refs = state.references.filter((r) => (r.motsCles || []).some((k) => fold(m.nom).includes(fold(k)) || fold(k).includes(fold(m.nom))))
+
+  return (
+    <Page
+      titre={m.nom}
+      sousTitre={<>{m.tags.map((t) => <Badge key={t} tone="muted">{t}</Badge>)}</>}
+      actions={
+        <>
+          {m.lienFDES && (
+            <a className="btn" href={m.lienFDES} target="_blank" rel="noreferrer">FDES (INIES) ↗</a>
+          )}
+          <Btn onClick={() => setEdition(true)}>Modifier</Btn>
+          <Btn
+            kind="danger"
+            onClick={() => {
+              if (confirm(`Supprimer ${m.nom} ?`)) {
+                update((d) => {
+                  d.materiaux = d.materiaux.filter((x) => x.id !== m.id)
+                  for (const pr of d.projets) pr.materiauxIds = pr.materiauxIds.filter((x) => x !== m.id)
+                })
+                navigate('/ressources/materiaux')
+              }
+            }}
+          >
+            Supprimer
+          </Btn>
+        </>
+      }
+    >
+      <p className="small" style={{ marginTop: -10, marginBottom: 14 }}>
+        <a href="#/ressources/materiaux">← Tous les matériaux</a>
+      </p>
+      <div className="grid2">
+        <Card titre="Fiche">
+          <dl className="kv">
+            <dt>Fournisseur</dt><dd>{m.fournisseur || '—'}</dd>
+            <dt>Coût moyen</dt><dd>{m.coutM2 != null ? `${m.coutM2} €/m²` : '—'}</dd>
+            <dt>FDES</dt><dd>{m.lienFDES ? <a href={m.lienFDES} target="_blank" rel="noreferrer">{m.lienFDES.slice(0, 50)}… ↗</a> : '—'}</dd>
+            <dt>Notes</dt><dd style={{ whiteSpace: 'pre-wrap' }}>{m.notes || '—'}</dd>
+          </dl>
+        </Card>
+        <Card titre={`Employé sur ${projets.length} projet${projets.length > 1 ? 's' : ''}`}>
+          {projets.length === 0 ? (
+            <EmptyState>Pas encore rattaché à un projet — cela se fait depuis l'espace projet (Ressources) ou le journal.</EmptyState>
+          ) : (
+            projets.map((pid) => {
+              const pr = state.projets.find((x) => x.id === pid)
+              return (
+                <div key={pid} className="alert-item">
+                  <div>
+                    <a href={`#/projets/${pid}/ressources`} className="alert-titre">{pid} — {pr?.nom || ''}</a>
+                    {pr && <div className="alert-detail">{pr.statut}{pr.moa ? ` · ${pr.moa}` : ''}</div>}
+                  </div>
+                </div>
+              )
+            })
+          )}
+          {refs.length > 0 && (
+            <p className="small muted" style={{ marginTop: 8 }}>
+              Références liées : {refs.map((r) => r.nom).join(' · ')} (<a href="#/references">base de références</a>)
+            </p>
+          )}
+        </Card>
+      </div>
+      {edition && (
+        <FicheMateriau initiale={structuredClone(m)} creation={false} onClose={() => setEdition(false)} />
+      )}
+    </Page>
+  )
+}
+
+function FicheArtisanPage({ id }: { id: string }) {
+  const { state, update } = useStore()
+  const today = useToday()
+  const [edition, setEdition] = useState(false)
+  const a = state.artisans.find((x) => x.id === id)
+
+  if (!a)
+    return (
+      <Page titre="Artisan introuvable">
+        <Card><EmptyState>Fiche inconnue. <a href="#/ressources">← Matériaux & artisans</a></EmptyState></Card>
+      </Page>
+    )
+
+  const projets = projetsArtisan(state, a.id, a.nom)
+  const marches = state.marches.filter((m) => fold(m.entreprise) === fold(a.nom))
+
+  return (
+    <Page
+      titre={a.nom}
+      sousTitre={<>{a.lots.map((l) => <Badge key={l} tone="muted">{l}</Badge>)} {badgeDecennale(a.decennaleFin, today)}</>}
+      actions={
+        <>
+          <Btn onClick={() => setEdition(true)}>Modifier</Btn>
+          <Btn
+            kind="danger"
+            onClick={() => {
+              if (confirm(`Supprimer ${a.nom} ?`)) {
+                update((d) => {
+                  d.artisans = d.artisans.filter((x) => x.id !== a.id)
+                  for (const pr of d.projets) pr.artisanIds = pr.artisanIds.filter((x) => x !== a.id)
+                })
+                navigate('/ressources')
+              }
+            }}
+          >
+            Supprimer
+          </Btn>
+        </>
+      }
+    >
+      <p className="small" style={{ marginTop: -10, marginBottom: 14 }}>
+        <a href="#/ressources">← Tous les artisans</a>
+      </p>
+      <div className="grid2">
+        <Card titre="Fiche">
+          <dl className="kv">
+            <dt>Zone d'intervention</dt><dd>{a.zone || '—'}</dd>
+            <dt>Fourchette</dt><dd>{a.fourchette || '—'}</dd>
+            <dt>Décennale</dt><dd>{badgeDecennale(a.decennaleFin, today)}</dd>
+            <dt>Contact chiffrage</dt><dd>{[a.contactNom, a.contactEmail, a.tel].filter(Boolean).join(' · ') || '—'}</dd>
+            <dt>Notes de chantier</dt><dd style={{ whiteSpace: 'pre-wrap' }}>{a.notes || '—'}</dd>
+          </dl>
+        </Card>
+        <Card titre={`Présent sur ${projets.length} projet${projets.length > 1 ? 's' : ''}`}>
+          {projets.length === 0 ? (
+            <EmptyState>Aucun projet ni marché rattaché pour l'instant.</EmptyState>
+          ) : (
+            projets.map((pid) => {
+              const pr = state.projets.find((x) => x.id === pid)
+              const marchesProjet = marches.filter((m) => m.projetId === pid)
+              return (
+                <div key={pid} className="alert-item">
+                  <div style={{ minWidth: 0 }}>
+                    <a href={`#/projets/${pid}/chantier`} className="alert-titre">{pid} — {pr?.nom || ''}</a>
+                    <div className="alert-detail">
+                      {marchesProjet.length > 0
+                        ? marchesProjet.map((m) => `${m.lot} (${fmtMoneyLocal(m.montantInitialHT + m.avenantsHT)})`).join(' · ')
+                        : 'consulté / pressenti'}
+                    </div>
+                  </div>
+                </div>
+              )
+            })
+          )}
+        </Card>
+      </div>
+      {edition && (
+        <FicheArtisan
+          initiale={structuredClone(a)}
+          creation={false}
+          onClose={() => setEdition(false)}
+          onSave={(maj) => {
+            update((d) => {
+              const i = d.artisans.findIndex((x) => x.id === maj.id)
+              if (i >= 0) d.artisans[i] = maj
+            })
+            setEdition(false)
+          }}
+        />
+      )}
+    </Page>
+  )
+}
+
+const fmtMoneyLocal = (v: number) => new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }).format(v)
 
 // ------------------------------------------------------------------
 // Artisans
@@ -118,9 +336,9 @@ function OngletArtisans() {
         {artisans.length === 0 ? (
           <EmptyState>Aucun artisan — l'annuaire se remplit chantier après chantier.</EmptyState>
         ) : (
-          <Table head={['Entreprise', 'Lots', 'Zone', 'Fourchette', 'Décennale', 'Contact', 'Notes', '']}>
+          <Table head={['Entreprise', 'Lots', 'Projets', 'Zone', 'Fourchette', 'Décennale', 'Contact', 'Notes', '']}>
             {artisans.map((a) => (
-              <tr key={a.id} className="clickable" onClick={() => setEdition(structuredClone(a))}>
+              <tr key={a.id} className="clickable" onClick={() => navigate(`/ressources/artisan/${a.id}`)}>
                 <td>
                   <strong>{a.nom}</strong>
                 </td>
@@ -131,6 +349,7 @@ function OngletArtisans() {
                     </Badge>
                   ))}
                 </td>
+                <td><BadgesProjets ids={projetsArtisan(state, a.id, a.nom)} /></td>
                 <td>{a.zone || '—'}</td>
                 <td>{a.fourchette || '—'}</td>
                 <td>{badgeDecennale(a.decennaleFin, today)}</td>
@@ -342,13 +561,14 @@ function OngletMateriaux() {
         {materiaux.length === 0 ? (
           <EmptyState>Aucun matériau. Le tagging à l'ingestion commence dès maintenant — il prépare la recherche future.</EmptyState>
         ) : (
-          <Table head={['Matériau', 'Fournisseur', 'Coût €/m²', 'FDES', 'Tags', 'Notes', '']}>
+          <Table head={['Matériau', 'Fournisseur', 'Projets', 'Coût €/m²', 'FDES', 'Tags', 'Notes', '']}>
             {materiaux.map((m) => (
-              <tr key={m.id} className="clickable" onClick={() => setEdition(structuredClone(m))}>
+              <tr key={m.id} className="clickable" onClick={() => navigate(`/ressources/materiau/${m.id}`)}>
                 <td>
                   <strong>{m.nom}</strong>
                 </td>
                 <td>{m.fournisseur || '—'}</td>
+                <td><BadgesProjets ids={projetsMateriau(state, m.id)} /></td>
                 <td className="right num">{m.coutM2 != null ? `${m.coutM2} €` : '—'}</td>
                 <td onClick={(e) => e.stopPropagation()}>
                   {m.lienFDES ? (

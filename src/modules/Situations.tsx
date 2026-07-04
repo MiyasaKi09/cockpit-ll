@@ -27,7 +27,7 @@ import {
   TextInput,
   useToday,
 } from '../ui'
-import { clamp, diffDays, fmtMois, fmtPct, fold, monthKey } from '../util'
+import { clamp, diffDays, fmtMois, fmtPct, fold, monthKey, ouvrirGmail } from '../util'
 import { dateLimiteVerif, nomProjet } from '../derive'
 import { assemble, contexteMarche } from '../prompts'
 import {
@@ -106,9 +106,9 @@ function CarteImport() {
       setErreur(err || 'Analyse impossible.')
       return
     }
-    if (retour.type === 'consultations') {
+    if (retour.type !== 'situations') {
       setErreur(
-        'Ce retour contient des consultations, pas des situations — collez-le dans le module Veille AO (ou Routines → Import universel).',
+        `Ce retour contient des ${retour.type}, pas des situations — collez-le dans Routines → Import universel, qui le rangera au bon endroit.`,
       )
       return
     }
@@ -633,12 +633,28 @@ function CarteAttendues() {
                   {sit ? (
                     <span className="muted">—</span>
                   ) : tplRelance ? (
-                    <CopyBtn
-                      small
-                      kind="default"
-                      label="Relance"
-                      text={() => assemble(tplRelance.corps, contexteMarche(state, m))}
-                    />
+                    <span style={{ display: 'inline-flex', gap: 6 }}>
+                      <CopyBtn
+                        small
+                        kind="default"
+                        label="Relance"
+                        text={() => assemble(tplRelance.corps, contexteMarche(state, m))}
+                      />
+                      <Btn
+                        small
+                        kind="ghost"
+                        title="Ouvre Gmail avec une relance factuelle pré-remplie — l'envoi reste votre clic"
+                        onClick={() =>
+                          ouvrirGmail(
+                            m.contactEmail || '',
+                            `Situation de travaux ${fmtMois(monthKey(today))} — ${m.lot}`,
+                            `Bonjour,\n\nSauf erreur de notre part, nous n'avons pas reçu votre situation de travaux du mois de ${fmtMois(monthKey(today))} (${m.lot}) sur l'adresse dédiée situations@agence-ll.fr, prévue contractuellement chaque mois.\n\nMerci de nous la transmettre sous 5 jours ouvrés — le retard de transmission décale d'autant la vérification et le paiement.\n\nCordialement,\n${state.settings.nomAgence}`,
+                          )
+                        }
+                      >
+                        Gmail
+                      </Btn>
+                    </span>
                   ) : (
                     <Btn small disabled title="Gabarit « tpl-relance-situation » introuvable dans la bibliothèque de prompts.">
                       Relance

@@ -2,7 +2,7 @@
 // réunions de chantier avec l'assistant CR (audio → transcription
 // sans API → CR au style de l'agence → relecture → diffusion).
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { MarcheTravaux, Projet, ReunionChantier, StatutReunion } from '../types'
 import { useStore } from '../store'
 import { assemble, contexteProjet } from '../prompts'
@@ -257,13 +257,13 @@ function participantsParDefaut(state: ReturnType<typeof useStore>['state'], p: P
 
 export function CarteReunions({ projet: p }: { projet: Projet }) {
   const { state, update } = useStore()
-  const [assistant, setAssistant] = useState<ReunionChantier | null>(null)
+  const [assistant, setAssistant] = useState<{ reunion: ReunionChantier; fichier?: File } | null>(null)
 
   const reunions = state.reunions
     .filter((r) => r.projetId === p.id)
     .sort((a, b) => b.date.localeCompare(a.date))
 
-  const creer = () => {
+  const creer = (fichier?: File) => {
     const n = reunions.length + 1
     const reunion: ReunionChantier = {
       id: uid('reu'),
@@ -276,18 +276,35 @@ export function CarteReunions({ projet: p }: { projet: Projet }) {
     update((d) => {
       d.reunions.push(reunion)
     })
-    setAssistant(reunion)
+    setAssistant({ reunion, fichier })
   }
 
   return (
     <Card
       titre="Réunions de chantier & comptes-rendus"
-      actions={<Btn small kind="primary" onClick={creer}>Nouvelle réunion</Btn>}
+      actions={
+        <>
+          <label className="btn btn-small btn-primary" style={{ cursor: 'pointer' }}>
+            🎙 Déposer l'enregistrement
+            <input
+              type="file"
+              accept="audio/*,.m4a,.mp3,.wav,.ogg,.aac"
+              style={{ display: 'none' }}
+              onChange={(e) => {
+                const f = e.target.files?.[0]
+                if (f) creer(f)
+                e.target.value = ''
+              }}
+            />
+          </label>
+          <Btn small onClick={() => creer()}>Nouvelle réunion</Btn>
+        </>
+      }
     >
       {reunions.length === 0 ? (
         <EmptyState>
-          Après chaque réunion : « Nouvelle réunion » → l'assistant vous guide de l'audio au CR diffusé
-          (dictée ou transcription locale, jamais d'API).
+          Après chaque réunion, un seul geste : « 🎙 Déposer l'enregistrement » — la réunion se crée, la
+          transcription démarre, le prompt se copie tout seul, et le DOCX final part dans le Drive.
         </EmptyState>
       ) : (
         <Table compact head={['Réunion', 'Date', 'Statut', 'Notes', '']}>
@@ -299,7 +316,7 @@ export function CarteReunions({ projet: p }: { projet: Projet }) {
               <td className="small muted">{r.notes || ''}</td>
               <td className="right">
                 <span style={{ display: 'inline-flex', gap: 6 }}>
-                  <Btn small kind={r.statut === 'diffuse' ? 'default' : 'primary'} onClick={() => setAssistant(r)}>
+                  <Btn small kind={r.statut === 'diffuse' ? 'default' : 'primary'} onClick={() => setAssistant({ reunion: r })}>
                     {r.statut === 'diffuse' ? 'Rouvrir' : 'Assistant CR'}
                   </Btn>
                   <Btn
@@ -324,7 +341,8 @@ export function CarteReunions({ projet: p }: { projet: Projet }) {
       {assistant && (
         <AssistantCR
           projet={p}
-          reunion={state.reunions.find((r) => r.id === assistant.id) || assistant}
+          reunion={state.reunions.find((r) => r.id === assistant.reunion.id) || assistant.reunion}
+          fichierInitial={assistant.fichier}
           onClose={() => setAssistant(null)}
         />
       )}
@@ -336,10 +354,12 @@ export function CarteReunions({ projet: p }: { projet: Projet }) {
 function AssistantCR({
   projet: p,
   reunion,
+  fichierInitial,
   onClose,
 }: {
   projet: Projet
   reunion: ReunionChantier
+  fichierInitial?: File
   onClose: () => void
 }) {
   const { state, update } = useStore()
@@ -350,6 +370,15 @@ function AssistantCR({
   const [retourClaude, setRetourClaude] = useState('')
   const [messageDocx, setMessageDocx] = useState('')
   const enCours = progres !== null
+  const fichierLance = useRef(false)
+
+  useEffect(() => {
+    if (fichierInitial && !fichierLance.current) {
+      fichierLance.current = true
+      void transcrire(fichierInitial)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const transcrire = async (file: File) => {
     setErreurAudio('')

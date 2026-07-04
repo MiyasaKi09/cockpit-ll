@@ -6,7 +6,7 @@
 // avis suivants. Claude propose, l'humain décide.
 // ============================================================
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { AppState, Consultation, StatutConsultation } from '../types'
 import { useStore } from '../store'
@@ -36,6 +36,8 @@ import { importerConsultations, parseRetourRoutine } from '../importRoutines'
 import type { RetourConsultation } from '../importRoutines'
 import { CRITERES_DEFAUT, rechercherBoamp } from '../boamp'
 import type { AnnonceBoamp, CriteresBoamp } from '../boamp'
+import { genererDocxCandidature, nomFichierCandidature, referencesPertinentes } from '../candidature'
+import { ecrireFichierRacine, lireRacine } from '../fsdrive'
 
 // ---------- référentiel des statuts ----------
 
@@ -194,10 +196,9 @@ function CarteBoamp() {
   return (
     <Card titre="Veille BOAMP automatique — les avis officiels arrivent tout seuls">
       <p className="small muted" style={{ marginBottom: 10 }}>
-        Le site interroge directement l'API ouverte du BOAMP (gratuite, sans compte). Réglez les
-        critères une fois : à chaque visite de cette page, les annonces récentes s'affichent, et un
-        clic les met « À étudier » dans le pipeline. La routine Claude reste utile pour TED et les
-        sources privées.
+        Le site interroge directement l'API ouverte du BOAMP (gratuite, sans compte) — uniquement les
+        <strong> avis de marché en cours</strong> (résultats, rectificatifs et avis expirés sont filtrés),
+        mots-clés cherchés dans l'objet de l'annonce. Un clic met l'annonce « À étudier » dans le pipeline.
       </p>
       <div className="toolbar" style={{ flexWrap: 'wrap' }}>
         <Field label="Mots-clés (OU entre chaque, virgules)">
@@ -249,6 +250,22 @@ function CarteBoamp() {
       {annonces && annonces.length === 0 && (
         <EmptyState>Aucune annonce récente pour ces critères — élargissez les mots-clés ou la période.</EmptyState>
       )}
+      <p className="muted small" style={{ marginBottom: 10 }}>
+        Chercher aussi sur :{' '}
+        <a href="https://www.marches-publics.info/" target="_blank" rel="noreferrer">
+          AWS / marches-publics.info
+        </a>{' '}
+        ·{' '}
+        <a
+          href={`https://ted.europa.eu/fr/search/result?FT=${encodeURIComponent(criteres.motsCles.split(',')[0]?.trim() || "maîtrise d'oeuvre")}`}
+          target="_blank"
+          rel="noreferrer"
+        >
+          TED (marchés européens)
+        </a>{' '}
+        — ces plateformes n'ouvrent pas leurs données aux navigateurs : lien direct, ou routine Claude hebdo
+        pour un import trié.
+      </p>
       {annonces && annonces.length > 0 && (
         <Table compact head={['Parution', 'Objet', 'Acheteur', 'Dép.', 'Date limite', '']}>
           {annonces.map((a) => {
@@ -263,7 +280,6 @@ function CarteBoamp() {
                   <a href={a.url} target="_blank" rel="noreferrer" title="Ouvrir l'avis officiel sur boamp.fr">
                     {a.objet.length > 110 ? a.objet.slice(0, 110) + '…' : a.objet}
                   </a>
-                  {a.nature && <span className="muted small"> — {a.nature}</span>}
                 </td>
                 <td className="small">{a.acheteur || '—'}</td>
                 <td className="small">{a.departements.join(', ') || '—'}</td>
@@ -446,6 +462,136 @@ function nouvelleConsultation(): Consultation {
   }
 }
 
+/** l'en-tête qui répond en 5 secondes à « c'est quoi, pour qui, pour quand ? » */
+function ResumeConsultation({ c }: { c: Consultation }) {
+  const today = useToday()
+  const dj = c.dateLimite ? diffDays(today, c.dateLimite) : null
+  const urlAvis = `${c.notes || ''} ${c.source || ''}`.match(/https?:\/\/\S+/)?.[0]
+
+  return (
+    <div className="grid3" style={{ marginBottom: 14 }}>
+      <div>
+        <div className="muted small">Remise des offres</div>
+        <div style={{ fontWeight: 700 }}>
+          {c.dateLimite ? (
+            <>
+              <DateF d={c.dateLimite} />{' '}
+              {dj !== null &&
+                (dj < 0 ? (
+                  <Badge tone="muted">dépassée</Badge>
+                ) : (
+                  <Badge tone={dj <= 7 ? 'danger' : dj <= 15 ? 'warn' : 'ok'}>J−{dj}</Badge>
+                ))}
+            </>
+          ) : (
+            '—'
+          )}
+        </div>
+      </div>
+      <div>
+        <div className="muted small">Budget travaux HT</div>
+        <div style={{ fontWeight: 700 }}>
+          <Money v={c.budgetTravaux ?? null} />
+        </div>
+      </div>
+      <div>
+        <div className="muted small">Avis officiel</div>
+        <div style={{ fontWeight: 700 }}>
+          {urlAvis ? (
+            <a href={urlAvis} target="_blank" rel="noreferrer">
+              ouvrir l'annonce ↗
+            </a>
+          ) : (
+            <span className="muted">lien non renseigné</span>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/** la réponse à l'AO en mode semi-automatique : trame DOCX + références auto */
+function BlocReponse({ c }: { c: Consultation }) {
+  const { state } = useStore()
+  const [message, setMessage] = useState<{ ok: boolean; texte: string } | null>(null)
+  const [enCours, setEnCours] = useState(false)
+  const refs = useMemo(
+    () => referencesPertinentes(state, c),
+    [state, c.intitule, c.typologie, c.notes], // eslint-disable-line react-hooks/exhaustive-deps
+  )
+
+  const generer = async () => {
+    setEnCours(true)
+    setMessage(null)
+    try {
+      const blob = await genererDocxCandidature(state, c, refs)
+      const nom = nomFichierCandidature(c)
+      const racine = await lireRacine()
+      if (racine) {
+        try {
+          const chemin = await ecrireFichierRacine(
+            racine,
+            '0_CANDIDATURES',
+            new File([blob], nom, { type: blob.type }),
+          )
+          setMessage({ ok: true, texte: `Dossier écrit dans le Drive : ${chemin} — à relire et compléter.` })
+          setEnCours(false)
+          return
+        } catch {
+          // dossier inaccessible → repli téléchargement
+        }
+      }
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = nom
+      a.click()
+      URL.revokeObjectURL(url)
+      setMessage({ ok: true, texte: `Dossier téléchargé (${nom}) — branchez le Drive dans Santé pour l'y ranger tout seul.` })
+    } catch (e) {
+      setMessage({ ok: false, texte: e instanceof Error ? e.message : 'Génération impossible.' })
+    } finally {
+      setEnCours(false)
+    }
+  }
+
+  return (
+    <div className="card" style={{ padding: 12, marginBottom: 14, background: 'var(--bg-soft, #f6f7fa)' }}>
+      <div style={{ fontWeight: 700, marginBottom: 6 }}>Préparer la réponse — semi-automatique</div>
+      <p className="small muted" style={{ marginBottom: 8 }}>
+        Le site assemble la trame du dossier de candidature (mise en page agence) : rappel de la
+        consultation, présentation & moyens, <strong>références choisies automatiquement</strong> par
+        proximité avec l'objet, et checklist des pièces (DC1, DC2, MAF…). Le mémoire technique
+        s'écrit ensuite avec le pré-prompt « Références & candidature » ci-dessus.
+      </p>
+      <p className="small" style={{ marginBottom: 10 }}>
+        Références retenues :{' '}
+        {refs.length === 0 ? (
+          <span className="muted">
+            aucune en base — <a href="#/references">alimentez la page Références</a>
+          </span>
+        ) : (
+          refs.map((r) => (
+            <span key={r.id} className="badge badge-info" style={{ marginRight: 4 }}>
+              {r.nom}
+              {r.annee ? ` (${r.annee})` : ''}
+            </span>
+          ))
+        )}
+      </p>
+      <Btn kind="primary" onClick={generer} disabled={enCours || !c.intitule.trim()}>
+        {enCours ? 'Génération…' : '📄 Générer le dossier de candidature (DOCX)'}
+      </Btn>
+      {message && (
+        <p className={`small ${message.ok ? 'ok-text' : 'danger-text'}`} style={{ marginTop: 8 }}>
+          {message.ok ? '✓ ' : '✗ '}
+          {message.texte}
+        </p>
+      )}
+    </div>
+  )
+}
+
 function FicheModal({
   initial,
   nouveau,
@@ -488,6 +634,7 @@ function FicheModal({
     <Modal titre={nouveau ? 'Nouvelle consultation' : 'Fiche consultation — Go / No-Go'} onClose={onClose} large>
       {!nouveau && (
         <>
+          <ResumeConsultation c={c} />
           <p className="small muted" style={{ marginBottom: 8 }}>
             Pré-prompts : un clic copie le prompt assemblé (fiche + références + charge
             actuelle) — à coller dans le Projet Claude indiqué sur le bouton. L'avis rendu se
@@ -498,6 +645,7 @@ function FicheModal({
             <PromptConsultation tplId="tpl-go-nogo" consultation={c} />
             <PromptConsultation tplId="tpl-references-candidature" consultation={c} />
           </div>
+          <BlocReponse c={c} />
         </>
       )}
 

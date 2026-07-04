@@ -46,10 +46,14 @@ function q(v: string): string {
 }
 
 function clauseWhere(c: CriteresBoamp, aujourdhui: string): string {
-  const clauses: string[] = []
+  // uniquement les vrais avis de marché : les « résultats », rectificatifs
+  // et annulations sont du bruit pour la prospection
+  const clauses: string[] = ['nature_libelle = "Avis de marché"']
 
+  // mots-clés cherchés dans l'OBJET seulement — le plein-texte global
+  // remontait n'importe quoi (un cahier des charges qui cite « architecte »…)
   const mots = c.motsCles.split(',').map((m) => m.trim()).filter(Boolean)
-  if (mots.length > 0) clauses.push(`(${mots.map(q).join(' OR ')})`)
+  if (mots.length > 0) clauses.push(`(${mots.map((m) => `search(objet,${q(m)})`).join(' OR ')})`)
 
   const deps = c.departements
     .split(',')
@@ -130,6 +134,8 @@ export async function rechercherBoamp(
   const data = (await r.json()) as { results?: RecordBoamp[] }
   const annonces = (data.results || [])
     .filter((x) => x.idweb && x.objet)
+    // date limite dépassée = plus la peine d'y penser
+    .filter((x) => !x.datelimitereponse || x.datelimitereponse.slice(0, 10) >= aujourdhui)
     .map((x) => ({
       idweb: x.idweb!,
       objet: x.objet!,

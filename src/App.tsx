@@ -7,6 +7,7 @@ import { alertesActives } from './alerts'
 import Cockpit from './modules/Cockpit'
 import BienDemarrer from './modules/BienDemarrer'
 import Recherche from './modules/Recherche'
+import Analyse from './modules/Analyse'
 import Projets from './modules/Projets'
 import Situations from './modules/Situations'
 import Facturation from './modules/Facturation'
@@ -31,6 +32,7 @@ const NAV: { groupe: string; items: { path: string; label: string }[] }[] = [
       { path: 'situations', label: 'Situations de travaux' },
       { path: 'facturation', label: 'Honoraires & relances' },
       { path: 'temps', label: 'Saisie des temps' },
+      { path: 'analyse', label: 'Analyse €/jour' },
     ],
   },
   {
@@ -76,6 +78,9 @@ export default function App() {
       break
     case 'recherche':
       page = <Recherche />
+      break
+    case 'analyse':
+      page = <Analyse />
       break
     case 'demarrer':
       page = <BienDemarrer />

@@ -20,6 +20,8 @@ export interface Phase {
   debut: string | null // ISO 'AAAA-MM-JJ'
   fin: string | null
   heuresPrevues: number
+  /** coûts externes de la phase (BET cotraitants, sous-traitance, débours) */
+  coutExterneHT?: number
 }
 
 /** lien utile rattaché au projet (Drive, plateforme, DCE…) */
@@ -68,6 +70,14 @@ export interface Projet {
   materiauxIds: string[]
   artisanIds: string[]
   journal: NoteJournal[]
+  /** surface plancher (m²) → ratios €/m² travaux et honoraires */
+  surfacePlancher?: number | null
+  /** responsable interne du projet (nom d'un membre de l'équipe) */
+  responsable?: string
+  /** plaisir à travailler sur ce projet, note sur 5 — l'idée est bonne */
+  plaisir?: number | null
+  /** n° de marché / acte d'engagement (facturation publique) */
+  numeroEngagement?: string
 }
 
 /** courrier trié par la routine mail du matin — rangé au bon projet */
@@ -171,6 +181,41 @@ export interface TempsEntry {
   projetId: string
   phase: PhaseCode
   heures: number
+}
+
+export const CATEGORIES_HORS_PROJET = [
+  'Prospection / AO',
+  'Administratif agence',
+  'Communication / réseaux',
+  'Vie d’agence / orga',
+  'Formation',
+  'CIR / R&D',
+  'Divers mail / tél',
+] as const
+
+/** temps non facturable (prospection, admin, formation…) — indispensable
+ *  pour le coût réel par jour et la part de temps facturable */
+export interface TempsHorsProjet {
+  id: string
+  semaine: string // lundi ISO
+  personne: string
+  categorie: string
+  heures: number
+}
+
+/** membre de l'équipe — le coût horaire RÉEL se calcule depuis sa
+ *  rémunération, plus aucun forfait */
+export interface Personne {
+  id: string
+  nom: string
+  /** rémunération mensuelle brute (salarié) ou net versé (gérant TNS) */
+  brutMensuel: number
+  /** coefficient de charges : ~1,45 TNS, ~1,42 salarié */
+  coefCharges: number
+  /** heures travaillées par an (1720 ≈ temps plein) */
+  heuresAnnuelles: number
+  /** part facturable visée (0,6 = 60 %) */
+  facturablePct: number
 }
 
 export interface Reference {
@@ -327,7 +372,12 @@ export interface Settings {
   /** seuil de dérive heures (0.9 = alerte à 90 % du budget) */
   seuilDeriveHeures: number
   delaisPaiement: Record<TypeMO, number>
+  /** noms (dérivés de l'équipe — gardés pour les listes déroulantes) */
   personnes: string[]
+  /** l'équipe avec rémunérations réelles → coûts horaires par personne */
+  equipe: Personne[]
+  /** frais généraux annuels HT (loyer, logiciels, assurances…) */
+  fraisGenerauxAnnuels: number
   /** modèle de nomenclature documentaire */
   nomenclature: string
   /** alerteId → ISO « en sommeil jusqu'au » */
@@ -361,4 +411,5 @@ export interface AppState {
   prompts: PromptTemplate[]
   reunions: ReunionChantier[]
   courriers: Courrier[]
+  tempsHorsProjet: TempsHorsProjet[]
 }

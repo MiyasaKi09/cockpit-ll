@@ -13,6 +13,20 @@ function migrate(parsed: AppState): AppState {
   const etat: AppState = { ...seedState(), ...parsed, version: STATE_VERSION }
   etat.reunions = Array.isArray(parsed.reunions) ? parsed.reunions : []
   etat.courriers = Array.isArray(parsed.courriers) ? parsed.courriers : []
+  etat.tempsHorsProjet = Array.isArray(parsed.tempsHorsProjet) ? parsed.tempsHorsProjet : []
+  // v3 → v4 : l'équipe réelle remplace le coût horaire forfaitaire
+  if (!Array.isArray(parsed.settings?.equipe) || parsed.settings.equipe.length === 0) {
+    const noms = parsed.settings?.personnes?.length ? parsed.settings.personnes : ['Julien', 'Zoé']
+    etat.settings.equipe = noms.map((nom, i) => ({
+      id: `pers-${i}-${nom.toLowerCase()}`,
+      nom,
+      brutMensuel: 3000,
+      coefCharges: 1.45,
+      heuresAnnuelles: 1720,
+      facturablePct: 0.6,
+    }))
+  }
+  if (typeof parsed.settings?.fraisGenerauxAnnuels !== 'number') etat.settings.fraisGenerauxAnnuels = 30040
   etat.projets = (parsed.projets || []).map((p) => ({
     ...p,
     liens: Array.isArray(p.liens) ? p.liens : [],

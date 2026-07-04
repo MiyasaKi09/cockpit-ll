@@ -19,10 +19,86 @@ import {
   TextInput,
   useToday,
 } from '../ui'
-import { download, fmtDate, fmtMoney, fold, todayISO } from '../util'
+import { download, fmtDate, fmtMoney, fmtPct, fold, todayISO, uid } from '../util'
+import { coutAgenceAnnuel, coutAnnuelPersonne, coutHorairePersonne, coutHoraireMoyen, coutJourObjectif } from '../derive'
 import { connecterGoogle, deconnecter, estConnecte } from '../google'
 
 const TYPES_MO: TypeMO[] = ['Public', 'Privé pro', 'Particulier']
+
+/** L'équipe avec rémunérations réelles : le coût horaire de chacun
+ *  se calcule tout seul — plus de forfait approximatif. */
+function CarteEquipe() {
+  const { state, update } = useStore()
+  const eq = state.settings.equipe
+
+  const majPersonne = (id: string, champ: 'nom' | 'brutMensuel' | 'coefCharges' | 'heuresAnnuelles' | 'facturablePct', v: string | number | null) =>
+    update((d) => {
+      const p = d.settings.equipe.find((x) => x.id === id)
+      if (!p) return
+      if (champ === 'nom') p.nom = String(v ?? '')
+      else (p as unknown as Record<string, number>)[champ] = typeof v === 'number' ? v : 0
+      d.settings.personnes = d.settings.equipe.map((x) => x.nom).filter(Boolean)
+    })
+
+  const ajouter = () =>
+    update((d) => {
+      d.settings.equipe.push({ id: uid('pers'), nom: 'Nouveau', brutMensuel: 2500, coefCharges: 1.42, heuresAnnuelles: 1720, facturablePct: 0.6 })
+      d.settings.personnes = d.settings.equipe.map((x) => x.nom)
+    })
+
+  const retirer = (id: string) => {
+    const p = eq.find((x) => x.id === id)
+    if (!p) return
+    if (!confirm(`Retirer ${p.nom} de l'équipe ? (ses heures pointées restent, valorisées au coût moyen)`)) return
+    update((d) => {
+      d.settings.equipe = d.settings.equipe.filter((x) => x.id !== id)
+      d.settings.personnes = d.settings.equipe.map((x) => x.nom)
+    })
+  }
+
+  return (
+    <Card titre="Équipe & coûts réels — le cœur du calcul de marge">
+      <p className="small muted" style={{ marginBottom: 10 }}>
+        Chaque heure pointée est valorisée au coût réel de la personne (rémunération chargée ÷ heures
+        annuelles). La marge d'un projet et l'<a href="#/analyse">Analyse €/jour</a> reposent sur ces
+        chiffres — pas sur un forfait.
+      </p>
+      <Table compact head={['Personne', <span key="b" className="right">Rému. mensuelle (brut / net TNS)</span>, <span key="c" className="right">Coef. charges</span>, <span key="h" className="right">Heures / an</span>, <span key="f" className="right">% facturable</span>, <span key="ch" className="right">Coût horaire</span>, <span key="ca" className="right">Coût annuel chargé</span>, '']}>
+        {eq.map((p) => (
+          <tr key={p.id}>
+            <td><TextInput value={p.nom} onChange={(v) => majPersonne(p.id, 'nom', v)} style={{ width: 110 }} /></td>
+            <td className="right"><NumInput value={p.brutMensuel} onChange={(v) => majPersonne(p.id, 'brutMensuel', v)} style={{ width: 90 }} /></td>
+            <td className="right"><NumInput value={p.coefCharges} onChange={(v) => majPersonne(p.id, 'coefCharges', v)} style={{ width: 70 }} /></td>
+            <td className="right"><NumInput value={p.heuresAnnuelles} onChange={(v) => majPersonne(p.id, 'heuresAnnuelles', v)} style={{ width: 76 }} /></td>
+            <td className="right"><NumInput value={p.facturablePct} onChange={(v) => majPersonne(p.id, 'facturablePct', v)} style={{ width: 64 }} /></td>
+            <td className="right num"><strong>{fmtMoney(coutHorairePersonne(p), true)}</strong></td>
+            <td className="right num">{fmtMoney(coutAnnuelPersonne(p))}</td>
+            <td className="right"><Btn small kind="danger" onClick={() => retirer(p.id)}>✕</Btn></td>
+          </tr>
+        ))}
+      </Table>
+      <div className="toolbar" style={{ marginTop: 10, marginBottom: 0 }}>
+        <Btn small onClick={ajouter}>+ Ajouter une personne</Btn>
+        <span className="spacer" />
+        <Field label="Frais généraux annuels HT (€)" hint="loyer, logiciels, assurances, compta…">
+          <NumInput
+            value={state.settings.fraisGenerauxAnnuels}
+            onChange={(v) => update((d) => void (d.settings.fraisGenerauxAnnuels = v ?? 0))}
+            style={{ width: 110 }}
+          />
+        </Field>
+      </div>
+      <dl className="kv" style={{ marginTop: 12 }}>
+        <dt>Coût d'agence annuel (équipe + FG)</dt>
+        <dd><strong>{fmtMoney(coutAgenceAnnuel(state))}</strong></dd>
+        <dt>Seuil de rentabilité par jour facturable</dt>
+        <dd><strong>{fmtMoney(coutJourObjectif(state))}</strong> <span className="muted small">— l'objectif de l'Analyse €/jour</span></dd>
+        <dt>Coût horaire moyen pondéré</dt>
+        <dd>{fmtMoney(coutHoraireMoyen(state), true)} <span className="muted small">(coefs indicatifs : ~1,45 gérant TNS · ~1,42 salarié)</span></dd>
+      </dl>
+    </Card>
+  )
+}
 
 /** Gmail & Agenda en direct — API Google gratuites, lecture seule */
 function CarteSurveillance() {
@@ -274,6 +350,8 @@ export default function Parametres() {
         </Card>
       </div>
 
+      <CarteEquipe />
+
       <Card titre="Agence & calculs">
         <div className="form-row">
           <Field label="Nom de l'agence">
@@ -295,8 +373,8 @@ export default function Parametres() {
           <Field label="Taux horaire de vente (€)">
             <NumInput value={s.tauxHoraireVente} onChange={(v) => maj((d) => void (d.settings.tauxHoraireVente = v ?? 0))} />
           </Field>
-          <Field label="Coût horaire de revient (€)">
-            <NumInput value={s.coutHoraireRevient} onChange={(v) => maj((d) => void (d.settings.coutHoraireRevient = v ?? 0))} />
+          <Field label="Coût horaire de revient" hint="calculé depuis l'équipe réelle (carte ci-dessus)">
+            <div className="input" style={{ background: '#f7f8fa' }}>{fmtMoney(coutHoraireMoyen(state), true)} / h</div>
           </Field>
           <Field label="Heures / jour">
             <NumInput value={s.heuresParJour} onChange={(v) => maj((d) => void (d.settings.heuresParJour = v ?? 7.8))} />

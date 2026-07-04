@@ -9,6 +9,7 @@
 import { useState } from 'react'
 import type { AppState, PhaseCode, Projet } from '../types'
 import { useStore } from '../store'
+import { CATEGORIES_HORS_PROJET } from '../types'
 import {
   Badge,
   Btn,
@@ -456,8 +457,77 @@ export default function Temps() {
         </div>
       )}
 
+      {personnes.length > 0 && <CarteHorsProjet semaine={semaine} />}
       {personnes.length > 0 && <RecapSemaine semaine={semaine} />}
       <RecapDerives />
     </Page>
+  )
+}
+
+
+// ------------------------------------------------------------------
+// Temps hors projet — prospection, admin, formation, CIR… Ces heures
+// ne se facturent pas mais pèsent sur le coût réel par jour : les
+// compter est ce qui rend l'Analyse honnête.
+// ------------------------------------------------------------------
+
+function CarteHorsProjet({ semaine }: { semaine: string }) {
+  const { state, update } = useStore()
+  const personnes = state.settings.personnes
+
+  const valeur = (personne: string, categorie: string): number | null => {
+    const e = state.tempsHorsProjet.find(
+      (t) => t.semaine === semaine && t.personne === personne && t.categorie === categorie,
+    )
+    return e ? e.heures : null
+  }
+
+  const poser = (personne: string, categorie: string, heures: number | null) =>
+    update((d) => {
+      const i = d.tempsHorsProjet.findIndex(
+        (t) => t.semaine === semaine && t.personne === personne && t.categorie === categorie,
+      )
+      if (heures === null || heures <= 0) {
+        if (i >= 0) d.tempsHorsProjet.splice(i, 1)
+        return
+      }
+      if (i >= 0) d.tempsHorsProjet[i].heures = heures
+      else d.tempsHorsProjet.push({ id: uid('thp'), semaine, personne, categorie, heures })
+    })
+
+  const totalPersonne = (personne: string) =>
+    state.tempsHorsProjet
+      .filter((t) => t.semaine === semaine && t.personne === personne)
+      .reduce((s, t) => s + t.heures, 0)
+
+  return (
+    <Card titre="Hors projet (non facturable) — prospection, admin, formation…">
+      <p className="muted small" style={{ marginBottom: 8 }}>
+        Ces heures ne se facturent pas mais comptent dans le coût réel par jour : les saisir rend
+        l'<a href="#/analyse">Analyse</a> honnête (part facturable, €/jour réel).
+      </p>
+      <Table compact head={['Catégorie', ...personnes.map((p) => <span key={p} className="right">{p}</span>)]}>
+        {CATEGORIES_HORS_PROJET.map((cat) => (
+          <tr key={cat}>
+            <td>{cat}</td>
+            {personnes.map((per) => (
+              <td key={per} className="right">
+                <NumInput
+                  value={valeur(per, cat)}
+                  onChange={(v) => poser(per, cat, v)}
+                  style={{ width: 64 }}
+                />
+              </td>
+            ))}
+          </tr>
+        ))}
+        <tr>
+          <td><strong>Total hors projet</strong></td>
+          {personnes.map((per) => (
+            <td key={per} className="right num"><strong>{fmtHeures(totalPersonne(per))}</strong></td>
+          ))}
+        </tr>
+      </Table>
+    </Card>
   )
 }

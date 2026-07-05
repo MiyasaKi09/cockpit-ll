@@ -38,13 +38,30 @@ export function Page({
   titre,
   sousTitre,
   actions,
+  meta,
+  wordmark,
   children,
 }: {
   titre: string
   sousTitre?: ReactNode
   actions?: ReactNode
+  /** ligne mono à droite du titre (mode wordmark) */
+  meta?: ReactNode
+  /** en-tête « affiche » : titre en logotype minuscule + filet bas */
+  wordmark?: boolean
   children: ReactNode
 }) {
+  if (wordmark) {
+    return (
+      <div className="page">
+        <header className="page-wordmark-h">
+          <h1 className="wordmark">{titre}</h1>
+          {meta && <div className="wordmark-meta">{meta}</div>}
+        </header>
+        {children}
+      </div>
+    )
+  }
   return (
     <div className="page">
       <header className="page-h">

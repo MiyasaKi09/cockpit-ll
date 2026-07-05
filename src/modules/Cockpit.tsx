@@ -307,9 +307,6 @@ function BoiteATraiter() {
         </span>
       }
     >
-      <p className="muted small" style={{ marginBottom: 10 }}>
-        Trié par urgence. Chaque ligne mène au bon endroit.
-      </p>
       <LigneCourrier personne={personne} />
       {items.length === 0 && nbCourriers === 0 ? (
         <EmptyState>Rien à traiter.</EmptyState>
@@ -349,7 +346,8 @@ function BoiteATraiter() {
 export default function Cockpit() {
   const { state, update, replace } = useStore()
   const today = useToday()
-  const { evenements, direct } = useSurveillance(state, update)
+  const { evenements } = useSurveillance(state, update)
+  const dateFR = today.split('-').reverse().join('.')
 
   const meteo = meteoFinanciere(state, today)
   const excel = state.settings.dernierImportExcel
@@ -417,62 +415,18 @@ export default function Cockpit() {
     .slice(0, 3)
 
   return (
-    <Page
-      titre="Cockpit"
-      sousTitre={
-        <>
-          {direct ? (
-            <span className="badge badge-ok" style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-              <Icon name="bolt" size={12} /> Gmail & Agenda en direct
-            </span>
-          ) : (
-            state.settings.surveillance?.clientId && (
-              <a href="#/parametres/branchements" className="badge badge-muted">surveillance coupée — reconnecter</a>
-            )
-          )}{' '}
-          <a
-            href="#/parametres/branchements"
-            className="badge badge-muted"
-            title="Tester chaque branchement en un clic"
-            style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}
-          >
-            <Icon name="activity" size={12} /> santé des branchements
-          </a>
-        </>
-      }
-    >
+    <Page titre="cockpit" wordmark meta={`Pilotage · ${dateFR}`}>
       {/* ---------- météo financière ---------- */}
       <div style={{ marginBottom: 16 }}>
         <div className="grid3">
           <Stat
             accent="yellow"
-            label="Trésorerie disponible"
+            label="Trésorerie"
             value={<Money v={meteo.tresorerie} />}
             tone={meteo.tresorerie !== null && meteo.tresorerie < 0 ? 'danger' : undefined}
-            sub={
-              meteo.tresorerie === null ? (
-                <>
-                  à renseigner dans <a href="#/parametres">Paramètres</a>
-                </>
-              ) : (
-                <>
-                  MAJ le {fmtDate(meteo.tresorerieMajLe)} · <a href="#/parametres">Paramètres</a>
-                </>
-              )
-            }
           />
-          <Stat
-            accent="blue"
-            label="Facturable à 90 jours"
-            value={<Money v={meteo.facturable90j} />}
-            sub="factures à émettre ou en attente d'encaissement"
-          />
-          <Stat
-            accent="red"
-            label="Carnet de commandes"
-            value={<Money v={meteo.carnetHT} />}
-            sub="honoraires restant à facturer (projets signés / en cours)"
-          />
+          <Stat accent="blue" label="Facturable 90 j" value={<Money v={meteo.facturable90j} />} />
+          <Stat accent="red" label="Carnet" value={<Money v={meteo.carnetHT} />} />
         </div>
         {caCible(state) > 0 && (() => {
           const annee = Number(today.slice(0, 4))

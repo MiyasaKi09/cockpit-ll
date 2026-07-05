@@ -150,6 +150,9 @@ export interface MarcheTravaux {
   contactEmail?: string
   /** chantier en cours → une situation mensuelle est attendue */
   actif: boolean
+  /** intervention du lot sur le chantier — alimente le planning travaux */
+  dateDebut?: string | null
+  dateFin?: string | null
   notes?: string
 }
 

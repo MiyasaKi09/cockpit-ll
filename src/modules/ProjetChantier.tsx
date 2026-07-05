@@ -12,6 +12,7 @@ import {
   Card,
   CopyBtn,
   EmptyState,
+  DateInput,
   Field,
   Modal,
   Money,
@@ -75,6 +76,7 @@ export function CarteMarches({ projet: p }: { projet: Projet }) {
             <span key="m" className="right">Montant HT (avenants inclus)</span>,
             'RG',
             'Révision',
+            'Intervention',
             'Chantier',
             'Contact',
             'Délai vérif.',
@@ -96,6 +98,13 @@ export function CarteMarches({ projet: p }: { projet: Projet }) {
               </td>
               <td className="num">{fmtPct(m.tauxRG, 0)}</td>
               <td>{m.revision ? 'oui' : '—'}</td>
+              <td className="small">
+                {m.dateDebut || m.dateFin ? (
+                  <>{m.dateDebut ? fmtDate(m.dateDebut) : '?'} → {m.dateFin ? fmtDate(m.dateFin) : '?'}</>
+                ) : (
+                  <a href="#/planning" className="muted">à planifier</a>
+                )}
+              </td>
               <td>{m.actif ? <Badge tone="ok">en cours</Badge> : <span className="muted">—</span>}</td>
               <td className="small">
                 {m.contactNom || <span className="muted">—</span>}
@@ -140,6 +149,8 @@ function ModalMarche({
   const [contactNom, setContactNom] = useState(marche?.contactNom || '')
   const [contactEmail, setContactEmail] = useState(marche?.contactEmail || '')
   const [actif, setActif] = useState(marche?.actif ? 'oui' : 'non')
+  const [dateDebut, setDateDebut] = useState<string | null>(marche?.dateDebut ?? null)
+  const [dateFin, setDateFin] = useState<string | null>(marche?.dateFin ?? null)
   const [notes, setNotes] = useState(marche?.notes || '')
 
   const valide = lot.trim() !== '' && entreprise.trim() !== ''
@@ -158,6 +169,8 @@ function ModalMarche({
         contactNom: contactNom.trim() || undefined,
         contactEmail: contactEmail.trim() || undefined,
         actif: actif === 'oui',
+        dateDebut,
+        dateFin,
         notes: notes.trim() || undefined,
       }
       if (creation) {
@@ -216,6 +229,14 @@ function ModalMarche({
             onChange={setActif}
             options={[{ value: 'non', label: 'Non' }, { value: 'oui', label: 'Oui' }]}
           />
+        </Field>
+      </div>
+      <div className="form-row">
+        <Field label="Intervention chantier — début" hint="alimente le planning travaux">
+          <DateInput value={dateDebut} onChange={setDateDebut} />
+        </Field>
+        <Field label="Intervention chantier — fin">
+          <DateInput value={dateFin} onChange={setDateFin} />
         </Field>
       </div>
       <div className="form-row">

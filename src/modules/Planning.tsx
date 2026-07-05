@@ -7,11 +7,12 @@
 // ============================================================
 
 import { useState } from 'react'
-import type { AppState, PhaseCode, Projet } from '../types'
+import type { AppState, MarcheTravaux, PhaseCode, Projet } from '../types'
 import { useStore } from '../store'
-import { Badge, Btn, Card, DateInput, EmptyState, Page, Select, useToday } from '../ui'
+import { Badge, Btn, Card, DateInput, EmptyState, Field, NumInput, Page, Select, useToday } from '../ui'
 import { addDays, diffDays, fmtDate, todayISO } from '../util'
 import { LIBELLES_PHASES, PHASES_ORDRE } from '../miqcp'
+import { daterPhases } from '../echeancier'
 import { STATUTS_ACTIFS } from '../derive'
 
 const COULEURS_PHASES = [
@@ -22,6 +23,16 @@ const COULEURS_PHASES = [
 function couleurPhase(code: PhaseCode): string {
   const i = PHASES_ORDRE.indexOf(code)
   return COULEURS_PHASES[(i === -1 ? PHASES_ORDRE.length : i) % COULEURS_PHASES.length]
+}
+
+const COULEURS_LOTS = [
+  '#0e7490', '#2563eb', '#7c3aed', '#c026d3', '#db2777', '#e11d48',
+  '#ea580c', '#ca8a04', '#65a30d', '#059669', '#0891b2', '#4f46e5',
+  '#9333ea', '#be123c', '#b45309', '#15803d',
+]
+
+function couleurLot(i: number): string {
+  return COULEURS_LOTS[i % COULEURS_LOTS.length]
 }
 
 /** premier jour du mois d'une date ISO */
@@ -107,10 +118,24 @@ function PisteProjet({ projet: p, fenetre: f }: { projet: Projet; fenetre: Fenet
 function EditionDates({ projet: p }: { projet: Projet }) {
   const { update } = useStore()
   const [propager, setPropager] = useState(true)
+  const [debutEtudes, setDebutEtudes] = useState<string | null>(
+    p.dateLancement ?? p.phases.find((ph) => ph.debut)?.debut ?? todayISO(),
+  )
+  const [dureeEtudes, setDureeEtudes] = useState<number | null>(8)
+  const [dureeChantier, setDureeChantier] = useState<number | null>(12)
 
   const indexDe = (code: PhaseCode) => {
     const i = PHASES_ORDRE.indexOf(code)
     return i === -1 ? PHASES_ORDRE.length : i
+  }
+
+  const daterAuto = () => {
+    if (!debutEtudes || !dureeEtudes || !dureeChantier) return
+    update((d) => {
+      const pr = d.projets.find((x) => x.id === p.id)
+      if (!pr) return
+      pr.phases = daterPhases(pr.phases, debutEtudes, dureeEtudes, dureeChantier)
+    })
   }
 
   const majDate = (code: PhaseCode, champ: 'debut' | 'fin', v: string | null) =>
@@ -144,9 +169,27 @@ function EditionDates({ projet: p }: { projet: Projet }) {
         </label>
       }
     >
-      <p className="muted small" style={{ marginBottom: 8 }}>
-        Le chantier a glissé ? ◀ ▶ décale la phase d'une semaine — avec la case cochée, tout ce qui
-        suit glisse d'autant. Le planning et l'échéancier de facturation restent alignés sur ces dates.
+      <div className="toolbar" style={{ background: 'var(--bg-soft, #f6f7fa)', padding: 10, borderRadius: 8, flexWrap: 'wrap' }}>
+        <Field label="Début des études">
+          <DateInput value={debutEtudes} onChange={setDebutEtudes} />
+        </Field>
+        <Field label="Durée études (mois)">
+          <NumInput value={dureeEtudes} onChange={setDureeEtudes} style={{ width: 70 }} />
+        </Field>
+        <Field label="Durée chantier (mois)">
+          <NumInput value={dureeChantier} onChange={setDureeChantier} style={{ width: 70 }} />
+        </Field>
+        <Field label=" ">
+          <Btn kind="primary" onClick={daterAuto} disabled={!debutEtudes || !dureeEtudes || !dureeChantier}>
+            Dater les phases automatiquement
+          </Btn>
+        </Field>
+      </div>
+      <p className="muted small" style={{ margin: '8px 0' }}>
+        Toutes les phases se placent d'un coup à partir de ces 3 repères (réparties au prorata des
+        honoraires) — le projet tient sur une seule ligne. Ensuite, ◀ ▶ décale une phase d'une
+        semaine ; avec la case cochée, tout ce qui suit glisse d'autant. Planning et échéancier de
+        facturation restent alignés sur ces dates.
       </p>
       <table className="table table-compact">
         <thead>
@@ -252,38 +295,283 @@ function ouvrirPlanningPDF(state: AppState, projets: Projet[], f: Fenetre, today
   w.document.close()
 }
 
+// ============================================================
+// Planning CHANTIER — une barre par lot / entreprise sur sa
+// période d'intervention. Le vrai planning travaux, à envoyer
+// aux entreprises et à faire glisser au fil du chantier.
+// ============================================================
+
+interface LigneChantier {
+  marche: MarcheTravaux
+  projet: Projet
+  couleur: string
+}
+
+/** lots datés des projets retenus, triés par projet puis début d'intervention */
+function lignesChantier(state: AppState, projets: Projet[]): LigneChantier[] {
+  const lignes: LigneChantier[] = []
+  for (const p of projets) {
+    const lots = state.marches
+      .filter((m) => m.projetId === p.id && (m.dateDebut || m.dateFin))
+      .sort((a, b) => (a.dateDebut || a.dateFin || '').localeCompare(b.dateDebut || b.dateFin || ''))
+    lots.forEach((m, i) => lignes.push({ marche: m, projet: p, couleur: couleurLot(i) }))
+  }
+  return lignes
+}
+
+/** projets actifs ayant au moins un lot daté */
+function projetsAvecChantier(state: AppState): Projet[] {
+  return state.projets.filter(
+    (p) => STATUTS_ACTIFS.includes(p.statut) && state.marches.some((m) => m.projetId === p.id && (m.dateDebut || m.dateFin)),
+  )
+}
+
+function BarreChantier({ ligne, fenetre: f }: { ligne: LigneChantier; fenetre: Fenetre }) {
+  const { marche: m } = ligne
+  const debut = m.dateDebut || m.dateFin!
+  const fin = m.dateFin || m.dateDebut!
+  if (fin < f.debut || debut >= f.fin) return <div style={{ height: 26 }} />
+  const gauche = pos(f, debut)
+  const largeur = Math.max(1.4, pos(f, addDays(fin, 1)) - gauche)
+  return (
+    <div style={{ position: 'relative', height: 26, background: 'var(--bg-soft, #f6f7fa)', borderRadius: 5 }}>
+      <div
+        title={`${m.lot} — ${m.entreprise}\n${fmtDate(debut)} → ${fmtDate(fin)}`}
+        style={{
+          position: 'absolute',
+          left: `${gauche}%`,
+          width: `${largeur}%`,
+          top: 3,
+          bottom: 3,
+          background: ligne.couleur,
+          borderRadius: 4,
+          color: '#fff',
+          fontSize: 10,
+          fontWeight: 700,
+          lineHeight: '20px',
+          paddingLeft: 5,
+          overflow: 'hidden',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        {m.entreprise}
+      </div>
+    </div>
+  )
+}
+
+/** édition rapide des dates de chantier — un lot glisse, les suivants suivent */
+function EditionChantier({ projet: p }: { projet: Projet }) {
+  const { state, update } = useStore()
+  const [propager, setPropager] = useState(true)
+  const lots = state.marches
+    .filter((m) => m.projetId === p.id)
+    .sort((a, b) => (a.dateDebut || '9999').localeCompare(b.dateDebut || '9999'))
+
+  const majDate = (id: string, champ: 'dateDebut' | 'dateFin', v: string | null) =>
+    update((d) => {
+      const m = d.marches.find((x) => x.id === id)
+      if (m) m[champ] = v
+    })
+
+  const decaler = (id: string, jours: number) =>
+    update((d) => {
+      const ref = d.marches.find((x) => x.id === id)
+      if (!ref) return
+      const seuil = ref.dateDebut || ref.dateFin || ''
+      for (const m of d.marches) {
+        if (m.projetId !== p.id) continue
+        const aDate = m.dateDebut || m.dateFin || ''
+        if (m.id === id || (propager && aDate >= seuil)) {
+          if (m.dateDebut) m.dateDebut = addDays(m.dateDebut, jours)
+          if (m.dateFin) m.dateFin = addDays(m.dateFin, jours)
+        }
+      }
+    })
+
+  return (
+    <Card
+      titre={`Ajuster le planning chantier — ${p.id}`}
+      actions={
+        <label className="small" style={{ display: 'flex', gap: 6, alignItems: 'center', cursor: 'pointer' }}>
+          <input type="checkbox" checked={propager} onChange={(e) => setPropager(e.target.checked)} />
+          un décalage repousse aussi les lots suivants
+        </label>
+      }
+    >
+      {lots.length === 0 ? (
+        <EmptyState>
+          Aucun marché sur ce projet — ajoutez les lots dans l'onglet Chantier de la fiche projet,
+          avec leurs dates d'intervention.
+        </EmptyState>
+      ) : (
+        <>
+          <p className="muted small" style={{ marginBottom: 8 }}>
+            Un lot prend du retard ? ◀ ▶ décale son intervention d'une semaine — avec la case cochée,
+            tous les lots qui démarrent après glissent aussi. Les dates se saisissent aussi dans la
+            fiche marché (onglet Chantier).
+          </p>
+          <table className="table table-compact">
+            <thead>
+              <tr>
+                <th>Lot · entreprise</th>
+                <th>Début</th>
+                <th>Fin</th>
+                <th>Décaler</th>
+              </tr>
+            </thead>
+            <tbody>
+              {lots.map((m, i) => (
+                <tr key={m.id}>
+                  <td>
+                    <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 3, background: couleurLot(i), marginRight: 6 }} />
+                    <strong>{m.lot}</strong> <span className="muted small">{m.entreprise}</span>
+                  </td>
+                  <td>
+                    <DateInput value={m.dateDebut ?? null} onChange={(v) => majDate(m.id, 'dateDebut', v)} />
+                  </td>
+                  <td>
+                    <DateInput value={m.dateFin ?? null} onChange={(v) => majDate(m.id, 'dateFin', v)} />
+                  </td>
+                  <td>
+                    <span style={{ display: 'inline-flex', gap: 4 }}>
+                      <Btn small onClick={() => decaler(m.id, -7)}>◀ 1 sem</Btn>
+                      <Btn small onClick={() => decaler(m.id, 7)}>1 sem ▶</Btn>
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+    </Card>
+  )
+}
+
+function ouvrirChantierPDF(state: AppState, lignes: LigneChantier[], f: Fenetre, today: string): void {
+  const mois: string[] = []
+  for (let m = f.debut; m < f.fin; m = addMonths(m, 1)) mois.push(m)
+
+  const rangs = lignes
+    .map((l) => {
+      const m = l.marche
+      const debut = m.dateDebut || m.dateFin!
+      const fin = m.dateFin || m.dateDebut!
+      const visible = fin >= f.debut && debut < f.fin
+      const gauche = pos(f, debut)
+      const largeur = Math.max(1.2, pos(f, addDays(fin, 1)) - gauche)
+      const barre = visible
+        ? `<div style="position:absolute;left:${gauche}%;width:${largeur}%;top:3px;bottom:3px;background:${l.couleur};border-radius:3px;color:#fff;font-size:9px;font-weight:700;line-height:20px;padding-left:4px;overflow:hidden;white-space:nowrap">${echapper(m.entreprise)}</div>`
+        : ''
+      const contact = m.contactNom || m.contactEmail ? `<div style="font-size:9px;color:#5a6478">${echapper([m.contactNom, m.contactEmail].filter(Boolean).join(' · '))}</div>` : ''
+      return `<tr>
+        <td style="width:240px;padding:4px 8px;border-bottom:1px solid #e3e6ec;font-size:11px"><strong>${echapper(m.lot)}</strong> — ${echapper(m.entreprise)}${contact}</td>
+        <td style="padding:0;border-bottom:1px solid #e3e6ec"><div style="position:relative;height:26px;background:#f6f7fa">${barre}
+          ${today >= f.debut && today < f.fin ? `<div style="position:absolute;left:${pos(f, today)}%;top:0;bottom:0;width:1.5px;background:#bb2233"></div>` : ''}
+        </div></td>
+      </tr>`
+    })
+    .join('')
+
+  const enTetesMois = mois
+    .map(
+      (m) =>
+        `<div style="position:absolute;left:${pos(f, m)}%;top:0;bottom:0;border-left:1px solid #e3e6ec;padding-left:4px;font-size:10px;color:#5a6478">${NOMS_MOIS_COURTS[Number(m.slice(5, 7)) - 1]} ${m.slice(2, 4)}</div>`,
+    )
+    .join('')
+
+  const projets = [...new Set(lignes.map((l) => `${l.projet.id} — ${l.projet.nom}`))].join(' · ')
+
+  const html = `<!doctype html>
+<html lang="fr"><head><meta charset="utf-8"><title>Planning chantier — ${echapper(state.settings.nomAgence)}</title>
+<style>
+  @page { size: A4 landscape; margin: 12mm; }
+  body { font-family: -apple-system, 'Segoe UI', Roboto, Arial, sans-serif; color: #1a2233; margin: 24px; }
+  h1 { font-size: 18px; margin: 0; }
+  .muted { color: #5a6478; font-size: 11px; }
+  table { width: 100%; border-collapse: collapse; margin-top: 14px; }
+  .impression { position: fixed; top: 12px; right: 12px; }
+  @media print { .impression { display: none; } body { margin: 0; } }
+</style></head><body>
+<button class="impression" onclick="window.print()">Imprimer / PDF</button>
+<h1>${echapper(state.settings.nomAgence)} — Planning chantier</h1>
+<div class="muted">${echapper(projets)}<br>Édité le ${fmtDate(today)} · fenêtre ${fmtDate(f.debut)} → ${fmtDate(addDays(f.fin, -1))} · trait rouge = aujourd'hui · document indicatif, ajusté au fil du chantier</div>
+<table>
+  <tr><td style="width:240px"></td><td style="padding:0"><div style="position:relative;height:18px">${enTetesMois}</div></td></tr>
+  ${rangs}
+</table>
+</body></html>`
+
+  const w = window.open('', '_blank')
+  if (!w) return
+  w.document.write(html)
+  w.document.close()
+}
+
 // ---------- page ----------
+
+type Mode = 'phases' | 'chantier'
 
 export default function Planning() {
   const { state } = useStore()
   const today = useToday()
+  const [mode, setMode] = useState<Mode>('phases')
   const [filtre, setFiltre] = useState('')
   const [debutF, setDebutF] = useState(() => addMonths(debutMois(todayISO()), -1))
 
-  const tous = projetsPlanifies(state)
+  const tousPhases = projetsPlanifies(state)
+  const tousChantier = projetsAvecChantier(state)
+  const tous = mode === 'phases' ? tousPhases : tousChantier
   const projets = filtre ? tous.filter((p) => p.id === filtre) : tous
   const f = fenetreDe(debutF, 12)
+
+  const lignesCh = mode === 'chantier' ? lignesChantier(state, projets) : []
 
   const mois: string[] = []
   for (let m = f.debut; m < f.fin; m = addMonths(m, 1)) mois.push(m)
 
   const calerSurProjets = () => {
-    const debuts = tous.flatMap((p) => p.phases.filter((ph) => ph.debut).map((ph) => ph.debut!))
+    const debuts =
+      mode === 'phases'
+        ? tousPhases.flatMap((p) => p.phases.filter((ph) => ph.debut).map((ph) => ph.debut!))
+        : state.marches.filter((m) => tousChantier.some((p) => p.id === m.projetId) && m.dateDebut).map((m) => m.dateDebut!)
     if (debuts.length > 0) setDebutF(debutMois(debuts.sort()[0]))
   }
 
   const projetSelectionne = filtre ? state.projets.find((p) => p.id === filtre) : undefined
 
+  const exporterPDF = () =>
+    mode === 'phases' ? ouvrirPlanningPDF(state, projets, f, today) : ouvrirChantierPDF(state, lignesCh, f, today)
+
+  const changerMode = (m: Mode) => {
+    setMode(m)
+    setFiltre('')
+  }
+
+  const vide = mode === 'phases' ? projets.length === 0 : lignesCh.length === 0
+
   return (
     <Page
       titre="Planning"
-      sousTitre="Le Gantt vivant de l'agence — une barre par phase, la ligne rouge marque aujourd'hui. Un chantier glisse ? Deux clics et tout suit. Imprimer/PDF pour diffuser."
+      sousTitre="Le Gantt vivant de l'agence — phases de conception ou lots de chantier. La ligne rouge marque aujourd'hui, tout glisse en deux clics, Imprimer/PDF pour diffuser."
       actions={
-        <Btn kind="primary" onClick={() => ouvrirPlanningPDF(state, projets, f, today)} disabled={projets.length === 0}>
+        <Btn kind="primary" onClick={exporterPDF} disabled={vide}>
           🖨 Imprimer / PDF
         </Btn>
       }
     >
+      <div className="toolbar" style={{ marginBottom: 4 }}>
+        <span style={{ display: 'inline-flex', gap: 4 }}>
+          <button className={`btn btn-small ${mode === 'phases' ? 'btn-primary' : ''}`} onClick={() => changerMode('phases')}>
+            Phases (conception)
+          </button>
+          <button className={`btn btn-small ${mode === 'chantier' ? 'btn-primary' : ''}`} onClick={() => changerMode('chantier')}>
+            Chantier (entreprises)
+          </button>
+        </span>
+      </div>
+
       <div className="toolbar">
         <Btn onClick={() => setDebutF(addMonths(debutF, -1))}>‹</Btn>
         <Btn onClick={() => setDebutF(addMonths(debutF, 1))}>›</Btn>
@@ -292,7 +580,7 @@ export default function Planning() {
         <Select
           value={filtre}
           onChange={setFiltre}
-          options={[{ value: '', label: 'Tous les projets actifs' }, ...tous.map((p) => ({ value: p.id, label: `${p.id} — ${p.nom}` }))]}
+          options={[{ value: '', label: mode === 'phases' ? 'Tous les projets actifs' : 'Tous les chantiers' }, ...tous.map((p) => ({ value: p.id, label: `${p.id} — ${p.nom}` }))]}
           style={{ maxWidth: 280 }}
         />
         <span className="muted small">
@@ -301,67 +589,98 @@ export default function Planning() {
       </div>
 
       <Card>
-        {projets.length === 0 ? (
+        {mode === 'phases' ? (
+          projets.length === 0 ? (
+            <EmptyState>
+              Aucun projet actif avec des phases datées — utilisez « Dater les phases automatiquement »
+              après avoir sélectionné un projet ci-dessous.
+            </EmptyState>
+          ) : (
+            <div style={{ display: 'grid', gridTemplateColumns: '190px 1fr', rowGap: 8, alignItems: 'center' }}>
+              <div />
+              <div style={{ position: 'relative', height: 20 }}>
+                {mois.map((m) => (
+                  <div key={m} className="muted small" style={{ position: 'absolute', left: `${pos(f, m)}%`, top: 0, bottom: 0, borderLeft: '1px solid var(--line)', paddingLeft: 4 }}>
+                    {NOMS_MOIS_COURTS[Number(m.slice(5, 7)) - 1]} {m.slice(2, 4)}
+                  </div>
+                ))}
+              </div>
+              {projets.map((p) => (
+                <div key={p.id} style={{ display: 'contents' }}>
+                  <div className="small" style={{ paddingRight: 8 }}>
+                    <a href={`#/projets/${p.id}`}>
+                      <strong>{p.id}</strong>
+                    </a>{' '}
+                    <span className="muted" title={p.nom}>{p.nom.length > 22 ? p.nom.slice(0, 22) + '…' : p.nom}</span>
+                    <div>
+                      <button className="btn btn-small btn-ghost" onClick={() => setFiltre(filtre === p.id ? '' : p.id)} title="Ajuster les dates de ce projet">
+                        {filtre === p.id ? 'fermer' : 'ajuster'}
+                      </button>
+                    </div>
+                  </div>
+                  <div style={{ position: 'relative' }}>
+                    <PisteProjet projet={p} fenetre={f} />
+                    {today >= f.debut && today < f.fin && (
+                      <div style={{ position: 'absolute', left: `${pos(f, today)}%`, top: -4, bottom: -4, width: 2, background: 'var(--danger)' }} title={`aujourd'hui — ${fmtDate(today)}`} />
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )
+        ) : lignesCh.length === 0 ? (
           <EmptyState>
-            Aucun projet actif avec des phases datées — datez les phases dans la fiche projet
-            (onglet Pilotage) ou via « Ajuster les dates » ci-dessous.
+            Aucun lot de chantier daté — renseignez les dates d'intervention des marchés dans l'onglet
+            Chantier d'un projet, ou via « Ajuster le planning chantier » après avoir choisi un projet.
           </EmptyState>
         ) : (
-          <div style={{ display: 'grid', gridTemplateColumns: '190px 1fr', rowGap: 8, alignItems: 'center' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '210px 1fr', rowGap: 6, alignItems: 'center' }}>
             <div />
             <div style={{ position: 'relative', height: 20 }}>
               {mois.map((m) => (
-                <div
-                  key={m}
-                  className="muted small"
-                  style={{ position: 'absolute', left: `${pos(f, m)}%`, top: 0, bottom: 0, borderLeft: '1px solid var(--line)', paddingLeft: 4 }}
-                >
+                <div key={m} className="muted small" style={{ position: 'absolute', left: `${pos(f, m)}%`, top: 0, bottom: 0, borderLeft: '1px solid var(--line)', paddingLeft: 4 }}>
                   {NOMS_MOIS_COURTS[Number(m.slice(5, 7)) - 1]} {m.slice(2, 4)}
                 </div>
               ))}
             </div>
-            {projets.map((p) => (
-              <div key={p.id} style={{ display: 'contents' }}>
+            {lignesCh.map((l) => (
+              <div key={l.marche.id} style={{ display: 'contents' }}>
                 <div className="small" style={{ paddingRight: 8 }}>
-                  <a href={`#/projets/${p.id}`}>
-                    <strong>{p.id}</strong>
-                  </a>{' '}
-                  <span className="muted" title={p.nom}>{p.nom.length > 22 ? p.nom.slice(0, 22) + '…' : p.nom}</span>
-                  <div>
-                    <button
-                      className="btn btn-small btn-ghost"
-                      onClick={() => setFiltre(filtre === p.id ? '' : p.id)}
-                      title="Ajuster les dates de ce projet"
-                    >
-                      {filtre === p.id ? 'fermer' : 'ajuster'}
+                  {!filtre && <span className="muted">{l.projet.id} · </span>}
+                  <strong>{l.marche.lot}</strong>
+                  <div className="muted" title={l.marche.entreprise}>
+                    {l.marche.entreprise.length > 24 ? l.marche.entreprise.slice(0, 24) + '…' : l.marche.entreprise}
+                    {' '}
+                    <button className="btn btn-small btn-ghost" onClick={() => setFiltre(filtre === l.projet.id ? '' : l.projet.id)} title="Ajuster le planning de ce chantier">
+                      {filtre === l.projet.id ? 'fermer' : 'ajuster'}
                     </button>
                   </div>
                 </div>
                 <div style={{ position: 'relative' }}>
-                  <PisteProjet projet={p} fenetre={f} />
+                  <BarreChantier ligne={l} fenetre={f} />
                   {today >= f.debut && today < f.fin && (
-                    <div
-                      style={{ position: 'absolute', left: `${pos(f, today)}%`, top: -4, bottom: -4, width: 2, background: 'var(--danger)' }}
-                      title={`aujourd'hui — ${fmtDate(today)}`}
-                    />
+                    <div style={{ position: 'absolute', left: `${pos(f, today)}%`, top: -3, bottom: -3, width: 2, background: 'var(--danger)' }} title={`aujourd'hui — ${fmtDate(today)}`} />
                   )}
                 </div>
               </div>
             ))}
           </div>
         )}
-        <p className="muted small" style={{ marginTop: 12, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-          {PHASES_ORDRE.slice(0, 10).map((c) => (
-            <span key={c}>
-              <span style={{ display: 'inline-block', width: 9, height: 9, borderRadius: 2, background: couleurPhase(c), marginRight: 3 }} />
-              {c}
-            </span>
-          ))}
-          <Badge tone="muted">barre cliquable → fiche projet</Badge>
-        </p>
+        {mode === 'phases' && (
+          <p className="muted small" style={{ marginTop: 12, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            {PHASES_ORDRE.slice(0, 10).map((c) => (
+              <span key={c}>
+                <span style={{ display: 'inline-block', width: 9, height: 9, borderRadius: 2, background: couleurPhase(c), marginRight: 3 }} />
+                {c}
+              </span>
+            ))}
+            <Badge tone="muted">barre cliquable → fiche projet</Badge>
+          </p>
+        )}
       </Card>
 
-      {projetSelectionne && <EditionDates projet={projetSelectionne} />}
+      {projetSelectionne && mode === 'phases' && <EditionDates projet={projetSelectionne} />}
+      {projetSelectionne && mode === 'chantier' && <EditionChantier projet={projetSelectionne} />}
     </Page>
   )
 }

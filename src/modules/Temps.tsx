@@ -53,6 +53,19 @@ function phaseParDefaut(p: Projet | undefined, today: string): PhaseCode {
   return premiere?.code ?? p.phases[0]?.code ?? 'ESQ'
 }
 
+/** phases d'un projet actives pendant la fenêtre affichée [debut, fin] —
+ *  ce sont les lignes prêtes d'office pour un projet affecté ; ainsi la
+ *  phase suit la période consultée, elle ne reste pas figée sur aujourd'hui */
+function phasesFenetre(p: Projet, debut: string, fin: string): PhaseCode[] {
+  const actives = p.phases
+    .filter((ph) => ph.debut && ph.fin && ph.debut <= fin && ph.fin >= debut)
+    .sort((a, b) => indexPhase(a.code) - indexPhase(b.code))
+    .map((ph) => ph.code)
+  // aucune phase datée sur la fenêtre → repli sur la phase par défaut du milieu de fenêtre
+  if (actives.length === 0) return [phaseParDefaut(p, debut)]
+  return actives
+}
+
 function tonePourRatio(ratio: number): 'ok' | 'warn' | 'danger' {
   if (ratio >= 1) return 'danger'
   if (ratio >= 0.8) return 'warn'
@@ -97,7 +110,10 @@ function TableauPersonne({
       couples.push(c)
     }
   }
-  for (const p of affectes) pousser({ projetId: p.id, phase: phaseParDefaut(p, today) })
+  const finFenetre = addDays(semaines[semaines.length - 1], 6)
+  for (const p of affectes) {
+    for (const phase of phasesFenetre(p, semaines[0], finFenetre)) pousser({ projetId: p.id, phase })
+  }
   for (const t of state.temps) {
     if (t.personne === personne && semaines.includes(t.semaine)) pousser({ projetId: t.projetId, phase: t.phase })
   }

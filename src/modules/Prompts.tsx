@@ -249,6 +249,7 @@ function EditerGabarit({
       if (i >= 0) d.prompts[i] = maj
       else d.prompts.push(maj)
     })
+    toast(creation ? 'Gabarit créé.' : 'Gabarit enregistré.', { tone: 'ok' })
     onClose()
   }
 

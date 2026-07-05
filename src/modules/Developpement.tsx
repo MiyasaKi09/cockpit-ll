@@ -7,11 +7,16 @@
 // ============================================================
 
 import { useState } from 'react'
-import type { AppState, Consultation, StatutConsultation } from '../types'
+import type { AppState, Consultation, Contact, StatutConsultation } from '../types'
 import { useStore } from '../store'
-import { Badge, Btn, Card, EmptyState, Money, navigate, useToday } from '../ui'
-import { diffDays, fmtMoney, todayISO } from '../util'
+import { Badge, Btn, Card, EmptyState, Money, navigate, toast, useToday } from '../ui'
+import { diffDays, fmtMoney, todayISO, uid } from '../util'
+import { ageCarte, previsionnelPondere, probaConsultation } from '../derive'
 import { creerProjetDepuisConsultation } from '../consultations'
+
+/** au-delà de ce nombre de jours sans bouger, une carte « stagne » */
+const SEUIL_STAGNATION = 21
+const ETAPES_ACTIVES: StatutConsultation[] = ['a_etudier', 'go', 'deposee']
 
 interface Colonne {
   statut: StatutConsultation
@@ -36,11 +41,14 @@ function CarteConsultation({ c }: { c: Consultation }) {
   const idx = FLUX.indexOf(c.statut)
   const dj = c.dateLimite ? diffDays(today, c.dateLimite) : null
 
+  const stagne = ETAPES_ACTIVES.includes(c.statut) ? ageCarte(c, today) : null
+
   const deplacer = (statut: StatutConsultation) =>
     update((d) => {
       const x = d.consultations.find((y) => y.id === c.id)
       if (!x) return
       x.statut = statut
+      x.dernierMouvement = todayISO()
       // gagnée sans projet encore lié → l'espace projet se crée tout seul
       if (statut === 'gagnee' && !x.projetId) {
         x.projetId = creerProjetDepuisConsultation(d, x)
@@ -55,13 +63,19 @@ function CarteConsultation({ c }: { c: Consultation }) {
       <div className="muted small" style={{ marginTop: 3 }}>
         {c.acheteur || '—'}
         {c.budgetTravaux ? <> · <Money v={c.budgetTravaux} /></> : null}
+        {ETAPES_ACTIVES.includes(c.statut) && c.budgetTravaux ? (
+          <> · pondéré <Money v={c.budgetTravaux * probaConsultation(c)} /></>
+        ) : null}
       </div>
-      <div className="small" style={{ marginTop: 4 }}>
+      <div className="small" style={{ marginTop: 4, display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' }}>
         {c.dateLimite && dj !== null && (
           <Badge tone={dj < 0 ? 'muted' : dj <= 7 ? 'danger' : dj <= 15 ? 'warn' : 'ok'}>
             {dj < 0 ? 'close' : `J−${dj}`}
           </Badge>
-        )}{' '}
+        )}
+        {stagne !== null && stagne > SEUIL_STAGNATION && (
+          <Badge tone="warn" >stagne depuis {stagne} j</Badge>
+        )}
         {c.projetId && <a href={`#/projets/${c.projetId}`} className="badge badge-info">{c.projetId}</a>}
       </div>
       <div style={{ display: 'flex', gap: 4, marginTop: 8, flexWrap: 'wrap' }}>
@@ -87,6 +101,8 @@ function CarteConsultation({ c }: { c: Consultation }) {
 
 function ColonneKanban({ colonne, consultations }: { colonne: Colonne; consultations: Consultation[] }) {
   const total = consultations.reduce((s, c) => s + (c.budgetTravaux || 0), 0)
+  const pondere = consultations.reduce((s, c) => s + (c.budgetTravaux || 0) * probaConsultation(c), 0)
+  const actif = ETAPES_ACTIVES.includes(colonne.statut)
   return (
     <div style={{ flex: '1 1 220px', minWidth: 220 }}>
       <div style={{ borderTop: `3px solid ${colonne.couleur}`, paddingTop: 6, marginBottom: 8 }}>
@@ -94,7 +110,12 @@ function ColonneKanban({ colonne, consultations }: { colonne: Colonne; consultat
           <span>{colonne.titre}</span>
           <span className="muted">{consultations.length}</span>
         </div>
-        {total > 0 && <div className="muted small">{fmtMoney(total)} de travaux</div>}
+        {total > 0 && (
+          <div className="muted small">
+            {fmtMoney(total)} de travaux
+            {actif && pondere > 0 ? ` · pondéré ${fmtMoney(pondere)}` : ''}
+          </div>
+        )}
       </div>
       {consultations.length === 0 ? (
         <div className="muted small" style={{ padding: '8px 0' }}>—</div>
@@ -106,11 +127,28 @@ function ColonneKanban({ colonne, consultations }: { colonne: Colonne; consultat
 }
 
 function ProspectsARelancer({ state }: { state: AppState }) {
+  const { update } = useStore()
   const today = todayISO()
   const prospects = state.contacts
     .filter((c) => c.type === 'Prospect')
     .sort((a, b) => (a.dateProchaineAction || '9999').localeCompare(b.dateProchaineAction || '9999'))
   const valeur = prospects.reduce((s, c) => s + (c.valeurEstimee || 0), 0)
+
+  const enConsultation = (contact: Contact) => {
+    update((d) => {
+      const nouvelle: Consultation = {
+        id: uid('cons'),
+        intitule: contact.organisme ? `${contact.organisme} — ${contact.nom}` : contact.nom,
+        acheteur: contact.organisme || contact.nom,
+        budgetTravaux: contact.valeurEstimee ?? null,
+        statut: 'a_etudier',
+        dernierMouvement: todayISO(),
+        notes: `Créée depuis le prospect ${contact.nom}${contact.prochaineAction ? ` — ${contact.prochaineAction}` : ''}.`,
+      }
+      d.consultations.push(nouvelle)
+    })
+    toast(`« ${contact.organisme || contact.nom} » entre dans le pipeline (à étudier).`, { tone: 'ok' })
+  }
 
   if (prospects.length === 0) return null
   return (
@@ -118,19 +156,24 @@ function ProspectsARelancer({ state }: { state: AppState }) {
       {prospects.map((c) => {
         const enRetard = c.dateProchaineAction && c.dateProchaineAction < today
         return (
-          <div key={c.id} className="small" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 0', borderBottom: '1px solid var(--line)' }}>
+          <div key={c.id} className="small" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '5px 0', borderBottom: '1px solid var(--line)' }}>
             <div>
               <strong>{c.nom}</strong>
               {c.organisme ? <span className="muted"> · {c.organisme}</span> : null}
               {c.prochaineAction ? <div className="muted">{c.prochaineAction}</div> : null}
             </div>
-            <div style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
-              {c.valeurEstimee ? <Money v={c.valeurEstimee} /> : null}
-              {c.dateProchaineAction && (
-                <div>
-                  <Badge tone={enRetard ? 'danger' : 'muted'}>{enRetard ? 'en retard' : c.dateProchaineAction}</Badge>
-                </div>
-              )}
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', whiteSpace: 'nowrap' }}>
+              <div style={{ textAlign: 'right' }}>
+                {c.valeurEstimee ? <Money v={c.valeurEstimee} /> : null}
+                {c.dateProchaineAction && (
+                  <div>
+                    <Badge tone={enRetard ? 'danger' : 'muted'}>{enRetard ? 'en retard' : c.dateProchaineAction}</Badge>
+                  </div>
+                )}
+              </div>
+              <Btn small onClick={() => enConsultation(c)} title="Créer une consultation à partir de ce prospect">
+                Passer en consultation
+              </Btn>
             </div>
           </div>
         )
@@ -161,7 +204,10 @@ export function PipelineContenu() {
       <div className="grid3" style={{ marginBottom: 16 }}>
         <Card titre="Pipeline actif (hors gagné/perdu)">
           <div style={{ fontSize: 24, fontWeight: 700 }}>{fmtMoney(totalPipeline)}</div>
-          <div className="muted small">travaux estimés en cours d'étude / dépôt</div>
+          <div className="muted small">
+            travaux estimés en cours d'étude / dépôt · pondéré{' '}
+            <strong>{fmtMoney(previsionnelPondere(state.consultations))}</strong>
+          </div>
         </Card>
         <Card titre="Gagnées">
           <div style={{ fontSize: 24, fontWeight: 700 }} className="ok-text">{parStatut('gagnee').length}</div>

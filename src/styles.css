@@ -546,6 +546,8 @@ pre {
 .input:focus { outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent); }
 .input.num { text-align: right; font-variant-numeric: tabular-nums; }
 textarea.input { resize: vertical; }
+/* valeur calculée affichée en lecture seule (non éditable) — fond tokenisé pour les 2 thèmes */
+.input-ro { background: var(--bg-soft); cursor: default; }
 
 .form-row { display: flex; gap: 12px; flex-wrap: wrap; }
 .form-row > .field { flex: 1; min-width: 140px; }

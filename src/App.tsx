@@ -8,6 +8,7 @@ import { basculerTheme, themeCourant } from './theme'
 
 import Cockpit from './modules/Cockpit'
 import RechercheOverlay from './modules/RechercheOverlay'
+import Revue from './modules/Revue'
 import Analyse from './modules/Analyse'
 import Projets from './modules/Projets'
 import Situations from './modules/Situations'
@@ -26,6 +27,7 @@ const NAV: { groupe: string; items: { path: string; label: string }[] }[] = [
     groupe: 'Piloter',
     items: [
       { path: '', label: 'Cockpit' },
+      { path: 'revue', label: 'Revue de pilotage' },
       { path: 'planning', label: 'Planning' },
       { path: 'analyse', label: 'Analyse €/jour' },
     ],
@@ -87,6 +89,9 @@ export default function App() {
   switch (section) {
     case '':
       page = <Cockpit />
+      break
+    case 'revue':
+      page = <Revue />
       break
     case 'analyse':
       page = <Analyse />

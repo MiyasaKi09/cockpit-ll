@@ -156,6 +156,12 @@ export interface MarcheTravaux {
   /** intervention du lot sur le chantier — alimente le planning travaux */
   dateDebut?: string | null
   dateFin?: string | null
+  /** date de réception des travaux — point de départ de la garantie de parfait achèvement */
+  dateReception?: string | null
+  /** retenue de garantie remplacée par une caution bancaire (pas d'argent retenu) */
+  cautionRG?: boolean
+  /** retenue de garantie libérée à l'entreprise (levée effectuée) */
+  rgLibere?: boolean
   notes?: string
 }
 
@@ -370,12 +376,18 @@ export interface Consultation {
   dateLimite?: string | null
   statut: StatutConsultation
   avisGoNoGo?: string
+  /** notes de la grille Go/No-Go pondérée, par code de critère (0-4) */
+  scoresGoNoGo?: Record<string, number>
   classement?: number | null
   motifsResultat?: string
   /** projet créé automatiquement quand la consultation est gagnée */
   projetId?: string | null
   /** personne concernée (facultatif) */
   pour?: string
+  /** probabilité de succès saisie (0-1) — sinon déduite de l'étape */
+  probabilite?: number | null
+  /** date ISO du dernier changement d'étape — pour le vieillissement des cartes */
+  dernierMouvement?: string
   notes?: string
 }
 
@@ -407,6 +419,7 @@ export type TypeAlerte =
   | 'decennale'
   | 'cr_en_attente'
   | 'sauvegarde'
+  | 'rg_a_liberer'
 
 /** Alerte du fil d'urgences — calculée, jamais stockée (hors snooze) */
 /** action rapide attachée à une alerte, réalisable depuis le fil */
@@ -532,4 +545,14 @@ export interface AppState {
   reunions: ReunionChantier[]
   courriers: Courrier[]
   tempsHorsProjet: TempsHorsProjet[]
+  absences: Absence[]
+}
+
+/** congé / absence d'une personne — réduit sa capacité dans le plan de charge */
+export interface Absence {
+  id: string
+  personne: string
+  debut: string
+  fin: string
+  motif?: string
 }

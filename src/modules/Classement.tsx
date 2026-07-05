@@ -7,7 +7,7 @@
 import { useMemo, useState } from 'react'
 import { useStore } from '../store'
 import { STATUTS_ACTIFS } from '../derive'
-import { Btn, Card, CopyBtn, Field, NumInput, Page, Select, TextArea, TextInput } from '../ui'
+import { Card, CopyBtn, Field, NumInput, Page, Select, TextArea, TextInput } from '../ui'
 import { fold, todayISO } from '../util'
 
 const TYPES_DOC = ['ADM', 'PC', 'CR', 'DCE', 'PLAN', 'FACT', 'DEVIS', 'PHOTO', 'MAIL', 'NOTE', 'CCTP', 'SITU']
@@ -96,18 +96,19 @@ export default function Classement() {
           mono
           placeholder={'IMG_4521.jpg\nscan chantier mardi.pdf\nfacture edf mars.pdf\n…'}
         />
-        <div className="form-foot">
-          {gabaritBatch ? (
+        {gabaritBatch ? (
+          <div className="form-foot">
             <CopyBtn
               text={() => promptBatch}
               label={`Copier le pré-prompt batch → « ${gabaritBatch.projetClaude} »`}
             />
-          ) : (
-            <Btn disabled title="Le gabarit « tpl-classement-batch » a été supprimé de la bibliothèque">
-              Gabarit batch introuvable
-            </Btn>
-          )}
-        </div>
+          </div>
+        ) : (
+          <div className="pill-note" style={{ marginTop: 8 }}>
+            Le gabarit « tpl-classement-batch » a été supprimé de la bibliothèque de prompts —
+            recréez-le (page Claude) pour réactiver l'assemblage du pré-prompt batch.
+          </div>
+        )}
       </Card>
     </Page>
   )

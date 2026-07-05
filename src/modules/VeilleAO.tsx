@@ -39,6 +39,7 @@ import type { Tone } from '../ui'
 import { PipelineContenu } from './Developpement'
 import { ReferencesContenu } from './References'
 import { diffDays, fmtPct, fold, todayISO, uid } from '../util'
+import { CRITERES_GO_NOGO, evaluerGoNoGo } from '../derive'
 import { assemble, contexteConsultation } from '../prompts'
 import { importerConsultations, parseRetourRoutine } from '../importRoutines'
 import type { RetourConsultation } from '../importRoutines'
@@ -610,6 +611,63 @@ function BlocReponse({ c }: { c: Consultation }) {
   )
 }
 
+const NOTES_GO_NOGO: { value: string; label: string }[] = [
+  { value: '', label: '— à noter —' },
+  { value: '0', label: '0 · rédhibitoire' },
+  { value: '1', label: '1 · défavorable' },
+  { value: '2', label: '2 · neutre' },
+  { value: '3', label: '3 · favorable' },
+  { value: '4', label: '4 · idéal' },
+]
+
+function GrilleGoNoGo({ c, maj }: { c: Consultation; maj: (patch: Partial<Consultation>) => void }) {
+  const scores = c.scoresGoNoGo || {}
+  const evalu = evaluerGoNoGo(scores)
+  const noter = (code: string, v: string) => {
+    const suivant = { ...scores }
+    if (v === '') delete suivant[code]
+    else suivant[code] = Number(v)
+    maj({ scoresGoNoGo: suivant })
+  }
+  return (
+    <Card titre="Grille Go / No-Go (aide à la décision)">
+      <p className="small muted" style={{ marginTop: 0, marginBottom: 8 }}>
+        Notez chaque critère : le score pondéré donne une reco — la décision reste humaine.
+      </p>
+      <table className="table table-compact">
+        <tbody>
+          {CRITERES_GO_NOGO.map((cr) => (
+            <tr key={cr.code}>
+              <td>
+                {cr.label} <span className="muted small">×{cr.poids}</span>
+                <div className="muted small">{cr.aide}</div>
+              </td>
+              <td className="right" style={{ width: 170 }}>
+                <Select
+                  value={scores[cr.code] != null ? String(scores[cr.code]) : ''}
+                  onChange={(v) => noter(cr.code, v)}
+                  options={NOTES_GO_NOGO}
+                />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {evalu.note !== null ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8 }}>
+          <Badge tone={evalu.tone}>{evalu.reco}</Badge>
+          <span className="small">
+            Score <strong>{fmtPct(evalu.note, 0)}</strong>
+            {!evalu.complet && <span className="muted"> · grille incomplète</span>}
+          </span>
+        </div>
+      ) : (
+        <p className="muted small" style={{ marginTop: 8, marginBottom: 0 }}>Aucun critère noté pour l'instant.</p>
+      )}
+    </Card>
+  )
+}
+
 function FicheModal({
   initial,
   nouveau,
@@ -710,6 +768,9 @@ function FicheModal({
         <Field label="Source" hint="Traçabilité : BOAMP, TED, alerte, routine du…">
           <TextInput value={c.source || ''} onChange={(v) => maj({ source: v })} />
         </Field>
+      </div>
+      <div style={{ marginTop: 12 }}>
+        <GrilleGoNoGo c={c} maj={maj} />
       </div>
       <div style={{ marginTop: 10 }}>
         <Field label="Avis Go / No-Go" hint="Avis préparé avec Claude puis relu et collé ici — la décision reste humaine.">
@@ -910,6 +971,7 @@ function ConsultationsContenu() {
               'Date limite',
               'Source',
               'Statut',
+              'Go/No-Go',
               '',
             ]}
           >
@@ -932,6 +994,12 @@ function ConsultationsContenu() {
                 </td>
                 <td>
                   <BadgeStatut statut={c.statut} />
+                </td>
+                <td>
+                  {(() => {
+                    const e = evaluerGoNoGo(c.scoresGoNoGo)
+                    return e.reco ? <Badge tone={e.tone}>{e.reco}</Badge> : <span className="muted">—</span>
+                  })()}
                 </td>
                 <td className="right">
                   <Btn small kind="ghost" onClick={() => ouvrir(c)}>

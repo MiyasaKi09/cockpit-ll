@@ -122,6 +122,7 @@ function FactureModal({
     if (!v.emission) return toast("Indiquer la date d'émission.", { tone: 'danger' })
     if (v.delaiJours === null) return toast('Indiquer le délai de paiement (jours).', { tone: 'danger' })
     onSave({ ...v, numero, libelle: v.libelle.trim() })
+    toast(creation ? 'Facture créée.' : 'Facture modifiée.', { tone: 'ok' })
   }
 
   return (

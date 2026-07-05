@@ -446,6 +446,7 @@ export default function Parametres({ ongletInitial = 'agence' }: { ongletInitial
     update((d) => {
       d.settings.derniereSauvegarde = todayISO()
     })
+    toast('Sauvegarde exportée.', { tone: 'ok' })
   }
 
   const importerJSON = async (file: File) => {
@@ -561,7 +562,7 @@ export default function Parametres({ ongletInitial = 'agence' }: { ongletInitial
             <TextInput value={s.nomAgence} onChange={(v) => maj((d) => void (d.settings.nomAgence = v))} />
           </Field>
           <Field label="Équipe" hint="source unique : la carte « Équipe & coûts réels » ci-dessus">
-            <div className="input" style={{ background: '#f7f8fa' }}>{s.personnes.join(', ') || '—'}</div>
+            <div className="input input-ro">{s.personnes.join(', ') || '—'}</div>
           </Field>
           <Field
             label="Marge nette visée (%)"
@@ -584,7 +585,7 @@ export default function Parametres({ ongletInitial = 'agence' }: { ongletInitial
                   hint={o.auto ? 'calculé automatiquement depuis la marge visée' : 'saisi à la main (aucune marge visée)'}
                 >
                   {o.auto ? (
-                    <div className="input" style={{ background: '#eef2fb', fontWeight: 700 }}>{fmtMoney(o.caCible)}</div>
+                    <div className="input input-ro" style={{ fontWeight: 700 }}>{fmtMoney(o.caCible)}</div>
                   ) : (
                     <NumInput value={s.caCibleHT} onChange={(v) => maj((d) => void (d.settings.caCibleHT = v ?? 0))} />
                   )}
@@ -622,7 +623,7 @@ export default function Parametres({ ongletInitial = 'agence' }: { ongletInitial
                   hint={auto ? 'calculé depuis les coûts et les marges' : 'prix d\'une heure vendue — saisi à la main'}
                 >
                   {auto ? (
-                    <div className="input" style={{ background: '#eef2fb', fontWeight: 700 }}>{fmtMoney(tauxVente(state), true)} / h</div>
+                    <div className="input input-ro" style={{ fontWeight: 700 }}>{fmtMoney(tauxVente(state), true)} / h</div>
                   ) : (
                     <NumInput value={s.tauxHoraireVente} onChange={(v) => maj((d) => void (d.settings.tauxHoraireVente = v ?? 0))} />
                   )}
@@ -658,7 +659,7 @@ export default function Parametres({ ongletInitial = 'agence' }: { ongletInitial
         })()}
         <div className="form-row">
           <Field label="Coût horaire de revient" hint="ce qu'une heure coûte réellement (calculé depuis l'équipe) — l'écart avec le taux de vente = votre marge horaire">
-            <div className="input" style={{ background: '#f7f8fa' }}>{fmtMoney(coutHoraireMoyen(state), true)} / h</div>
+            <div className="input input-ro">{fmtMoney(coutHoraireMoyen(state), true)} / h</div>
           </Field>
           <Field label="Heures / jour">
             <NumInput value={s.heuresParJour} onChange={(v) => maj((d) => void (d.settings.heuresParJour = v ?? 7.8))} />

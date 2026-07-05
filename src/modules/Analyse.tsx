@@ -7,94 +7,18 @@
 // ============================================================
 
 import { useMemo, useState } from 'react'
-import type { AppState } from '../types'
 import { useStore } from '../store'
 import {
+  analyserPeriode,
   caCible,
+  caParMois,
   caRealiseAnnee,
   coutAgenceAnnuel,
-  coutHoraireDe,
   coutJourObjectif,
-  coutsExternes,
-  enJours,
   nomProjet,
 } from '../derive'
 import { Badge, Card, EmptyState, Page, Stat } from '../ui'
 import { addDays, fmtMoney, fmtPct, todayISO } from '../util'
-
-interface LigneAnalyse {
-  projetId: string
-  ca: number
-  coutTemps: number
-  coutExterne: number
-  margeReelle: number
-  jours: number
-  parJour: number | null
-  partCA: number
-  partTemps: number
-}
-
-interface Synthese {
-  lignes: LigneAnalyse[]
-  totalCA: number
-  totalJours: number
-  totalCoutTemps: number
-  totalCoutExterne: number
-  joursHorsProjet: number
-  parJourMoyen: number | null
-}
-
-/** CA facturé (émis/encaissé), temps et coûts réels sur [debut, fin] */
-function analyser(state: AppState, debut: string, fin: string): Synthese {
-  const parProjet = new Map<string, LigneAnalyse>()
-  const ligne = (id: string): LigneAnalyse => {
-    if (!parProjet.has(id))
-      parProjet.set(id, { projetId: id, ca: 0, coutTemps: 0, coutExterne: 0, margeReelle: 0, jours: 0, parJour: null, partCA: 0, partTemps: 0 })
-    return parProjet.get(id)!
-  }
-
-  for (const f of state.factures) {
-    if (f.statut === 'prevue') continue
-    if (f.emission < debut || f.emission > fin) continue
-    ligne(f.projetId).ca += f.montantHT
-  }
-  for (const t of state.temps) {
-    if (t.semaine < debut || t.semaine > fin) continue
-    const l = ligne(t.projetId)
-    l.jours += enJours(state, t.heures)
-    l.coutTemps += t.heures * coutHoraireDe(state, t.personne)
-  }
-
-  let joursHorsProjet = 0
-  for (const t of state.tempsHorsProjet) {
-    if (t.semaine < debut || t.semaine > fin) continue
-    joursHorsProjet += enJours(state, t.heures)
-  }
-
-  const lignes = [...parProjet.values()].filter((l) => l.ca > 0 || l.jours > 0)
-  const totalCA = lignes.reduce((s, l) => s + l.ca, 0)
-  const totalJours = lignes.reduce((s, l) => s + l.jours, 0)
-  const totalCoutTemps = lignes.reduce((s, l) => s + l.coutTemps, 0)
-  for (const l of lignes) {
-    // même définition que l'onglet Finances : marge = CA − coût du temps − coûts externes
-    l.coutExterne = coutsExternes(state, l.projetId)
-    l.margeReelle = l.ca - l.coutTemps - l.coutExterne
-    l.parJour = l.jours > 0.05 ? l.ca / l.jours : null
-    l.partCA = totalCA > 0 ? l.ca / totalCA : 0
-    l.partTemps = totalJours > 0 ? l.jours / totalJours : 0
-  }
-  lignes.sort((a, b) => b.ca - a.ca)
-
-  return {
-    lignes,
-    totalCA,
-    totalJours,
-    totalCoutTemps,
-    totalCoutExterne: lignes.reduce((s, l) => s + l.coutExterne, 0),
-    joursHorsProjet,
-    parJourMoyen: totalJours > 0.05 ? totalCA / totalJours : null,
-  }
-}
 
 function CouleurParJour({ v, objectif }: { v: number | null; objectif: number }) {
   if (v === null) return <span className="muted">—</span>
@@ -123,7 +47,7 @@ function TableauPeriode({ titre, debut, fin, setDebut, setFin }: {
 }) {
   const { state } = useStore()
   const objectif = coutJourObjectif(state)
-  const syn = useMemo(() => analyser(state, debut, fin), [state, debut, fin])
+  const syn = useMemo(() => analyserPeriode(state, debut, fin), [state, debut, fin])
   const totalAvecHP = syn.totalJours + syn.joursHorsProjet
 
   return (
@@ -219,33 +143,7 @@ function CarteCAMensuel() {
   const { state } = useStore()
   const [annee, setAnnee] = useState(Number(todayISO().slice(0, 4)))
 
-  const donnees = useMemo(() => {
-    const parProjet = new Map<string, number[]>()
-    const emisParMois = Array(12).fill(0) as number[]
-    const encaisseParMois = Array(12).fill(0) as number[]
-    const prevuParMois = Array(12).fill(0) as number[]
-
-    for (const f of state.factures) {
-      const m = Number(f.emission.slice(5, 7)) - 1
-      if (f.emission.slice(0, 4) === String(annee)) {
-        if (f.statut === 'prevue') {
-          prevuParMois[m] += f.montantHT
-        } else {
-          if (!parProjet.has(f.projetId)) parProjet.set(f.projetId, Array(12).fill(0))
-          parProjet.get(f.projetId)![m] += f.montantHT
-          emisParMois[m] += f.montantHT
-        }
-      }
-      if (f.statut === 'encaissee' && f.encaissementReel?.slice(0, 4) === String(annee)) {
-        encaisseParMois[Number(f.encaissementReel.slice(5, 7)) - 1] += f.montantHT
-      }
-    }
-
-    const lignes = [...parProjet.entries()]
-      .map(([projetId, mois]) => ({ projetId, mois, total: mois.reduce((s, x) => s + x, 0) }))
-      .sort((a, b) => b.total - a.total)
-    return { lignes, emisParMois, encaisseParMois, prevuParMois }
-  }, [state, annee])
+  const donnees = useMemo(() => caParMois(state, annee), [state, annee])
 
   const cellule = (v: number, cle: string | number, gras = false) => (
     <td key={cle} className="right num" style={gras ? { fontWeight: 650 } : undefined}>

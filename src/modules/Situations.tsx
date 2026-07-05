@@ -37,7 +37,9 @@ import {
   honorairesDETduMois,
   marcheDeSituation,
   nomProjet,
+  retenueGarantieMarche,
 } from '../derive'
+import type { StatutRG } from '../derive'
 import { ouvrirDecompteSituationPDF } from '../pdf'
 import { assemble, contexteMarche } from '../prompts'
 import {
@@ -884,6 +886,91 @@ function CarteAttendues() {
 
 // ---------- page ----------
 
+const LIBELLE_RG: Record<StatutRG, { label: string; tone: 'ok' | 'warn' | 'danger' | 'info' | 'muted' }> = {
+  en_cours: { label: 'chantier en cours', tone: 'muted' },
+  retenue: { label: 'retenue en cours', tone: 'info' },
+  a_liberer: { label: 'à libérer', tone: 'danger' },
+  liberee: { label: 'libérée', tone: 'ok' },
+}
+
+function CarteRetenues() {
+  const { state, update } = useStore()
+  const today = useToday()
+  const marches = state.marches.filter((m) => (m.tauxRG || 0) > 0)
+
+  const majMarche = (id: string, patch: Partial<(typeof state.marches)[number]>) =>
+    update((d) => {
+      const m = d.marches.find((x) => x.id === id)
+      if (m) Object.assign(m, patch)
+    })
+
+  const total = marches.reduce((s, m) => {
+    const rg = retenueGarantieMarche(state, m, today)
+    return rg.statut === 'liberee' || rg.caution ? s : s + rg.retenueHT
+  }, 0)
+
+  return (
+    <Card titre={`Retenues de garantie — ${fmtMoney(total)} encore retenus`}>
+      <p className="small muted" style={{ marginTop: 0, marginBottom: 8 }}>
+        La RG (5 % en général) est libérée un an après la réception (garantie de parfait
+        achèvement), sauf caution bancaire de substitution. De l'argent facile à oublier.
+      </p>
+      {marches.length === 0 ? (
+        <EmptyState>Aucun marché avec retenue de garantie.</EmptyState>
+      ) : (
+        <Table
+          compact
+          head={['Lot / entreprise', 'Projet', 'Cumul travaux', 'RG retenue', 'Réception', 'Levée (récep.+1 an)', 'Caution', 'Statut', '']}
+        >
+          {marches.map((m) => {
+            const rg = retenueGarantieMarche(state, m, today)
+            const lib = LIBELLE_RG[rg.statut]
+            return (
+              <tr key={m.id}>
+                <td>
+                  <strong>{m.lot}</strong>
+                  <div className="muted small">{m.entreprise}</div>
+                </td>
+                <td><LienProjet state={state} projetId={m.projetId} /></td>
+                <td className="right num">{fmtMoney(rg.travauxCumulHT)}</td>
+                <td className="right num">
+                  {fmtMoney(rg.retenueHT)}
+                  <div className="muted small">{fmtPct(m.tauxRG, 0)}</div>
+                </td>
+                <td>
+                  <DateInput value={m.dateReception ?? null} onChange={(v) => majMarche(m.id, { dateReception: v })} />
+                </td>
+                <td>{rg.dateLevee ? <DateF d={rg.dateLevee} /> : <span className="muted">—</span>}</td>
+                <td className="right">
+                  <label style={{ cursor: 'pointer' }} title="Retenue remplacée par une caution bancaire">
+                    <input
+                      type="checkbox"
+                      checked={!!m.cautionRG}
+                      onChange={(e) => majMarche(m.id, { cautionRG: e.target.checked })}
+                    />
+                  </label>
+                </td>
+                <td><Badge tone={lib.tone}>{lib.label}</Badge></td>
+                <td className="right">
+                  {rg.statut !== 'liberee' && rg.dateReception ? (
+                    <Btn small onClick={() => majMarche(m.id, { rgLibere: true })} title="Marquer la retenue de garantie comme libérée à l'entreprise">
+                      Marquer libérée
+                    </Btn>
+                  ) : rg.statut === 'liberee' ? (
+                    <Btn small kind="ghost" onClick={() => majMarche(m.id, { rgLibere: false })} title="Annuler la libération">
+                      Rouvrir
+                    </Btn>
+                  ) : null}
+                </td>
+              </tr>
+            )
+          })}
+        </Table>
+      )}
+    </Card>
+  )
+}
+
 export default function Situations() {
   return (
     <Page
@@ -898,6 +985,7 @@ export default function Situations() {
       <CarteAVerifier />
       <CarteHistorique />
       <CarteAttendues />
+      <CarteRetenues />
     </Page>
   )
 }

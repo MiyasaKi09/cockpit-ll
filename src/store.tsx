@@ -16,6 +16,8 @@ function migrate(parsed: AppState): AppState {
   etat.reunions = Array.isArray(parsed.reunions) ? parsed.reunions : []
   etat.courriers = Array.isArray(parsed.courriers) ? parsed.courriers : []
   etat.tempsHorsProjet = Array.isArray(parsed.tempsHorsProjet) ? parsed.tempsHorsProjet : []
+  // v7 → v8 : congés / absences par personne (plan de charge)
+  etat.absences = Array.isArray(parsed.absences) ? parsed.absences : []
   // v5 → v6 : journal d'interactions CRM. On amorce depuis les
   // derniereInteraction existantes pour ne rien perdre de l'historique.
   if (Array.isArray(parsed.interactions)) {

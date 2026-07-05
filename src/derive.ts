@@ -1,7 +1,7 @@
 // Valeurs dérivées — une seule source de vérité par donnée :
 // le facturé vient des factures, les heures réelles du pointage.
 
-import type { AppState, Facture, MarcheTravaux, PhaseCode, Projet, Situation } from './types'
+import type { AppState, Consultation, Facture, MarcheTravaux, PhaseCode, Projet, Situation, StatutConsultation } from './types'
 import { calculHonoraires } from './miqcp'
 import { addDays, diffDays, fmtMoney, fold } from './util'
 
@@ -248,6 +248,23 @@ export function chargePlanifieeSemaine(state: AppState, personne: string, lundi:
   return heures
 }
 
+/** heures d'absence (congés) d'une personne sur la semaine du lundi donné */
+export function heuresAbsenceSemaine(state: AppState, personne: string, lundi: string): number {
+  const abs = (state.absences || []).filter((a) => a.personne === personne)
+  if (abs.length === 0) return 0
+  let jours = 0
+  for (let i = 0; i < 5; i++) {
+    const jour = addDays(lundi, i)
+    if (abs.some((a) => a.debut <= jour && a.fin >= jour)) jours++
+  }
+  return jours * state.settings.heuresParJour
+}
+
+/** capacité RÉELLE d'une personne pour la semaine, congés déduits (heures) */
+export function capacitePersonneSemaine(state: AppState, personne: string, lundi: string): number {
+  return Math.max(0, capaciteSemaine(state) - heuresAbsenceSemaine(state, personne, lundi))
+}
+
 /** CA HT facturé (émis ou encaissé) sur une année civile — confronté à la cible */
 export function caRealiseAnnee(state: AppState, annee: number): number {
   const prefixe = String(annee)
@@ -431,4 +448,270 @@ export function honorairesDETduMois(state: AppState, s: Situation): number {
   const mois = s.montantMoisHT || 0
   if (travauxOp <= 0 || mois <= 0) return 0
   return Math.round(det.montantHT * (mois / travauxOp))
+}
+
+// ------------------------------------------------------------------
+// Retenue de garantie — cycle de vie par marché : cumul retenu,
+// réception, levée à réception + 1 an (garantie de parfait achèvement).
+// ------------------------------------------------------------------
+
+export type StatutRG = 'en_cours' | 'retenue' | 'a_liberer' | 'liberee'
+
+export interface RGMarche {
+  travauxCumulHT: number
+  retenueHT: number
+  dateReception: string | null
+  dateLevee: string | null
+  caution: boolean
+  statut: StatutRG
+}
+
+/** cumul des travaux HT validés d'un marché (dernière situation validée) */
+export function travauxCumulMarche(state: AppState, marcheId: string): number {
+  return state.situations
+    .filter((s) => s.marcheId === marcheId && s.statut === 'validee')
+    .reduce((m, s) => Math.max(m, s.montantCumulHT ?? s.montantMoisHT ?? 0), 0)
+}
+
+/** état de la retenue de garantie d'un marché */
+export function retenueGarantieMarche(state: AppState, marche: MarcheTravaux, today: string): RGMarche {
+  const travauxCumulHT = travauxCumulMarche(state, marche.id)
+  const retenueHT = travauxCumulHT * (marche.tauxRG || 0)
+  const dateReception = marche.dateReception || null
+  // réception + 1 an (même jour l'année suivante) — garantie de parfait achèvement
+  const dateLevee = dateReception ? `${Number(dateReception.slice(0, 4)) + 1}${dateReception.slice(4)}` : null
+  const statut: StatutRG = marche.rgLibere
+    ? 'liberee'
+    : !dateReception
+      ? 'en_cours'
+      : dateLevee && today >= dateLevee
+        ? 'a_liberer'
+        : 'retenue'
+  return { travauxCumulHT, retenueHT, dateReception, dateLevee, caution: !!marche.cautionRG, statut }
+}
+
+// ------------------------------------------------------------------
+// Pipeline commercial — probabilité par étape, prévisionnel pondéré,
+// vieillissement des cartes.
+// ------------------------------------------------------------------
+
+/** probabilité de succès par défaut selon l'étape du pipeline */
+export const PROBA_ETAPE: Record<StatutConsultation, number> = {
+  a_etudier: 0.1,
+  go: 0.3,
+  deposee: 0.5,
+  gagnee: 1,
+  perdue: 0,
+  no_go: 0,
+}
+
+/** probabilité retenue : saisie sur la consultation, sinon barème d'étape */
+export function probaConsultation(c: Consultation): number {
+  return c.probabilite != null ? c.probabilite : PROBA_ETAPE[c.statut]
+}
+
+/** prévisionnel pondéré = Σ budget travaux × probabilité, sur les étapes actives */
+export function previsionnelPondere(consultations: Consultation[]): number {
+  return consultations
+    .filter((c) => c.statut === 'a_etudier' || c.statut === 'go' || c.statut === 'deposee')
+    .reduce((s, c) => s + (c.budgetTravaux || 0) * probaConsultation(c), 0)
+}
+
+/** jours écoulés depuis le dernier mouvement d'étape (null si inconnu) */
+export function ageCarte(c: Consultation, today: string): number | null {
+  return c.dernierMouvement ? Math.max(0, diffDays(c.dernierMouvement, today)) : null
+}
+
+// ------------------------------------------------------------------
+// Grille Go/No-Go pondérée — décision aidée mais déterministe.
+// Chaque critère est noté 0 (rédhibitoire) à 4 (idéal), pondéré ;
+// le score normalisé donne une recommandation. La décision reste humaine.
+// ------------------------------------------------------------------
+
+export interface CritereGoNoGo {
+  code: string
+  label: string
+  poids: number
+  aide: string
+}
+
+export const CRITERES_GO_NOGO: CritereGoNoGo[] = [
+  { code: 'references', label: 'Adéquation avec nos références', poids: 3, aide: 'a-t-on des références proches (typologie, montant) ?' },
+  { code: 'charge', label: 'Disponibilité / plan de charge', poids: 2, aide: 'a-t-on la capacité de produire dans les délais ?' },
+  { code: 'honoraires', label: 'Honoraires vs effort', poids: 2, aide: 'le budget justifie-t-il le temps de montage et de production ?' },
+  { code: 'distance', label: 'Proximité / déplacements', poids: 1, aide: 'le chantier est-il accessible sans trop de trajets ?' },
+  { code: 'concurrence', label: 'Concurrence / chances', poids: 1, aide: 'la concurrence attendue laisse-t-elle une vraie chance ?' },
+]
+
+export interface EvaluationGoNoGo {
+  note: number | null // 0-1, null si non évaluée
+  reco: 'Plutôt Go' | 'À étudier' | 'Plutôt No-Go' | null
+  tone: 'ok' | 'warn' | 'danger' | 'muted'
+  complet: boolean
+}
+
+/** évalue la grille : score pondéré normalisé (0-1) + recommandation */
+export function evaluerGoNoGo(scores: Record<string, number> | undefined): EvaluationGoNoGo {
+  if (!scores || Object.keys(scores).length === 0) {
+    return { note: null, reco: null, tone: 'muted', complet: false }
+  }
+  let obtenu = 0
+  let max = 0
+  for (const c of CRITERES_GO_NOGO) {
+    const s = scores[c.code]
+    if (s == null) continue
+    obtenu += s * c.poids
+    max += 4 * c.poids
+  }
+  if (max === 0) return { note: null, reco: null, tone: 'muted', complet: false }
+  const note = obtenu / max
+  const complet = CRITERES_GO_NOGO.every((c) => scores[c.code] != null)
+  const reco = note >= 0.65 ? 'Plutôt Go' : note >= 0.4 ? 'À étudier' : 'Plutôt No-Go'
+  const tone = note >= 0.65 ? 'ok' : note >= 0.4 ? 'warn' : 'danger'
+  return { note, reco, tone, complet }
+}
+
+// ------------------------------------------------------------------
+// Synthèses de période (Analyse & Revue de pilotage) — CA facturé,
+// temps et coûts réels agrégés par projet, par mois, par personne.
+// ------------------------------------------------------------------
+
+export interface LigneAnalyse {
+  projetId: string
+  ca: number
+  coutTemps: number
+  coutExterne: number
+  margeReelle: number
+  jours: number
+  parJour: number | null
+  partCA: number
+  partTemps: number
+}
+
+export interface SyntheseAnalyse {
+  lignes: LigneAnalyse[]
+  totalCA: number
+  totalJours: number
+  totalCoutTemps: number
+  totalCoutExterne: number
+  joursHorsProjet: number
+  parJourMoyen: number | null
+}
+
+/** CA facturé (émis/encaissé), temps et coûts réels par projet sur [debut, fin] */
+export function analyserPeriode(state: AppState, debut: string, fin: string): SyntheseAnalyse {
+  const parProjet = new Map<string, LigneAnalyse>()
+  const ligne = (id: string): LigneAnalyse => {
+    if (!parProjet.has(id))
+      parProjet.set(id, { projetId: id, ca: 0, coutTemps: 0, coutExterne: 0, margeReelle: 0, jours: 0, parJour: null, partCA: 0, partTemps: 0 })
+    return parProjet.get(id)!
+  }
+
+  for (const f of state.factures) {
+    if (f.statut === 'prevue') continue
+    if (f.emission < debut || f.emission > fin) continue
+    ligne(f.projetId).ca += f.montantHT
+  }
+  for (const t of state.temps) {
+    if (t.semaine < debut || t.semaine > fin) continue
+    const l = ligne(t.projetId)
+    l.jours += enJours(state, t.heures)
+    l.coutTemps += t.heures * coutHoraireDe(state, t.personne)
+  }
+
+  let joursHorsProjet = 0
+  for (const t of state.tempsHorsProjet) {
+    if (t.semaine < debut || t.semaine > fin) continue
+    joursHorsProjet += enJours(state, t.heures)
+  }
+
+  const lignes = [...parProjet.values()].filter((l) => l.ca > 0 || l.jours > 0)
+  const totalCA = lignes.reduce((s, l) => s + l.ca, 0)
+  const totalJours = lignes.reduce((s, l) => s + l.jours, 0)
+  const totalCoutTemps = lignes.reduce((s, l) => s + l.coutTemps, 0)
+  for (const l of lignes) {
+    // même définition que l'onglet Finances : marge = CA − coût du temps − coûts externes
+    l.coutExterne = coutsExternes(state, l.projetId)
+    l.margeReelle = l.ca - l.coutTemps - l.coutExterne
+    l.parJour = l.jours > 0.05 ? l.ca / l.jours : null
+    l.partCA = totalCA > 0 ? l.ca / totalCA : 0
+    l.partTemps = totalJours > 0 ? l.jours / totalJours : 0
+  }
+  lignes.sort((a, b) => b.ca - a.ca)
+
+  return {
+    lignes,
+    totalCA,
+    totalJours,
+    totalCoutTemps,
+    totalCoutExterne: lignes.reduce((s, l) => s + l.coutExterne, 0),
+    joursHorsProjet,
+    parJourMoyen: totalJours > 0.05 ? totalCA / totalJours : null,
+  }
+}
+
+export interface CAMensuel {
+  lignes: { projetId: string; mois: number[]; total: number }[]
+  emisParMois: number[]
+  encaisseParMois: number[]
+  prevuParMois: number[]
+}
+
+/** Matrice CA facturé projets × 12 mois pour une année (émis / encaissé / prévu) */
+export function caParMois(state: AppState, annee: number): CAMensuel {
+  const parProjet = new Map<string, number[]>()
+  const emisParMois = Array(12).fill(0) as number[]
+  const encaisseParMois = Array(12).fill(0) as number[]
+  const prevuParMois = Array(12).fill(0) as number[]
+
+  for (const f of state.factures) {
+    const m = Number(f.emission.slice(5, 7)) - 1
+    if (f.emission.slice(0, 4) === String(annee)) {
+      if (f.statut === 'prevue') {
+        prevuParMois[m] += f.montantHT
+      } else {
+        if (!parProjet.has(f.projetId)) parProjet.set(f.projetId, Array(12).fill(0))
+        parProjet.get(f.projetId)![m] += f.montantHT
+        emisParMois[m] += f.montantHT
+      }
+    }
+    if (f.statut === 'encaissee' && f.encaissementReel?.slice(0, 4) === String(annee)) {
+      encaisseParMois[Number(f.encaissementReel.slice(5, 7)) - 1] += f.montantHT
+    }
+  }
+
+  const lignes = [...parProjet.entries()]
+    .map(([projetId, mois]) => ({ projetId, mois, total: mois.reduce((s, x) => s + x, 0) }))
+    .sort((a, b) => b.total - a.total)
+  return { lignes, emisParMois, encaisseParMois, prevuParMois }
+}
+
+export interface LigneTempsPersonne {
+  personne: string
+  heures: number
+  jours: number
+  cout: number
+}
+
+/** Temps pointé agrégé par personne (projets + hors-projet) sur [debut, fin] */
+export function tempsParPersonne(state: AppState, debut: string, fin: string): LigneTempsPersonne[] {
+  const par = new Map<string, { heures: number; cout: number }>()
+  const ajouter = (personne: string, heures: number) => {
+    const cur = par.get(personne) || { heures: 0, cout: 0 }
+    cur.heures += heures
+    cur.cout += heures * coutHoraireDe(state, personne)
+    par.set(personne, cur)
+  }
+  for (const t of state.temps) {
+    if (t.semaine < debut || t.semaine > fin) continue
+    ajouter(t.personne, t.heures)
+  }
+  for (const t of state.tempsHorsProjet) {
+    if (t.semaine < debut || t.semaine > fin) continue
+    ajouter(t.personne, t.heures)
+  }
+  return [...par.entries()]
+    .map(([personne, v]) => ({ personne, heures: v.heures, jours: enJours(state, v.heures), cout: v.cout }))
+    .filter((l) => l.heures > 0)
+    .sort((a, b) => b.heures - a.heures)
 }

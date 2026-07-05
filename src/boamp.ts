@@ -139,7 +139,13 @@ export async function rechercherBoamp(
     memoriser({ date: new Date().toISOString(), nb: 0, erreur: `HTTP ${r.status}` })
     throw new Error(corps?.message ? `BOAMP : ${corps.message}` : `BOAMP a répondu ${r.status}.`)
   }
-  const data = (await r.json()) as { results?: RecordBoamp[] }
+  let data: { results?: RecordBoamp[] }
+  try {
+    data = (await r.json()) as { results?: RecordBoamp[] }
+  } catch {
+    memoriser({ date: new Date().toISOString(), nb: 0, erreur: 'réponse illisible' })
+    throw new Error('Réponse BOAMP illisible — service momentanément indisponible ?')
+  }
   const annonces = (data.results || [])
     .filter((x) => x.idweb && x.objet)
     // date limite dépassée = plus la peine d'y penser

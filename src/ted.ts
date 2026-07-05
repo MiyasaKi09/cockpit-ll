@@ -89,7 +89,12 @@ export async function rechercherTed(
       limit: limite,
     }),
   })
-  const data = JSON.parse(brut) as { notices?: NoticeTed[] }
+  let data: { notices?: NoticeTed[] }
+  try {
+    data = JSON.parse(brut) as { notices?: NoticeTed[] }
+  } catch {
+    throw new Error('Réponse TED illisible — service momentanément indisponible ?')
+  }
 
   return (data.notices || [])
     .filter((n) => n['publication-number'])

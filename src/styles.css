@@ -5,6 +5,16 @@
    Tokens : couleur · espacement · typo · rayons · ombres.
    ============================================================ */
 
+/* Police géométrique embarquée (Jost, SIL OFL — clone libre de Futura),
+   auto-hébergée pour un logotype identique sur tous les postes. */
+@font-face {
+  font-family: 'Jost';
+  src: url('/fonts/jost.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
   /* — couleur (thème clair A) — */
   --bg: #ede4cb;
@@ -52,7 +62,7 @@
 
   /* — typographie — */
   --font-body: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-  --font-geo: 'Futura', 'Century Gothic', 'Trebuchet MS', var(--font-body);
+  --font-geo: 'Jost', 'Futura', 'Century Gothic', 'Trebuchet MS', var(--font-body);
   --font-mono: ui-monospace, 'SFMono-Regular', 'Cascadia Code', Menlo, Consolas, monospace;
 }
 

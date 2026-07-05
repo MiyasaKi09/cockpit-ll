@@ -3,6 +3,7 @@
 
 import type { AppState, Consultation, Projet } from './types'
 import { calculHonoraires, phasesParDefaut } from './miqcp'
+import { tauxVente } from './derive'
 
 /** prochain identifiant projet libre (P01, P02…) */
 export function prochainIdProjet(ids: string[]): string {
@@ -42,7 +43,7 @@ export function creerProjetDepuisConsultation(d: AppState, c: Consultation): str
   if (projet.montantTravauxHT) {
     const h = calculHonoraires(projet, d.settings)
     const base = h.honorairesBaseHT > 0 ? h.honorairesBaseHT : h.tauxBareme !== null ? projet.montantTravauxHT * h.tauxBareme : 0
-    if (base > 0) projet.phases = phasesParDefaut(base, d.settings.tauxHoraireVente)
+    if (base > 0) projet.phases = phasesParDefaut(base, tauxVente(d))
   }
   d.projets.push(projet)
   return id

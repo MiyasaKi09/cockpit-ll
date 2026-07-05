@@ -21,7 +21,7 @@ import {
   useToday,
 } from '../ui'
 import { download, fmtDate, fmtMoney, fmtPct, fold, todayISO, uid } from '../util'
-import { coefSuggere, coutAgenceAnnuel, coutAnnuelPersonne, coutHorairePersonne, coutHoraireMoyen, coutJourObjectif, objectifCA } from '../derive'
+import { coefSuggere, coutAgenceAnnuel, coutAnnuelPersonne, coutHorairePersonne, coutHoraireMoyen, coutJourObjectif, objectifCA, tauxVente, tauxVenteObjectif } from '../derive'
 import { connecterGoogle, deconnecter, estConnecte } from '../google'
 
 const TYPES_MO: TypeMO[] = ['Public', 'Privé pro', 'Particulier']
@@ -450,13 +450,56 @@ export default function Parametres() {
             </div>
           )
         })()}
+        {(() => {
+          const t = tauxVenteObjectif(state)
+          const auto = !!s.tauxHoraireAuto
+          return (
+            <div style={{ margin: '2px 0 12px', padding: '10px 12px', background: 'var(--bg-soft, #f6f7fa)', borderRadius: 8 }}>
+              <label className="small" style={{ display: 'flex', gap: 6, alignItems: 'center', cursor: 'pointer', marginBottom: 8 }}>
+                <input type="checkbox" checked={auto} onChange={(e) => maj((d) => void (d.settings.tauxHoraireAuto = e.target.checked))} />
+                Calculer le <strong>&nbsp;taux horaire de vente&nbsp;</strong> automatiquement (frais fixes + salaires + marges)
+              </label>
+              <div className="form-row" style={{ alignItems: 'flex-end' }}>
+                <Field
+                  label="Taux horaire de vente (€)"
+                  hint={auto ? 'calculé depuis les coûts et les marges' : 'prix d\'une heure vendue — saisi à la main'}
+                >
+                  {auto ? (
+                    <div className="input" style={{ background: '#eef2fb', fontWeight: 700 }}>{fmtMoney(tauxVente(state), true)} / h</div>
+                  ) : (
+                    <NumInput value={s.tauxHoraireVente} onChange={(v) => maj((d) => void (d.settings.tauxHoraireVente = v ?? 0))} />
+                  )}
+                </Field>
+                {auto && (
+                  <Field label="Marge supplémentaire (%)" hint="coussin au-delà de la marge nette (négo, imprévus, non-facturable)">
+                    <NumInput
+                      value={s.margeSecuritePct != null ? Math.round(s.margeSecuritePct * 1000) / 10 : null}
+                      onChange={(v) => maj((d) => void (d.settings.margeSecuritePct = v == null ? null : v / 100))}
+                      placeholder="ex. 10"
+                    />
+                  </Field>
+                )}
+                <div className="muted small" style={{ flex: 1, minWidth: 260, paddingBottom: 6 }}>
+                  {auto ? (
+                    <>
+                      Au seuil <strong>{fmtMoney(t.base, true)}/h</strong> (coûts ÷ {Math.round(t.heuresFac)} h facturables/an)
+                      {t.marge > 0 ? <> ÷ (1 − {fmtPct(t.marge, 0)})</> : null}
+                      {t.margeSupp > 0 ? <> × (1 + {fmtPct(t.margeSupp, 0)})</> : null} ={' '}
+                      <strong>{fmtMoney(t.taux, true)}/h</strong>.
+                      {t.marge === 0 && ' Renseignez une marge nette visée ci-dessus pour viser un bénéfice.'}
+                    </>
+                  ) : (
+                    <>
+                      Cochez pour déduire le taux des coûts et des marges. Au seuil actuel :{' '}
+                      <strong>{fmtMoney(t.base, true)}/h</strong> (couvre salaires + frais, sans marge).
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+          )
+        })()}
         <div className="form-row">
-          <Field
-            label="Taux horaire de vente (€)"
-            hint="prix d'une heure vendue : convertit les honoraires en budget d'heures (heures = honoraires ÷ ce taux) et fixe la productivité visée"
-          >
-            <NumInput value={s.tauxHoraireVente} onChange={(v) => maj((d) => void (d.settings.tauxHoraireVente = v ?? 0))} />
-          </Field>
           <Field label="Coût horaire de revient" hint="ce qu'une heure coûte réellement (calculé depuis l'équipe) — l'écart avec le taux de vente = votre marge horaire">
             <div className="input" style={{ background: '#f7f8fa' }}>{fmtMoney(coutHoraireMoyen(state), true)} / h</div>
           </Field>

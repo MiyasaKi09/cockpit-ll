@@ -7,6 +7,7 @@ import { useMemo, useState } from 'react'
 import type { Projet, StatutProjet, TypeMO } from '../types'
 import { useStore } from '../store'
 import { OUVRAGES, calculHonoraires, phasesParDefaut, seuilPlancherActualise } from '../miqcp'
+import { tauxVente } from '../derive'
 import { daterPhases, facturesParDefaut } from '../echeancier'
 import { Badge, Btn, Field, Modal, NumInput, Select, TextInput, navigate } from '../ui'
 import { addDays, fmtMoney, fmtPct, todayISO, uid } from '../util'
@@ -77,7 +78,7 @@ export default function ProjetNouveau({ onClose }: { onClose: () => void }) {
 
   const creer = () => {
     const projet = structuredClone(brouillon)
-    let phases = phasesParDefaut(h.honorairesBaseHT, state.settings.tauxHoraireVente)
+    let phases = phasesParDefaut(h.honorairesBaseHT, tauxVente(state))
     if (missionsCompl && missionsCompl > 0) {
       const mc = phases.find((p) => p.code === 'MC')
       if (mc) mc.montantHT = missionsCompl

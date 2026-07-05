@@ -283,6 +283,37 @@ export function caCible(state: AppState): number {
   return objectifCA(state).caCible
 }
 
+/** heures facturables de l'équipe sur l'année (Σ heures annuelles × part facturable) */
+export function heuresFacturablesAnnuelles(state: AppState): number {
+  return state.settings.equipe.reduce((s, p) => s + p.heuresAnnuelles * p.facturablePct, 0)
+}
+
+/** Taux horaire de vente « objectif » déduit des coûts et des marges :
+ *  1) coût au seuil = coûts d'agence ÷ heures facturables (couvre salaires + frais) ;
+ *  2) marge nette visée : ÷ (1 − marge) pour dégager le bénéfice ;
+ *  3) marge supplémentaire : × (1 + coussin) pour absorber négos et imprévus. */
+export function tauxVenteObjectif(state: AppState): {
+  base: number
+  marge: number
+  margeSupp: number
+  taux: number
+  heuresFac: number
+} {
+  const heuresFac = heuresFacturablesAnnuelles(state)
+  const couts = coutAgenceAnnuel(state)
+  const base = heuresFac > 0 ? couts / heuresFac : 0
+  const marge = Math.min(0.95, Math.max(0, state.settings.margeCiblePct ?? 0))
+  const margeSupp = Math.max(0, state.settings.margeSecuritePct ?? 0)
+  const taux = (base / (1 - marge)) * (1 + margeSupp)
+  return { base, marge, margeSupp, taux, heuresFac }
+}
+
+/** taux horaire de vente retenu : calculé (mode auto) ou saisi à la main */
+export function tauxVente(state: AppState): number {
+  if (state.settings.tauxHoraireAuto) return Math.round(tauxVenteObjectif(state).taux)
+  return state.settings.tauxHoraireVente
+}
+
 // ------------------------------------------------------------------
 // Situations de travaux — décompte « net à payer » à certifier à
 // l'entreprise : cumul des travaux (+ révision) − retenue de garantie

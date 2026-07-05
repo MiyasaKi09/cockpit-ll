@@ -456,6 +456,10 @@ export interface Settings {
   bt01Actuel: number
   bt01Ref1994: number
   tauxHoraireVente: number
+  /** si vrai, le taux horaire de vente est calculé (coûts + marges) au lieu d'être saisi */
+  tauxHoraireAuto?: boolean
+  /** marge supplémentaire (coussin) appliquée au taux de vente calculé (0,10 = +10 %) */
+  margeSecuritePct?: number | null
   coutHoraireRevient: number
   heuresParJour: number
   /** objectif de CA saisi à la main (utilisé si margeCiblePct est vide) */

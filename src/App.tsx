@@ -13,9 +13,7 @@ import Projets from './modules/Projets'
 import Situations from './modules/Situations'
 import Facturation from './modules/Facturation'
 import Temps from './modules/Temps'
-import Developpement from './modules/Developpement'
 import VeilleAO from './modules/VeilleAO'
-import References from './modules/References'
 import Claude from './modules/Claude'
 import Classement from './modules/Classement'
 import Ressources from './modules/Ressources'
@@ -41,11 +39,7 @@ const NAV: { groupe: string; items: { path: string; label: string }[] }[] = [
   },
   {
     groupe: 'Développement',
-    items: [
-      { path: 'developpement', label: 'Pipeline commercial' },
-      { path: 'ao', label: "Appels d'offres" },
-      { path: 'references', label: 'Références' },
-    ],
+    items: [{ path: 'ao', label: 'Développement & AO' }],
   },
   {
     groupe: 'Claude',
@@ -114,13 +108,13 @@ export default function App() {
       page = <Temps />
       break
     case 'developpement':
-      page = <Developpement />
+      page = <VeilleAO ongletInitial="pipeline" />
       break
     case 'ao':
       page = <VeilleAO />
       break
     case 'references':
-      page = <References />
+      page = <VeilleAO ongletInitial="references" />
       break
     case 'prompts':
       page = <Claude />

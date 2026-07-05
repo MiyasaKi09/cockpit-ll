@@ -9,7 +9,7 @@
 import { useState } from 'react'
 import type { AppState, Consultation, StatutConsultation } from '../types'
 import { useStore } from '../store'
-import { Badge, Btn, Card, EmptyState, Money, Page, navigate, useToday } from '../ui'
+import { Badge, Btn, Card, EmptyState, Money, navigate, useToday } from '../ui'
 import { diffDays, fmtMoney, todayISO } from '../util'
 import { creerProjetDepuisConsultation } from '../consultations'
 
@@ -76,7 +76,7 @@ function CarteConsultation({ c }: { c: Consultation }) {
         {c.statut !== 'perdue' && c.statut !== 'gagnee' && (
           <Btn small kind="ghost" onClick={() => deplacer('perdue')} title="Marquer perdue / No-Go">✕ Perdue</Btn>
         )}
-        <a className="btn btn-small btn-ghost" href="#/ao" title="Ouvrir la fiche complète">fiche</a>
+        <a className="btn btn-small btn-ghost" href="#/ao/consultations" title="Ouvrir la fiche complète">fiche</a>
       </div>
       {c.statut === 'gagnee' && c.projetId && (
         <div className="small ok-text" style={{ marginTop: 4 }}>✓ projet {c.projetId} créé</div>
@@ -142,7 +142,7 @@ function ProspectsARelancer({ state }: { state: AppState }) {
   )
 }
 
-export default function Developpement() {
+export function PipelineContenu() {
   const { state } = useStore()
   const [voirPerdues, setVoirPerdues] = useState(false)
 
@@ -154,10 +154,10 @@ export default function Developpement() {
     .reduce((s, c) => s + (c.budgetTravaux || 0), 0)
 
   return (
-    <Page
-      titre="Développement commercial"
-      sousTitre="Chaque consultation avance d'un clic ; « Gagnée » crée le projet."
-    >
+    <>
+      <p className="small muted" style={{ margin: '0 0 4px' }}>
+        Chaque consultation avance d'un clic ; « Gagnée » crée le projet.
+      </p>
       <div className="grid3" style={{ marginBottom: 16 }}>
         <Card titre="Pipeline actif (hors gagné/perdu)">
           <div style={{ fontSize: 24, fontWeight: 700 }}>{fmtMoney(totalPipeline)}</div>
@@ -205,6 +205,6 @@ export default function Developpement() {
       </Card>
 
       <ProspectsARelancer state={state} />
-    </Page>
+    </>
   )
 }

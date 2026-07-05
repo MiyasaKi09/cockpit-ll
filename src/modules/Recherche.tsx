@@ -94,7 +94,7 @@ function chercher(state: AppState, q: string): Resultat[] {
         groupe: 'Références',
         titre: r.nom,
         detail: [r.lieu, r.annee ? String(r.annee) : null].filter(Boolean).join(' · '),
-        lien: '#/references',
+        lien: '#/ao/references',
       })
   }
 

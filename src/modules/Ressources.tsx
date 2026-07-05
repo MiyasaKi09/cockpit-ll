@@ -159,7 +159,7 @@ function FicheMateriauPage({ id }: { id: string }) {
           )}
           {refs.length > 0 && (
             <p className="small muted" style={{ marginTop: 8 }}>
-              Références liées : {refs.map((r) => r.nom).join(' · ')} (<a href="#/references">base de références</a>)
+              Références liées : {refs.map((r) => r.nom).join(' · ')} (<a href="#/ao/references">base de références</a>)
             </p>
           )}
         </Card>

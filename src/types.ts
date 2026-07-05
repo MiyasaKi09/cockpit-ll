@@ -285,6 +285,20 @@ export interface Obligation {
 
 export type TypeContact = 'MOA' | 'Prospect' | 'Entreprise' | 'BET' | 'Autre'
 
+export type CanalInteraction = 'appel' | 'mail' | 'rdv' | 'visite' | 'autre'
+
+/** échange daté avec un contact — historique (ne s'écrase jamais) */
+export interface Interaction {
+  id: string
+  contactId: string
+  date: string // ISO
+  canal: CanalInteraction
+  resume: string
+  /** rattachements facultatifs */
+  projetId?: string | null
+  consultationId?: string | null
+}
+
 export interface Contact {
   id: string
   nom: string
@@ -293,8 +307,15 @@ export interface Contact {
   type: TypeContact
   email?: string
   tel?: string
+  /** dernière interaction — dérivée du journal d'interactions (conservée pour compat.) */
   derniereInteraction?: string | null
   prochaineAction?: string
+  /** relance récurrente : la prochaine action se re-décale de N jours quand elle est faite */
+  relanceJours?: number | null
+  /** valeur estimée de l'opportunité (prospect) — alimente le pipeline commercial */
+  valeurEstimee?: number | null
+  /** projets rattachés (liens manuels, en plus des liens dérivés des interactions) */
+  projetsIds?: string[]
   dateProchaineAction?: string | null
   notes?: string
 }
@@ -465,6 +486,7 @@ export interface AppState {
   references: Reference[]
   obligations: Obligation[]
   contacts: Contact[]
+  interactions: Interaction[]
   artisans: Artisan[]
   materiaux: Materiau[]
   consultations: Consultation[]

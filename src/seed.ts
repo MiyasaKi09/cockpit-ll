@@ -6,7 +6,7 @@
 
 import type { AppState, Facture, PromptTemplate } from './types'
 
-export const STATE_VERSION = 5
+export const STATE_VERSION = 6
 
 const P = (v: number) => Math.round(v * 100) / 100
 
@@ -518,8 +518,15 @@ export function seedState(): AppState {
         derniereInteraction: '2026-06-05',
         prochaineAction: 'Proposer une rencontre de présentation de l’agence',
         dateProchaineAction: '2026-09-01',
+        relanceJours: 30,
+        valeurEstimee: 45000,
         notes: 'EXEMPLE — projets scolaires évoqués pour 2027.',
       },
+    ],
+
+    interactions: [
+      { id: 'int-1', contactId: 'ct-1', date: '2026-06-20', canal: 'mail', resume: 'Échange sur le calage du DIAG amiante.', projetId: 'P01' },
+      { id: 'int-2', contactId: 'ct-2', date: '2026-06-05', canal: 'rdv', resume: 'Premier contact au salon des maires — intérêt pour un groupe scolaire.' },
     ],
 
     artisans: [

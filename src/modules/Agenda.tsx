@@ -4,7 +4,7 @@
 // Google Agenda sans API (pont déterministe, un fichier).
 
 import { useMemo, useState } from 'react'
-import type { Contact, Obligation, TypeContact } from '../types'
+import type { AppState, CanalInteraction, Contact, Obligation, TypeContact } from '../types'
 import { useStore } from '../store'
 import {
   Badge,
@@ -15,6 +15,7 @@ import {
   EmptyState,
   Field,
   Modal,
+  Money,
   NumInput,
   Page,
   Select,
@@ -24,8 +25,24 @@ import {
   TextInput,
   useToday,
 } from '../ui'
-import { addDays, addMonths, diffDays, download, fold, todayISO, uid } from '../util'
+import { addDays, addMonths, diffDays, download, fmtDate, fold, todayISO, uid } from '../util'
 import { STATUTS_ACTIFS } from '../derive'
+
+const CANAUX: { value: CanalInteraction; label: string }[] = [
+  { value: 'appel', label: '📞 Appel' },
+  { value: 'mail', label: '✉ Mail' },
+  { value: 'rdv', label: '🤝 RDV' },
+  { value: 'visite', label: '🏗 Visite' },
+  { value: 'autre', label: 'Autre' },
+]
+
+/** dernière interaction datée d'un contact (dérivée du journal) */
+function derniereInteractionDe(state: AppState, contactId: string): string | null {
+  const dates = state.interactions.filter((i) => i.contactId === contactId).map((i) => i.date)
+  const fiche = state.contacts.find((c) => c.id === contactId)?.derniereInteraction
+  const toutes = [...dates, ...(fiche ? [fiche] : [])].sort()
+  return toutes.length ? toutes[toutes.length - 1] : null
+}
 
 export default function Agenda() {
   const [onglet, setOnglet] = useState('obligations')
@@ -267,6 +284,28 @@ function contactVide(): Contact {
   return { id: uid('ct'), nom: '', organisme: '', role: '', type: 'MOA', email: '', tel: '', derniereInteraction: null, prochaineAction: '', dateProchaineAction: null, notes: '' }
 }
 
+/** relance faite : décale la prochaine action de relanceJours (ou la vide) + logue l'échange */
+function marquerRelanceFaite(state: AppState, update: (fn: (d: AppState) => void) => void, c: Contact): void {
+  update((d) => {
+    const x = d.contacts.find((y) => y.id === c.id)
+    if (!x) return
+    d.interactions.push({
+      id: uid('int'),
+      contactId: c.id,
+      date: todayISO(),
+      canal: 'autre',
+      resume: x.prochaineAction ? `Relance : ${x.prochaineAction}` : 'Relance effectuée.',
+    })
+    x.derniereInteraction = todayISO()
+    if (x.relanceJours && x.relanceJours > 0) {
+      x.dateProchaineAction = addDays(todayISO(), x.relanceJours)
+    } else {
+      x.dateProchaineAction = null
+      x.prochaineAction = ''
+    }
+  })
+}
+
 function OngletContacts({ today }: { today: string }) {
   const { state, update } = useStore()
   const [recherche, setRecherche] = useState('')
@@ -323,7 +362,10 @@ function OngletContacts({ today }: { today: string }) {
                     {c.tel && <div>{c.tel}</div>}
                   </td>
                   <td>
-                    <DateF d={c.derniereInteraction} />
+                    <DateF d={derniereInteractionDe(state, c.id)} />
+                    {c.type === 'Prospect' && c.valeurEstimee ? (
+                      <div className="muted small">opportunité <Money v={c.valeurEstimee} /></div>
+                    ) : null}
                   </td>
                   <td>
                     {c.prochaineAction ? (
@@ -335,12 +377,18 @@ function OngletContacts({ today }: { today: string }) {
                             <DateF d={c.dateProchaineAction} />
                           </Badge>
                         )}
+                        {c.relanceJours ? <span className="muted small"> · récurrente {c.relanceJours} j</span> : null}
                       </>
                     ) : (
                       <span className="muted">—</span>
                     )}
                   </td>
-                  <td className="right" onClick={(e) => e.stopPropagation()}>
+                  <td className="right" onClick={(e) => e.stopPropagation()} style={{ whiteSpace: 'nowrap' }}>
+                    {c.dateProchaineAction && (
+                      <Btn small kind="primary" onClick={() => marquerRelanceFaite(state, update, c)} title={c.relanceJours ? `Relance faite — replanifiée dans ${c.relanceJours} j` : 'Relance faite — action soldée'}>
+                        ✓ Relance
+                      </Btn>
+                    )}{' '}
                     <Btn
                       small
                       kind="danger"
@@ -384,8 +432,49 @@ function FicheContact({
   creation: boolean
   onClose: () => void
 }) {
-  const { update } = useStore()
+  const { state, update } = useStore()
   const [c, setC] = useState<Contact>(initiale)
+  // saisie d'un nouvel échange
+  const [canal, setCanal] = useState<CanalInteraction>('appel')
+  const [resume, setResume] = useState('')
+  const [projetLie, setProjetLie] = useState('')
+
+  const interactions = state.interactions
+    .filter((i) => i.contactId === c.id)
+    .sort((a, b) => b.date.localeCompare(a.date))
+
+  // projets liés : liens manuels + projets cités dans les interactions
+  const projetsLies = [
+    ...new Set([...(c.projetsIds || []), ...interactions.map((i) => i.projetId).filter(Boolean) as string[]]),
+  ]
+
+  const enregistrerContact = (patch?: Partial<Contact>) =>
+    update((d) => {
+      const fusion = { ...c, ...patch }
+      const i = d.contacts.findIndex((x) => x.id === c.id)
+      if (i >= 0) d.contacts[i] = fusion
+      else d.contacts.push(fusion)
+    })
+
+  const loggerEchange = () => {
+    if (!resume.trim()) return
+    // le contact doit exister en base avant d'y rattacher un échange
+    if (creation && !state.contacts.some((x) => x.id === c.id)) enregistrerContact()
+    update((d) => {
+      d.interactions.push({
+        id: uid('int'),
+        contactId: c.id,
+        date: todayISO(),
+        canal,
+        resume: resume.trim(),
+        projetId: projetLie || null,
+      })
+      const x = d.contacts.find((y) => y.id === c.id)
+      if (x) x.derniereInteraction = todayISO()
+    })
+    setResume('')
+    setProjetLie('')
+  }
 
   return (
     <Modal titre={creation ? 'Nouveau contact' : c.nom} onClose={onClose} large>
@@ -414,9 +503,11 @@ function FicheContact({
         <Field label="Téléphone">
           <TextInput value={c.tel || ''} onChange={(v) => setC({ ...c, tel: v })} />
         </Field>
-        <Field label="Dernière interaction">
-          <DateInput value={c.derniereInteraction || null} onChange={(v) => setC({ ...c, derniereInteraction: v })} />
-        </Field>
+        {c.type === 'Prospect' && (
+          <Field label="Valeur estimée (€)" hint="opportunité — alimente le pipeline">
+            <NumInput value={c.valeurEstimee ?? null} onChange={(v) => setC({ ...c, valeurEstimee: v })} />
+          </Field>
+        )}
       </div>
       <div className="form-row">
         <Field label="Prochaine action" hint="alimente le fil d'urgences dès que la date est passée">
@@ -425,28 +516,58 @@ function FicheContact({
         <Field label="Pour le">
           <DateInput value={c.dateProchaineAction || null} onChange={(v) => setC({ ...c, dateProchaineAction: v })} />
         </Field>
+        <Field label="Relance récurrente (jours)" hint="vide = ponctuelle ; sinon la relance se replanifie quand faite">
+          <NumInput value={c.relanceJours ?? null} onChange={(v) => setC({ ...c, relanceJours: v })} />
+        </Field>
       </div>
       <Field label="Notes">
-        <TextArea value={c.notes || ''} onChange={(v) => setC({ ...c, notes: v })} rows={3} />
+        <TextArea value={c.notes || ''} onChange={(v) => setC({ ...c, notes: v })} rows={2} />
       </Field>
+
+      {projetsLies.length > 0 && (
+        <p className="small" style={{ marginTop: 10 }}>
+          Projets liés :{' '}
+          {projetsLies.map((id) => (
+            <a key={id} href={`#/projets/${id}`} className="badge badge-info" style={{ marginRight: 4 }}>{id}</a>
+          ))}
+        </p>
+      )}
+
+      {/* ---------- historique des échanges ---------- */}
+      <div className="card" style={{ padding: 12, marginTop: 12, background: 'var(--bg-soft, #f6f7fa)' }}>
+        <div style={{ fontWeight: 700, marginBottom: 8 }}>Historique des échanges</div>
+        <div className="toolbar" style={{ marginBottom: 8, flexWrap: 'wrap' }}>
+          <Select value={canal} onChange={(v) => setCanal(v as CanalInteraction)} options={CANAUX} style={{ width: 120 }} />
+          <TextInput value={resume} onChange={setResume} placeholder="Résumé de l'échange…" style={{ minWidth: 240 }} />
+          <Select
+            value={projetLie}
+            onChange={setProjetLie}
+            options={[{ value: '', label: 'Projet lié (option)' }, ...state.projets.map((p) => ({ value: p.id, label: `${p.id} — ${p.nom}` }))]}
+            style={{ maxWidth: 200 }}
+          />
+          <Btn kind="primary" onClick={loggerEchange} disabled={!resume.trim()}>Logguer</Btn>
+        </div>
+        {interactions.length === 0 ? (
+          <p className="muted small">Aucun échange enregistré — chaque appel/mail/RDV se logue ici et ne s'écrase jamais.</p>
+        ) : (
+          interactions.slice(0, 20).map((i) => (
+            <div key={i.id} className="small" style={{ padding: '4px 0', borderBottom: '1px solid var(--line)' }}>
+              <span className="muted">{fmtDate(i.date)}</span>{' '}
+              <strong>{CANAUX.find((x) => x.value === i.canal)?.label || i.canal}</strong> — {i.resume}
+              {i.projetId && <> · <a href={`#/projets/${i.projetId}`}>{i.projetId}</a></>}
+            </div>
+          ))
+        )}
+      </div>
+
       <div className="form-foot">
-        <Btn
-          onClick={() => setC({ ...c, derniereInteraction: todayISO() })}
-          title="Note l'interaction du jour — pensez à redonner une prochaine action"
-        >
-          Interaction aujourd'hui
-        </Btn>
         <span className="spacer" />
-        <Btn onClick={onClose}>Annuler</Btn>
+        <Btn onClick={onClose}>Fermer</Btn>
         <Btn
           kind="primary"
           disabled={!c.nom.trim()}
           onClick={() => {
-            update((d) => {
-              const i = d.contacts.findIndex((x) => x.id === c.id)
-              if (i >= 0) d.contacts[i] = c
-              else d.contacts.push(c)
-            })
+            enregistrerContact()
             onClose()
           }}
         >

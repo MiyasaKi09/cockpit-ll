@@ -17,8 +17,7 @@ import Temps from './modules/Temps'
 import Developpement from './modules/Developpement'
 import VeilleAO from './modules/VeilleAO'
 import References from './modules/References'
-import Prompts from './modules/Prompts'
-import Routines from './modules/Routines'
+import Claude from './modules/Claude'
 import Classement from './modules/Classement'
 import Ressources from './modules/Ressources'
 import Agenda from './modules/Agenda'
@@ -53,10 +52,7 @@ const NAV: { groupe: string; items: { path: string; label: string }[] }[] = [
   },
   {
     groupe: 'Claude',
-    items: [
-      { path: 'prompts', label: 'Prompts' },
-      { path: 'routines', label: 'Routines & imports' },
-    ],
+    items: [{ path: 'prompts', label: 'Prompts & routines' }],
   },
   {
     groupe: 'Ressources',
@@ -133,10 +129,10 @@ export default function App() {
       page = <References />
       break
     case 'prompts':
-      page = <Prompts />
+      page = <Claude />
       break
     case 'routines':
-      page = <Routines />
+      page = <Claude ongletInitial="routines" />
       break
     case 'classement':
       page = <Classement />

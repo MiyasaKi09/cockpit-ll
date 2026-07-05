@@ -19,6 +19,8 @@ import {
   Select,
   TextArea,
   TextInput,
+  confirmer,
+  toast,
 } from '../ui'
 import { fmtDate, todayISO, uid } from '../util'
 
@@ -68,7 +70,7 @@ function gabaritVide(): PromptTemplate {
 }
 
 export function PromptsContenu() {
-  const { state, update } = useStore()
+  const { state, update, replace } = useStore()
   const [utilise, setUtilise] = useState<PromptTemplate | null>(null)
   const [edite, setEdite] = useState<PromptTemplate | null>(null)
   const [creation, setCreation] = useState(false)
@@ -89,11 +91,13 @@ export function PromptsContenu() {
     })
   }
 
-  const supprimer = (t: PromptTemplate) => {
-    if (!confirm(`Supprimer le gabarit « ${t.titre} » ?`)) return
+  const supprimer = async (t: PromptTemplate) => {
+    const snap = state
+    if (!(await confirmer({ message: `Supprimer le gabarit « ${t.titre} » ?`, danger: true, confirmerLabel: 'Supprimer' }))) return
     update((d) => {
       d.prompts = d.prompts.filter((x) => x.id !== t.id)
     })
+    toast('Gabarit supprimé.', { undo: () => replace(snap) })
   }
 
   return (

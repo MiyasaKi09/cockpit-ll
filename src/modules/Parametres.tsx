@@ -20,6 +20,8 @@ import {
   Table,
   Tabs,
   TextInput,
+  confirmer,
+  toast,
   useRoute,
   useToday,
 } from '../ui'
@@ -42,7 +44,7 @@ const TYPES_MO: TypeMO[] = ['Public', 'Privé pro', 'Particulier']
 /** L'équipe avec rémunérations réelles : le coût horaire de chacun
  *  se calcule tout seul — plus de forfait approximatif. */
 function CarteEquipe() {
-  const { state, update } = useStore()
+  const { state, update, replace } = useStore()
   const eq = state.settings.equipe
 
   const majPersonne = (id: string, champ: 'nom' | 'remuMensuelle' | 'coefCharges' | 'heuresAnnuelles' | 'facturablePct', v: string | number | null) =>
@@ -71,14 +73,16 @@ function CarteEquipe() {
       d.settings.personnes = d.settings.equipe.map((x) => x.nom)
     })
 
-  const retirer = (id: string) => {
+  const retirer = async (id: string) => {
     const p = eq.find((x) => x.id === id)
     if (!p) return
-    if (!confirm(`Retirer ${p.nom} de l'équipe ? (ses heures pointées restent, valorisées au coût moyen)`)) return
+    const snap = state
+    if (!(await confirmer({ message: `Retirer ${p.nom} de l'équipe ? (ses heures pointées restent, valorisées au coût moyen)`, danger: true, confirmerLabel: 'Retirer' }))) return
     update((d) => {
       d.settings.equipe = d.settings.equipe.filter((x) => x.id !== id)
       d.settings.personnes = d.settings.equipe.map((x) => x.nom)
     })
+    toast('Personne retirée.', { undo: () => replace(snap) })
   }
 
   return (
@@ -451,9 +455,10 @@ export default function Parametres({ ongletInitial = 'agence' }: { ongletInitial
       if (typeof data !== 'object' || data === null || !Array.isArray(data.projets) || typeof data.version !== 'number')
         throw new Error('Ce fichier ne ressemble pas à une sauvegarde du Cockpit.')
       if (
-        !confirm(
-          `Remplacer TOUTES les données actuelles par « ${file.name} » (${data.projets.length} projets, ${data.factures?.length ?? 0} factures) ?`,
-        )
+        !(await confirmer({
+          message: `Remplacer TOUTES les données actuelles par « ${file.name} » (${data.projets.length} projets, ${data.factures?.length ?? 0} factures) ?`,
+          danger: true,
+        }))
       )
         return
       replace(data)
@@ -463,8 +468,8 @@ export default function Parametres({ ongletInitial = 'agence' }: { ongletInitial
     }
   }
 
-  const reinitialiser = () => {
-    if (confirm('Réinitialiser sur les données d’exemple ? Toutes les données actuelles seront perdues (pensez à exporter avant).'))
+  const reinitialiser = async () => {
+    if (await confirmer({ message: 'Réinitialiser sur les données d’exemple ? Toutes les données actuelles seront perdues (pensez à exporter avant).', danger: true }))
       replace(seedState())
   }
 

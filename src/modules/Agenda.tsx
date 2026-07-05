@@ -23,6 +23,8 @@ import {
   Tabs,
   TextArea,
   TextInput,
+  confirmer,
+  toast,
   useToday,
 } from '../ui'
 import { addDays, addMonths, diffDays, download, fmtDate, fold, todayISO, uid } from '../util'
@@ -118,7 +120,7 @@ function obligationVide(): Obligation {
 }
 
 function OngletObligations({ today }: { today: string }) {
-  const { state, update } = useStore()
+  const { state, update, replace } = useStore()
   const [edition, setEdition] = useState<Obligation | null>(null)
   const [creation, setCreation] = useState(false)
 
@@ -127,16 +129,18 @@ function OngletObligations({ today }: { today: string }) {
     [state.obligations],
   )
 
-  const marquerFaite = (o: Obligation) => {
+  const marquerFaite = async (o: Obligation) => {
     if (o.periodiciteMois) {
       update((d) => {
         const x = d.obligations.find((y) => y.id === o.id)
         if (x) x.echeance = echeanceSuivante(x.echeance, x.periodiciteMois!)
       })
-    } else if (confirm(`« ${o.libelle} » est ponctuelle : la marquer faite la supprime. Confirmer ?`)) {
+    } else if (await confirmer({ message: `« ${o.libelle} » est ponctuelle : la marquer faite la supprime. Confirmer ?`, danger: true })) {
+      const snap = state
       update((d) => {
         d.obligations = d.obligations.filter((x) => x.id !== o.id)
       })
+      toast('Obligation faite.', { undo: () => replace(snap) })
     }
   }
 
@@ -182,11 +186,14 @@ function OngletObligations({ today }: { today: string }) {
                     <Btn
                       small
                       kind="danger"
-                      onClick={() => {
-                        if (confirm(`Supprimer « ${o.libelle} » ?`))
+                      onClick={async () => {
+                        const snap = state
+                        if (await confirmer({ message: `Supprimer « ${o.libelle} » ?`, danger: true, confirmerLabel: 'Supprimer' })) {
                           update((d) => {
                             d.obligations = d.obligations.filter((x) => x.id !== o.id)
                           })
+                          toast('Obligation supprimée.', { undo: () => replace(snap) })
+                        }
                       }}
                     >
                       Suppr.
@@ -307,7 +314,7 @@ function marquerRelanceFaite(state: AppState, update: (fn: (d: AppState) => void
 }
 
 function OngletContacts({ today }: { today: string }) {
-  const { state, update } = useStore()
+  const { state, update, replace } = useStore()
   const [recherche, setRecherche] = useState('')
   const [filtreType, setFiltreType] = useState('')
   const [edition, setEdition] = useState<Contact | null>(null)
@@ -392,11 +399,14 @@ function OngletContacts({ today }: { today: string }) {
                     <Btn
                       small
                       kind="danger"
-                      onClick={() => {
-                        if (confirm(`Supprimer ${c.nom} ?`))
+                      onClick={async () => {
+                        const snap = state
+                        if (await confirmer({ message: `Supprimer ${c.nom} ?`, danger: true, confirmerLabel: 'Supprimer' })) {
                           update((d) => {
                             d.contacts = d.contacts.filter((x) => x.id !== c.id)
                           })
+                          toast('Contact supprimé.', { undo: () => replace(snap) })
+                        }
                       }}
                     >
                       Suppr.

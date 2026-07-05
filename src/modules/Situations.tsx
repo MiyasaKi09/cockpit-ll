@@ -26,6 +26,7 @@ import {
   Table,
   TextArea,
   TextInput,
+  confirmer,
   toast,
   useToday,
 } from '../ui'
@@ -110,21 +111,22 @@ function NetAPayer({ state, sit }: { state: AppState; sit: Situation }) {
 }
 
 /** crée (statut prévue) la facture d'honoraires DET du mois depuis une situation validée */
-function facturerDET(
+async function facturerDET(
   state: AppState,
   update: (fn: (d: AppState) => void) => void,
   today: string,
   sit: Situation,
-): void {
+): Promise<void> {
   const montant = honorairesDETduMois(state, sit)
   if (montant <= 0) {
-    alert(
+    toast(
       "Honoraires DET incalculables : renseignez le montant des travaux de l'opération (fiche projet) et une phase DET dotée d'honoraires.",
+      { tone: 'danger' },
     )
     return
   }
   if (sit.factureId && state.factures.some((f) => f.id === sit.factureId)) {
-    if (!confirm(`Une facture DET (${sit.factureId}) existe déjà pour cette situation. En créer une autre ?`)) return
+    if (!(await confirmer({ message: `Une facture DET (${sit.factureId}) existe déjà pour cette situation. En créer une autre ?`, danger: true }))) return
   }
   const id = prochainNumeroFacture(state.factures, today)
   const p = state.projets.find((x) => x.id === sit.projetId)
@@ -145,8 +147,9 @@ function facturerDET(
     const x = d.situations.find((s) => s.id === sit.id)
     if (x) x.factureId = id
   })
-  alert(
+  toast(
     `Facture ${id} créée (prévue, ${fmtMoney(montant, true)} HT — honoraires DET d'avancement) : à ajuster puis émettre dans Facturation.`,
+    { tone: 'ok' },
   )
 }
 
@@ -326,7 +329,7 @@ function CarteImport() {
 // ---------- modal d'édition ----------
 
 function ModalEdition({ sit, onClose }: { sit: Situation; onClose: () => void }) {
-  const { state, update } = useStore()
+  const { state, update, replace } = useStore()
   const [entreprise, setEntreprise] = useState(sit.entreprise)
   const [lot, setLot] = useState(sit.lot || '')
   const [mois, setMois] = useState(sit.mois)
@@ -346,11 +349,11 @@ function ModalEdition({ sit, onClose }: { sit: Situation; onClose: () => void })
 
   const enregistrer = () => {
     if (!entreprise.trim()) {
-      alert('Le nom de l’entreprise est obligatoire.')
+      toast('Le nom de l’entreprise est obligatoire.', { tone: 'danger' })
       return
     }
     if (!/^\d{4}-\d{2}$/.test(mois)) {
-      alert('Mois attendu au format AAAA-MM (ex. 2026-07).')
+      toast('Mois attendu au format AAAA-MM (ex. 2026-07).', { tone: 'danger' })
       return
     }
     update((d) => {
@@ -374,11 +377,13 @@ function ModalEdition({ sit, onClose }: { sit: Situation; onClose: () => void })
     onClose()
   }
 
-  const supprimer = () => {
-    if (!confirm(`Supprimer la situation de ${sit.entreprise} (${fmtMois(sit.mois)}) ?`)) return
+  const supprimer = async () => {
+    const snap = state
+    if (!(await confirmer({ message: `Supprimer la situation de ${sit.entreprise} (${fmtMois(sit.mois)}) ?`, danger: true, confirmerLabel: 'Supprimer' }))) return
     update((d) => {
       d.situations = d.situations.filter((s) => s.id !== sit.id)
     })
+    toast('Situation supprimée.', { undo: () => replace(snap) })
     onClose()
   }
 

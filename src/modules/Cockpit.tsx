@@ -8,7 +8,7 @@ import { useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import type { Alerte } from '../types'
 import { useStore } from '../store'
-import { Btn, Card, DateF, EmptyState, Money, Page, Stat, useToday } from '../ui'
+import { Btn, Card, DateF, EmptyState, Icon, Money, Page, Stat, toast, useToday } from '../ui'
 import { alertesActives } from '../alerts'
 import { STATUTS_ACTIFS, caCible, caRealiseAnnee, meteoFinanciere } from '../derive'
 import { addDays, fmtDate, fmtMoney, fmtPct } from '../util'
@@ -174,7 +174,7 @@ function itemsATraiter(state: ReturnType<typeof useStore>['state'], today: strin
 }
 
 function LigneCourrier({ personne }: { personne: string }) {
-  const { state, update } = useStore()
+  const { state, update, replace } = useStore()
   const courriers = state.courriers
     .filter((c) => c.statut === 'a_traiter')
     .filter((c) => !personne || !c.pour || c.pour === personne)
@@ -182,13 +182,17 @@ function LigneCourrier({ personne }: { personne: string }) {
 
   if (courriers.length === 0) return null
 
-  const traiter = (id: string) =>
+  const traiter = (id: string) => {
+    const snap = state
     update((d) => {
       const c = d.courriers.find((x) => x.id === id)
       if (c) c.statut = 'traite'
     })
+    toast('Courrier traité.', { undo: () => replace(snap) })
+  }
 
-  const versJournal = (id: string) =>
+  const versJournal = (id: string) => {
+    const snap = state
     update((d) => {
       const c = d.courriers.find((x) => x.id === id)
       if (!c || !c.projetId) return
@@ -203,15 +207,18 @@ function LigneCourrier({ personne }: { personne: string }) {
       })
       c.statut = 'traite'
     })
+    toast('Archivé dans le journal du projet.', { undo: () => replace(snap) })
+  }
 
   return (
     <>
       {courriers.map((c) => (
         <div key={c.id} className={`alert-item ${c.urgence === 3 ? 'alert-3' : ''}`}>
-          <span className="alert-dot" style={{ background: c.urgence === 3 ? 'var(--danger)' : 'var(--accent)' }} />
+          <span className={`gmk gmk-${c.urgence === 3 ? 'triangle' : 'circle'}`} aria-hidden="true" />
           <div style={{ minWidth: 0 }}>
             <div className="alert-titre">
-              ✉ {c.objet} {c.pour && <span className="badge badge-info">{c.pour}</span>}{' '}
+              <Icon name="mail" size={13} style={{ verticalAlign: '-0.15em' }} /> {c.objet}{' '}
+              {c.pour && <span className="badge badge-info">{c.pour}</span>}{' '}
               {c.projetId ? (
                 <a href={`#/projets/${c.projetId}`} className="badge badge-muted">
                   {c.projetId}
@@ -261,9 +268,21 @@ function executerRapide(update: ReturnType<typeof useStore>['update'], a: Action
 }
 
 function BoiteATraiter() {
-  const { state, update } = useStore()
+  const { state, update, replace } = useStore()
   const today = useToday()
   const [personne, setPersonne] = useState('')
+
+  const faireRapide = (a: ActionRapide) => {
+    const snap = state
+    executerRapide(update, a)
+    const libelle =
+      a.kind === 'valider_situation'
+        ? 'Situation validée.'
+        : a.kind === 'emettre_facture'
+          ? 'Facture émise.'
+          : 'Note marquée faite.'
+    toast(libelle, { undo: () => replace(snap) })
+  }
 
   const tous = itemsATraiter(state, today)
   const items = personne ? tous.filter((i) => !i.pour || i.pour === personne) : tous
@@ -288,17 +307,16 @@ function BoiteATraiter() {
         </span>
       }
     >
-      <p className="muted small" style={{ marginBottom: 10 }}>
-        Tout ce que les routines et les échéances ont déposé — trié, rangé, prêt à traiter. Chaque ligne
-        mène directement au bon endroit.
-      </p>
       <LigneCourrier personne={personne} />
       {items.length === 0 && nbCourriers === 0 ? (
-        <EmptyState>Rien à traiter — la boîte est vide. Les mails peuvent attendre.</EmptyState>
+        <EmptyState>Rien à traiter.</EmptyState>
       ) : (
         items.map((i) => (
           <div key={i.id} className="alert-item">
-            <span className="alert-dot" style={{ background: 'var(--accent)' }} />
+            <span
+              className={`gmk gmk-${i.id.startsWith('sit-') ? 'triangle' : i.id.startsWith('ao-') ? 'square' : 'circle'}`}
+              aria-hidden="true"
+            />
             <div style={{ minWidth: 0 }}>
               <div className="alert-titre">
                 {i.action}{' '}
@@ -308,7 +326,7 @@ function BoiteATraiter() {
             </div>
             <div className="alert-actions">
               {i.rapide && (
-                <Btn small kind="primary" onClick={() => executerRapide(update, i.rapide!)} title="Fait sur place, sans changer de page">
+                <Btn small kind="primary" onClick={() => faireRapide(i.rapide!)} title="Fait sur place, sans changer de page">
                   {i.rapide.label}
                 </Btn>
               )}
@@ -326,21 +344,26 @@ function BoiteATraiter() {
 // ---------- module ----------
 
 export default function Cockpit() {
-  const { state, update } = useStore()
+  const { state, update, replace } = useStore()
   const today = useToday()
-  const { evenements, direct } = useSurveillance(state, update)
+  const { evenements } = useSurveillance(state, update)
+  const dateFR = today.split('-').reverse().join('.')
 
   const meteo = meteoFinanciere(state, today)
   const excel = state.settings.dernierImportExcel
   const alertes = alertesActives(state, today)
 
-  const snooze = (id: string, jours: number) =>
+  const snooze = (id: string, jours: number) => {
+    const snap = state
     update((d) => {
       d.settings.snoozes[id] = addDays(today, jours)
     })
+    toast(`Alerte en sommeil ${jours} jours.`, { undo: () => replace(snap) })
+  }
 
   // action rapide d'une alerte, exécutée sur place
-  const executerAlerte = (action: NonNullable<Alerte['action']>) =>
+  const executerAlerte = (action: NonNullable<Alerte['action']>) => {
+    const snap = state
     update((d) => {
       if (action.kind === 'emettre_facture') {
         const f = d.factures.find((x) => x.id === action.refId)
@@ -363,6 +386,14 @@ export default function Cockpit() {
         }
       }
     })
+    const libelle =
+      action.kind === 'emettre_facture'
+        ? 'Facture émise.'
+        : action.kind === 'valider_situation'
+          ? 'Situation validée.'
+          : 'Obligation faite.'
+    toast(libelle, { undo: () => replace(snap) })
+  }
 
   // phases en cours : projets actifs dont une phase encadre la date du jour
   const phasesEnCours = state.projets
@@ -384,69 +415,36 @@ export default function Cockpit() {
     .slice(0, 3)
 
   return (
-    <Page
-      titre="Cockpit"
-      sousTitre={
-        <>
-          Claude propose, l'humain valide — intranet 100 % déterministe.{' '}
-          {direct ? (
-            <span className="badge badge-ok">⚡ Gmail & Agenda en direct</span>
-          ) : (
-            state.settings.surveillance?.clientId && (
-              <a href="#/parametres" className="badge badge-muted">surveillance coupée — reconnecter</a>
-            )
-          )}{' '}
-          <a href="#/sante" className="badge badge-muted" title="Tester chaque branchement en un clic">
-            ✚ santé des branchements
-          </a>
-        </>
-      }
-    >
+    <Page titre="cockpit" wordmark meta={`Pilotage · ${dateFR}`}>
       {/* ---------- météo financière ---------- */}
       <div style={{ marginBottom: 16 }}>
         <div className="grid3">
           <Stat
-            label="Trésorerie disponible"
+            accent="yellow"
+            label="Trésorerie"
             value={<Money v={meteo.tresorerie} />}
             tone={meteo.tresorerie !== null && meteo.tresorerie < 0 ? 'danger' : undefined}
-            sub={
-              meteo.tresorerie === null ? (
-                <>
-                  à renseigner dans <a href="#/parametres">Paramètres</a>
-                </>
-              ) : (
-                <>
-                  MAJ le {fmtDate(meteo.tresorerieMajLe)} · <a href="#/parametres">Paramètres</a>
-                </>
-              )
-            }
           />
-          <Stat
-            label="Facturable à 90 jours"
-            value={<Money v={meteo.facturable90j} />}
-            sub="factures à émettre ou en attente d'encaissement"
-          />
-          <Stat
-            label="Carnet de commandes"
-            value={<Money v={meteo.carnetHT} />}
-            sub="honoraires restant à facturer (projets signés / en cours)"
-          />
+          <Stat accent="blue" label="Facturable 90 j" value={<Money v={meteo.facturable90j} />} />
+          <Stat accent="red" label="Carnet" value={<Money v={meteo.carnetHT} />} />
         </div>
         {caCible(state) > 0 && (() => {
           const annee = Number(today.slice(0, 4))
           const ca = caRealiseAnnee(state, annee)
           const cible = caCible(state)
           const pct = ca / cible
-          const couleur = pct >= 1 ? 'var(--ok)' : pct >= 0.6 ? 'var(--warn)' : 'var(--danger)'
+          const couleur = pct >= 1 ? 'var(--ok)' : pct >= 0.6 ? 'var(--c-blue)' : 'var(--c-red)'
           return (
-            <div style={{ margin: '10px 2px 0' }}>
-              <div className="small" style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
-                <span className="muted">Objectif CA {annee} — <a href="#/analyse">Analyse</a></span>
-                <span><strong>{fmtMoney(ca)}</strong> <span className="muted">/ {fmtMoney(cible)} ({fmtPct(pct, 0)})</span></span>
-              </div>
-              <div style={{ background: 'var(--line)', borderRadius: 99, height: 8, overflow: 'hidden' }}>
-                <div style={{ width: `${Math.min(100, pct * 100)}%`, height: '100%', background: couleur }} />
-              </div>
+            <div className="gauge" style={{ marginTop: 12 }}>
+              <a href="#/analyse" className="gauge-t" style={{ color: 'inherit', textDecoration: 'none' }}>
+                CA {annee} · {fmtPct(pct, 0)}
+              </a>
+              <span className="gauge-bar">
+                <i style={{ width: `${Math.min(100, pct * 100)}%`, background: couleur }} />
+              </span>
+              <span className="gauge-t muted">
+                {fmtMoney(ca)} / {fmtMoney(cible)}
+              </span>
             </div>
           )
         })()}
@@ -459,7 +457,9 @@ export default function Cockpit() {
         )}
       </div>
 
-      {/* ---------- boîte à traiter ---------- */}
+      {/* ---------- inbox principale + rail latéral ---------- */}
+      <div className="cockpit-cols">
+      <div className="cockpit-main">
       <BoiteATraiter />
 
       {/* ---------- fil d'urgences ---------- */}
@@ -475,7 +475,7 @@ export default function Cockpit() {
         }
       >
         {alertes.length === 0 ? (
-          <EmptyState>Rien d'urgent — le fil est calme.</EmptyState>
+          <EmptyState>Rien d'urgent.</EmptyState>
         ) : (
           GROUPES_ALERTES.map((g) => {
             const items = alertes.filter((a) => a.gravite === g.gravite)
@@ -493,10 +493,12 @@ export default function Cockpit() {
           })
         )}
       </Card>
+      </div>
 
-      {/* ---------- repères du jour ---------- */}
-      <Card titre={<>Repères du jour — {fmtDate(today)}</>}>
-        <div className="grid3">
+      {/* ---------- repères du jour (rail latéral discret) ---------- */}
+      <aside className="cockpit-rail">
+      <Card titre={<>Repères — {fmtDate(today)}</>}>
+        <div className="cockpit-rail-stack">
           <Repere titre="Phases en cours">
             {phasesEnCours.length === 0 ? (
               <RienASignaler>Aucune phase en cours aujourd'hui.</RienASignaler>
@@ -563,6 +565,8 @@ export default function Cockpit() {
           </Repere>
         </div>
       </Card>
+      </aside>
+      </div>
     </Page>
   )
 }

@@ -15,14 +15,11 @@ import {
   type RetourRoutine,
   type ResultatImport,
 } from '../importRoutines'
-import { Badge, Btn, Card, CopyBtn, Page, TextArea } from '../ui'
+import { Badge, Btn, Card, CopyBtn, TextArea } from '../ui'
 
-export default function Routines() {
+export function RoutinesContenu() {
   return (
-    <Page
-      titre="Routines Claude & imports"
-      sousTitre="Configurées une fois dans Claude (routines programmées, accès Gmail/Drive/web), elles tournent sans intervention. Le Cockpit n'appelle jamais d'API : seuls les résultats font l'aller-retour — et l'humain valide toujours."
-    >
+    <>
       <ImportUniversel />
 
       {ROUTINES.map((r) => (
@@ -41,42 +38,21 @@ export default function Routines() {
           </p>
           <details style={{ marginTop: 10 }}>
             <summary className="small" style={{ cursor: 'pointer', color: 'var(--accent)' }}>
-              Voir le prompt complet{r.formatJSON ? ' et le contrat JSON' : ''}
+              Voir le prompt complet
             </summary>
             <pre style={{ marginTop: 8 }}>{r.promptRoutine}</pre>
           </details>
         </Card>
       ))}
 
-      <Card titre="Mode d'emploi (une fois pour toutes)">
-        <ol style={{ margin: 0, paddingLeft: 20, lineHeight: 1.8 }}>
-          <li>
-            Créer les <strong>Projets Claude</strong> : « CR de chantier » (template + intervenants),
-            « Analyse AO » (critères de l'agence), « Secrétariat » (ton, signatures), « Matériauthèque »
-            (vocabulaire de tags) — les instructions permanentes n'y sont jamais retapées.
-          </li>
-          <li>
-            Créer les <strong>routines programmées</strong> ci-dessus dans Claude (copier chaque prompt tel
-            quel, régler l'horaire, autoriser Gmail/Drive/recherche web).
-          </li>
-          <li>
-            Côté Gmail : ouvrir <strong>situations@agence-ll.fr</strong> (à imposer dans les marchés) et poser
-            les filtres natifs Administratif / Chantier / Client.
-          </li>
-          <li>
-            Au quotidien : lire le digest du matin dans Claude ; quand une routine produit un bloc JSON, le
-            coller dans l'import ci-dessus (ou dans le module concerné) — les lignes arrivent
-            <strong> « à vérifier »</strong>, jamais validées toutes seules.
-          </li>
-        </ol>
-        <p className="small muted" style={{ marginTop: 10 }}>
-          Limites assumées du sans-API : pas d'automatisation en tâche de fond hors routines planifiées, un
-          geste de copier-coller subsiste sur les flux ponctuels. À deux, c'est un avantage déguisé — chaque
-          sortie est relue. Le jour où l'agence grandit, la bascule est propre : les pré-prompts deviennent
-          des appels API, la base et les règles ne changent pas.
+      <Card titre="Première mise en place">
+        <p className="small" style={{ maxWidth: '75ch' }}>
+          Créer les Projets Claude et programmer chaque routine se fait une seule fois.
+          La marche à suivre complète est dans{' '}
+          <a href="#/demarrer">Bien démarrer</a>.
         </p>
       </Card>
-    </Page>
+    </>
   )
 }
 

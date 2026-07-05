@@ -1,13 +1,13 @@
-// Recherche globale — les liens dans tous les sens : un produit,
-// une entreprise, un contact, un mot du journal… → tout ce qui y
-// touche, avec le chemin vers chaque fiche. Réponse notamment à
-// « sur quels projets a-t-on utilisé tel matériau / telle
-// entreprise ? » via les rattachements de l'espace projet.
+// Recherche globale — palette de commandes (overlay « / »).
+// Un matériau, une entreprise, un contact, un mot du journal… →
+// tout ce qui y touche, avec le chemin vers chaque fiche et les
+// projets reliés. Clavier : ↑ ↓ pour naviguer, Entrée pour ouvrir,
+// Échap pour fermer.
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../store'
 import type { AppState } from '../types'
-import { Badge, Card, EmptyState, Page, TextInput } from '../ui'
+import { navigate } from '../ui'
 import { fmtDate, fmtMoney, fold } from '../util'
 
 interface Resultat {
@@ -94,7 +94,7 @@ function chercher(state: AppState, q: string): Resultat[] {
         groupe: 'Références',
         titre: r.nom,
         detail: [r.lieu, r.annee ? String(r.annee) : null].filter(Boolean).join(' · '),
-        lien: '#/references',
+        lien: '#/ao/references',
       })
   }
 
@@ -139,7 +139,7 @@ function chercher(state: AppState, q: string): Resultat[] {
         groupe: 'Consultations (AO)',
         titre: c.intitule,
         detail: c.acheteur,
-        lien: '#/ao',
+        lien: '#/ao/consultations',
       })
   }
 
@@ -157,71 +157,130 @@ function chercher(state: AppState, q: string): Resultat[] {
   return res
 }
 
-export default function Recherche() {
+export default function RechercheOverlay({ onClose }: { onClose: () => void }) {
   const { state } = useStore()
   const [q, setQ] = useState('')
+  const [sel, setSel] = useState(0)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const listRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    inputRef.current?.focus()
+  }, [])
 
   const resultats = useMemo(() => (q.trim().length >= 2 ? chercher(state, q) : []), [state, q])
   const groupes = useMemo(() => {
     const map = new Map<string, Resultat[]>()
-    for (const r of resultats) {
-      map.set(r.groupe, [...(map.get(r.groupe) || []), r])
-    }
+    for (const r of resultats) map.set(r.groupe, [...(map.get(r.groupe) || []), r])
     return [...map.entries()]
   }, [resultats])
+  // liste à plat, dans l'ordre d'affichage, pour la navigation clavier
+  const plat = useMemo(() => groupes.flatMap(([, items]) => items), [groupes])
+
+  useEffect(() => {
+    setSel(0)
+  }, [q])
+
+  const ouvrir = (r: Resultat) => {
+    navigate(r.lien)
+    onClose()
+  }
+
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      onClose()
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      setSel((s) => Math.min(s + 1, plat.length - 1))
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      setSel((s) => Math.max(s - 1, 0))
+    } else if (e.key === 'Enter' && plat[sel]) {
+      e.preventDefault()
+      ouvrir(plat[sel])
+    }
+  }
+
+  // garder l'élément sélectionné visible
+  useEffect(() => {
+    const el = listRef.current?.querySelector<HTMLElement>('.cmdk-item.sel')
+    el?.scrollIntoView({ block: 'nearest' })
+  }, [sel])
+
+  let index = -1
 
   return (
-    <Page
-      titre="Recherche"
-      sousTitre="Tout est relié : cherchez un matériau, une entreprise, un contact, un mot d'une note — et retrouvez les projets où ils apparaissent."
-    >
-      <div className="toolbar">
-        <TextInput
-          value={q}
-          onChange={setQ}
-          placeholder="Ex. « chanvre », « Martin BTP », « acrotère »…"
-          style={{ width: 420, fontSize: 15 }}
-        />
-        {q.trim().length >= 2 && (
-          <span className="muted small">
-            {resultats.length} résultat{resultats.length > 1 ? 's' : ''}
-          </span>
-        )}
-      </div>
+    <div className="cmdk-backdrop" onMouseDown={onClose} role="presentation">
+      <div
+        className="cmdk-panel"
+        onMouseDown={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Recherche globale"
+      >
+        <div className="cmdk-head">
+          <input
+            ref={inputRef}
+            className="cmdk-input"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            onKeyDown={onKeyDown}
+            placeholder="Rechercher — « chanvre », « Martin BTP », « acrotère »…"
+            aria-label="Terme de recherche"
+          />
+          {q.trim().length >= 2 && (
+            <span className="cmdk-count">
+              {resultats.length} résultat{resultats.length > 1 ? 's' : ''}
+            </span>
+          )}
+        </div>
 
-      {q.trim().length < 2 ? (
-        <Card>
-          <EmptyState>Tapez au moins 2 caractères. Exemples utiles : un nom d'entreprise pour voir tous ses chantiers, un matériau pour voir où il a été employé.</EmptyState>
-        </Card>
-      ) : resultats.length === 0 ? (
-        <Card>
-          <EmptyState>Aucun résultat pour « {q} ».</EmptyState>
-        </Card>
-      ) : (
-        groupes.map(([groupe, items]) => (
-          <Card key={groupe} titre={`${groupe} (${items.length})`}>
-            {items.map((r, i) => (
-              <div key={i} className="alert-item">
-                <div style={{ minWidth: 0, flex: 1 }}>
-                  <div className="alert-titre">
-                    <a href={r.lien}>{r.titre}</a>
-                  </div>
-                  {r.detail && <div className="alert-detail">{r.detail}</div>}
+        <div className="cmdk-results" ref={listRef}>
+          {q.trim().length < 2 ? (
+            <div className="cmdk-empty">Tapez au moins 2 caractères. ↑ ↓ pour naviguer, Entrée pour ouvrir, Échap pour fermer.</div>
+          ) : resultats.length === 0 ? (
+            <div className="cmdk-empty">Aucun résultat pour « {q} ».</div>
+          ) : (
+            groupes.map(([groupe, items]) => (
+              <div key={groupe} className="cmdk-group">
+                <div className="cmdk-group-titre">
+                  {groupe} <span className="cmdk-group-nb">{items.length}</span>
                 </div>
-                {r.projets && r.projets.length > 0 && (
-                  <div className="alert-actions" style={{ flexWrap: 'wrap', maxWidth: 220, justifyContent: 'flex-end' }}>
-                    {r.projets.map((pid) => (
-                      <a key={pid} href={`#/projets/${pid}`} className="badge badge-info">
-                        {pid}
-                      </a>
-                    ))}
-                  </div>
-                )}
+                {items.map((r) => {
+                  index += 1
+                  const i = index
+                  return (
+                    <div
+                      key={i}
+                      className={`cmdk-item ${i === sel ? 'sel' : ''}`}
+                      onMouseEnter={() => setSel(i)}
+                      onMouseDown={(e) => {
+                        e.preventDefault()
+                        ouvrir(r)
+                      }}
+                    >
+                      <div className="cmdk-item-main">
+                        <div className="cmdk-item-titre">{r.titre}</div>
+                        {r.detail && <div className="cmdk-item-detail">{r.detail}</div>}
+                      </div>
+                      {r.projets && r.projets.length > 0 && (
+                        <div className="cmdk-item-projets">
+                          {r.projets.map((pid) => (
+                            <span key={pid} className="badge badge-info">
+                              {pid}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
               </div>
-            ))}
-          </Card>
-        ))
-      )}
-    </Page>
+            ))
+          )}
+        </div>
+      </div>
+    </div>
   )
 }

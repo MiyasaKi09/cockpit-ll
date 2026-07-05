@@ -67,7 +67,12 @@ function ListeRessources({ ongletInitial }: { ongletInitial: string }) {
   return (
     <Page
       titre="Matériaux & artisans"
-      sousTitre="Fiches 100 % code dur : notes qualitatives issues des chantiers, décennales surveillées, FDES pour l'argument carbone."
+      sousTitre="Notes de chantier, décennales surveillées, FDES pour l'argument carbone."
+      actions={
+        <a className="btn btn-small btn-ghost" href="#/classement" title="Renommer et ranger des lots de documents">
+          Classement documentaire →
+        </a>
+      }
     >
       <Tabs
         tabs={[
@@ -159,7 +164,7 @@ function FicheMateriauPage({ id }: { id: string }) {
           )}
           {refs.length > 0 && (
             <p className="small muted" style={{ marginTop: 8 }}>
-              Références liées : {refs.map((r) => r.nom).join(' · ')} (<a href="#/references">base de références</a>)
+              Références liées : {refs.map((r) => r.nom).join(' · ')} (<a href="#/ao/references">base de références</a>)
             </p>
           )}
         </Card>
@@ -540,8 +545,7 @@ function OngletMateriaux() {
   return (
     <>
       <div className="pill-note">
-        L'argument carbone dès l'esquisse : chaque matériau pointe vers sa FDES (base INIES) — vrai
-        différenciateur pour un positionnement biosourcé.
+        L'argument carbone dès l'esquisse : chaque matériau pointe vers sa FDES (base INIES).
       </div>
 
       <div className="toolbar">
@@ -559,7 +563,7 @@ function OngletMateriaux() {
 
       <Card>
         {materiaux.length === 0 ? (
-          <EmptyState>Aucun matériau. Le tagging à l'ingestion commence dès maintenant — il prépare la recherche future.</EmptyState>
+          <EmptyState>Aucun matériau.</EmptyState>
         ) : (
           <Table head={['Matériau', 'Fournisseur', 'Projets', 'Coût €/m²', 'FDES', 'Tags', 'Notes', '']}>
             {materiaux.map((m) => (

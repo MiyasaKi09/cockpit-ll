@@ -5,7 +5,7 @@
 import type { ReactNode } from 'react'
 import { useStore } from '../store'
 import { ROUTINES } from '../routines'
-import { Badge, Btn, Card, CopyBtn, Page } from '../ui'
+import { Badge, Btn, Card } from '../ui'
 
 interface Etape {
   id: string
@@ -14,7 +14,7 @@ interface Etape {
   contenu: ReactNode
 }
 
-export default function BienDemarrer() {
+export function BienDemarrerContenu() {
   const { state, update } = useStore()
   const coche = state.settings.onboarding || {}
 
@@ -134,11 +134,18 @@ export default function BienDemarrer() {
   const pct = Math.round((faites / etapes.length) * 100)
 
   return (
-    <Page
-      titre="Bien démarrer"
-      sousTitre="Le circuit complet en une heure : après ça, le quotidien tient en trois gestes — regarder « À traiter », cliquer, coller."
-      actions={<Badge tone={pct === 100 ? 'ok' : 'info'}>{faites}/{etapes.length} étapes · {pct} %</Badge>}
-    >
+    <>
+      <div className="toolbar" style={{ alignItems: 'baseline' }}>
+        <p className="small muted" style={{ margin: 0, maxWidth: '70ch' }}>
+          Le circuit complet en une heure. Après ça, le quotidien tient en trois gestes : regarder
+          « À traiter », cliquer, coller.
+        </p>
+        <span className="spacer" />
+        <Badge tone={pct === 100 ? 'ok' : 'info'}>
+          {faites}/{etapes.length} étapes · {pct} %
+        </Badge>
+      </div>
+
       <div className="pill-note">
         Le principe de l'outil : <strong>l'intranet calcule, Claude rédige, l'humain valide.</strong>{' '}
         Aucune IA dans le site — les chiffres sont toujours justes. Les boutons « Copier » assemblent des
@@ -186,6 +193,6 @@ export default function BienDemarrer() {
           </li>
         </ol>
       </Card>
-    </Page>
+    </>
   )
 }

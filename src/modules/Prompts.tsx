@@ -16,7 +16,6 @@ import {
   EmptyState,
   Field,
   Modal,
-  Page,
   Select,
   TextArea,
   TextInput,
@@ -68,7 +67,7 @@ function gabaritVide(): PromptTemplate {
   }
 }
 
-export default function Prompts() {
+export function PromptsContenu() {
   const { state, update } = useStore()
   const [utilise, setUtilise] = useState<PromptTemplate | null>(null)
   const [edite, setEdite] = useState<PromptTemplate | null>(null)
@@ -98,15 +97,12 @@ export default function Prompts() {
   }
 
   return (
-    <Page
-      titre="Bibliothèque de prompts"
-      sousTitre="Un clic assemble le gabarit avec les données de la base et le copie — il ne reste qu'à le coller dans le bon Projet Claude. Les gabarits sont versionnés : une amélioration profite immédiatement à toute l'agence."
-      actions={
+    <>
+      <div className="toolbar" style={{ justifyContent: 'flex-end' }}>
         <Btn kind="primary" onClick={() => setCreation(true)}>
           Nouveau gabarit
         </Btn>
-      }
-    >
+      </div>
       {state.prompts.length === 0 && <EmptyState>Aucun gabarit — créez le premier.</EmptyState>}
 
       {parDomaine.map(([domaine, gabarits]) => (
@@ -157,7 +153,7 @@ export default function Prompts() {
           }}
         />
       )}
-    </Page>
+    </>
   )
 }
 

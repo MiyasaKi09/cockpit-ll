@@ -208,7 +208,7 @@ export function computeAlertes(state: AppState, today: string): Alerte[] {
         ? `Sauvegarde JSON datée du ${fmtDate(sauve)} — pensez à exporter`
         : 'Aucune sauvegarde JSON — exportez une première fois',
       detail: 'Les données vivent dans ce navigateur : un export JSON régulier les met à l’abri (30 secondes).',
-      lien: '#/parametres',
+      lien: '#/parametres/donnees',
     })
   }
 

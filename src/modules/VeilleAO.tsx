@@ -19,18 +19,23 @@ import {
   DateInput,
   EmptyState,
   Field,
+  Icon,
   Modal,
   Money,
   NumInput,
   Page,
   Select,
   Table,
+  Tabs,
   TextArea,
   TextInput,
   navigate,
+  useRoute,
   useToday,
 } from '../ui'
 import type { Tone } from '../ui'
+import { PipelineContenu } from './Developpement'
+import { ReferencesContenu } from './References'
 import { diffDays, fmtPct, fold, todayISO, uid } from '../util'
 import { assemble, contexteConsultation } from '../prompts'
 import { importerConsultations, parseRetourRoutine } from '../importRoutines'
@@ -206,12 +211,10 @@ function CarteBoamp() {
     })
 
   return (
-    <Card titre="Veille automatique — BOAMP + TED, les avis officiels arrivent tout seuls">
+    <Card titre="Veille automatique BOAMP + TED">
       <p className="small muted" style={{ marginBottom: 10 }}>
-        BOAMP (national) interrogé en direct, TED (marchés européens) via le relais du site — les deux
-        sur <strong>vos départements</strong>, uniquement les <strong>avis de marché en cours</strong> :
-        résultats, rectificatifs et avis expirés sont filtrés, mots-clés cherchés dans l'objet. Un clic
-        met l'annonce « À étudier ».
+        Sur <strong>vos départements</strong>, uniquement les <strong>marchés en cours</strong>.
+        Un clic : « À étudier ».
       </p>
       <div className="toolbar" style={{ flexWrap: 'wrap' }}>
         <Field label="Mots-clés (OU entre chaque, virgules)">
@@ -575,7 +578,7 @@ function BlocReponse({ c }: { c: Consultation }) {
         Références retenues :{' '}
         {refs.length === 0 ? (
           <span className="muted">
-            aucune en base — <a href="#/references">alimentez la page Références</a>
+            aucune en base — <a href="#/ao/references">alimentez l'onglet Références</a>
           </span>
         ) : (
           refs.map((r) => (
@@ -587,7 +590,13 @@ function BlocReponse({ c }: { c: Consultation }) {
         )}
       </p>
       <Btn kind="primary" onClick={generer} disabled={enCours || !c.intitule.trim()}>
-        {enCours ? 'Génération…' : '📄 Générer le dossier de candidature (DOCX)'}
+        {enCours ? (
+          'Génération…'
+        ) : (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <Icon name="file" size={14} /> Générer le dossier de candidature (DOCX)
+          </span>
+        )}
       </Btn>
       {message && (
         <p className={`small ${message.ok ? 'ok-text' : 'danger-text'}`} style={{ marginTop: 8 }}>
@@ -821,9 +830,9 @@ function Bilan({ consultations }: { consultations: Consultation[] }) {
   )
 }
 
-// ---------- module ----------
+// ---------- onglet Consultations ----------
 
-export default function VeilleAO() {
+function ConsultationsContenu() {
   const { state } = useStore()
   const today = useToday()
   const [q, setQ] = useState('')
@@ -859,19 +868,14 @@ export default function VeilleAO() {
   const ouvrir = (c: Consultation) => setFiche({ c: { ...c }, nouveau: false })
 
   return (
-    <Page
-      titre="Appels d'offres"
-      sousTitre="Le BOAMP arrive tout seul (API officielle gratuite) ; la routine hebdo complète avec TED et les sources privées. Avis Go / No-Go outillés par Claude — décision et bilan restent humains."
-      actions={
+    <>
+      <div className="toolbar" style={{ justifyContent: 'flex-end' }}>
         <Btn kind="primary" onClick={() => setFiche({ c: nouvelleConsultation(), nouveau: true })}>
           Nouvelle consultation
         </Btn>
-      }
-    >
-      <CarteBoamp />
-      <ImportVeille />
+      </div>
 
-      <Card titre="Pipeline des consultations">
+      <Card titre="Toutes les consultations">
         <div className="toolbar">
           <TextInput
             value={q}
@@ -887,8 +891,7 @@ export default function VeilleAO() {
         </div>
         {consultations.length === 0 ? (
           <EmptyState>
-            Aucune consultation — collez le retour de la routine « Veille AO hebdomadaire »
-            ci-dessus, ou créez une consultation manuellement.
+            Aucune consultation — la veille l'alimente (onglet Veille), ou créez-en une manuellement.
           </EmptyState>
         ) : visibles.length === 0 ? (
           <EmptyState>Aucune consultation ne correspond à la recherche ou au filtre.</EmptyState>
@@ -947,6 +950,40 @@ export default function VeilleAO() {
           onClose={() => setFiche(null)}
         />
       )}
+    </>
+  )
+}
+
+// ---------- module ----------
+
+const ONGLETS_AO: { id: string; label: string }[] = [
+  { id: 'veille', label: 'Veille' },
+  { id: 'pipeline', label: 'Pipeline' },
+  { id: 'consultations', label: 'Consultations' },
+  { id: 'references', label: 'Références' },
+]
+
+export default function VeilleAO({ ongletInitial = 'veille' }: { ongletInitial?: string }) {
+  const route = useRoute()
+  const segment = route[0] === 'ao' ? route[1] : ongletInitial
+  const onglet = ONGLETS_AO.some((o) => o.id === segment) ? segment! : 'veille'
+
+  return (
+    <Page
+      titre="Développement & AO"
+      sousTitre="Veille officielle, pipeline commercial, candidatures et références."
+    >
+      <Tabs tabs={ONGLETS_AO} actif={onglet} onSelect={(id) => navigate(`/ao/${id}`)} />
+
+      {onglet === 'veille' && (
+        <>
+          <CarteBoamp />
+          <ImportVeille />
+        </>
+      )}
+      {onglet === 'pipeline' && <PipelineContenu />}
+      {onglet === 'consultations' && <ConsultationsContenu />}
+      {onglet === 'references' && <ReferencesContenu />}
     </Page>
   )
 }

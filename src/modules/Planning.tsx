@@ -9,11 +9,12 @@
 import { useState } from 'react'
 import type { AppState, MarcheTravaux, PhaseCode, Projet } from '../types'
 import { useStore } from '../store'
-import { Badge, Btn, Card, DateInput, EmptyState, Field, NumInput, Page, Select, useToday } from '../ui'
+import { Badge, Btn, Card, DateInput, EmptyState, Field, Icon, NumInput, navigate, Page, Select, Tabs, useRoute, useToday } from '../ui'
 import { addDays, diffDays, fmtDate, fmtHeures, mondayOf, todayISO } from '../util'
 import { LIBELLES_PHASES, PHASES_ORDRE } from '../miqcp'
 import { daterPhases, facturesParDefaut } from '../echeancier'
 import { STATUTS_ACTIFS, capaciteSemaine, chargePlanifieeSemaine } from '../derive'
+import { EcheancesContenu } from './Calendrier'
 
 const COULEURS_PHASES = [
   '#0e7490', '#2563eb', '#7c3aed', '#0891b2', '#059669', '#ca8a04',
@@ -212,11 +213,8 @@ function EditionDates({ projet: p }: { projet: Projet }) {
         </Field>
       </div>
       <p className="muted small" style={{ margin: '8px 0' }}>
-        Toutes les phases se placent d'un coup à partir de ces 3 repères (réparties au prorata des
-        honoraires) — le projet tient sur une seule ligne. Ensuite, ◀ ▶ décale une phase d'une
-        semaine ; avec la case cochée, tout ce qui démarre après glisse d'autant. Après un décalage,
-        « Réaligner l'échéancier » recale les factures prévisionnelles sur les nouvelles dates (sans
-        toucher aux factures déjà émises).
+        ◀ ▶ décale une phase d'une semaine ; case cochée = les phases suivantes suivent.
+        « Réaligner l'échéancier » recale ensuite les factures prévues.
       </p>
       <table className="table table-compact">
         <thead>
@@ -544,12 +542,20 @@ function ouvrirChantierPDF(state: AppState, lignes: LigneChantier[], f: Fenetre,
 // capacité hebdo. Rouge = surcharge, à rééquilibrer.
 // ============================================================
 
-/** couleur d'une cellule selon le taux de charge (planifié / capacité) */
+/** couleur d'une cellule à l'écran — tokens de thème (clair ET sombre) */
 function couleurCharge(ratio: number): { bg: string; fg: string } {
-  if (ratio <= 0.001) return { bg: 'transparent', fg: 'var(--muted, #94a3b8)' }
-  if (ratio > 1.001) return { bg: '#fde0e0', fg: '#b91c1c' } // surcharge
-  if (ratio >= 0.85) return { bg: '#fdf3c6', fg: '#854d0e' } // presque plein
-  return { bg: '#dcf5e3', fg: '#166534' } // marge disponible
+  if (ratio <= 0.001) return { bg: 'transparent', fg: 'var(--ink-3)' }
+  if (ratio > 1.001) return { bg: 'var(--danger-soft)', fg: 'var(--danger)' } // surcharge
+  if (ratio >= 0.85) return { bg: 'var(--warn-soft)', fg: 'var(--warn)' } // presque plein
+  return { bg: 'var(--ok-soft)', fg: 'var(--ok)' } // marge disponible
+}
+
+/** version impression : couleurs littérales, toujours sur fond blanc A4 */
+function couleurChargePDF(ratio: number): { bg: string; fg: string } {
+  if (ratio <= 0.001) return { bg: '#ffffff', fg: '#94a3b8' }
+  if (ratio > 1.001) return { bg: '#fde0e0', fg: '#b91c1c' }
+  if (ratio >= 0.85) return { bg: '#fdf3c6', fg: '#854d0e' }
+  return { bg: '#dcf5e3', fg: '#166534' }
 }
 
 /** liste des lundis (ISO) de la fenêtre */
@@ -655,9 +661,9 @@ function PlanDeCharge({ debutLundi, nbSemaines }: { debutLundi: string; nbSemain
       </table>
       <p className="muted small" style={{ marginTop: 10, display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
         Heures planifiées / semaine (phases datées réparties dans le temps et entre l'équipe affectée).
-        <span><span style={{ display: 'inline-block', width: 11, height: 11, borderRadius: 2, background: '#dcf5e3', marginRight: 4, verticalAlign: 'middle' }} />marge</span>
-        <span><span style={{ display: 'inline-block', width: 11, height: 11, borderRadius: 2, background: '#fdf3c6', marginRight: 4, verticalAlign: 'middle' }} />presque plein</span>
-        <span><span style={{ display: 'inline-block', width: 11, height: 11, borderRadius: 2, background: '#fde0e0', marginRight: 4, verticalAlign: 'middle' }} />surcharge</span>
+        <span><span style={{ display: 'inline-block', width: 11, height: 11, borderRadius: 2, background: 'var(--ok-soft)', marginRight: 4, verticalAlign: 'middle' }} />marge</span>
+        <span><span style={{ display: 'inline-block', width: 11, height: 11, borderRadius: 2, background: 'var(--warn-soft)', marginRight: 4, verticalAlign: 'middle' }} />presque plein</span>
+        <span><span style={{ display: 'inline-block', width: 11, height: 11, borderRadius: 2, background: 'var(--danger-soft)', marginRight: 4, verticalAlign: 'middle' }} />surcharge</span>
       </p>
     </div>
   )
@@ -682,8 +688,8 @@ function ouvrirChargePDF(state: AppState, debutLundi: string, nbSemaines: number
         .map((l) => {
           const h = chargePlanifieeSemaine(state, pers.nom, l)
           const ratio = cap > 0 ? h / cap : 0
-          const { bg, fg } = couleurCharge(ratio)
-          return `<td style="text-align:center;font-size:9px;padding:3px 2px;background:${bg === 'transparent' ? '#fff' : bg};color:${fg};font-weight:${ratio > 1.001 ? 800 : 600}">${h < 0.05 ? '·' : Math.round(h)}</td>`
+          const { bg, fg } = couleurChargePDF(ratio)
+          return `<td style="text-align:center;font-size:9px;padding:3px 2px;background:${bg};color:${fg};font-weight:${ratio > 1.001 ? 800 : 600}">${h < 0.05 ? '·' : Math.round(h)}</td>`
         })
         .join('')
       return `<tr><td style="padding:3px 6px;font-size:10px;white-space:nowrap;border-right:1px solid #e3e6ec"><strong>${echapper(pers.nom)}</strong> <span style="color:#5a6478">${Math.round(cap)} h</span></td>${cells}</tr>`
@@ -695,7 +701,7 @@ function ouvrirChargePDF(state: AppState, debutLundi: string, nbSemaines: number
       const t = equipe.reduce((s, pers) => s + chargePlanifieeSemaine(state, pers.nom, l), 0)
       const capEquipe = cap * equipe.length
       const ratio = capEquipe > 0 ? t / capEquipe : 0
-      const { fg } = couleurCharge(ratio)
+      const { fg } = couleurChargePDF(ratio)
       return `<td style="text-align:center;font-size:9px;padding:3px 2px;font-weight:700;color:${fg};border-top:1px solid #cdd3dd">${t < 0.05 ? '·' : Math.round(t)}</td>`
     })
     .join('')
@@ -730,10 +736,10 @@ function ouvrirChargePDF(state: AppState, debutLundi: string, nbSemaines: number
 
 type Mode = 'phases' | 'chantier' | 'charge'
 
-export default function Planning() {
+function GanttEtCharge({ vue }: { vue: 'gantt' | 'charge' }) {
   const { state } = useStore()
   const today = useToday()
-  const [mode, setMode] = useState<Mode>('phases')
+  const [mode, setMode] = useState<Mode>(vue === 'charge' ? 'charge' : 'phases')
   const [filtre, setFiltre] = useState('')
   const [debutF, setDebutF] = useState(() => addMonths(debutMois(todayISO()), -1))
   const [nbMois, setNbMois] = useState(12)
@@ -781,29 +787,30 @@ export default function Planning() {
         ? lignesCh.length === 0
         : state.settings.equipe.length === 0
 
+  const boutonPDF = (
+    <Btn kind="primary" onClick={exporterPDF} disabled={vide}>
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+        <Icon name="printer" size={14} /> Imprimer / PDF
+      </span>
+    </Btn>
+  )
+
   return (
-    <Page
-      titre="Planning"
-      sousTitre="Le Gantt vivant de l'agence — phases de conception, lots de chantier, ou plan de charge de l'équipe (qui bosse sur quoi, qui est en surcharge). La ligne rouge marque aujourd'hui, tout glisse en deux clics, Imprimer/PDF pour diffuser."
-      actions={
-        <Btn kind="primary" onClick={exporterPDF} disabled={vide}>
-          🖨 Imprimer / PDF
-        </Btn>
-      }
-    >
-      <div className="toolbar" style={{ marginBottom: 4 }}>
-        <span style={{ display: 'inline-flex', gap: 4 }}>
-          <button className={`btn btn-small ${mode === 'phases' ? 'btn-primary' : ''}`} onClick={() => changerMode('phases')}>
-            Phases (conception)
-          </button>
-          <button className={`btn btn-small ${mode === 'chantier' ? 'btn-primary' : ''}`} onClick={() => changerMode('chantier')}>
-            Chantier (entreprises)
-          </button>
-          <button className={`btn btn-small ${mode === 'charge' ? 'btn-primary' : ''}`} onClick={() => changerMode('charge')}>
-            Plan de charge (équipe)
-          </button>
-        </span>
-      </div>
+    <>
+      {vue === 'gantt' && (
+        <div className="toolbar" style={{ marginBottom: 4 }}>
+          <span style={{ display: 'inline-flex', gap: 4 }}>
+            <button className={`btn btn-small ${mode === 'phases' ? 'btn-primary' : ''}`} onClick={() => changerMode('phases')}>
+              Phases (conception)
+            </button>
+            <button className={`btn btn-small ${mode === 'chantier' ? 'btn-primary' : ''}`} onClick={() => changerMode('chantier')}>
+              Chantier (entreprises)
+            </button>
+          </span>
+          <span className="spacer" />
+          {boutonPDF}
+        </div>
+      )}
 
       <div className="toolbar">
         <Btn onClick={() => setDebutF(addMonths(debutF, -1))}>‹</Btn>
@@ -827,6 +834,12 @@ export default function Planning() {
         <span className="muted small">
           {fmtDate(f.debut)} → {fmtDate(addDays(f.fin, -1))}
         </span>
+        {vue === 'charge' && (
+          <>
+            <span className="spacer" />
+            {boutonPDF}
+          </>
+        )}
       </div>
 
       <Card>
@@ -924,6 +937,33 @@ export default function Planning() {
 
       {projetSelectionne && mode === 'phases' && <EditionDates projet={projetSelectionne} />}
       {projetSelectionne && mode === 'chantier' && <EditionChantier projet={projetSelectionne} />}
+    </>
+  )
+}
+
+// ---------- module ----------
+
+const ONGLETS_PLANNING: { id: string; label: string }[] = [
+  { id: 'echeances', label: 'Échéances' },
+  { id: 'gantt', label: 'Gantt' },
+  { id: 'charge', label: 'Charge' },
+]
+
+export default function Planning({ ongletInitial = 'gantt' }: { ongletInitial?: string }) {
+  const route = useRoute()
+  const segment = route[0] === 'planning' ? route[1] : ongletInitial
+  const onglet = ONGLETS_PLANNING.some((o) => o.id === segment) ? segment! : 'gantt'
+
+  return (
+    <Page
+      titre="Planning"
+      sousTitre="Échéances, Gantt phases/chantier, plan de charge. La ligne rouge = aujourd'hui."
+    >
+      <Tabs tabs={ONGLETS_PLANNING} actif={onglet} onSelect={(id) => navigate(`/planning/${id}`)} />
+
+      {onglet === 'echeances' && <EcheancesContenu />}
+      {onglet === 'gantt' && <GanttEtCharge vue="gantt" />}
+      {onglet === 'charge' && <GanttEtCharge vue="charge" />}
     </Page>
   )
 }

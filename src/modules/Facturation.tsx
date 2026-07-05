@@ -22,6 +22,7 @@ import {
   Money,
   NumInput,
   Page,
+  RowMenu,
   Select,
   Stat,
   Table,
@@ -264,8 +265,6 @@ function CarteRelances({ state, today }: { state: AppState; today: string }) {
     .filter((f) => retardFacture(f, today) > 0)
     .sort((a, b) => retardFacture(b, today) - retardFacture(a, today))
 
-  const projetClaude = state.prompts.find((t) => NIVEAUX_RELANCE.some((n) => n.tplId === t.id))?.projetClaude
-
   // trace la relance quand son brouillon est copié (date + niveau + historique)
   const marquerRelance = (id: string, niveau: number) =>
     update((d) => {
@@ -279,13 +278,11 @@ function CarteRelances({ state, today }: { state: AppState; today: string }) {
   return (
     <Card titre="Relances à faire">
       {enRetard.length === 0 ? (
-        <EmptyState>Aucune facture en retard — rien à relancer.</EmptyState>
+        <EmptyState>Aucun retard.</EmptyState>
       ) : (
         <>
           <p className="muted small" style={{ marginBottom: 10 }}>
-            Trois niveaux gradués — le niveau conseillé est en bleu. Chaque clic copie un brouillon
-            complet à coller dans le Projet Claude {projetClaude ? `« ${projetClaude} »` : 'dédié'} ;
-            relecture humaine avant tout envoi.
+            Trois niveaux ; le conseillé est en bleu.
           </p>
           <Table
             compact
@@ -497,7 +494,7 @@ export default function Facturation() {
   return (
     <Page
       titre="Facturation"
-      sousTitre="Échéancier des honoraires, encaissements et relances graduées — les brouillons de relance sont toujours relus avant envoi."
+      sousTitre="Échéancier des honoraires, encaissements et relances."
     >
       {/* ----- stats ----- */}
       <div
@@ -622,29 +619,25 @@ export default function Facturation() {
                     )}
                   </td>
                   <td>
-                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    <div style={{ display: 'flex', gap: 6, alignItems: 'center', justifyContent: 'flex-end' }}>
                       {f.statut === 'prevue' && (
-                        <Btn small onClick={() => emettre(f)} title="Passer la facture au statut « émise » (la date d'émission est conservée)">
+                        <Btn small kind="primary" onClick={() => emettre(f)} title="Passer la facture au statut « émise » (la date d'émission est conservée)">
                           Émettre
                         </Btn>
                       )}
                       {f.statut === 'emise' && (
-                        <Btn small onClick={() => setEncaissement(f)} title="Enregistrer l'encaissement réel">
+                        <Btn small kind="primary" onClick={() => setEncaissement(f)} title="Enregistrer l'encaissement réel">
                           Encaisser
                         </Btn>
                       )}
-                      <Btn small kind="ghost" onClick={() => ouvrirFacturePDF(state, f)} title="Vue imprimable — Ctrl+P pour enregistrer en PDF">
-                        PDF
-                      </Btn>
-                      <Btn small kind="ghost" onClick={() => emailFacture(state, f)} title="Ouvre Gmail avec l'e-mail pré-rempli — l'envoi reste votre clic">
-                        E-mail
-                      </Btn>
-                      <Btn small kind="ghost" onClick={() => setEdition(f)}>
-                        Modifier
-                      </Btn>
-                      <Btn small kind="danger" onClick={() => supprimer(f)}>
-                        Supprimer
-                      </Btn>
+                      <RowMenu
+                        items={[
+                          { label: 'Vue imprimable (PDF)', onClick: () => ouvrirFacturePDF(state, f) },
+                          { label: 'Préparer l’e-mail', onClick: () => emailFacture(state, f) },
+                          { label: 'Modifier', onClick: () => setEdition(f) },
+                          { label: 'Supprimer', onClick: () => supprimer(f), danger: true },
+                        ]}
+                      />
                     </div>
                   </td>
                 </tr>

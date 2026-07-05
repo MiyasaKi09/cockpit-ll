@@ -57,7 +57,7 @@ export default function Classement() {
   return (
     <Page
       titre="Classement documentaire"
-      sousTitre={`Nomenclature de l'agence : ${state.settings.nomenclature} — à figer avant septembre, modifiable dans Paramètres.`}
+      sousTitre={`Nomenclature de l'agence : ${state.settings.nomenclature} (modifiable dans Paramètres).`}
     >
       <Card titre="Générer un nom de fichier conforme">
         <div className="form-row">

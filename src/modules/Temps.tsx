@@ -435,7 +435,7 @@ export default function Temps() {
   return (
     <Page
       titre="Temps passé"
-      sousTitre="Le tableau de temps interactif : une colonne par semaine, la saisie s'enregistre en direct. Ces heures calibrent la marge réelle et les futurs devis."
+      sousTitre="Une colonne par semaine, saisie enregistrée en direct. Ces heures calibrent marge et devis."
     >
       <div className="toolbar">
         <Btn onClick={() => setFin(addDays(fin, -7))} title="Reculer d'une semaine">

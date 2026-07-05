@@ -152,8 +152,7 @@ export default function ProjetNouveau({ onClose }: { onClose: () => void }) {
       {etape === 2 && (
         <>
           <p className="small muted" style={{ marginBottom: 12 }}>
-            Tout est calculé automatiquement à partir du barème MIQCP actualisé — vous n'avez rien à faire,
-            sauf si un taux a été négocié.
+            Calculé au barème MIQCP. Renseignez un taux seulement s'il a été négocié.
           </p>
           <dl className="kv">
             <dt>Taux barème (actualisé BT01)</dt>

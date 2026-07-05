@@ -17,7 +17,6 @@ import {
   Modal,
   Money,
   NumInput,
-  Page,
   Select,
   Table,
   TextArea,
@@ -185,7 +184,7 @@ function ModalReference({
 
 // ---------- module ----------
 
-export default function References() {
+export function ReferencesContenu() {
   const { state, update } = useStore()
   const today = useToday()
 
@@ -235,11 +234,12 @@ export default function References() {
   }
 
   return (
-    <Page
-      titre="Références"
-      sousTitre="Carburant des candidatures, du Go/No-Go et des futures planches."
-      actions={<Btn kind="primary" onClick={() => setModal({ ouvert: true, ref: null })}>Nouvelle référence</Btn>}
-    >
+    <>
+      <div className="toolbar" style={{ justifyContent: 'flex-end' }}>
+        <Btn kind="primary" onClick={() => setModal({ ouvert: true, ref: null })}>
+          Nouvelle référence
+        </Btn>
+      </div>
       <Card>
         <div className="toolbar">
           <TextInput
@@ -362,6 +362,6 @@ export default function References() {
           onSave={enregistrer}
         />
       )}
-    </Page>
+    </>
   )
 }

@@ -1,76 +1,62 @@
 // Coquille de l'application : barre latérale + routage hash.
 
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useStore } from './store'
-import { navigate, useRoute, useToday } from './ui'
+import { Icon, ToastHost, useRoute, useToday } from './ui'
 import { alertesActives } from './alerts'
+import { basculerTheme, themeCourant } from './theme'
 
 import Cockpit from './modules/Cockpit'
-import BienDemarrer from './modules/BienDemarrer'
-import Recherche from './modules/Recherche'
+import RechercheOverlay from './modules/RechercheOverlay'
 import Analyse from './modules/Analyse'
 import Projets from './modules/Projets'
 import Situations from './modules/Situations'
 import Facturation from './modules/Facturation'
 import Temps from './modules/Temps'
-import Developpement from './modules/Developpement'
 import VeilleAO from './modules/VeilleAO'
-import References from './modules/References'
-import Prompts from './modules/Prompts'
-import Routines from './modules/Routines'
+import Claude from './modules/Claude'
 import Classement from './modules/Classement'
 import Ressources from './modules/Ressources'
 import Agenda from './modules/Agenda'
 import Parametres from './modules/Parametres'
-import Sante from './modules/Sante'
-import Calendrier from './modules/Calendrier'
 import Planning from './modules/Planning'
 
 const NAV: { groupe: string; items: { path: string; label: string }[] }[] = [
   {
-    groupe: 'Pilotage',
+    groupe: 'Piloter',
     items: [
       { path: '', label: 'Cockpit' },
-      { path: 'calendrier', label: 'Calendrier' },
       { path: 'planning', label: 'Planning' },
-      { path: 'recherche', label: 'Recherche ( / )' },
-      { path: 'demarrer', label: 'Bien démarrer' },
-      { path: 'projets', label: 'Projets' },
-      { path: 'situations', label: 'Situations de travaux' },
-      { path: 'facturation', label: 'Factures & relances' },
-      { path: 'temps', label: 'Temps' },
       { path: 'analyse', label: 'Analyse €/jour' },
     ],
   },
   {
-    groupe: 'Développement',
+    groupe: 'Produire',
     items: [
-      { path: 'developpement', label: 'Pipeline commercial' },
-      { path: 'ao', label: "Appels d'offres" },
-      { path: 'references', label: 'Références' },
+      { path: 'projets', label: 'Projets' },
+      { path: 'situations', label: 'Situations' },
+      { path: 'facturation', label: 'Factures' },
+      { path: 'temps', label: 'Temps' },
     ],
   },
   {
-    groupe: 'Claude',
-    items: [
-      { path: 'prompts', label: 'Prompts' },
-      { path: 'routines', label: 'Routines & imports' },
-    ],
+    groupe: 'Développer',
+    items: [{ path: 'ao', label: 'Développement & AO' }],
   },
   {
     groupe: 'Ressources',
     items: [
-      { path: 'classement', label: 'Classement documentaire' },
       { path: 'ressources', label: 'Matériaux & artisans' },
-      { path: 'agenda', label: 'Obligations & contacts' },
+      { path: 'agenda', label: 'Contacts & obligations' },
     ],
   },
   {
-    groupe: 'Agence',
-    items: [
-      { path: 'sante', label: 'Santé des branchements' },
-      { path: 'parametres', label: 'Paramètres & données' },
-    ],
+    groupe: 'Claude',
+    items: [{ path: 'prompts', label: 'Prompts & routines' }],
+  },
+  {
+    groupe: 'Réglages',
+    items: [{ path: 'parametres', label: 'Paramètres' }],
   },
 ]
 
@@ -79,15 +65,17 @@ export default function App() {
   const { state } = useStore()
   const today = useToday()
   const nbAlertes = alertesActives(state, today).filter((a) => a.gravite >= 2).length
+  const [theme, setTheme] = useState(themeCourant())
+  const [rechercheOuverte, setRechercheOuverte] = useState(false)
 
-  // « / » depuis n'importe où (hors champ de saisie) → Recherche
+  // « / » depuis n'importe où (hors champ de saisie) → palette de recherche
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey) return
       const cible = e.target as HTMLElement | null
       if (cible && (['INPUT', 'TEXTAREA', 'SELECT'].includes(cible.tagName) || cible.isContentEditable)) return
       e.preventDefault()
-      navigate('/recherche')
+      setRechercheOuverte(true)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -100,14 +88,11 @@ export default function App() {
     case '':
       page = <Cockpit />
       break
-    case 'recherche':
-      page = <Recherche />
-      break
     case 'analyse':
       page = <Analyse />
       break
     case 'demarrer':
-      page = <BienDemarrer />
+      page = <Parametres ongletInitial="demarrer" />
       break
     case 'projets':
       page = <Projets />
@@ -122,19 +107,19 @@ export default function App() {
       page = <Temps />
       break
     case 'developpement':
-      page = <Developpement />
+      page = <VeilleAO ongletInitial="pipeline" />
       break
     case 'ao':
       page = <VeilleAO />
       break
     case 'references':
-      page = <References />
+      page = <VeilleAO ongletInitial="references" />
       break
     case 'prompts':
-      page = <Prompts />
+      page = <Claude />
       break
     case 'routines':
-      page = <Routines />
+      page = <Claude ongletInitial="routines" />
       break
     case 'classement':
       page = <Classement />
@@ -149,10 +134,10 @@ export default function App() {
       page = <Parametres />
       break
     case 'sante':
-      page = <Sante />
+      page = <Parametres ongletInitial="branchements" />
       break
     case 'calendrier':
-      page = <Calendrier />
+      page = <Planning ongletInitial="echeances" />
       break
     case 'planning':
       page = <Planning />
@@ -162,12 +147,20 @@ export default function App() {
   }
 
   return (
+    <>
     <div className="layout">
       <aside className="sidebar">
         <div className="brand">
           Cockpit L&L
           <small>intranet v2 — sans API</small>
         </div>
+        <button className="nav-search" onClick={() => setRechercheOuverte(true)} title="Recherche globale">
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
+            <Icon name="search" size={14} />
+            Rechercher…
+          </span>
+          <kbd>/</kbd>
+        </button>
         {NAV.map((g) => (
           <div key={g.groupe}>
             <div className="nav-group">{g.groupe}</div>
@@ -183,8 +176,22 @@ export default function App() {
             ))}
           </div>
         ))}
+        <div className="sidebar-foot">
+          <button
+            className="theme-toggle"
+            onClick={() => setTheme(basculerTheme())}
+            title="Basculer clair / sombre"
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}
+          >
+            <Icon name={theme === 'dark' ? 'sun' : 'moon'} size={14} />
+            {theme === 'dark' ? 'Thème clair' : 'Thème sombre'}
+          </button>
+        </div>
       </aside>
       <main className="main">{page}</main>
     </div>
+    {rechercheOuverte && <RechercheOverlay onClose={() => setRechercheOuverte(false)} />}
+    <ToastHost />
+    </>
   )
 }

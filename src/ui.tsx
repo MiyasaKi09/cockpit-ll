@@ -53,7 +53,7 @@ export function Page({
 }) {
   if (wordmark) {
     return (
-      <div className="page">
+      <div className="page page-geo">
         <header className="page-wordmark-h">
           <h1 className="wordmark">{titre}</h1>
           {meta && <div className="wordmark-meta">{meta}</div>}

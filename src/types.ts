@@ -85,6 +85,9 @@ export interface Projet {
   /** dates de vie du projet (fiche) */
   dateLancement?: string | null
   dateCloture?: string | null
+  /** durées mémorisées pour la datation auto des phases (planning) */
+  dureeEtudesMois?: number | null
+  dureeChantierMois?: number | null
   /** objet à rappeler sur les factures (ex. « Création d'une pension de famille au… ») */
   objetFacture?: string
   siretClient?: string
@@ -397,6 +400,15 @@ export interface ImportExcelMeta {
 
 export interface Settings {
   nomAgence: string
+  /** coordonnées légales & bancaires — imprimées sur les factures PDF */
+  adresseAgence?: string
+  siretAgence?: string
+  rcs?: string
+  capitalSocial?: string
+  numeroTVA?: string
+  iban?: string
+  bic?: string
+  banque?: string
   /** trésorerie disponible — saisie ou relevé (source : banque / Excel maître) */
   tresorerieDispo: number | null
   tresorerieMajLe: string | null

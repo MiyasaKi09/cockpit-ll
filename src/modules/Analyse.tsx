@@ -10,9 +10,11 @@ import { useMemo, useState } from 'react'
 import type { AppState } from '../types'
 import { useStore } from '../store'
 import {
+  caRealiseAnnee,
   coutAgenceAnnuel,
   coutHoraireDe,
   coutJourObjectif,
+  coutsExternes,
   enJours,
   nomProjet,
 } from '../derive'
@@ -23,6 +25,7 @@ interface LigneAnalyse {
   projetId: string
   ca: number
   coutTemps: number
+  coutExterne: number
   margeReelle: number
   jours: number
   parJour: number | null
@@ -35,6 +38,7 @@ interface Synthese {
   totalCA: number
   totalJours: number
   totalCoutTemps: number
+  totalCoutExterne: number
   joursHorsProjet: number
   parJourMoyen: number | null
 }
@@ -44,7 +48,7 @@ function analyser(state: AppState, debut: string, fin: string): Synthese {
   const parProjet = new Map<string, LigneAnalyse>()
   const ligne = (id: string): LigneAnalyse => {
     if (!parProjet.has(id))
-      parProjet.set(id, { projetId: id, ca: 0, coutTemps: 0, margeReelle: 0, jours: 0, parJour: null, partCA: 0, partTemps: 0 })
+      parProjet.set(id, { projetId: id, ca: 0, coutTemps: 0, coutExterne: 0, margeReelle: 0, jours: 0, parJour: null, partCA: 0, partTemps: 0 })
     return parProjet.get(id)!
   }
 
@@ -71,7 +75,9 @@ function analyser(state: AppState, debut: string, fin: string): Synthese {
   const totalJours = lignes.reduce((s, l) => s + l.jours, 0)
   const totalCoutTemps = lignes.reduce((s, l) => s + l.coutTemps, 0)
   for (const l of lignes) {
-    l.margeReelle = l.ca - l.coutTemps
+    // même définition que l'onglet Finances : marge = CA − coût du temps − coûts externes
+    l.coutExterne = coutsExternes(state, l.projetId)
+    l.margeReelle = l.ca - l.coutTemps - l.coutExterne
     l.parJour = l.jours > 0.05 ? l.ca / l.jours : null
     l.partCA = totalCA > 0 ? l.ca / totalCA : 0
     l.partTemps = totalJours > 0 ? l.jours / totalJours : 0
@@ -83,6 +89,7 @@ function analyser(state: AppState, debut: string, fin: string): Synthese {
     totalCA,
     totalJours,
     totalCoutTemps,
+    totalCoutExterne: lignes.reduce((s, l) => s + l.coutExterne, 0),
     joursHorsProjet,
     parJourMoyen: totalJours > 0.05 ? totalCA / totalJours : null,
   }
@@ -150,9 +157,9 @@ function TableauPeriode({ titre, debut, fin, setDebut, setFin }: {
               <tr style={{ fontWeight: 650 }}>
                 <td>Total / moyenne</td>
                 <td className="right num">{fmtMoney(syn.totalCA)}</td>
-                <td className="right num">{fmtMoney(syn.totalCoutTemps)}</td>
-                <td className={`right num ${syn.totalCA - syn.totalCoutTemps < 0 ? 'danger-text' : 'ok-text'}`}>
-                  {fmtMoney(syn.totalCA - syn.totalCoutTemps)}
+                <td className="right num" title={syn.totalCoutExterne > 0 ? `dont ${fmtMoney(syn.totalCoutExterne)} de coûts externes déduits de la marge` : undefined}>{fmtMoney(syn.totalCoutTemps)}</td>
+                <td className={`right num ${syn.totalCA - syn.totalCoutTemps - syn.totalCoutExterne < 0 ? 'danger-text' : 'ok-text'}`}>
+                  {fmtMoney(syn.totalCA - syn.totalCoutTemps - syn.totalCoutExterne)}
                 </td>
                 <td className="right num">{Math.round(syn.totalJours)}</td>
                 <td className="right"><CouleurParJour v={syn.parJourMoyen} objectif={objectif} /></td>
@@ -319,12 +326,34 @@ export default function Analyse() {
   const [f2, setF2] = useState(auj)
 
   const objectif = coutJourObjectif(state)
+  const annee = Number(auj.slice(0, 4))
+  const caRealise = caRealiseAnnee(state, annee)
+  const cible = state.settings.caCibleHT
+  const pctCible = cible > 0 ? caRealise / cible : null
 
   return (
     <Page
       titre="Analyse — chaque mission paie-t-elle sa journée ?"
       sousTitre="Le coût du temps est calculé personne par personne (salaire réel chargé, réglé dans Paramètres → Équipe) — pas de forfait. Vert : la mission couvre les coûts fixes ; rouge : elle en vit."
     >
+      {cible > 0 && (
+        <Card titre={`Objectif de chiffre d'affaires ${annee}`}>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 22, fontWeight: 700 }}>{fmtMoney(caRealise)}</span>
+            <span className="muted">/ {fmtMoney(cible)} HT cible</span>
+            {pctCible !== null && (
+              <Badge tone={pctCible >= 1 ? 'ok' : pctCible >= 0.6 ? 'warn' : 'danger'}>{fmtPct(pctCible, 0)}</Badge>
+            )}
+          </div>
+          <div style={{ background: 'var(--line)', borderRadius: 99, height: 12, overflow: 'hidden', marginTop: 10 }}>
+            <div style={{ width: `${Math.min(100, (pctCible ?? 0) * 100)}%`, height: '100%', background: pctCible !== null && pctCible >= 1 ? 'var(--ok)' : pctCible !== null && pctCible >= 0.6 ? 'var(--warn)' : 'var(--danger)' }} />
+          </div>
+          <p className="muted small" style={{ marginTop: 8 }}>
+            CA facturé (émis ou encaissé) de l'année vs cible réglée dans Paramètres. Reste à faire :{' '}
+            <strong>{fmtMoney(Math.max(0, cible - caRealise))}</strong>.
+          </p>
+        </Card>
+      )}
       <div className="grid3" style={{ marginBottom: 16 }}>
         <Stat
           label="Seuil de rentabilité (€/jour facturable)"

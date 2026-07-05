@@ -121,8 +121,9 @@ function EditionDates({ projet: p }: { projet: Projet }) {
   const [debutEtudes, setDebutEtudes] = useState<string | null>(
     p.dateLancement ?? p.phases.find((ph) => ph.debut)?.debut ?? todayISO(),
   )
-  const [dureeEtudes, setDureeEtudes] = useState<number | null>(8)
-  const [dureeChantier, setDureeChantier] = useState<number | null>(12)
+  // durées mémorisées sur le projet (plus de valeur figée re-tapée à chaque fois)
+  const [dureeEtudes, setDureeEtudes] = useState<number | null>(p.dureeEtudesMois ?? 8)
+  const [dureeChantier, setDureeChantier] = useState<number | null>(p.dureeChantierMois ?? 12)
 
   const indexDe = (code: PhaseCode) => {
     const i = PHASES_ORDRE.indexOf(code)
@@ -135,6 +136,9 @@ function EditionDates({ projet: p }: { projet: Projet }) {
       const pr = d.projets.find((x) => x.id === p.id)
       if (!pr) return
       pr.phases = daterPhases(pr.phases, debutEtudes, dureeEtudes, dureeChantier)
+      // on mémorise pour la prochaine fois
+      pr.dureeEtudesMois = dureeEtudes
+      pr.dureeChantierMois = dureeChantier
     })
   }
 

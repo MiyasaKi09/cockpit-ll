@@ -10,10 +10,10 @@ import { useState } from 'react'
 import type { AppState, MarcheTravaux, PhaseCode, Projet } from '../types'
 import { useStore } from '../store'
 import { Badge, Btn, Card, DateInput, EmptyState, Field, NumInput, Page, Select, useToday } from '../ui'
-import { addDays, diffDays, fmtDate, todayISO } from '../util'
+import { addDays, diffDays, fmtDate, fmtHeures, mondayOf, todayISO } from '../util'
 import { LIBELLES_PHASES, PHASES_ORDRE } from '../miqcp'
-import { daterPhases } from '../echeancier'
-import { STATUTS_ACTIFS } from '../derive'
+import { daterPhases, facturesParDefaut } from '../echeancier'
+import { STATUTS_ACTIFS, capaciteSemaine, chargePlanifieeSemaine } from '../derive'
 
 const COULEURS_PHASES = [
   '#0e7490', '#2563eb', '#7c3aed', '#0891b2', '#059669', '#ca8a04',
@@ -116,7 +116,7 @@ function PisteProjet({ projet: p, fenetre: f }: { projet: Projet; fenetre: Fenet
 // ---------- édition rapide des dates (le réel du chantier) ----------
 
 function EditionDates({ projet: p }: { projet: Projet }) {
-  const { update } = useStore()
+  const { state, update } = useStore()
   const [propager, setPropager] = useState(true)
   const [debutEtudes, setDebutEtudes] = useState<string | null>(
     p.dateLancement ?? p.phases.find((ph) => ph.debut)?.debut ?? todayISO(),
@@ -124,11 +124,6 @@ function EditionDates({ projet: p }: { projet: Projet }) {
   // durées mémorisées sur le projet (plus de valeur figée re-tapée à chaque fois)
   const [dureeEtudes, setDureeEtudes] = useState<number | null>(p.dureeEtudesMois ?? 8)
   const [dureeChantier, setDureeChantier] = useState<number | null>(p.dureeChantierMois ?? 12)
-
-  const indexDe = (code: PhaseCode) => {
-    const i = PHASES_ORDRE.indexOf(code)
-    return i === -1 ? PHASES_ORDRE.length : i
-  }
 
   const daterAuto = () => {
     if (!debutEtudes || !dureeEtudes || !dureeChantier) return
@@ -142,19 +137,41 @@ function EditionDates({ projet: p }: { projet: Projet }) {
     })
   }
 
+  // Réaligne l'échéancier de facturation « prévue » sur les dates actuelles
+  // des phases (après un décalage). On ne touche jamais aux factures déjà
+  // émises ou encaissées — seules les prévues sont régénérées.
+  const prevuesDuProjet = state.factures.filter((f) => f.projetId === p.id && f.statut === 'prevue').length
+  const realignerEcheancier = () => {
+    if (prevuesDuProjet > 0 && !window.confirm(`Régénérer l'échéancier prévisionnel de ${p.id} ?\n\nLes ${prevuesDuProjet} facture(s) « prévue(s) » seront remplacées d'après les dates actuelles des phases. Les factures déjà émises ou encaissées ne bougent pas.`)) return
+    update((d) => {
+      const pr = d.projets.find((x) => x.id === p.id)
+      if (!pr) return
+      // on garde tout sauf les prévues de CE projet, puis on régénère
+      const gardees = d.factures.filter((f) => f.projetId !== p.id || f.statut !== 'prevue')
+      const nouvelles = facturesParDefaut(pr, d.settings, gardees)
+      d.factures = [...gardees, ...nouvelles]
+    })
+  }
+
   const majDate = (code: PhaseCode, champ: 'debut' | 'fin', v: string | null) =>
     update((d) => {
       const ph = d.projets.find((x) => x.id === p.id)?.phases.find((x) => x.code === code)
       if (ph) ph[champ] = v
     })
 
+  // décalage propagé par DATE réelle : une phase glisse, et toutes celles qui
+  // démarrent à partir de sa date de début suivent (plus fiable que l'ordre
+  // théorique des phases quand le réel du chantier bouscule le calendrier).
   const decaler = (code: PhaseCode, jours: number) =>
     update((d) => {
       const pr = d.projets.find((x) => x.id === p.id)
       if (!pr) return
-      const idx = indexDe(code)
+      const ref = pr.phases.find((x) => x.code === code)
+      if (!ref) return
+      const seuil = ref.debut || ref.fin || ''
       for (const ph of pr.phases) {
-        if (ph.code === code || (propager && indexDe(ph.code) > idx)) {
+        const aDate = ph.debut || ph.fin || ''
+        if (ph.code === code || (propager && seuil && aDate >= seuil)) {
           if (ph.debut) ph.debut = addDays(ph.debut, jours)
           if (ph.fin) ph.fin = addDays(ph.fin, jours)
         }
@@ -188,12 +205,18 @@ function EditionDates({ projet: p }: { projet: Projet }) {
             Dater les phases automatiquement
           </Btn>
         </Field>
+        <Field label=" ">
+          <Btn onClick={realignerEcheancier} title="Régénère les factures prévisionnelles d'après les dates actuelles des phases (les factures émises ou encaissées ne bougent pas)">
+            Réaligner l'échéancier{prevuesDuProjet > 0 ? ` (${prevuesDuProjet} prévue${prevuesDuProjet > 1 ? 's' : ''})` : ''}
+          </Btn>
+        </Field>
       </div>
       <p className="muted small" style={{ margin: '8px 0' }}>
         Toutes les phases se placent d'un coup à partir de ces 3 repères (réparties au prorata des
         honoraires) — le projet tient sur une seule ligne. Ensuite, ◀ ▶ décale une phase d'une
-        semaine ; avec la case cochée, tout ce qui suit glisse d'autant. Planning et échéancier de
-        facturation restent alignés sur ces dates.
+        semaine ; avec la case cochée, tout ce qui démarre après glisse d'autant. Après un décalage,
+        « Réaligner l'échéancier » recale les factures prévisionnelles sur les nouvelles dates (sans
+        toucher aux factures déjà émises).
       </p>
       <table className="table table-compact">
         <thead>
@@ -513,9 +536,199 @@ function ouvrirChantierPDF(state: AppState, lignes: LigneChantier[], f: Fenetre,
   w.document.close()
 }
 
+// ============================================================
+// Plan de charge — la vue « qui bosse sur quoi, quelle semaine »
+// et surtout QUI EST EN SURCHARGE. Lignes = personnes, colonnes =
+// semaines ; chaque cellule confronte les heures planifiées (issues
+// des phases datées réparties dans le temps et entre l'équipe) à la
+// capacité hebdo. Rouge = surcharge, à rééquilibrer.
+// ============================================================
+
+/** couleur d'une cellule selon le taux de charge (planifié / capacité) */
+function couleurCharge(ratio: number): { bg: string; fg: string } {
+  if (ratio <= 0.001) return { bg: 'transparent', fg: 'var(--muted, #94a3b8)' }
+  if (ratio > 1.001) return { bg: '#fde0e0', fg: '#b91c1c' } // surcharge
+  if (ratio >= 0.85) return { bg: '#fdf3c6', fg: '#854d0e' } // presque plein
+  return { bg: '#dcf5e3', fg: '#166534' } // marge disponible
+}
+
+/** liste des lundis (ISO) de la fenêtre */
+function lundisDe(debutLundi: string, nbSemaines: number): string[] {
+  const l: string[] = []
+  for (let i = 0; i < nbSemaines; i++) l.push(addDays(debutLundi, i * 7))
+  return l
+}
+
+function PlanDeCharge({ debutLundi, nbSemaines }: { debutLundi: string; nbSemaines: number }) {
+  const { state } = useStore()
+  const today = useToday()
+  const cap = capaciteSemaine(state)
+  const equipe = state.settings.equipe
+  const lundis = lundisDe(debutLundi, nbSemaines)
+  const lundiCourant = mondayOf(today)
+
+  if (equipe.length === 0) {
+    return (
+      <EmptyState>
+        Renseignez l'équipe et les rémunérations dans Paramètres pour afficher le plan de charge.
+      </EmptyState>
+    )
+  }
+  if (state.projets.every((p) => !STATUTS_ACTIFS.includes(p.statut) || !p.phases.some((ph) => ph.debut && ph.fin))) {
+    return (
+      <EmptyState>
+        Aucun projet actif avec des phases datées — datez les phases (onglet Phases) pour voir la
+        charge se répartir sur l'équipe.
+      </EmptyState>
+    )
+  }
+
+  const totalSemaine = (l: string) => equipe.reduce((s, pers) => s + chargePlanifieeSemaine(state, pers.nom, l), 0)
+
+  return (
+    <div style={{ overflowX: 'auto' }}>
+      <table className="table table-compact" style={{ minWidth: 620, borderCollapse: 'separate', borderSpacing: 0 }}>
+        <thead>
+          <tr>
+            <th style={{ textAlign: 'left', position: 'sticky', left: 0, background: 'var(--bg, #fff)', zIndex: 1 }}>
+              Personne
+            </th>
+            {lundis.map((l) => (
+              <th
+                key={l}
+                style={{
+                  textAlign: 'center',
+                  fontWeight: l === lundiCourant ? 800 : 600,
+                  color: l === lundiCourant ? 'var(--danger)' : undefined,
+                  whiteSpace: 'nowrap',
+                  fontSize: 11,
+                  minWidth: 46,
+                  borderBottom: l === lundiCourant ? '2px solid var(--danger)' : undefined,
+                }}
+                title={`semaine du ${fmtDate(l)}`}
+              >
+                {Number(l.slice(8, 10))} {NOMS_MOIS_COURTS[Number(l.slice(5, 7)) - 1].slice(0, 4)}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {equipe.map((pers) => (
+            <tr key={pers.id}>
+              <td style={{ position: 'sticky', left: 0, background: 'var(--bg, #fff)', zIndex: 1, whiteSpace: 'nowrap' }}>
+                <strong>{pers.nom}</strong>{' '}
+                <span className="muted small">{Math.round(cap)} h/sem</span>
+              </td>
+              {lundis.map((l) => {
+                const h = chargePlanifieeSemaine(state, pers.nom, l)
+                const ratio = cap > 0 ? h / cap : 0
+                const { bg, fg } = couleurCharge(ratio)
+                return (
+                  <td
+                    key={l}
+                    style={{ textAlign: 'center', background: bg, color: fg, fontSize: 11, fontWeight: ratio > 1.001 ? 800 : 600, padding: '4px 2px' }}
+                    title={`${pers.nom} · semaine du ${fmtDate(l)}\n${fmtHeures(h)} planifiées / ${Math.round(cap)} h capacité (${Math.round(ratio * 100)} %)`}
+                  >
+                    {h < 0.05 ? '·' : Math.round(h)}
+                  </td>
+                )
+              })}
+            </tr>
+          ))}
+          <tr>
+            <td style={{ position: 'sticky', left: 0, background: 'var(--bg, #fff)', zIndex: 1 }}>
+              <span className="muted small">Équipe · {Math.round(cap * equipe.length)} h/sem</span>
+            </td>
+            {lundis.map((l) => {
+              const t = totalSemaine(l)
+              const capEquipe = cap * equipe.length
+              const ratio = capEquipe > 0 ? t / capEquipe : 0
+              const { fg } = couleurCharge(ratio)
+              return (
+                <td key={l} style={{ textAlign: 'center', fontSize: 11, fontWeight: 700, color: fg, borderTop: '1px solid var(--line)' }} title={`total équipe · ${fmtHeures(t)} / ${Math.round(capEquipe)} h`}>
+                  {t < 0.05 ? '·' : Math.round(t)}
+                </td>
+              )
+            })}
+          </tr>
+        </tbody>
+      </table>
+      <p className="muted small" style={{ marginTop: 10, display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+        Heures planifiées / semaine (phases datées réparties dans le temps et entre l'équipe affectée).
+        <span><span style={{ display: 'inline-block', width: 11, height: 11, borderRadius: 2, background: '#dcf5e3', marginRight: 4, verticalAlign: 'middle' }} />marge</span>
+        <span><span style={{ display: 'inline-block', width: 11, height: 11, borderRadius: 2, background: '#fdf3c6', marginRight: 4, verticalAlign: 'middle' }} />presque plein</span>
+        <span><span style={{ display: 'inline-block', width: 11, height: 11, borderRadius: 2, background: '#fde0e0', marginRight: 4, verticalAlign: 'middle' }} />surcharge</span>
+      </p>
+    </div>
+  )
+}
+
+function ouvrirChargePDF(state: AppState, debutLundi: string, nbSemaines: number, today: string): void {
+  const equipe = state.settings.equipe
+  const cap = capaciteSemaine(state)
+  const lundis = lundisDe(debutLundi, nbSemaines)
+  const lundiCourant = mondayOf(today)
+
+  const enTete = lundis
+    .map((l) => {
+      const actuel = l === lundiCourant
+      return `<th style="font-size:9px;padding:3px 2px;border-bottom:1px solid #e3e6ec;text-align:center;${actuel ? 'color:#bb2233;font-weight:800' : ''}">${Number(l.slice(8, 10))} ${NOMS_MOIS_COURTS[Number(l.slice(5, 7)) - 1].slice(0, 4)}</th>`
+    })
+    .join('')
+
+  const lignes = equipe
+    .map((pers) => {
+      const cells = lundis
+        .map((l) => {
+          const h = chargePlanifieeSemaine(state, pers.nom, l)
+          const ratio = cap > 0 ? h / cap : 0
+          const { bg, fg } = couleurCharge(ratio)
+          return `<td style="text-align:center;font-size:9px;padding:3px 2px;background:${bg === 'transparent' ? '#fff' : bg};color:${fg};font-weight:${ratio > 1.001 ? 800 : 600}">${h < 0.05 ? '·' : Math.round(h)}</td>`
+        })
+        .join('')
+      return `<tr><td style="padding:3px 6px;font-size:10px;white-space:nowrap;border-right:1px solid #e3e6ec"><strong>${echapper(pers.nom)}</strong> <span style="color:#5a6478">${Math.round(cap)} h</span></td>${cells}</tr>`
+    })
+    .join('')
+
+  const totaux = lundis
+    .map((l) => {
+      const t = equipe.reduce((s, pers) => s + chargePlanifieeSemaine(state, pers.nom, l), 0)
+      const capEquipe = cap * equipe.length
+      const ratio = capEquipe > 0 ? t / capEquipe : 0
+      const { fg } = couleurCharge(ratio)
+      return `<td style="text-align:center;font-size:9px;padding:3px 2px;font-weight:700;color:${fg};border-top:1px solid #cdd3dd">${t < 0.05 ? '·' : Math.round(t)}</td>`
+    })
+    .join('')
+
+  const html = `<!doctype html>
+<html lang="fr"><head><meta charset="utf-8"><title>Plan de charge — ${echapper(state.settings.nomAgence)}</title>
+<style>
+  @page { size: A4 landscape; margin: 12mm; }
+  body { font-family: -apple-system, 'Segoe UI', Roboto, Arial, sans-serif; color: #1a2233; margin: 24px; }
+  h1 { font-size: 18px; margin: 0; }
+  .muted { color: #5a6478; font-size: 11px; }
+  table { width: 100%; border-collapse: collapse; margin-top: 14px; }
+  .impression { position: fixed; top: 12px; right: 12px; }
+  @media print { .impression { display: none; } body { margin: 0; } }
+</style></head><body>
+<button class="impression" onclick="window.print()">Imprimer / PDF</button>
+<h1>${echapper(state.settings.nomAgence)} — Plan de charge</h1>
+<div class="muted">Édité le ${fmtDate(today)} · ${fmtDate(lundis[0])} → ${fmtDate(addDays(lundis[lundis.length - 1], 6))} · heures planifiées / semaine · rouge = surcharge · document indicatif</div>
+<table>
+  <thead><tr><th style="text-align:left;font-size:10px;padding:3px 6px;border-bottom:1px solid #e3e6ec">Personne</th>${enTete}</tr></thead>
+  <tbody>${lignes}<tr><td style="padding:3px 6px;font-size:10px;color:#5a6478;border-right:1px solid #e3e6ec">Total équipe</td>${totaux}</tr></tbody>
+</table>
+</body></html>`
+
+  const w = window.open('', '_blank')
+  if (!w) return
+  w.document.write(html)
+  w.document.close()
+}
+
 // ---------- page ----------
 
-type Mode = 'phases' | 'chantier'
+type Mode = 'phases' | 'chantier' | 'charge'
 
 export default function Planning() {
   const { state } = useStore()
@@ -523,21 +736,26 @@ export default function Planning() {
   const [mode, setMode] = useState<Mode>('phases')
   const [filtre, setFiltre] = useState('')
   const [debutF, setDebutF] = useState(() => addMonths(debutMois(todayISO()), -1))
+  const [nbMois, setNbMois] = useState(12)
 
   const tousPhases = projetsPlanifies(state)
   const tousChantier = projetsAvecChantier(state)
   const tous = mode === 'phases' ? tousPhases : tousChantier
   const projets = filtre ? tous.filter((p) => p.id === filtre) : tous
-  const f = fenetreDe(debutF, 12)
+  const f = fenetreDe(debutF, nbMois)
 
   const lignesCh = mode === 'chantier' ? lignesChantier(state, projets) : []
+
+  // fenêtre en semaines pour le plan de charge (lundis couvrant la fenêtre en mois)
+  const debutLundi = mondayOf(f.debut)
+  const nbSemaines = Math.max(1, Math.round(diffDays(f.debut, f.fin) / 7))
 
   const mois: string[] = []
   for (let m = f.debut; m < f.fin; m = addMonths(m, 1)) mois.push(m)
 
   const calerSurProjets = () => {
     const debuts =
-      mode === 'phases'
+      mode === 'phases' || mode === 'charge'
         ? tousPhases.flatMap((p) => p.phases.filter((ph) => ph.debut).map((ph) => ph.debut!))
         : state.marches.filter((m) => tousChantier.some((p) => p.id === m.projetId) && m.dateDebut).map((m) => m.dateDebut!)
     if (debuts.length > 0) setDebutF(debutMois(debuts.sort()[0]))
@@ -545,20 +763,28 @@ export default function Planning() {
 
   const projetSelectionne = filtre ? state.projets.find((p) => p.id === filtre) : undefined
 
-  const exporterPDF = () =>
-    mode === 'phases' ? ouvrirPlanningPDF(state, projets, f, today) : ouvrirChantierPDF(state, lignesCh, f, today)
+  const exporterPDF = () => {
+    if (mode === 'phases') ouvrirPlanningPDF(state, projets, f, today)
+    else if (mode === 'chantier') ouvrirChantierPDF(state, lignesCh, f, today)
+    else ouvrirChargePDF(state, debutLundi, nbSemaines, today)
+  }
 
   const changerMode = (m: Mode) => {
     setMode(m)
     setFiltre('')
   }
 
-  const vide = mode === 'phases' ? projets.length === 0 : lignesCh.length === 0
+  const vide =
+    mode === 'phases'
+      ? projets.length === 0
+      : mode === 'chantier'
+        ? lignesCh.length === 0
+        : state.settings.equipe.length === 0
 
   return (
     <Page
       titre="Planning"
-      sousTitre="Le Gantt vivant de l'agence — phases de conception ou lots de chantier. La ligne rouge marque aujourd'hui, tout glisse en deux clics, Imprimer/PDF pour diffuser."
+      sousTitre="Le Gantt vivant de l'agence — phases de conception, lots de chantier, ou plan de charge de l'équipe (qui bosse sur quoi, qui est en surcharge). La ligne rouge marque aujourd'hui, tout glisse en deux clics, Imprimer/PDF pour diffuser."
       actions={
         <Btn kind="primary" onClick={exporterPDF} disabled={vide}>
           🖨 Imprimer / PDF
@@ -573,6 +799,9 @@ export default function Planning() {
           <button className={`btn btn-small ${mode === 'chantier' ? 'btn-primary' : ''}`} onClick={() => changerMode('chantier')}>
             Chantier (entreprises)
           </button>
+          <button className={`btn btn-small ${mode === 'charge' ? 'btn-primary' : ''}`} onClick={() => changerMode('charge')}>
+            Plan de charge (équipe)
+          </button>
         </span>
       </div>
 
@@ -582,18 +811,28 @@ export default function Planning() {
         <Btn onClick={() => setDebutF(addMonths(debutMois(todayISO()), -1))}>Aujourd'hui</Btn>
         <Btn kind="ghost" onClick={calerSurProjets}>Caler sur les projets</Btn>
         <Select
-          value={filtre}
-          onChange={setFiltre}
-          options={[{ value: '', label: mode === 'phases' ? 'Tous les projets actifs' : 'Tous les chantiers' }, ...tous.map((p) => ({ value: p.id, label: `${p.id} — ${p.nom}` }))]}
-          style={{ maxWidth: 280 }}
+          value={String(nbMois)}
+          onChange={(v) => setNbMois(Number(v))}
+          options={[{ value: '6', label: '6 mois' }, { value: '12', label: '12 mois' }, { value: '24', label: '24 mois' }]}
+          style={{ maxWidth: 110 }}
         />
+        {mode !== 'charge' && (
+          <Select
+            value={filtre}
+            onChange={setFiltre}
+            options={[{ value: '', label: mode === 'phases' ? 'Tous les projets actifs' : 'Tous les chantiers' }, ...tous.map((p) => ({ value: p.id, label: `${p.id} — ${p.nom}` }))]}
+            style={{ maxWidth: 280 }}
+          />
+        )}
         <span className="muted small">
           {fmtDate(f.debut)} → {fmtDate(addDays(f.fin, -1))}
         </span>
       </div>
 
       <Card>
-        {mode === 'phases' ? (
+        {mode === 'charge' ? (
+          <PlanDeCharge debutLundi={debutLundi} nbSemaines={nbSemaines} />
+        ) : mode === 'phases' ? (
           projets.length === 0 ? (
             <EmptyState>
               Aucun projet actif avec des phases datées — utilisez « Dater les phases automatiquement »

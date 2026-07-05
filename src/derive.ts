@@ -206,6 +206,48 @@ export function enJours(state: AppState, heures: number): number {
   return state.settings.heuresParJour > 0 ? heures / state.settings.heuresParJour : 0
 }
 
+// ------------------------------------------------------------------
+// Plan de charge — « qui travaille sur quoi, quelle semaine » et
+// surcharge. La charge planifiée d'une personne une semaine donnée
+// vient des heures PRÉVUES des phases actives cette semaine, réparties
+// sur la durée de la phase puis entre les personnes affectées.
+// ------------------------------------------------------------------
+
+/** personnes affectées à un projet (équipe explicite + responsables) */
+export function equipeDuProjet(p: Projet): string[] {
+  return [...new Set([p.responsable, p.coResponsable, ...(p.equipeProjet || [])].filter(Boolean) as string[])]
+}
+
+/** capacité hebdomadaire d'une personne (heures) */
+export function capaciteSemaine(state: AppState): number {
+  return state.settings.heuresParJour * 5
+}
+
+/** nombre de semaines (ISO, ≥ 1) couvertes par [debut, fin] inclus */
+function nbSemaines(debut: string, fin: string): number {
+  return Math.max(1, Math.round(diffDays(debut, fin) / 7) + 1)
+}
+
+/** charge PLANIFIÉE d'une personne pour la semaine du lundi donné (heures) */
+export function chargePlanifieeSemaine(state: AppState, personne: string, lundi: string): number {
+  const dimanche = addDays(lundi, 6)
+  let heures = 0
+  for (const p of state.projets) {
+    if (!STATUTS_ACTIFS.includes(p.statut)) continue
+    const equipe = equipeDuProjet(p)
+    if (!equipe.includes(personne)) continue
+    const nb = equipe.length || 1
+    for (const ph of p.phases) {
+      if (!ph.debut || !ph.fin || ph.heuresPrevues <= 0) continue
+      // la phase chevauche-t-elle la semaine ?
+      if (ph.debut > dimanche || ph.fin < lundi) continue
+      const parSemaine = ph.heuresPrevues / nbSemaines(ph.debut, ph.fin)
+      heures += parSemaine / nb
+    }
+  }
+  return heures
+}
+
 /** CA HT facturé (émis ou encaissé) sur une année civile — confronté à la cible */
 export function caRealiseAnnee(state: AppState, annee: number): number {
   const prefixe = String(annee)

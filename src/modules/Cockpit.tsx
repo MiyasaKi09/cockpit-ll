@@ -8,7 +8,7 @@ import { useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import type { Alerte } from '../types'
 import { useStore } from '../store'
-import { Btn, Card, DateF, EmptyState, Money, Page, Stat, useToday } from '../ui'
+import { Btn, Card, DateF, EmptyState, Money, Page, Progress, Stat, useToday } from '../ui'
 import { alertesActives } from '../alerts'
 import { STATUTS_ACTIFS, caCible, caRealiseAnnee, meteoFinanciere } from '../derive'
 import { addDays, fmtDate, fmtMoney, fmtPct } from '../util'
@@ -289,8 +289,7 @@ function BoiteATraiter() {
       }
     >
       <p className="muted small" style={{ marginBottom: 10 }}>
-        Tout ce que les routines et les échéances ont déposé — trié, rangé, prêt à traiter. Chaque ligne
-        mène directement au bon endroit.
+        Trié par urgence. Chaque ligne mène au bon endroit.
       </p>
       <LigneCourrier personne={personne} />
       {items.length === 0 && nbCourriers === 0 ? (
@@ -405,6 +404,7 @@ export default function Cockpit() {
       <div style={{ marginBottom: 16 }}>
         <div className="grid3">
           <Stat
+            accent="blue"
             label="Trésorerie disponible"
             value={<Money v={meteo.tresorerie} />}
             tone={meteo.tresorerie !== null && meteo.tresorerie < 0 ? 'danger' : undefined}
@@ -421,11 +421,13 @@ export default function Cockpit() {
             }
           />
           <Stat
+            accent="yellow"
             label="Facturable à 90 jours"
             value={<Money v={meteo.facturable90j} />}
             sub="factures à émettre ou en attente d'encaissement"
           />
           <Stat
+            accent="red"
             label="Carnet de commandes"
             value={<Money v={meteo.carnetHT} />}
             sub="honoraires restant à facturer (projets signés / en cours)"
@@ -436,16 +438,18 @@ export default function Cockpit() {
           const ca = caRealiseAnnee(state, annee)
           const cible = caCible(state)
           const pct = ca / cible
-          const couleur = pct >= 1 ? 'var(--ok)' : pct >= 0.6 ? 'var(--warn)' : 'var(--danger)'
           return (
             <div style={{ margin: '10px 2px 0' }}>
-              <div className="small" style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
-                <span className="muted">Objectif CA {annee} — <a href="#/analyse">Analyse</a></span>
-                <span><strong>{fmtMoney(ca)}</strong> <span className="muted">/ {fmtMoney(cible)} ({fmtPct(pct, 0)})</span></span>
-              </div>
-              <div style={{ background: 'var(--line)', borderRadius: 99, height: 8, overflow: 'hidden' }}>
-                <div style={{ width: `${Math.min(100, pct * 100)}%`, height: '100%', background: couleur }} />
-              </div>
+              <Progress
+                value={ca}
+                max={cible}
+                header={
+                  <>
+                    <span className="muted">Objectif CA {annee} — <a href="#/analyse">Analyse</a></span>
+                    <span><strong>{fmtMoney(ca)}</strong> <span className="muted">/ {fmtMoney(cible)} ({fmtPct(pct, 0)})</span></span>
+                  </>
+                }
+              />
             </div>
           )
         })()}
@@ -458,7 +462,9 @@ export default function Cockpit() {
         )}
       </div>
 
-      {/* ---------- boîte à traiter ---------- */}
+      {/* ---------- inbox principale + rail latéral ---------- */}
+      <div className="cockpit-cols">
+      <div className="cockpit-main">
       <BoiteATraiter />
 
       {/* ---------- fil d'urgences ---------- */}
@@ -492,10 +498,12 @@ export default function Cockpit() {
           })
         )}
       </Card>
+      </div>
 
-      {/* ---------- repères du jour ---------- */}
-      <Card titre={<>Repères du jour — {fmtDate(today)}</>}>
-        <div className="grid3">
+      {/* ---------- repères du jour (rail latéral discret) ---------- */}
+      <aside className="cockpit-rail">
+      <Card titre={<>Repères — {fmtDate(today)}</>}>
+        <div className="cockpit-rail-stack">
           <Repere titre="Phases en cours">
             {phasesEnCours.length === 0 ? (
               <RienASignaler>Aucune phase en cours aujourd'hui.</RienASignaler>
@@ -562,6 +570,8 @@ export default function Cockpit() {
           </Repere>
         </div>
       </Card>
+      </aside>
+      </div>
     </Page>
   )
 }

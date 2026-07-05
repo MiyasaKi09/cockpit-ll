@@ -94,17 +94,46 @@ export function Stat({
   value,
   sub,
   tone,
+  accent,
 }: {
   label: string
   value: ReactNode
   sub?: ReactNode
   tone?: Tone
+  /** liseré supérieur bauhaus (repère catégoriel) */
+  accent?: 'blue' | 'yellow' | 'red'
 }) {
   return (
-    <div className={`stat ${tone ? `stat-${tone}` : ''}`}>
+    <div className={`stat ${tone ? `stat-${tone}` : ''} ${accent ? `stat-acc-${accent}` : ''}`}>
       <div className="stat-label">{label}</div>
       <div className="stat-value">{value}</div>
       {sub && <div className="stat-sub">{sub}</div>}
+    </div>
+  )
+}
+
+/** jauge de progression réutilisable (objectif CA, budget d'heures…) */
+export function Progress({
+  value,
+  max,
+  header,
+  couleur,
+}: {
+  value: number
+  max: number
+  /** ligne d'en-tête optionnelle (label à gauche, valeur à droite) */
+  header?: ReactNode
+  /** couleur imposée ; sinon dérivée du taux (rouge < 60 % < jaune < 100 % ≤ vert) */
+  couleur?: string
+}) {
+  const pct = max > 0 ? value / max : 0
+  const c = couleur || (pct >= 1 ? 'var(--ok)' : pct >= 0.6 ? 'var(--warn)' : 'var(--danger)')
+  return (
+    <div>
+      {header && <div className="progress-head small">{header}</div>}
+      <div className="progress-track">
+        <div className="progress-fill" style={{ width: `${Math.min(100, Math.max(0, pct * 100))}%`, background: c }} />
+      </div>
     </div>
   )
 }

@@ -345,6 +345,22 @@ pre {
 .stat-warn .stat-value { color: var(--warn); }
 .stat-danger .stat-value { color: var(--danger); }
 .stat-info .stat-value { color: var(--accent); }
+.stat-acc-blue { border-top: 5px solid var(--c-blue); }
+.stat-acc-yellow { border-top: 5px solid var(--c-yellow); }
+.stat-acc-red { border-top: 5px solid var(--c-red); }
+
+/* ---------- jauge de progression ---------- */
+.progress-head { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
+.progress-track { background: var(--line); border-radius: 99px; height: 8px; overflow: hidden; }
+.progress-fill { height: 100%; border-radius: 99px; }
+
+/* ---------- Cockpit : inbox principale + rail latéral ---------- */
+.cockpit-cols { display: grid; grid-template-columns: minmax(0, 1fr) 316px; gap: 16px; align-items: start; }
+.cockpit-main { min-width: 0; display: flex; flex-direction: column; gap: 16px; }
+.cockpit-rail { display: flex; flex-direction: column; gap: 14px; }
+.cockpit-rail .card { box-shadow: none; background: var(--bg-soft); }
+.cockpit-rail-stack { display: flex; flex-direction: column; gap: 16px; }
+@media (max-width: 1040px) { .cockpit-cols { grid-template-columns: 1fr; } }
 
 /* ---------- badges (chips à bord franc) ---------- */
 

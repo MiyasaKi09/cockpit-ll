@@ -1,6 +1,6 @@
 // Kit UI partagé — composants sobres, cohérents sur tous les modules.
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import { copier } from './prompts'
 import { fmtDate, fmtMoney, parseNum, todayISO } from './util'
@@ -148,6 +148,67 @@ export function DateF({ d }: { d: string | null | undefined }) {
 
 export function EmptyState({ children }: { children: ReactNode }) {
   return <div className="empty">{children}</div>
+}
+
+// ---------- menu d'actions de ligne (« ··· ») ----------
+
+export interface MenuAction {
+  label: string
+  onClick: () => void
+  danger?: boolean
+  title?: string
+}
+
+/** bouton « ··· » ouvrant un menu déroulant — pour désencombrer les tableaux */
+export function RowMenu({ items }: { items: MenuAction[] }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!open) return
+    const onDoc = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('mousedown', onDoc)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDoc)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [open])
+  return (
+    <div className="rowmenu" ref={ref}>
+      <button
+        className="btn btn-small btn-ghost rowmenu-trigger"
+        onClick={() => setOpen((o) => !o)}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        title="Plus d'actions"
+      >
+        ⋯
+      </button>
+      {open && (
+        <div className="rowmenu-pop" role="menu">
+          {items.map((it, i) => (
+            <button
+              key={i}
+              role="menuitem"
+              className={`rowmenu-item ${it.danger ? 'rowmenu-danger' : ''}`}
+              title={it.title}
+              onClick={() => {
+                setOpen(false)
+                it.onClick()
+              }}
+            >
+              {it.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
 }
 
 // ---------- toasts + undo (feedback global, sans provider) ----------

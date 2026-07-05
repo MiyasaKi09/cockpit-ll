@@ -22,6 +22,7 @@ import {
   Money,
   NumInput,
   Page,
+  RowMenu,
   Select,
   Stat,
   Table,
@@ -618,29 +619,25 @@ export default function Facturation() {
                     )}
                   </td>
                   <td>
-                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    <div style={{ display: 'flex', gap: 6, alignItems: 'center', justifyContent: 'flex-end' }}>
                       {f.statut === 'prevue' && (
-                        <Btn small onClick={() => emettre(f)} title="Passer la facture au statut « émise » (la date d'émission est conservée)">
+                        <Btn small kind="primary" onClick={() => emettre(f)} title="Passer la facture au statut « émise » (la date d'émission est conservée)">
                           Émettre
                         </Btn>
                       )}
                       {f.statut === 'emise' && (
-                        <Btn small onClick={() => setEncaissement(f)} title="Enregistrer l'encaissement réel">
+                        <Btn small kind="primary" onClick={() => setEncaissement(f)} title="Enregistrer l'encaissement réel">
                           Encaisser
                         </Btn>
                       )}
-                      <Btn small kind="ghost" onClick={() => ouvrirFacturePDF(state, f)} title="Vue imprimable — Ctrl+P pour enregistrer en PDF">
-                        PDF
-                      </Btn>
-                      <Btn small kind="ghost" onClick={() => emailFacture(state, f)} title="Ouvre Gmail avec l'e-mail pré-rempli — l'envoi reste votre clic">
-                        E-mail
-                      </Btn>
-                      <Btn small kind="ghost" onClick={() => setEdition(f)}>
-                        Modifier
-                      </Btn>
-                      <Btn small kind="danger" onClick={() => supprimer(f)}>
-                        Supprimer
-                      </Btn>
+                      <RowMenu
+                        items={[
+                          { label: 'Vue imprimable (PDF)', onClick: () => ouvrirFacturePDF(state, f) },
+                          { label: 'Préparer l’e-mail', onClick: () => emailFacture(state, f) },
+                          { label: 'Modifier', onClick: () => setEdition(f) },
+                          { label: 'Supprimer', onClick: () => supprimer(f), danger: true },
+                        ]}
+                      />
                     </div>
                   </td>
                 </tr>

@@ -602,6 +602,39 @@ textarea.input { resize: vertical; }
   * { transition: none !important; }
 }
 
+/* ---------- menu de ligne « ··· » ---------- */
+.rowmenu { position: relative; display: inline-block; }
+.rowmenu-trigger { font-weight: 800; letter-spacing: 1px; line-height: 1; }
+.rowmenu-pop {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 60;
+  min-width: 168px;
+  background: var(--panel);
+  border: 2px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-hard);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+}
+.rowmenu-item {
+  text-align: left;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.rowmenu-item:hover { background: var(--accent); color: var(--accent-ink); }
+.rowmenu-danger { color: var(--danger); }
+.rowmenu-danger:hover { background: var(--danger); color: #fff; }
+
 /* ---------- toasts ---------- */
 .toast-host {
   position: fixed;

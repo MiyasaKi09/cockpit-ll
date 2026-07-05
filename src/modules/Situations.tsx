@@ -21,10 +21,12 @@ import {
   Money,
   NumInput,
   Page,
+  RowMenu,
   Select,
   Table,
   TextArea,
   TextInput,
+  toast,
   useToday,
 } from '../ui'
 import { clamp, diffDays, fmtMois, fmtMoney, fmtPct, fold, monthKey, ouvrirGmail } from '../util'
@@ -538,9 +540,11 @@ function ModalEdition({ sit, onClose }: { sit: Situation; onClose: () => void })
 // ---------- tableau « à vérifier » ----------
 
 function CarteAVerifier() {
-  const { state, update } = useStore()
+  const { state, update, replace } = useStore()
   const today = useToday()
   const [editionId, setEditionId] = useState<string | null>(null)
+  const [rejetId, setRejetId] = useState<string | null>(null)
+  const [motifRejet, setMotifRejet] = useState('')
 
   const tplVerif = gabarit(state, 'tpl-verif-situation')
   const aVerifier = state.situations
@@ -548,25 +552,32 @@ function CarteAVerifier() {
     .sort((a, b) => dateLimiteVerif(state, a).localeCompare(dateLimiteVerif(state, b)))
 
   const valider = (id: string) => {
+    const snap = state
     update((d) => {
       const x = d.situations.find((s) => s.id === id)
       if (x) x.statut = 'validee'
     })
+    toast('Situation validée.', { undo: () => replace(snap) })
   }
 
-  const rejeter = (id: string) => {
-    const motif = prompt('Motif du rejet (tracé dans les notes) :')
-    if (motif === null) return
+  const confirmerRejet = () => {
+    if (!rejetId) return
+    const snap = state
+    const motif = motifRejet
     update((d) => {
-      const x = d.situations.find((s) => s.id === id)
+      const x = d.situations.find((s) => s.id === rejetId)
       if (!x) return
       x.statut = 'rejetee'
       const ligne = `Rejetée le ${today} : ${motif.trim() || 'sans motif'}`
       x.notes = x.notes ? `${x.notes}\n${ligne}` : ligne
     })
+    setRejetId(null)
+    setMotifRejet('')
+    toast('Situation rejetée.', { undo: () => replace(snap) })
   }
 
   const enEdition = editionId ? state.situations.find((s) => s.id === editionId) : undefined
+  const enRejet = rejetId ? state.situations.find((s) => s.id === rejetId) : undefined
 
   return (
     <Card titre={`À vérifier (${aVerifier.length})`}>
@@ -627,7 +638,7 @@ function CarteAVerifier() {
                   ) : null}
                 </td>
                 <td>
-                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  <div style={{ display: 'flex', gap: 6, alignItems: 'center', justifyContent: 'flex-end' }}>
                     {marche && tplVerif ? (
                       <CopyBtn
                         small
@@ -651,20 +662,13 @@ function CarteAVerifier() {
                     <Btn small kind="primary" onClick={() => valider(s.id)}>
                       Valider
                     </Btn>
-                    <Btn small kind="danger" onClick={() => rejeter(s.id)}>
-                      Rejeter
-                    </Btn>
-                    <Btn
-                      small
-                      kind="ghost"
-                      onClick={() => ouvrirDecompteSituationPDF(state, s)}
-                      title="Décompte / certificat de paiement imprimable (net à payer)"
-                    >
-                      Décompte
-                    </Btn>
-                    <Btn small kind="ghost" onClick={() => setEditionId(s.id)}>
-                      Éditer
-                    </Btn>
+                    <RowMenu
+                      items={[
+                        { label: 'Décompte (PDF)', onClick: () => ouvrirDecompteSituationPDF(state, s), title: 'Certificat de paiement imprimable (net à payer)' },
+                        { label: 'Éditer', onClick: () => setEditionId(s.id) },
+                        { label: 'Rejeter…', onClick: () => { setRejetId(s.id); setMotifRejet('') }, danger: true },
+                      ]}
+                    />
                   </div>
                 </td>
               </tr>
@@ -679,6 +683,24 @@ function CarteAVerifier() {
         </p>
       )}
       {enEdition && <ModalEdition sit={enEdition} onClose={() => setEditionId(null)} />}
+      {enRejet && (
+        <Modal titre={`Rejeter la situation — ${enRejet.entreprise} (${fmtMois(enRejet.mois)})`} onClose={() => setRejetId(null)}>
+          <Field label="Motif du rejet" hint="tracé dans les notes de la situation">
+            <TextArea
+              value={motifRejet}
+              onChange={setMotifRejet}
+              rows={3}
+              placeholder="Ex. écart de cumul, pièce manquante, montant à corriger…"
+            />
+          </Field>
+          <div className="form-foot">
+            <Btn onClick={() => setRejetId(null)}>Annuler</Btn>
+            <Btn kind="danger" onClick={confirmerRejet}>
+              Rejeter la situation
+            </Btn>
+          </div>
+        </Modal>
+      )}
     </Card>
   )
 }

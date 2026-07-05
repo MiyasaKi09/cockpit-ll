@@ -13,6 +13,7 @@ import Projets from './modules/Projets'
 import Situations from './modules/Situations'
 import Facturation from './modules/Facturation'
 import Temps from './modules/Temps'
+import Developpement from './modules/Developpement'
 import VeilleAO from './modules/VeilleAO'
 import References from './modules/References'
 import Prompts from './modules/Prompts'
@@ -44,6 +45,7 @@ const NAV: { groupe: string; items: { path: string; label: string }[] }[] = [
   {
     groupe: 'Développement',
     items: [
+      { path: 'developpement', label: 'Pipeline commercial' },
       { path: 'ao', label: "Appels d'offres" },
       { path: 'references', label: 'Références' },
     ],
@@ -118,6 +120,9 @@ export default function App() {
       break
     case 'temps':
       page = <Temps />
+      break
+    case 'developpement':
+      page = <Developpement />
       break
     case 'ao':
       page = <VeilleAO />

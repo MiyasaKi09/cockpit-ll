@@ -15,6 +15,21 @@ function migrate(parsed: AppState): AppState {
   etat.reunions = Array.isArray(parsed.reunions) ? parsed.reunions : []
   etat.courriers = Array.isArray(parsed.courriers) ? parsed.courriers : []
   etat.tempsHorsProjet = Array.isArray(parsed.tempsHorsProjet) ? parsed.tempsHorsProjet : []
+  // v5 → v6 : journal d'interactions CRM. On amorce depuis les
+  // derniereInteraction existantes pour ne rien perdre de l'historique.
+  if (Array.isArray(parsed.interactions)) {
+    etat.interactions = parsed.interactions
+  } else {
+    etat.interactions = (parsed.contacts || [])
+      .filter((c) => c.derniereInteraction)
+      .map((c) => ({
+        id: `int-migr-${c.id}`,
+        contactId: c.id,
+        date: c.derniereInteraction!,
+        canal: 'autre' as const,
+        resume: 'Interaction reprise de l’ancienne fiche.',
+      }))
+  }
   // v3 → v4 : l'équipe réelle remplace le coût horaire forfaitaire
   if (!Array.isArray(parsed.settings?.equipe) || parsed.settings.equipe.length === 0) {
     const noms = parsed.settings?.personnes?.length ? parsed.settings.personnes : ['Julien', 'Zoé']

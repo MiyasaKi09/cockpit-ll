@@ -150,6 +150,160 @@ export function EmptyState({ children }: { children: ReactNode }) {
   return <div className="empty">{children}</div>
 }
 
+// ---------- icônes (jeu de traits, style Lucide, currentColor) ----------
+
+export type IconName =
+  | 'bolt' | 'activity' | 'mail' | 'hardhat' | 'scale' | 'rocket' | 'flag'
+  | 'user' | 'shield' | 'printer' | 'file' | 'trophy' | 'sun' | 'moon'
+  | 'mic' | 'camera' | 'phone' | 'calendar' | 'car' | 'users' | 'arrowDown'
+  | 'alert' | 'star' | 'search' | 'check' | 'party'
+
+const ICON_PATHS: Record<IconName, ReactNode> = {
+  bolt: <path d="M13 2 4 14h6l-1 8 9-12h-6l1-8z" />,
+  activity: <path d="M22 12h-4l-3 9L9 3l-3 9H2" />,
+  mail: (
+    <>
+      <rect x="2" y="4" width="20" height="16" rx="2" />
+      <path d="m22 7-10 6L2 7" />
+    </>
+  ),
+  hardhat: (
+    <>
+      <path d="M2 18h20 M4 18v-2a8 8 0 0 1 16 0v2" />
+      <path d="M10 9V6a2 2 0 0 1 4 0v3" />
+    </>
+  ),
+  scale: (
+    <>
+      <path d="M12 3v18 M7 21h10 M4 7h4c2 0 4-1 4-1s2 1 4 1h4" />
+      <path d="M6 7l-3 7a3 3 0 0 0 6 0z M18 7l-3 7a3 3 0 0 0 6 0z" />
+    </>
+  ),
+  rocket: (
+    <>
+      <path d="M5 15c-1.5 1.3-2 5-2 5s3.7-.5 5-2a2 2 0 1 0-3-3z" />
+      <path d="M12 15l-3-3a22 22 0 0 1 2-4A12.9 12.9 0 0 1 22 2c0 2.7-.8 7.5-6 11a22 22 0 0 1-4 2z" />
+    </>
+  ),
+  flag: (
+    <>
+      <path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V4s-1 1-4 1-5-2-8-2-4 1-4 1z" />
+      <path d="M4 22v-7" />
+    </>
+  ),
+  user: (
+    <>
+      <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" />
+      <circle cx="12" cy="7" r="4" />
+    </>
+  ),
+  shield: <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />,
+  printer: (
+    <>
+      <path d="M6 9V2h12v7 M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" />
+      <rect x="6" y="14" width="12" height="8" />
+    </>
+  ),
+  file: (
+    <>
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z M14 2v6h6" />
+      <path d="M9 13h6 M9 17h6" />
+    </>
+  ),
+  trophy: (
+    <>
+      <path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6 M18 9h1.5a2.5 2.5 0 0 0 0-5H18" />
+      <path d="M4 22h16 M10 15v3c0 1-1 2-3 4 M14 15v3c0 1 1 2 3 4 M18 2H6v7a6 6 0 0 0 12 0z" />
+    </>
+  ),
+  sun: (
+    <>
+      <circle cx="12" cy="12" r="4" />
+      <path d="M12 2v2 M12 20v2 M4.9 4.9l1.4 1.4 M17.7 17.7l1.4 1.4 M2 12h2 M20 12h2 M4.9 19.1l1.4-1.4 M17.7 6.3l1.4-1.4" />
+    </>
+  ),
+  moon: <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9z" />,
+  mic: (
+    <>
+      <rect x="9" y="2" width="6" height="12" rx="3" />
+      <path d="M19 10v2a7 7 0 0 1-14 0v-2 M12 19v3" />
+    </>
+  ),
+  camera: (
+    <>
+      <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
+      <circle cx="12" cy="13" r="4" />
+    </>
+  ),
+  phone: <path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2 4.2 2 2 0 0 1 4 2h3a2 2 0 0 1 2 1.7c.1 1 .4 1.9.7 2.8a2 2 0 0 1-.5 2.1L8 9.9a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.8.7a2 2 0 0 1 1.7 2z" />,
+  calendar: (
+    <>
+      <rect x="3" y="4" width="18" height="18" rx="2" />
+      <path d="M8 2v4 M16 2v4 M3 10h18" />
+    </>
+  ),
+  car: (
+    <>
+      <path d="M19 17h2v-5.5a2 2 0 0 0-.4-1.2l-2.1-2.8a2 2 0 0 0-1.6-.8H7.2a2 2 0 0 0-1.8 1.1L3.5 11.4a2 2 0 0 0-.5 1.1V17h2 M7 17h10" />
+      <circle cx="6.5" cy="18.5" r="1.5" />
+      <circle cx="17.5" cy="18.5" r="1.5" />
+    </>
+  ),
+  users: (
+    <>
+      <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+      <circle cx="9" cy="7" r="4" />
+      <path d="M22 21v-2a4 4 0 0 0-3-3.9 M16 3.1a4 4 0 0 1 0 7.8" />
+    </>
+  ),
+  arrowDown: <path d="M12 5v14 M19 12l-7 7-7-7" />,
+  alert: <path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z M12 9v4 M12 17h.01" />,
+  star: <path d="M12 2l3.1 6.3 6.9 1-5 4.9 1.2 6.8L12 17.8 5.8 21l1.2-6.8-5-4.9 6.9-1z" />,
+  search: (
+    <>
+      <circle cx="11" cy="11" r="8" />
+      <path d="m21 21-4.3-4.3" />
+    </>
+  ),
+  check: <path d="M20 6 9 17l-5-5" />,
+  party: <path d="M5.8 11.3 2 22l10.7-3.8 M4 3h.01 M22 8h.01 M15 2h.01 M22 20h.01 M22 2l-2.2.6a2 2 0 0 0-1.3 2.9l.3.6a2 2 0 0 1-1.3 2.9L15 9 M2 8a2 2 0 0 1 1.6 4l-1 1.3M11 13a2 2 0 0 0 4 0 2 2 0 0 0-2-2" />,
+}
+
+export function Icon({
+  name,
+  size = 16,
+  className,
+  title,
+  style,
+}: {
+  name: IconName
+  size?: number
+  className?: string
+  title?: string
+  style?: CSSProperties
+}) {
+  return (
+    <svg
+      className={`icon ${className || ''}`}
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      style={style}
+      role={title ? 'img' : undefined}
+      aria-hidden={title ? undefined : true}
+      aria-label={title}
+      focusable="false"
+    >
+      {ICON_PATHS[name]}
+    </svg>
+  )
+}
+
 // ---------- menu d'actions de ligne (« ··· ») ----------
 
 export interface MenuAction {

@@ -9,7 +9,8 @@
 import { useMemo, useState } from 'react'
 import type { AppState } from '../types'
 import { useStore } from '../store'
-import { Badge, Btn, Card, useToday } from '../ui'
+import { Badge, Btn, Card, Icon, useToday } from '../ui'
+import type { IconName } from '../ui'
 import { addDays, mondayOf, todayISO } from '../util'
 import { STATUTS_ACTIFS, encaissementPrevu } from '../derive'
 
@@ -20,6 +21,8 @@ interface EvtCal {
   /** couleur de la pastille */
   couleur: string
   titreLong: string
+  /** icône optionnelle (sinon, une pastille ronde) */
+  icon?: IconName
 }
 
 const COULEURS = {
@@ -59,9 +62,9 @@ function evenements(state: AppState): EvtCal[] {
       }
     }
     if (p.dateLancement)
-      evts.push({ date: p.dateLancement, label: `🚀 ${p.id}`, lien: `#/projets/${p.id}`, couleur: COULEURS.projet, titreLong: `Lancement — ${p.nom}` })
+      evts.push({ date: p.dateLancement, label: p.id, icon: 'rocket', lien: `#/projets/${p.id}`, couleur: COULEURS.projet, titreLong: `Lancement — ${p.nom}` })
     if (p.dateCloture)
-      evts.push({ date: p.dateCloture, label: `🏁 ${p.id}`, lien: `#/projets/${p.id}`, couleur: COULEURS.projet, titreLong: `Clôture — ${p.nom}` })
+      evts.push({ date: p.dateCloture, label: p.id, icon: 'flag', lien: `#/projets/${p.id}`, couleur: COULEURS.projet, titreLong: `Clôture — ${p.nom}` })
   }
 
   for (const f of state.factures) {
@@ -97,7 +100,8 @@ function evenements(state: AppState): EvtCal[] {
   for (const r of state.reunions) {
     evts.push({
       date: r.date,
-      label: `🏗 ${r.projetId}`,
+      label: r.projetId,
+      icon: 'hardhat',
       lien: `#/projets/${r.projetId}/chantier`,
       couleur: COULEURS.reunion,
       titreLong: `Réunion — ${r.titre}`,
@@ -107,7 +111,8 @@ function evenements(state: AppState): EvtCal[] {
   for (const o of state.obligations) {
     evts.push({
       date: o.echeance,
-      label: `⚖ ${o.libelle.slice(0, 14)}${o.libelle.length > 14 ? '…' : ''}`,
+      label: `${o.libelle.slice(0, 14)}${o.libelle.length > 14 ? '…' : ''}`,
+      icon: 'scale',
       lien: '#/agenda',
       couleur: COULEURS.obligation,
       titreLong: `Obligation — ${o.libelle}${o.organisme ? ` (${o.organisme})` : ''}`,
@@ -118,7 +123,8 @@ function evenements(state: AppState): EvtCal[] {
     if (c.dateProchaineAction)
       evts.push({
         date: c.dateProchaineAction,
-        label: `👤 ${c.nom.split(' ')[0]}`,
+        label: c.nom.split(' ')[0],
+        icon: 'user',
         lien: '#/agenda',
         couleur: COULEURS.crm,
         titreLong: `CRM — ${c.nom} : ${c.prochaineAction || 'action prévue'}`,
@@ -129,7 +135,8 @@ function evenements(state: AppState): EvtCal[] {
     if (a.decennaleFin)
       evts.push({
         date: a.decennaleFin,
-        label: `🛡 ${a.nom.slice(0, 12)}`,
+        label: a.nom.slice(0, 12),
+        icon: 'shield',
         lien: '#/ressources',
         couleur: COULEURS.crm,
         titreLong: `Décennale expire — ${a.nom}`,
@@ -235,9 +242,11 @@ export function EcheancesContenu() {
                     href={e.lien}
                     title={e.titreLong}
                     style={{
-                      display: 'block',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 4,
                       fontSize: 11,
-                      lineHeight: '15px',
+                      lineHeight: '16px',
                       whiteSpace: 'nowrap',
                       overflow: 'hidden',
                       textOverflow: 'ellipsis',
@@ -246,7 +255,12 @@ export function EcheancesContenu() {
                       fontWeight: 600,
                     }}
                   >
-                    ● {e.label}
+                    {e.icon ? (
+                      <Icon name={e.icon} size={12} />
+                    ) : (
+                      <span style={{ fontSize: 8 }}>●</span>
+                    )}
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{e.label}</span>
                   </a>
                 ))}
                 {duJour.length > 4 && (

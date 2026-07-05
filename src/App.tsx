@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useStore } from './store'
-import { ToastHost, useRoute, useToday } from './ui'
+import { Icon, ToastHost, useRoute, useToday } from './ui'
 import { alertesActives } from './alerts'
 import { basculerTheme, themeCourant } from './theme'
 
@@ -155,7 +155,10 @@ export default function App() {
           <small>intranet v2 — sans API</small>
         </div>
         <button className="nav-search" onClick={() => setRechercheOuverte(true)} title="Recherche globale">
-          <span>Rechercher…</span>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
+            <Icon name="search" size={14} />
+            Rechercher…
+          </span>
           <kbd>/</kbd>
         </button>
         {NAV.map((g) => (
@@ -178,8 +181,10 @@ export default function App() {
             className="theme-toggle"
             onClick={() => setTheme(basculerTheme())}
             title="Basculer clair / sombre"
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}
           >
-            {theme === 'dark' ? '☀ Thème clair' : '☾ Thème sombre'}
+            <Icon name={theme === 'dark' ? 'sun' : 'moon'} size={14} />
+            {theme === 'dark' ? 'Thème clair' : 'Thème sombre'}
           </button>
         </div>
       </aside>

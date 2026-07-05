@@ -9,7 +9,7 @@
 import { useState } from 'react'
 import type { AppState, MarcheTravaux, PhaseCode, Projet } from '../types'
 import { useStore } from '../store'
-import { Badge, Btn, Card, DateInput, EmptyState, Field, NumInput, navigate, Page, Select, Tabs, useRoute, useToday } from '../ui'
+import { Badge, Btn, Card, DateInput, EmptyState, Field, Icon, NumInput, navigate, Page, Select, Tabs, useRoute, useToday } from '../ui'
 import { addDays, diffDays, fmtDate, fmtHeures, mondayOf, todayISO } from '../util'
 import { LIBELLES_PHASES, PHASES_ORDRE } from '../miqcp'
 import { daterPhases, facturesParDefaut } from '../echeancier'
@@ -789,7 +789,9 @@ function GanttEtCharge({ vue }: { vue: 'gantt' | 'charge' }) {
 
   const boutonPDF = (
     <Btn kind="primary" onClick={exporterPDF} disabled={vide}>
-      🖨 Imprimer / PDF
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+        <Icon name="printer" size={14} /> Imprimer / PDF
+      </span>
     </Btn>
   )
 

@@ -19,6 +19,7 @@ import {
   DateInput,
   EmptyState,
   Field,
+  Icon,
   Modal,
   Money,
   NumInput,
@@ -589,7 +590,13 @@ function BlocReponse({ c }: { c: Consultation }) {
         )}
       </p>
       <Btn kind="primary" onClick={generer} disabled={enCours || !c.intitule.trim()}>
-        {enCours ? 'Génération…' : '📄 Générer le dossier de candidature (DOCX)'}
+        {enCours ? (
+          'Génération…'
+        ) : (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <Icon name="file" size={14} /> Générer le dossier de candidature (DOCX)
+          </span>
+        )}
       </Btn>
       {message && (
         <p className={`small ${message.ok ? 'ok-text' : 'danger-text'}`} style={{ marginTop: 8 }}>

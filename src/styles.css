@@ -602,6 +602,9 @@ textarea.input { resize: vertical; }
   * { transition: none !important; }
 }
 
+/* ---------- icônes ---------- */
+.icon { display: inline-block; vertical-align: -0.15em; flex-shrink: 0; }
+
 /* ---------- menu de ligne « ··· » ---------- */
 .rowmenu { position: relative; display: inline-block; }
 .rowmenu-trigger { font-weight: 800; letter-spacing: 1px; line-height: 1; }

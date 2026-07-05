@@ -8,7 +8,7 @@ import { useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import type { Alerte } from '../types'
 import { useStore } from '../store'
-import { Btn, Card, DateF, EmptyState, Money, Page, Progress, Stat, toast, useToday } from '../ui'
+import { Btn, Card, DateF, EmptyState, Icon, Money, Page, Progress, Stat, toast, useToday } from '../ui'
 import { alertesActives } from '../alerts'
 import { STATUTS_ACTIFS, caCible, caRealiseAnnee, meteoFinanciere } from '../derive'
 import { addDays, fmtDate, fmtMoney, fmtPct } from '../util'
@@ -217,7 +217,8 @@ function LigneCourrier({ personne }: { personne: string }) {
           <span className="alert-dot" style={{ background: c.urgence === 3 ? 'var(--danger)' : 'var(--accent)' }} />
           <div style={{ minWidth: 0 }}>
             <div className="alert-titre">
-              ✉ {c.objet} {c.pour && <span className="badge badge-info">{c.pour}</span>}{' '}
+              <Icon name="mail" size={13} style={{ verticalAlign: '-0.15em' }} /> {c.objet}{' '}
+              {c.pour && <span className="badge badge-info">{c.pour}</span>}{' '}
               {c.projetId ? (
                 <a href={`#/projets/${c.projetId}`} className="badge badge-muted">
                   {c.projetId}
@@ -418,14 +419,21 @@ export default function Cockpit() {
       sousTitre={
         <>
           {direct ? (
-            <span className="badge badge-ok">⚡ Gmail & Agenda en direct</span>
+            <span className="badge badge-ok" style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+              <Icon name="bolt" size={12} /> Gmail & Agenda en direct
+            </span>
           ) : (
             state.settings.surveillance?.clientId && (
               <a href="#/parametres/branchements" className="badge badge-muted">surveillance coupée — reconnecter</a>
             )
           )}{' '}
-          <a href="#/parametres/branchements" className="badge badge-muted" title="Tester chaque branchement en un clic">
-            ✚ santé des branchements
+          <a
+            href="#/parametres/branchements"
+            className="badge badge-muted"
+            title="Tester chaque branchement en un clic"
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}
+          >
+            <Icon name="activity" size={12} /> santé des branchements
           </a>
         </>
       }

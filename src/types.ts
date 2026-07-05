@@ -182,6 +182,10 @@ export interface Situation {
   /** personne concernée (facultatif — fourni par la routine ou à la main) */
   pour?: string
   notes?: string
+  /** révision de prix HT saisie (si le marché est révisable) — s'ajoute au décompte */
+  revisionHT?: number | null
+  /** facture d'honoraires DET générée depuis cette situation validée (anti-doublon + lien) */
+  factureId?: string | null
 }
 
 export type StatutFacture = 'prevue' | 'emise' | 'encaissee'
@@ -199,6 +203,14 @@ export interface Facture {
   delaiJours: number
   statut: StatutFacture
   encaissementReel?: string | null
+  /** situation de travaux validée à l'origine de cette facture d'avancement DET */
+  situationId?: string | null
+  /** suivi des relances : date de la dernière relance envoyée */
+  derniereRelance?: string | null
+  /** niveau de la dernière relance (0 courtoise · 1 ferme · 2 mise en demeure) */
+  niveauRelance?: number | null
+  /** historique des relances passées (date + niveau) */
+  relances?: { date: string; niveau: number }[]
 }
 
 export interface TempsEntry {

@@ -27,8 +27,15 @@ import {
   TextInput,
   useToday,
 } from '../ui'
-import { clamp, diffDays, fmtMois, fmtPct, fold, monthKey, ouvrirGmail } from '../util'
-import { dateLimiteVerif, nomProjet } from '../derive'
+import { clamp, diffDays, fmtMois, fmtMoney, fmtPct, fold, monthKey, ouvrirGmail } from '../util'
+import {
+  dateLimiteVerif,
+  decompteSituation,
+  honorairesDETduMois,
+  marcheDeSituation,
+  nomProjet,
+} from '../derive'
+import { ouvrirDecompteSituationPDF } from '../pdf'
 import { assemble, contexteMarche } from '../prompts'
 import {
   importerSituations,
@@ -62,6 +69,82 @@ function LienProjet({ state, projetId }: { state: AppState; projetId: string }) 
     <a href={`#/projets/${projetId}`} title={nomProjet(state, projetId)}>
       {projetId}
     </a>
+  )
+}
+
+/** prochain numéro « AAAA-NNN » (suite du compteur global de l'année) */
+function prochainNumeroFacture(factures: { id: string }[], emissionISO: string): string {
+  let max = 0
+  for (const f of factures) {
+    const m = /^\d{4}-(\d+)$/.exec(f.id)
+    if (m) max = Math.max(max, Number(m[1]))
+  }
+  return `${emissionISO.slice(0, 4)}-${String(max + 1).padStart(3, '0')}`
+}
+
+/** pastille de cohérence du décompte (cumul, dépassement marché) */
+function BadgeCoherence({ state, sit }: { state: AppState; sit: Situation }) {
+  const dc = decompteSituation(state, sit)
+  if (dc.coherences.length === 0) return null
+  return (
+    <span title={dc.coherences.join('\n')}>
+      <Badge tone="danger">⚠ à vérifier</Badge>
+    </span>
+  )
+}
+
+/** montant net à payer HT d'une situation (colonne de tableau) */
+function NetAPayer({ state, sit }: { state: AppState; sit: Situation }) {
+  const dc = decompteSituation(state, sit)
+  const titre =
+    dc.tauxRG > 0
+      ? `Cumul ${fmtMoney(dc.baseHT)} − RG ${fmtPct(dc.tauxRG, 0)} (${fmtMoney(dc.retenueGarantieHT)}) − déjà réglé ${fmtMoney(dc.precedentNetHT)}`
+      : 'RG à 0 % (marché non rattaché ou sans retenue)'
+  return (
+    <span title={titre}>
+      <Money v={dc.netAPayerHT} />
+    </span>
+  )
+}
+
+/** crée (statut prévue) la facture d'honoraires DET du mois depuis une situation validée */
+function facturerDET(
+  state: AppState,
+  update: (fn: (d: AppState) => void) => void,
+  today: string,
+  sit: Situation,
+): void {
+  const montant = honorairesDETduMois(state, sit)
+  if (montant <= 0) {
+    alert(
+      "Honoraires DET incalculables : renseignez le montant des travaux de l'opération (fiche projet) et une phase DET dotée d'honoraires.",
+    )
+    return
+  }
+  if (sit.factureId && state.factures.some((f) => f.id === sit.factureId)) {
+    if (!confirm(`Une facture DET (${sit.factureId}) existe déjà pour cette situation. En créer une autre ?`)) return
+  }
+  const id = prochainNumeroFacture(state.factures, today)
+  const p = state.projets.find((x) => x.id === sit.projetId)
+  const delai = p ? state.settings.delaisPaiement[p.typeMO] : 30
+  update((d) => {
+    d.factures.push({
+      id,
+      projetId: sit.projetId,
+      phase: 'DET',
+      libelle: `DET — avancement ${sit.entreprise}${sit.lot ? ' · ' + sit.lot : ''} (${fmtMois(sit.mois)})`,
+      montantHT: montant,
+      tauxTVA: 0.2,
+      emission: today,
+      delaiJours: delai,
+      statut: 'prevue',
+      situationId: sit.id,
+    })
+    const x = d.situations.find((s) => s.id === sit.id)
+    if (x) x.factureId = id
+  })
+  alert(
+    `Facture ${id} créée (prévue, ${fmtMoney(montant, true)} HT — honoraires DET d'avancement) : à ajuster puis émettre dans Facturation.`,
   )
 }
 
@@ -248,6 +331,7 @@ function ModalEdition({ sit, onClose }: { sit: Situation; onClose: () => void })
   const [numero, setNumero] = useState<number | null>(sit.numero ?? null)
   const [montantMois, setMontantMois] = useState<number | null>(sit.montantMoisHT)
   const [cumul, setCumul] = useState<number | null>(sit.montantCumulHT ?? null)
+  const [revision, setRevision] = useState<number | null>(sit.revisionHT ?? null)
   const [confiance, setConfiance] = useState<number | null>(sit.confiance ?? null)
   const [marcheId, setMarcheId] = useState(sit.marcheId || '')
   const [projetId, setProjetId] = useState(sit.projetId)
@@ -276,6 +360,7 @@ function ModalEdition({ sit, onClose }: { sit: Situation; onClose: () => void })
       x.numero = numero
       x.montantMoisHT = montantMois
       x.montantCumulHT = cumul
+      x.revisionHT = revision
       x.confiance = confiance === null ? null : clamp(confiance, 0, 1)
       x.marcheId = marcheId || null
       x.projetId = marche ? marche.projetId : projetId
@@ -365,6 +450,69 @@ function ModalEdition({ sit, onClose }: { sit: Situation; onClose: () => void })
           />
         </Field>
       </div>
+
+      {/* décompte « net à payer » recalculé en direct */}
+      {(() => {
+        const sitTemp: Situation = {
+          ...sit,
+          montantMoisHT: montantMois,
+          montantCumulHT: cumul,
+          revisionHT: revision,
+          marcheId: marcheId || null,
+          projetId: marche ? marche.projetId : projetId,
+          entreprise: entreprise.trim() || sit.entreprise,
+        }
+        const dc = decompteSituation(state, sitTemp)
+        return (
+          <div style={{ marginTop: 4, padding: 12, background: 'var(--bg-soft, #f6f7fa)', borderRadius: 8 }}>
+            <div className="form-row" style={{ alignItems: 'flex-start' }}>
+              <Field
+                label="Révision de prix HT"
+                hint={marche ? (marche.revision ? 'marché révisable' : 'marché non révisable') : 'rattachez un marché pour la RG'}
+              >
+                <NumInput value={revision} onChange={setRevision} placeholder="0" />
+              </Field>
+              <div style={{ flex: 1, minWidth: 240 }}>
+                <div className="small muted" style={{ marginBottom: 4 }}>
+                  Décompte net à payer — retenue de garantie {fmtPct(dc.tauxRG, 0)}
+                </div>
+                <table className="table table-compact" style={{ margin: 0 }}>
+                  <tbody>
+                    <tr>
+                      <td>Base HT (travaux + révision)</td>
+                      <td className="right"><Money v={dc.baseHT} /></td>
+                    </tr>
+                    <tr>
+                      <td>− Retenue de garantie</td>
+                      <td className="right"><Money v={-dc.retenueGarantieHT} /></td>
+                    </tr>
+                    <tr>
+                      <td>− Déjà réglé (situations préc.)</td>
+                      <td className="right"><Money v={-dc.precedentNetHT} /></td>
+                    </tr>
+                    <tr>
+                      <td><strong>Net à payer ce mois HT</strong></td>
+                      <td className="right"><strong><Money v={dc.netAPayerHT} /></strong></td>
+                    </tr>
+                    <tr>
+                      <td className="muted small">Net à payer TTC</td>
+                      <td className="right muted small"><Money v={dc.netAPayerTTC} /></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            {dc.coherences.length > 0 && (
+              <p className="danger-text small" style={{ marginTop: 8, marginBottom: 0 }}>
+                {dc.coherences.map((c, i) => (
+                  <span key={i}>⚠ {c}<br /></span>
+                ))}
+              </p>
+            )}
+          </div>
+        )
+      })()}
+
       <Field label="Source" hint="Traçabilité : mail d’origine, routine, date">
         <TextInput value={source} onChange={setSource} />
       </Field>
@@ -433,6 +581,7 @@ function CarteAVerifier() {
             'Mois',
             'Mois HT',
             'Cumul HT',
+            'Net à payer',
             'Confiance',
             'Reçue le',
             'Vérifier avant',
@@ -459,6 +608,9 @@ function CarteAVerifier() {
                 </td>
                 <td className="right">
                   <Money v={s.montantCumulHT} />
+                </td>
+                <td className="right">
+                  <NetAPayer state={state} sit={s} /> <BadgeCoherence state={state} sit={s} />
                 </td>
                 <td>
                   <BadgeConfiance v={s.confiance} />
@@ -502,6 +654,14 @@ function CarteAVerifier() {
                     <Btn small kind="danger" onClick={() => rejeter(s.id)}>
                       Rejeter
                     </Btn>
+                    <Btn
+                      small
+                      kind="ghost"
+                      onClick={() => ouvrirDecompteSituationPDF(state, s)}
+                      title="Décompte / certificat de paiement imprimable (net à payer)"
+                    >
+                      Décompte
+                    </Btn>
                     <Btn small kind="ghost" onClick={() => setEditionId(s.id)}>
                       Éditer
                     </Btn>
@@ -526,7 +686,8 @@ function CarteAVerifier() {
 // ---------- historique ----------
 
 function CarteHistorique() {
-  const { state } = useStore()
+  const { state, update } = useStore()
+  const today = useToday()
   const traitees = state.situations
     .filter((s) => s.statut !== 'a_verifier')
     .sort(
@@ -546,7 +707,7 @@ function CarteHistorique() {
           <div style={{ marginTop: 10 }}>
             <Table
               compact
-              head={['Entreprise', 'Lot', 'Projet', 'Mois', 'Mois HT', 'Cumul HT', 'Statut', 'Reçue le', 'Notes']}
+              head={['Entreprise', 'Lot', 'Projet', 'Mois', 'Mois HT', 'Cumul HT', 'Net à payer', 'Statut', 'Reçue le', 'Actions']}
             >
               {traitees.map((s) => (
                 <tr key={s.id} title={s.source || undefined}>
@@ -562,14 +723,34 @@ function CarteHistorique() {
                   <td className="right">
                     <Money v={s.montantCumulHT} />
                   </td>
+                  <td className="right">
+                    <NetAPayer state={state} sit={s} /> <BadgeCoherence state={state} sit={s} />
+                  </td>
                   <td>
                     <BadgeStatutSituation statut={s.statut} />
                   </td>
                   <td>
                     <DateF d={s.dateReception} />
                   </td>
-                  <td className="muted small" title={s.notes || undefined}>
-                    {s.notes ? (s.notes.length > 60 ? s.notes.slice(0, 60) + '…' : s.notes) : '—'}
+                  <td>
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                      <Btn small kind="ghost" onClick={() => ouvrirDecompteSituationPDF(state, s)} title="Décompte / certificat de paiement">
+                        Décompte
+                      </Btn>
+                      {s.statut === 'validee' && (
+                        <Btn
+                          small
+                          onClick={() => facturerDET(state, update, today, s)}
+                          title={
+                            s.factureId
+                              ? `Honoraires DET déjà facturés (${s.factureId}) — recréer si besoin`
+                              : "Créer la facture d'honoraires DET d'avancement pour ce mois"
+                          }
+                        >
+                          {s.factureId ? 'DET ✓' : 'Facturer DET'}
+                        </Btn>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}

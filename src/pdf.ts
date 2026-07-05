@@ -2,9 +2,9 @@
 // imprimable propre s'ouvre et le navigateur « Enregistre en
 // PDF » (Ctrl+P). Déterministe, zéro service externe.
 
-import type { AppState, Facture } from './types'
-import { encaissementPrevu, projetById, ttc } from './derive'
-import { fmtDate, fmtMoney } from './util'
+import type { AppState, Facture, Situation } from './types'
+import { decompteSituation, encaissementPrevu, nomProjet, projetById, ttc } from './derive'
+import { fmtDate, fmtMois, fmtMoney, fmtPct } from './util'
 
 function echapper(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -81,6 +81,85 @@ ${s.iban ? `<div class="bloc"><strong>Règlement par virement</strong><br>
   ${[echapper(s.nomAgence), s.capitalSocial ? `SAS au capital de ${echapper(s.capitalSocial)}` : '', s.rcs ? `RCS ${echapper(s.rcs)}` : '', s.siretAgence ? `SIRET ${echapper(s.siretAgence)}` : ''].filter(Boolean).join(' · ')}
   ${!s.iban ? '<br>Coordonnées bancaires à compléter dans Paramètres.' : ''}
 </div>
+</body></html>`
+
+  const w = window.open('', '_blank')
+  if (!w) return
+  w.document.write(html)
+  w.document.close()
+}
+
+/** ouvre le décompte / certificat de paiement d'une situation (→ PDF via Ctrl+P).
+ *  Document que la MOE remet à l'entreprise : net à payer = cumul (+ révision)
+ *  − retenue de garantie − déjà réglé. Tout est calculé en dur. */
+export function ouvrirDecompteSituationPDF(state: AppState, sit: Situation): void {
+  const s = state.settings
+  const d = decompteSituation(state, sit)
+  const p = projetById(state, sit.projetId)
+  const num = sit.numero != null ? `n° ${sit.numero}` : ''
+  const ligne = (libelle: string, montant: number, opts: { fort?: boolean; retrait?: boolean } = {}) =>
+    `<tr${opts.fort ? ' class="fort"' : ''}><td${opts.retrait ? ' style="padding-left:24px"' : ''}>${libelle}</td><td class="r">${fmtMoney(montant, true)}</td></tr>`
+
+  const html = `<!doctype html>
+<html lang="fr"><head><meta charset="utf-8"><title>Décompte situation — ${echapper(sit.entreprise)} ${echapper(fmtMois(sit.mois))}</title>
+<style>
+  body { font-family: -apple-system, 'Segoe UI', Roboto, Arial, sans-serif; color: #1a2233; margin: 48px; font-size: 14px; }
+  header { display: flex; justify-content: space-between; margin-bottom: 30px; }
+  h1 { font-size: 21px; margin: 0 0 4px; }
+  .muted { color: #5a6478; }
+  .bloc { margin: 18px 0; }
+  table.dc { width: 100%; border-collapse: collapse; margin-top: 12px; }
+  table.dc td { padding: 9px 6px; border-bottom: 1px solid #e3e6ec; }
+  table.dc td.r { text-align: right; font-variant-numeric: tabular-nums; }
+  table.dc tr.fort td { font-weight: 700; border-bottom: 2px solid #1a2233; }
+  .net { margin-top: 18px; padding: 14px 16px; background: #f2f6ff; border-radius: 8px; display: flex; justify-content: space-between; align-items: baseline; }
+  .net .v { font-size: 22px; font-weight: 800; }
+  .warn { margin-top: 16px; padding: 10px 12px; background: #fff5f5; border-left: 3px solid #bb2233; color: #922; font-size: 12px; border-radius: 4px; }
+  .sign { margin-top: 44px; display: flex; justify-content: space-between; font-size: 12px; color: #5a6478; }
+  .sign .box { width: 44%; }
+  .sign .line { margin-top: 40px; border-top: 1px solid #97a0b0; padding-top: 4px; }
+  .impression { position: fixed; top: 12px; right: 12px; }
+  @media print { .impression { display: none; } body { margin: 24px; } }
+</style></head><body>
+<button class="impression" onclick="window.print()">Imprimer / PDF</button>
+<header>
+  <div>
+    <h1>${echapper(s.nomAgence)}</h1>
+    <div class="muted">Maîtrise d'œuvre — vérification des situations<br>${echapper(s.personnes.join(' · '))}${s.siretAgence ? `<br>SIRET ${echapper(s.siretAgence)}` : ''}</div>
+  </div>
+  <div style="text-align:right">
+    <h1>Décompte de situation ${echapper(num)}</h1>
+    <div class="muted">Mois ${echapper(fmtMois(sit.mois))}<br>Établi le ${fmtDate(sit.dateReception)}</div>
+  </div>
+</header>
+
+<div class="bloc">
+  <strong>Entreprise</strong> — ${echapper(sit.entreprise)}${sit.lot ? ` · ${echapper(sit.lot)}` : ''}${d.marche ? `<br><span class="muted">Marché : ${fmtMoney(d.marche.montantInitialHT + d.marche.avenantsHT, false)} HT (RG ${fmtPct(d.tauxRG, 0)}${d.marche.revision ? ' · révisable' : ''})</span>` : '<br><span class="muted">Situation non rattachée à un marché — RG à 0 %.</span>'}
+</div>
+<div class="bloc">
+  <strong>Opération</strong> — ${echapper(p ? `${p.id} — ${p.nom}` : nomProjet(state, sit.projetId))}${p?.adresse ? `<br><span class="muted">${echapper(p.adresse)}</span>` : ''}
+</div>
+
+<table class="dc">
+  ${ligne('Travaux exécutés cumulés HT', d.travauxCumulHT)}
+  ${d.revisionHT ? ligne('Révision de prix HT', d.revisionHT) : ''}
+  ${ligne('Montant cumulé HT (base)', d.baseHT, { fort: true })}
+  ${ligne(`Retenue de garantie (${fmtPct(d.tauxRG, 0)})`, -d.retenueGarantieHT, { retrait: true })}
+  ${ligne('Cumul net de RG HT', d.cumulNetHT, { fort: true })}
+  ${ligne('À déduire : situations précédentes (net)', -d.precedentNetHT, { retrait: true })}
+  ${ligne('Net à payer ce mois HT', d.netAPayerHT, { fort: true })}
+  ${ligne(`TVA (${fmtPct(d.tauxTVA, 0)})`, d.netAPayerTTC - d.netAPayerHT, { retrait: true })}
+</table>
+
+<div class="net"><span>Net à payer ce mois <strong>TTC</strong></span><span class="v">${fmtMoney(d.netAPayerTTC, true)}</span></div>
+
+${d.coherences.length > 0 ? `<div class="warn"><strong>Points à vérifier :</strong><br>${d.coherences.map((c) => echapper(c)).join('<br>')}</div>` : ''}
+
+<div class="sign">
+  <div class="box">Situation présentée par l'entreprise<div class="line">Date & signature</div></div>
+  <div class="box">Certifié par la maîtrise d'œuvre — ${echapper(s.nomAgence)}<div class="line">Date & signature</div></div>
+</div>
+<div class="muted" style="margin-top:24px;font-size:11px">Document indicatif établi par la maîtrise d'œuvre pour proposition de paiement au maître d'ouvrage. La retenue de garantie est libérée à la levée des réserves (délai de garantie de parfait achèvement), sauf caution de substitution.</div>
 </body></html>`
 
   const w = window.open('', '_blank')

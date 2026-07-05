@@ -1,9 +1,9 @@
 // Valeurs dérivées — une seule source de vérité par donnée :
 // le facturé vient des factures, les heures réelles du pointage.
 
-import type { AppState, Facture, PhaseCode, Projet, Situation } from './types'
+import type { AppState, Facture, MarcheTravaux, PhaseCode, Projet, Situation } from './types'
 import { calculHonoraires } from './miqcp'
-import { addDays, diffDays } from './util'
+import { addDays, diffDays, fmtMoney, fold } from './util'
 
 export function projetById(state: AppState, id: string): Projet | undefined {
   return state.projets.find((p) => p.id === id)
@@ -254,4 +254,123 @@ export function caRealiseAnnee(state: AppState, annee: number): number {
   return state.factures
     .filter((f) => f.statut !== 'prevue' && f.emission.slice(0, 4) === prefixe)
     .reduce((s, f) => s + f.montantHT, 0)
+}
+
+// ------------------------------------------------------------------
+// Situations de travaux — décompte « net à payer » à certifier à
+// l'entreprise : cumul des travaux (+ révision) − retenue de garantie
+// − ce qui a déjà été réglé (situations précédentes). 100 % déterministe,
+// le taux de RG est lu sur le marché rattaché.
+// ------------------------------------------------------------------
+
+/** marché rattaché à une situation (par id explicite, sinon par projet + entreprise) */
+export function marcheDeSituation(state: AppState, s: Situation): MarcheTravaux | undefined {
+  if (s.marcheId) return state.marches.find((m) => m.id === s.marcheId)
+  return state.marches.find(
+    (m) => m.projetId === s.projetId && fold(m.entreprise) === fold(s.entreprise),
+  )
+}
+
+/** situation précédente du même marché/entreprise (mois strictement antérieur, non rejetée) */
+export function situationPrecedente(state: AppState, s: Situation): Situation | undefined {
+  return state.situations
+    .filter(
+      (x) =>
+        x.id !== s.id &&
+        x.mois < s.mois &&
+        x.statut !== 'rejetee' &&
+        (s.marcheId
+          ? x.marcheId === s.marcheId
+          : x.projetId === s.projetId && fold(x.entreprise) === fold(s.entreprise)),
+    )
+    .sort((a, b) => b.mois.localeCompare(a.mois))[0]
+}
+
+/** base HT d'une situation : travaux cumulés + révision saisie */
+function baseSituation(s: Situation): number {
+  const cumul = s.montantCumulHT ?? s.montantMoisHT ?? 0
+  return cumul + (s.revisionHT || 0)
+}
+
+export interface DecompteSituation {
+  /** travaux cumulés HT (montantCumulHT, à défaut montantMoisHT) */
+  travauxCumulHT: number
+  revisionHT: number
+  /** travaux + révision */
+  baseHT: number
+  tauxRG: number
+  retenueGarantieHT: number
+  /** base − RG */
+  cumulNetHT: number
+  /** cumul net déjà réglé (situations précédentes) */
+  precedentNetHT: number
+  /** net à payer ce mois HT = cumulNet − précédent */
+  netAPayerHT: number
+  tauxTVA: number
+  netAPayerTTC: number
+  marche?: MarcheTravaux
+  /** messages d'incohérence détectés (vide = cohérent) */
+  coherences: string[]
+}
+
+/** décompte complet « net à payer » d'une situation (certificat de paiement) */
+export function decompteSituation(state: AppState, s: Situation, tauxTVA = 0.2): DecompteSituation {
+  const marche = marcheDeSituation(state, s)
+  const tauxRG = marche?.tauxRG ?? 0
+  const travauxCumulHT = s.montantCumulHT ?? s.montantMoisHT ?? 0
+  const revisionHT = s.revisionHT || 0
+  const baseHT = travauxCumulHT + revisionHT
+  const retenueGarantieHT = baseHT * tauxRG
+  const cumulNetHT = baseHT - retenueGarantieHT
+  const prec = situationPrecedente(state, s)
+  const precedentNetHT = prec ? baseSituation(prec) * (1 - tauxRG) : 0
+  const netAPayerHT = cumulNetHT - precedentNetHT
+  const netAPayerTTC = netAPayerHT * (1 + tauxTVA)
+
+  const coherences: string[] = []
+  // cohérence : cumul mois = cumul précédent + montant du mois
+  if (prec && s.montantMoisHT != null && s.montantCumulHT != null && prec.montantCumulHT != null) {
+    const attendu = prec.montantCumulHT + s.montantMoisHT
+    if (Math.abs(attendu - s.montantCumulHT) > 1) {
+      coherences.push(
+        `Cumul incohérent : ${fmtMoney(prec.montantCumulHT)} (préc.) + ${fmtMoney(s.montantMoisHT)} (mois) = ${fmtMoney(attendu)} ≠ ${fmtMoney(s.montantCumulHT)} saisi`,
+      )
+    }
+  }
+  // dépassement du montant du marché (avenants inclus)
+  if (marche) {
+    const plafond = marche.montantInitialHT + marche.avenantsHT
+    if (plafond > 0 && travauxCumulHT > plafond * 1.0001) {
+      coherences.push(
+        `Cumul travaux ${fmtMoney(travauxCumulHT)} > marché ${fmtMoney(plafond)} — avenant à prévoir ?`,
+      )
+    }
+  }
+  return {
+    travauxCumulHT,
+    revisionHT,
+    baseHT,
+    tauxRG,
+    retenueGarantieHT,
+    cumulNetHT,
+    precedentNetHT,
+    netAPayerHT,
+    tauxTVA,
+    netAPayerTTC,
+    marche,
+    coherences,
+  }
+}
+
+/** honoraires DET du mois proposés depuis une situation validée : quote-part
+ *  d'avancement (montant du mois / travaux de l'opération) × honoraires DET */
+export function honorairesDETduMois(state: AppState, s: Situation): number {
+  const p = projetById(state, s.projetId)
+  if (!p) return 0
+  const det = p.phases.find((ph) => ph.code === 'DET')
+  if (!det || det.montantHT <= 0) return 0
+  const travauxOp = p.montantTravauxHT || 0
+  const mois = s.montantMoisHT || 0
+  if (travauxOp <= 0 || mois <= 0) return 0
+  return Math.round(det.montantHT * (mois / travauxOp))
 }

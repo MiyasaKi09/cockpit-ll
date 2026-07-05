@@ -152,16 +152,13 @@ export default function ProjetNouveau({ onClose }: { onClose: () => void }) {
       {etape === 2 && (
         <>
           <p className="small muted" style={{ marginBottom: 12 }}>
-            Calculé au barème MIQCP. Renseignez un taux seulement s'il a été négocié.
+            Calculés au barème MIQCP — ne renseignez un taux que s'il a été négocié.
           </p>
           <dl className="kv">
             <dt>Taux barème (actualisé BT01)</dt>
             <dd>{fmtPct(h.tauxBareme, 2)}</dd>
             <dt>Coefficient de complexité</dt>
-            <dd>
-              {h.coef !== null ? h.coef.toFixed(2).replace('.', ',') : '—'}{' '}
-              <span className="muted small">(affinable ensuite avec la grille des 27 critères)</span>
-            </dd>
+            <dd>{h.coef !== null ? h.coef.toFixed(2).replace('.', ',') : '—'}</dd>
             <dt>Taux résultant</dt>
             <dd>{fmtPct(h.tauxAjuste, 2)}</dd>
             <dt>
@@ -173,8 +170,8 @@ export default function ProjetNouveau({ onClose }: { onClose: () => void }) {
           </dl>
           {h.sousPlancher && (
             <div className="pill-note" style={{ marginTop: 10 }}>
-              Petit projet (sous ~{fmtMoney(seuilPlancherActualise(state.settings))} de travaux) : le barème
-              n'est qu'un repère, saisissez plutôt un taux négocié ci-dessous (ex. 0,12 pour 12 %).
+              Petit projet (sous ~{fmtMoney(seuilPlancherActualise(state.settings))}) : le barème n'est
+              qu'un repère, saisissez plutôt un taux négocié.
             </div>
           )}
           <div className="form-row" style={{ marginTop: 12 }}>
@@ -194,9 +191,8 @@ export default function ProjetNouveau({ onClose }: { onClose: () => void }) {
       {etape === 3 && (
         <>
           <p className="small muted" style={{ marginBottom: 12 }}>
-            Trois repères suffisent : les phases sont datées automatiquement et l'échéancier de facturation
-            complet est généré (modèle {typeMO === 'Particulier' ? 'particulier — ESQ 25/75, PC 75/25, chantier mensuel' : 'public/pro — remise de chaque phase, chantier mensuel, AOR 50/50'}).
-            Tout reste modifiable ensuite, phase par phase et facture par facture.
+            Trois repères suffisent : phases datées et échéancier générés automatiquement, tout reste
+            modifiable ensuite.
           </p>
           <div className="form-row">
             <Field label="Début des études">

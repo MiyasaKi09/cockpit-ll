@@ -22,13 +22,16 @@ import {
   Money,
   NumInput,
   Page,
+  RowMenu,
   Select,
   Stat,
   Table,
   Tabs,
   TextArea,
   TextInput,
+  confirmer,
   navigate,
+  toast,
   useRoute,
   useToday,
 } from '../ui'
@@ -209,7 +212,7 @@ const ONGLETS = [
 ]
 
 function EspaceProjet({ projetId, onglet }: { projetId: string; onglet?: string }) {
-  const { state, update } = useStore()
+  const { state, update, replace } = useStore()
   const [modalEdition, setModalEdition] = useState(false)
   const p = state.projets.find((x) => x.id === projetId)
   const actif = ONGLETS.some((o) => o.id === onglet) ? onglet! : 'pilotage'
@@ -228,17 +231,25 @@ function EspaceProjet({ projetId, onglet }: { projetId: string; onglet?: string 
 
   const promptsProjet = state.prompts.filter((t) => t.contexte === 'projet')
 
-  const supprimer = () => {
+  const supprimer = async () => {
     const nbFactures = state.factures.filter((f) => f.projetId === p.id).length
     const nbSituations = state.situations.filter((s) => s.projetId === p.id).length
     if (nbFactures > 0 || nbSituations > 0) {
-      alert(
-        `Suppression impossible : ${nbFactures} facture(s) et ${nbSituations} situation(s) sont liées à ${p.id}.\n` +
-          'Supprimez ou réaffectez d’abord ces éléments (modules Facturation et Situations) — chaque donnée reste traçable.',
+      toast(
+        `Suppression impossible : ${nbFactures} facture(s) et ${nbSituations} situation(s) liées à ${p.id}. Supprimez-les ou réaffectez-les d'abord.`,
+        { tone: 'danger' },
       )
       return
     }
-    if (!confirm(`Supprimer définitivement le projet ${p.id} — ${p.nom} (et ses marchés, réunions, notes) ?`)) return
+    const snap = state
+    if (
+      !(await confirmer({
+        message: `Supprimer définitivement le projet ${p.id} — ${p.nom} (et ses marchés, réunions, notes) ?`,
+        danger: true,
+        confirmerLabel: 'Supprimer',
+      }))
+    )
+      return
     update((d) => {
       d.projets = d.projets.filter((x) => x.id !== p.id)
       d.marches = d.marches.filter((m) => m.projetId !== p.id)
@@ -246,6 +257,7 @@ function EspaceProjet({ projetId, onglet }: { projetId: string; onglet?: string 
       d.reunions = d.reunions.filter((r) => r.projetId !== p.id)
     })
     navigate('/projets')
+    toast(`Projet ${p.id} supprimé.`, { undo: () => replace(snap) })
   }
 
   return (
@@ -271,8 +283,8 @@ function EspaceProjet({ projetId, onglet }: { projetId: string; onglet?: string 
               label={`${t.titre} → « ${t.projetClaude} »`}
             />
           ))}
-          <Btn onClick={() => setModalEdition(true)}>Modifier</Btn>
-          <Btn kind="danger" onClick={supprimer}>Supprimer</Btn>
+          <Btn kind="primary" onClick={() => setModalEdition(true)}>Modifier</Btn>
+          <RowMenu items={[{ label: 'Supprimer le projet', onClick: supprimer, danger: true }]} />
         </>
       }
     >
@@ -396,22 +408,26 @@ function OngletFinances({ projet: p }: { projet: Projet }) {
     .filter((f) => f.projetId === p.id)
     .sort((a, b) => a.emission.localeCompare(b.emission))
 
-  const generer = () => {
+  const generer = async () => {
     const nouvelles = facturesParDefaut(p, state.settings, state.factures)
     if (nouvelles.length === 0) {
-      alert('Rien à générer : datez d’abord les phases (onglet Pilotage) — l’échéancier se construit sur les fins de phases.')
+      toast('Rien à générer : datez d’abord les phases (onglet Pilotage) — l’échéancier se construit sur les fins de phases.', { tone: 'danger' })
       return
     }
     if (
-      !confirm(
-        `Générer ${nouvelles.length} facture(s) prévisionnelle(s) selon le modèle « ${p.typeMO} » ?\n` +
+      !(await confirmer({
+        message:
+          `Générer ${nouvelles.length} facture(s) prévisionnelle(s) selon le modèle « ${p.typeMO} » ?\n` +
           `Les ${factures.length} facture(s) existantes du projet ne sont pas touchées — attention aux doublons si l’échéancier a déjà été généré.`,
-      )
+        danger: true,
+        confirmerLabel: 'Générer',
+      }))
     )
       return
     update((d) => {
       d.factures.push(...facturesParDefaut(p, d.settings, d.factures))
     })
+    toast(`${nouvelles.length} facture(s) prévisionnelle(s) générée(s).`, { tone: 'ok' })
   }
 
   const coutTemps = coutReelTemps(state, p.id)
@@ -750,6 +766,9 @@ function NoteCritere({ value, onChange }: { value: number; onChange: (n: number)
 function CartePhases({ projet: p }: { projet: Projet }) {
   const { state, update } = useStore()
   const seuil = state.settings.seuilDeriveHeures
+  const [edition, setEdition] = useState(false)
+  const [colonnesDetaillees, setColonnesDetaillees] = useState(false)
+  const detail = edition || colonnesDetaillees
 
   const majPhase = (code: PhaseCode, fn: (ph: Phase) => void) =>
     update((d) => {
@@ -757,19 +776,23 @@ function CartePhases({ projet: p }: { projet: Projet }) {
       if (ph) fn(ph)
     })
 
-  const recalculer = () => {
+  const recalculer = async () => {
     const h = calculHonoraires(p, state.settings)
     if (
-      !confirm(
-        `Recalculer la répartition des phases sur ${fmtMoney(h.honorairesBaseHT)} d’honoraires de base ?\n` +
+      !(await confirmer({
+        message:
+          `Recalculer la répartition des phases sur ${fmtMoney(h.honorairesBaseHT)} d’honoraires de base ?\n` +
           'Attention : montants, dates et heures prévues saisis sur les phases seront écrasés (DIAG et MC remis à zéro).',
-      )
+        danger: true,
+        confirmerLabel: 'Recalculer',
+      }))
     )
       return
     update((d) => {
       const pr = d.projets.find((x) => x.id === p.id)
       if (pr) pr.phases = phasesParDefaut(h.honorairesBaseHT, tauxVente(d))
     })
+    toast('Répartition des phases recalculée.', { tone: 'ok' })
   }
 
   const encaissePhase = (code: PhaseCode) =>
@@ -795,26 +818,41 @@ function CartePhases({ projet: p }: { projet: Projet }) {
   return (
     <Card
       titre="Phases de la mission"
-      actions={<Btn small onClick={recalculer}>Recalculer la répartition</Btn>}
+      actions={
+        edition ? (
+          <span style={{ display: 'inline-flex', gap: 6 }}>
+            <Btn small onClick={recalculer}>Recalculer la répartition</Btn>
+            <Btn small kind="primary" onClick={() => setEdition(false)}>Terminé</Btn>
+          </span>
+        ) : (
+          <span style={{ display: 'inline-flex', gap: 10, alignItems: 'center' }}>
+            <label className="small" style={{ display: 'inline-flex', gap: 5, alignItems: 'center', cursor: 'pointer' }}>
+              <input type="checkbox" checked={colonnesDetaillees} onChange={(e) => setColonnesDetaillees(e.target.checked)} />
+              Colonnes détaillées
+            </label>
+            <Btn small onClick={() => setEdition(true)}>Modifier les phases</Btn>
+          </span>
+        )
+      }
     >
       {p.phases.length === 0 ? (
-        <EmptyState>Aucune phase — « Recalculer la répartition » pour générer la mission de base.</EmptyState>
+        <EmptyState>Aucune phase — « Modifier les phases » puis « Recalculer la répartition » pour générer la mission de base.</EmptyState>
       ) : (
         <Table
           compact
           head={[
             'Phase',
-            '% base',
+            ...(detail ? ['% base'] : []),
             <span key="m" className="right">Montant HT</span>,
             'Début',
             'Fin',
-            <span key="hp" className="right">H. prévues</span>,
-            <span key="ce" className="right" title="BET cotraitants, sous-traitance, débours — vient en moins de la marge">Coût ext. HT</span>,
+            ...(detail ? [<span key="hp" className="right">H. prévues</span>] : []),
+            ...(detail ? [<span key="ce" className="right" title="BET cotraitants, sous-traitance, débours — vient en moins de la marge">Coût ext. HT</span>] : []),
             <span key="f" className="right">% fact.</span>,
-            <span key="pay" className="right">% payé</span>,
+            ...(detail ? [<span key="pay" className="right">% payé</span>] : []),
             <span key="r" className="right">Reste HT</span>,
-            <span key="hr" className="right">H. réelles</span>,
-            'Écart heures',
+            ...(detail ? [<span key="hr" className="right">H. réelles</span>] : []),
+            ...(detail ? ['Écart heures'] : []),
           ]}
         >
           {p.phases.map((ph) => {
@@ -827,74 +865,80 @@ function CartePhases({ projet: p }: { projet: Projet }) {
                   <strong>{ph.code}</strong>
                   <div className="muted small">{LIBELLES_PHASES[ph.code]}</div>
                 </td>
-                <td className="muted small">{ph.pctBase !== null ? fmtPct(ph.pctBase, 1) : '—'}</td>
+                {detail && <td className="muted small">{ph.pctBase !== null ? fmtPct(ph.pctBase, 1) : '—'}</td>}
                 <td className="right">
-                  <NumInput
-                    value={ph.montantHT}
-                    onChange={(v) => majPhase(ph.code, (x) => { x.montantHT = v ?? 0 })}
-                    style={{ width: 96 }}
-                  />
-                </td>
-                <td>
-                  <DateInput
-                    value={ph.debut}
-                    onChange={(v) => majPhase(ph.code, (x) => { x.debut = v })}
-                    style={{ width: 138 }}
-                  />
-                </td>
-                <td>
-                  <DateInput
-                    value={ph.fin}
-                    onChange={(v) => majPhase(ph.code, (x) => { x.fin = v })}
-                    style={{ width: 138 }}
-                  />
-                </td>
-                <td className="right">
-                  <NumInput
-                    value={ph.heuresPrevues}
-                    onChange={(v) => majPhase(ph.code, (x) => { x.heuresPrevues = v ?? 0 })}
-                    style={{ width: 64 }}
-                  />
-                  {ph.montantHT > 0 && coutJourObjectif(state) > 0 && (
-                    <div className="muted small" title="jours objectif = budget de phase ÷ seuil de rentabilité par jour">
-                      obj. {Math.round((ph.montantHT / coutJourObjectif(state)) * 10) / 10} j
-                    </div>
+                  {edition ? (
+                    <NumInput value={ph.montantHT} onChange={(v) => majPhase(ph.code, (x) => { x.montantHT = v ?? 0 })} style={{ width: 96 }} />
+                  ) : (
+                    <Money v={ph.montantHT} />
                   )}
                 </td>
-                <td className="right">
-                  <NumInput
-                    value={ph.coutExterneHT ?? null}
-                    onChange={(v) => majPhase(ph.code, (x) => { x.coutExterneHT = v ?? undefined })}
-                    style={{ width: 80 }}
-                  />
+                <td>
+                  {edition ? (
+                    <DateInput value={ph.debut} onChange={(v) => majPhase(ph.code, (x) => { x.debut = v })} style={{ width: 138 }} />
+                  ) : (
+                    <DateF d={ph.debut} />
+                  )}
                 </td>
+                <td>
+                  {edition ? (
+                    <DateInput value={ph.fin} onChange={(v) => majPhase(ph.code, (x) => { x.fin = v })} style={{ width: 138 }} />
+                  ) : (
+                    <DateF d={ph.fin} />
+                  )}
+                </td>
+                {detail && (
+                  <td className="right">
+                    {edition ? (
+                      <NumInput value={ph.heuresPrevues} onChange={(v) => majPhase(ph.code, (x) => { x.heuresPrevues = v ?? 0 })} style={{ width: 64 }} />
+                    ) : (
+                      fmtHeures(ph.heuresPrevues)
+                    )}
+                    {ph.montantHT > 0 && coutJourObjectif(state) > 0 && (
+                      <div className="muted small" title="jours objectif = budget de phase ÷ seuil de rentabilité par jour">
+                        obj. {Math.round((ph.montantHT / coutJourObjectif(state)) * 10) / 10} j
+                      </div>
+                    )}
+                  </td>
+                )}
+                {detail && (
+                  <td className="right">
+                    {edition ? (
+                      <NumInput value={ph.coutExterneHT ?? null} onChange={(v) => majPhase(ph.code, (x) => { x.coutExterneHT = v ?? undefined })} style={{ width: 80 }} />
+                    ) : ph.coutExterneHT ? (
+                      <Money v={ph.coutExterneHT} />
+                    ) : (
+                      '—'
+                    )}
+                  </td>
+                )}
                 <td className="right num" title={fmtMoney(fact) + ' facturés'}>
                   {ph.montantHT > 0 ? fmtPct(fact / ph.montantHT, 0) : '—'}
                 </td>
-                <td className="right num">
-                  {ph.montantHT > 0 ? fmtPct(encaissePhase(ph.code) / ph.montantHT, 0) : '—'}
-                </td>
+                {detail && (
+                  <td className="right num">{ph.montantHT > 0 ? fmtPct(encaissePhase(ph.code) / ph.montantHT, 0) : '—'}</td>
+                )}
                 <td className={`right ${reste < 0 ? 'danger-text' : ''}`}><Money v={reste} /></td>
-                <td className="right num">{fmtHeures(hReel)}</td>
-                <td><EcartHeures reel={hReel} prevu={ph.heuresPrevues} seuil={seuil} /></td>
+                {detail && <td className="right num">{fmtHeures(hReel)}</td>}
+                {detail && <td><EcartHeures reel={hReel} prevu={ph.heuresPrevues} seuil={seuil} /></td>}
               </tr>
             )
           })}
           <tr>
             <td><strong>Total</strong></td>
-            <td />
+            {detail && <td />}
             <td className="right"><strong><Money v={totaux.montant} /></strong></td>
             <td />
             <td />
-            <td className="right"><strong>{fmtHeures(totaux.hPrev)}</strong></td>
-            <td className="right"><strong><Money v={totaux.externe} /></strong></td>
+            {detail && <td className="right"><strong>{fmtHeures(totaux.hPrev)}</strong></td>}
+            {detail && <td className="right"><strong><Money v={totaux.externe} /></strong></td>}
             <td className="right num"><strong>{totaux.montant > 0 ? fmtPct(totaux.facture / totaux.montant, 0) : '—'}</strong></td>
-            <td />
+            {detail && <td />}
             <td className={`right ${totaux.reste < 0 ? 'danger-text' : ''}`}>
               <strong><Money v={totaux.reste} /></strong>
             </td>
-            <td className="right"><strong>{fmtHeures(totaux.hReel)}</strong></td>
-            <td><EcartHeures reel={totaux.hReel} prevu={totaux.hPrev} seuil={seuil} /></td>
+            {detail && <td className="right"><strong>{fmtHeures(totaux.hReel)}</strong></td>}
+            {detail && <td><EcartHeures reel={totaux.hReel} prevu={totaux.hPrev} seuil={seuil} /></td>}
           </tr>
         </Table>
       )}
@@ -991,8 +1035,9 @@ function ModalEditionProjet({ projet, onClose }: { projet: Projet; onClose: () =
       }
     })
     if (livraison)
-      alert(
+      toast(
         `${projet.id} livré : la référence « ${nom.trim()} » a été créée dans la base (surface et attestation à compléter).`,
+        { tone: 'ok' },
       )
     onClose()
   }

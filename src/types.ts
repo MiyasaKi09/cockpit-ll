@@ -156,6 +156,12 @@ export interface MarcheTravaux {
   /** intervention du lot sur le chantier — alimente le planning travaux */
   dateDebut?: string | null
   dateFin?: string | null
+  /** date de réception des travaux — point de départ de la garantie de parfait achèvement */
+  dateReception?: string | null
+  /** retenue de garantie remplacée par une caution bancaire (pas d'argent retenu) */
+  cautionRG?: boolean
+  /** retenue de garantie libérée à l'entreprise (levée effectuée) */
+  rgLibere?: boolean
   notes?: string
 }
 
@@ -413,6 +419,7 @@ export type TypeAlerte =
   | 'decennale'
   | 'cr_en_attente'
   | 'sauvegarde'
+  | 'rg_a_liberer'
 
 /** Alerte du fil d'urgences — calculée, jamais stockée (hors snooze) */
 /** action rapide attachée à une alerte, réalisable depuis le fil */

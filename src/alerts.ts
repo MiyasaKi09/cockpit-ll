@@ -14,6 +14,7 @@ import {
   heuresReelles,
   nomProjet,
   retardFacture,
+  retenueGarantieMarche,
 } from './derive'
 import { addDays, diffDays, fmtDate, fmtMoney, fmtMois, monthKey } from './util'
 
@@ -108,6 +109,21 @@ export function computeAlertes(state: AppState, today: string): Alerte[] {
         })
       }
     }
+  }
+
+  // --- Retenue de garantie arrivée à échéance (réception + 1 an) et non levée.
+  for (const m of state.marches) {
+    const rg = retenueGarantieMarche(state, m, today)
+    if (rg.statut !== 'a_liberer' || rg.retenueHT <= 0) continue
+    alertes.push({
+      id: `rg:${m.id}`,
+      type: 'rg_a_liberer',
+      gravite: 2,
+      titre: `Retenue de garantie à libérer — ${m.entreprise} (${m.lot})`,
+      detail: `${nomProjet(state, m.projetId)} · ${fmtMoney(rg.retenueHT)} retenus · réception le ${fmtDate(rg.dateReception)}${rg.caution ? ' · caution de substitution' : ''}`,
+      lien: '#/situations',
+      date: rg.dateLevee || undefined,
+    })
   }
 
   // --- Dérive d'heures : réel > prévu × seuil, par projet actif.

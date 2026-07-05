@@ -434,6 +434,46 @@ export function honorairesDETduMois(state: AppState, s: Situation): number {
 }
 
 // ------------------------------------------------------------------
+// Retenue de garantie — cycle de vie par marché : cumul retenu,
+// réception, levée à réception + 1 an (garantie de parfait achèvement).
+// ------------------------------------------------------------------
+
+export type StatutRG = 'en_cours' | 'retenue' | 'a_liberer' | 'liberee'
+
+export interface RGMarche {
+  travauxCumulHT: number
+  retenueHT: number
+  dateReception: string | null
+  dateLevee: string | null
+  caution: boolean
+  statut: StatutRG
+}
+
+/** cumul des travaux HT validés d'un marché (dernière situation validée) */
+export function travauxCumulMarche(state: AppState, marcheId: string): number {
+  return state.situations
+    .filter((s) => s.marcheId === marcheId && s.statut === 'validee')
+    .reduce((m, s) => Math.max(m, s.montantCumulHT ?? s.montantMoisHT ?? 0), 0)
+}
+
+/** état de la retenue de garantie d'un marché */
+export function retenueGarantieMarche(state: AppState, marche: MarcheTravaux, today: string): RGMarche {
+  const travauxCumulHT = travauxCumulMarche(state, marche.id)
+  const retenueHT = travauxCumulHT * (marche.tauxRG || 0)
+  const dateReception = marche.dateReception || null
+  // réception + 1 an (même jour l'année suivante) — garantie de parfait achèvement
+  const dateLevee = dateReception ? `${Number(dateReception.slice(0, 4)) + 1}${dateReception.slice(4)}` : null
+  const statut: StatutRG = marche.rgLibere
+    ? 'liberee'
+    : !dateReception
+      ? 'en_cours'
+      : dateLevee && today >= dateLevee
+        ? 'a_liberer'
+        : 'retenue'
+  return { travauxCumulHT, retenueHT, dateReception, dateLevee, caution: !!marche.cautionRG, statut }
+}
+
+// ------------------------------------------------------------------
 // Pipeline commercial — probabilité par étape, prévisionnel pondéré,
 // vieillissement des cartes.
 // ------------------------------------------------------------------

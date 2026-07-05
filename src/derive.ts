@@ -248,6 +248,23 @@ export function chargePlanifieeSemaine(state: AppState, personne: string, lundi:
   return heures
 }
 
+/** heures d'absence (congés) d'une personne sur la semaine du lundi donné */
+export function heuresAbsenceSemaine(state: AppState, personne: string, lundi: string): number {
+  const abs = (state.absences || []).filter((a) => a.personne === personne)
+  if (abs.length === 0) return 0
+  let jours = 0
+  for (let i = 0; i < 5; i++) {
+    const jour = addDays(lundi, i)
+    if (abs.some((a) => a.debut <= jour && a.fin >= jour)) jours++
+  }
+  return jours * state.settings.heuresParJour
+}
+
+/** capacité RÉELLE d'une personne pour la semaine, congés déduits (heures) */
+export function capacitePersonneSemaine(state: AppState, personne: string, lundi: string): number {
+  return Math.max(0, capaciteSemaine(state) - heuresAbsenceSemaine(state, personne, lundi))
+}
+
 /** CA HT facturé (émis ou encaissé) sur une année civile — confronté à la cible */
 export function caRealiseAnnee(state: AppState, annee: number): number {
   const prefixe = String(annee)

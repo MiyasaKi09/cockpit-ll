@@ -545,4 +545,14 @@ export interface AppState {
   reunions: ReunionChantier[]
   courriers: Courrier[]
   tempsHorsProjet: TempsHorsProjet[]
+  absences: Absence[]
+}
+
+/** congé / absence d'une personne — réduit sa capacité dans le plan de charge */
+export interface Absence {
+  id: string
+  personne: string
+  debut: string
+  fin: string
+  motif?: string
 }

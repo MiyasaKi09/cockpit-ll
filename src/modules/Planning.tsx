@@ -9,11 +9,11 @@
 import { useState } from 'react'
 import type { AppState, MarcheTravaux, PhaseCode, Projet } from '../types'
 import { useStore } from '../store'
-import { Badge, Btn, Card, confirmer, DateInput, EmptyState, Field, Icon, NumInput, navigate, Page, Select, Tabs, useRoute, useToday } from '../ui'
-import { addDays, diffDays, fmtDate, fmtHeures, mondayOf, todayISO } from '../util'
+import { Badge, Btn, Card, confirmer, DateInput, EmptyState, Field, Icon, NumInput, navigate, Page, Select, Tabs, TextInput, toast, useRoute, useToday } from '../ui'
+import { addDays, diffDays, fmtDate, fmtHeures, mondayOf, todayISO, uid } from '../util'
 import { LIBELLES_PHASES, PHASES_ORDRE } from '../miqcp'
 import { daterPhases, facturesParDefaut } from '../echeancier'
-import { STATUTS_ACTIFS, capaciteSemaine, chargePlanifieeSemaine } from '../derive'
+import { STATUTS_ACTIFS, capacitePersonneSemaine, capaciteSemaine, chargePlanifieeSemaine, heuresAbsenceSemaine } from '../derive'
 import { EcheancesContenu } from './Calendrier'
 
 const COULEURS_PHASES = [
@@ -627,13 +627,27 @@ function PlanDeCharge({ debutLundi, nbSemaines }: { debutLundi: string; nbSemain
               </td>
               {lundis.map((l) => {
                 const h = chargePlanifieeSemaine(state, pers.nom, l)
-                const ratio = cap > 0 ? h / cap : 0
+                const absH = heuresAbsenceSemaine(state, pers.nom, l)
+                const capP = capacitePersonneSemaine(state, pers.nom, l)
+                if (capP <= 0) {
+                  // semaine entièrement en congé
+                  return (
+                    <td
+                      key={l}
+                      style={{ textAlign: 'center', background: 'var(--bg-soft)', color: 'var(--ink-3)', fontSize: 10, fontStyle: 'italic', padding: '4px 2px' }}
+                      title={`${pers.nom} · semaine du ${fmtDate(l)}\nCongé toute la semaine`}
+                    >
+                      congé
+                    </td>
+                  )
+                }
+                const ratio = capP > 0 ? h / capP : 0
                 const { bg, fg } = couleurCharge(ratio)
                 return (
                   <td
                     key={l}
-                    style={{ textAlign: 'center', background: bg, color: fg, fontSize: 11, fontWeight: ratio > 1.001 ? 800 : 600, padding: '4px 2px' }}
-                    title={`${pers.nom} · semaine du ${fmtDate(l)}\n${fmtHeures(h)} planifiées / ${Math.round(cap)} h capacité (${Math.round(ratio * 100)} %)`}
+                    style={{ textAlign: 'center', background: bg, color: fg, fontSize: 11, fontWeight: ratio > 1.001 ? 800 : 600, padding: '4px 2px', boxShadow: absH > 0 ? 'inset 0 -3px 0 var(--ink-3)' : undefined }}
+                    title={`${pers.nom} · semaine du ${fmtDate(l)}\n${fmtHeures(h)} planifiées / ${Math.round(capP)} h capacité${absH > 0 ? ` (${Math.round(absH)} h de congé)` : ''} (${Math.round(ratio * 100)} %)`}
                   >
                     {h < 0.05 ? '·' : Math.round(h)}
                   </td>
@@ -647,11 +661,11 @@ function PlanDeCharge({ debutLundi, nbSemaines }: { debutLundi: string; nbSemain
             </td>
             {lundis.map((l) => {
               const t = totalSemaine(l)
-              const capEquipe = cap * equipe.length
+              const capEquipe = equipe.reduce((s, pers) => s + capacitePersonneSemaine(state, pers.nom, l), 0)
               const ratio = capEquipe > 0 ? t / capEquipe : 0
               const { fg } = couleurCharge(ratio)
               return (
-                <td key={l} style={{ textAlign: 'center', fontSize: 11, fontWeight: 700, color: fg, borderTop: '1px solid var(--line)' }} title={`total équipe · ${fmtHeures(t)} / ${Math.round(capEquipe)} h`}>
+                <td key={l} style={{ textAlign: 'center', fontSize: 11, fontWeight: 700, color: fg, borderTop: '1px solid var(--line)' }} title={`total équipe · ${fmtHeures(t)} / ${Math.round(capEquipe)} h capacité (congés déduits)`}>
                   {t < 0.05 ? '·' : Math.round(t)}
                 </td>
               )
@@ -664,8 +678,97 @@ function PlanDeCharge({ debutLundi, nbSemaines }: { debutLundi: string; nbSemain
         <span><span style={{ display: 'inline-block', width: 11, height: 11, borderRadius: 2, background: 'var(--ok-soft)', marginRight: 4, verticalAlign: 'middle' }} />marge</span>
         <span><span style={{ display: 'inline-block', width: 11, height: 11, borderRadius: 2, background: 'var(--warn-soft)', marginRight: 4, verticalAlign: 'middle' }} />presque plein</span>
         <span><span style={{ display: 'inline-block', width: 11, height: 11, borderRadius: 2, background: 'var(--danger-soft)', marginRight: 4, verticalAlign: 'middle' }} />surcharge</span>
+        <span className="muted"><em>congé</em> = semaine indisponible ; capacité réduite les semaines partiellement en congé.</span>
       </p>
     </div>
+  )
+}
+
+function GestionAbsences() {
+  const { state, update, replace } = useStore()
+  const equipe = state.settings.equipe
+  const [personne, setPersonne] = useState(equipe[0]?.nom || '')
+  const [debut, setDebut] = useState<string | null>(null)
+  const [fin, setFin] = useState<string | null>(null)
+  const [motif, setMotif] = useState('')
+
+  const absences = [...state.absences].sort((a, b) => (b.debut || '').localeCompare(a.debut || ''))
+
+  const ajouter = () => {
+    if (!personne) return toast('Choisir une personne.', { tone: 'danger' })
+    if (!debut || !fin) return toast('Indiquer les dates de début et de fin.', { tone: 'danger' })
+    if (fin < debut) return toast('La fin est avant le début.', { tone: 'danger' })
+    update((d) => {
+      d.absences.push({ id: uid('abs'), personne, debut, fin, motif: motif.trim() || undefined })
+    })
+    toast('Congé ajouté.', { tone: 'ok' })
+    setDebut(null)
+    setFin(null)
+    setMotif('')
+  }
+
+  const supprimer = async (id: string) => {
+    const snap = state
+    if (!(await confirmer({ message: 'Supprimer ce congé ?', danger: true, confirmerLabel: 'Supprimer' }))) return
+    update((d) => {
+      d.absences = d.absences.filter((a) => a.id !== id)
+    })
+    toast('Congé supprimé.', { undo: () => replace(snap) })
+  }
+
+  return (
+    <Card titre="Congés & absences">
+      <p className="small muted" style={{ marginTop: 0, marginBottom: 8 }}>
+        Les congés réduisent la capacité de la personne dans le plan de charge ci-dessus.
+      </p>
+      {equipe.length === 0 ? (
+        <EmptyState>Renseignez l'équipe dans Paramètres pour saisir des congés.</EmptyState>
+      ) : (
+        <>
+          <div className="form-row" style={{ alignItems: 'flex-end' }}>
+            <Field label="Personne">
+              <Select value={personne} onChange={setPersonne} options={equipe.map((p) => ({ value: p.nom, label: p.nom }))} />
+            </Field>
+            <Field label="Du">
+              <DateInput value={debut} onChange={setDebut} />
+            </Field>
+            <Field label="Au">
+              <DateInput value={fin} onChange={setFin} />
+            </Field>
+            <Field label="Motif (optionnel)">
+              <TextInput value={motif} onChange={setMotif} placeholder="Congés, formation…" />
+            </Field>
+            <Btn kind="primary" onClick={ajouter}>Ajouter</Btn>
+          </div>
+          {absences.length > 0 && (
+            <table className="table table-compact" style={{ marginTop: 12 }}>
+              <thead>
+                <tr>
+                  <th>Personne</th>
+                  <th>Du</th>
+                  <th>Au</th>
+                  <th>Motif</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {absences.map((a) => (
+                  <tr key={a.id}>
+                    <td><strong>{a.personne}</strong></td>
+                    <td>{fmtDate(a.debut)}</td>
+                    <td>{fmtDate(a.fin)}</td>
+                    <td className="muted small">{a.motif || '—'}</td>
+                    <td className="right">
+                      <Btn small kind="ghost" onClick={() => supprimer(a.id)}>Suppr.</Btn>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </>
+      )}
+    </Card>
   )
 }
 
@@ -935,6 +1038,7 @@ function GanttEtCharge({ vue }: { vue: 'gantt' | 'charge' }) {
         )}
       </Card>
 
+      {mode === 'charge' && <GestionAbsences />}
       {projetSelectionne && mode === 'phases' && <EditionDates projet={projetSelectionne} />}
       {projetSelectionne && mode === 'chantier' && <EditionChantier projet={projetSelectionne} />}
     </>

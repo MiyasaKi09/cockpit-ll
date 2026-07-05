@@ -7,7 +7,6 @@ import { alertesActives } from './alerts'
 import { basculerTheme, themeCourant } from './theme'
 
 import Cockpit from './modules/Cockpit'
-import BienDemarrer from './modules/BienDemarrer'
 import Recherche from './modules/Recherche'
 import Analyse from './modules/Analyse'
 import Projets from './modules/Projets'
@@ -22,7 +21,6 @@ import Classement from './modules/Classement'
 import Ressources from './modules/Ressources'
 import Agenda from './modules/Agenda'
 import Parametres from './modules/Parametres'
-import Sante from './modules/Sante'
 import Calendrier from './modules/Calendrier'
 import Planning from './modules/Planning'
 
@@ -34,7 +32,6 @@ const NAV: { groupe: string; items: { path: string; label: string }[] }[] = [
       { path: 'calendrier', label: 'Calendrier' },
       { path: 'planning', label: 'Planning' },
       { path: 'recherche', label: 'Recherche ( / )' },
-      { path: 'demarrer', label: 'Bien démarrer' },
       { path: 'projets', label: 'Projets' },
       { path: 'situations', label: 'Situations de travaux' },
       { path: 'facturation', label: 'Factures & relances' },
@@ -64,10 +61,7 @@ const NAV: { groupe: string; items: { path: string; label: string }[] }[] = [
   },
   {
     groupe: 'Agence',
-    items: [
-      { path: 'sante', label: 'Santé des branchements' },
-      { path: 'parametres', label: 'Paramètres & données' },
-    ],
+    items: [{ path: 'parametres', label: 'Paramètres' }],
   },
 ]
 
@@ -105,7 +99,7 @@ export default function App() {
       page = <Analyse />
       break
     case 'demarrer':
-      page = <BienDemarrer />
+      page = <Parametres ongletInitial="demarrer" />
       break
     case 'projets':
       page = <Projets />
@@ -147,7 +141,7 @@ export default function App() {
       page = <Parametres />
       break
     case 'sante':
-      page = <Sante />
+      page = <Parametres ongletInitial="branchements" />
       break
     case 'calendrier':
       page = <Calendrier />

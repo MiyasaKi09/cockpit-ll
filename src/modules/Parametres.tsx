@@ -13,17 +13,29 @@ import {
   Card,
   Field,
   Money,
+  navigate,
   NumInput,
   Page,
   Select,
   Table,
+  Tabs,
   TextInput,
+  useRoute,
   useToday,
 } from '../ui'
 import { download, fmtDate, fmtMoney, fmtPct, fold, todayISO, uid } from '../util'
 import { coefSuggere, coutAgenceAnnuel, coutAnnuelPersonne, coutHorairePersonne, coutHoraireMoyen, coutJourObjectif, objectifCA, tauxVente, tauxVenteObjectif } from '../derive'
 import { connecterGoogle, deconnecter, estConnecte } from '../google'
 import { connecterSync, deconnecterSync, envoyerLienMagique, pousserEtat, syncEtat, tirerEtat } from '../sync'
+import { SanteContenu } from './Sante'
+import { BienDemarrerContenu } from './BienDemarrer'
+
+const ONGLETS: { id: string; label: string }[] = [
+  { id: 'agence', label: 'Agence & coûts' },
+  { id: 'branchements', label: 'Branchements' },
+  { id: 'donnees', label: 'Sauvegarde & données' },
+  { id: 'demarrer', label: 'Bien démarrer' },
+]
 
 const TYPES_MO: TypeMO[] = ['Public', 'Privé pro', 'Particulier']
 
@@ -347,10 +359,13 @@ function CarteSync() {
   )
 }
 
-export default function Parametres() {
+export default function Parametres({ ongletInitial = 'agence' }: { ongletInitial?: string }) {
+  const route = useRoute()
   const { state, update, replace } = useStore()
   const s = state.settings
   const today = useToday()
+  const segment = route[0] === 'parametres' ? route[1] : ongletInitial
+  const onglet = ONGLETS.some((o) => o.id === segment) ? segment! : 'agence'
   const [messageExcel, setMessageExcel] = useState('')
   const [messageJSON, setMessageJSON] = useState('')
   const fichierExcel = useRef<HTMLInputElement>(null)
@@ -462,10 +477,11 @@ export default function Parametres() {
   const maj = (fn: (d: AppState) => void) => update(fn)
 
   return (
-    <Page
-      titre="Paramètres & données"
-      sousTitre="Réglages de l'agence, trésorerie, Excel et sauvegardes."
-    >
+    <Page titre="Paramètres" sousTitre="Réglages de l'agence, branchements, sauvegarde et prise en main.">
+      <Tabs tabs={ONGLETS} actif={onglet} onSelect={(id) => navigate(`/parametres/${id}`)} />
+
+      {onglet === 'agence' && (
+        <>
       <div className="grid2">
         <Card titre="Trésorerie disponible (météo financière)">
           <div className="form-row">
@@ -710,7 +726,11 @@ export default function Parametres() {
           </Field>
         </div>
       </Card>
+        </>
+      )}
 
+      {onglet === 'donnees' && (
+        <>
       <div className="grid2">
         <Card titre="Sauvegarde des données">
           <p className="small muted" style={{ marginBottom: 10 }}>
@@ -766,10 +786,18 @@ export default function Parametres() {
           )}
         </Card>
       </div>
+        </>
+      )}
 
-      <CarteSync />
-
+      {onglet === 'branchements' && (
+        <>
       <CarteSurveillance />
+      <CarteSync />
+      <SanteContenu />
+        </>
+      )}
+
+      {onglet === 'demarrer' && <BienDemarrerContenu />}
     </Page>
   )
 }

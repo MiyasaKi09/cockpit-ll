@@ -9,7 +9,7 @@
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { useStore } from '../store'
-import { Badge, Btn, Card, EmptyState, Page } from '../ui'
+import { Badge, Btn, Card, EmptyState } from '../ui'
 import { diffDays, fmtDate, todayISO } from '../util'
 import { estConnecte } from '../google'
 import { syncEtat } from '../sync'
@@ -118,9 +118,9 @@ function SanteGoogle() {
     >
       {!sv?.clientId ? (
         <p className="small">
-          Pas encore configuré — le Client ID Google se crée en 10 minutes (guide pas à pas dans{' '}
-          <a href="#/parametres">Paramètres → Surveillance</a>). Ensuite, chaque mail reçu apparaît
-          dans « À traiter », rattaché au bon projet.
+          Pas encore configuré — le Client ID Google se crée en 10 minutes (guide dans le réglage{' '}
+          <a href="#/parametres/branchements">Surveillance</a> ci-dessus). Ensuite, chaque mail reçu
+          apparaît dans « À traiter », rattaché au bon projet.
         </p>
       ) : (
         <>
@@ -130,7 +130,7 @@ function SanteGoogle() {
             ) : (
               <>
                 <Badge tone="warn">session coupée</Badge>{' '}
-                <a href="#/parametres">se reconnecter dans Paramètres</a> (la session Google dure ~1 h)
+                <a href="#/parametres/branchements">se reconnecter</a> (réglage ci-dessus ; la session Google dure ~1 h)
               </>
             )}
             {scan && <span className="muted"> · dernier scan : {fmtInstant(scan)}</span>}
@@ -505,7 +505,7 @@ function SanteDonnees() {
         ) : (
           <Badge tone="warn">aucune sauvegarde JSON pour l'instant</Badge>
         )}{' '}
-        <a href="#/parametres">exporter maintenant (30 s)</a>
+        <a href="#/parametres/donnees">exporter maintenant (30 s)</a>
       </p>
       <p className="small muted" style={{ marginTop: 6 }}>
         Excel maître :{' '}
@@ -528,9 +528,9 @@ function SanteSync() {
     <Branchement etat={etat} titre="Synchronisation 2 postes — Supabase (temps réel + sauvegarde)">
       {!cfg?.url || !cfg.anonKey ? (
         <p className="small">
-          Pas encore configurée — optionnelle. Reliez un projet Supabase gratuit dans{' '}
-          <a href="#/parametres">Paramètres → Synchronisation</a> pour partager l’état entre Julien et Zoé en
-          temps réel (et l’avoir sauvegardé hors du navigateur). Sans elle, tout reste en local.
+          Pas encore configurée — optionnelle. Reliez un projet Supabase gratuit dans le réglage{' '}
+          <a href="#/parametres/branchements">Synchronisation</a> ci-dessus pour partager l’état entre Julien et
+          Zoé en temps réel (et l’avoir sauvegardé hors du navigateur). Sans elle, tout reste en local.
         </p>
       ) : (
         <p className="small">
@@ -539,7 +539,7 @@ function SanteSync() {
           ) : (
             <>
               <Badge tone="warn">session non connectée</Badge>{' '}
-              <a href="#/parametres">se connecter (lien magique) dans Paramètres</a>
+              <a href="#/parametres/branchements">se connecter (lien magique, réglage ci-dessus)</a>
             </>
           )}
           {etat_.derniereSync && <span className="muted"> · dernière synchro : {fmtInstant(etat_.derniereSync)}</span>}
@@ -550,14 +550,14 @@ function SanteSync() {
   )
 }
 
-// ---------- page ----------
+// ---------- contenu (onglet Branchements de Paramètres) ----------
 
-export default function Sante() {
+export function SanteContenu() {
   return (
-    <Page
-      titre="Santé des branchements"
-      sousTitre="« Est-ce que tout marche ? » — l'état de chaque branchement, un bouton pour tester. Vert = ça tourne."
-    >
+    <>
+      <p className="small muted" style={{ margin: '0 0 4px' }}>
+        Un bouton pour tester chaque branchement. Vert = ça tourne.
+      </p>
       <SanteGoogle />
       <SanteBoamp />
       <SanteRelais />
@@ -566,6 +566,6 @@ export default function Sante() {
       <SanteRoutines />
       <SanteSync />
       <SanteDonnees />
-    </Page>
+    </>
   )
 }

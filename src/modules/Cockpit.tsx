@@ -392,10 +392,10 @@ export default function Cockpit() {
             <span className="badge badge-ok">⚡ Gmail & Agenda en direct</span>
           ) : (
             state.settings.surveillance?.clientId && (
-              <a href="#/parametres" className="badge badge-muted">surveillance coupée — reconnecter</a>
+              <a href="#/parametres/branchements" className="badge badge-muted">surveillance coupée — reconnecter</a>
             )
           )}{' '}
-          <a href="#/sante" className="badge badge-muted" title="Tester chaque branchement en un clic">
+          <a href="#/parametres/branchements" className="badge badge-muted" title="Tester chaque branchement en un clic">
             ✚ santé des branchements
           </a>
         </>

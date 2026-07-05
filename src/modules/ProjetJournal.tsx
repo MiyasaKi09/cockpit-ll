@@ -10,7 +10,7 @@ import type { NoteJournal, Projet } from '../types'
 import { useStore } from '../store'
 import { suggererTags, taggerImage } from '../tagging'
 import { lireRacine, nomConforme, rangerFichier, supporteFS } from '../fsdrive'
-import { Badge, Btn, Card, CopyBtn, EmptyState, Select, TextArea, TextInput } from '../ui'
+import { Badge, Btn, Card, CopyBtn, EmptyState, Select, TextArea, TextInput, confirmer, toast } from '../ui'
 import { fmtDate, fold, todayISO, uid } from '../util'
 
 function noteEnMarkdown(p: Projet, n: NoteJournal): string {
@@ -31,7 +31,7 @@ function noteEnMarkdown(p: Projet, n: NoteJournal): string {
 }
 
 export default function ProjetJournal({ projet: p }: { projet: Projet }) {
-  const { state, update } = useStore()
+  const { state, update, replace } = useStore()
   const [texte, setTexte] = useState('')
   const [tagsManuels, setTagsManuels] = useState('')
   const [tagsRetires, setTagsRetires] = useState<string[]>([])
@@ -248,11 +248,14 @@ export default function ProjetJournal({ projet: p }: { projet: Projet }) {
                 <Btn
                   small
                   kind="danger"
-                  onClick={() => {
-                    if (confirm('Supprimer cette note ?'))
+                  onClick={async () => {
+                    const snap = state
+                    if (await confirmer({ message: 'Supprimer cette note ?', danger: true, confirmerLabel: 'Supprimer' })) {
                       maj((pr) => {
                         pr.journal = pr.journal.filter((x) => x.id !== n.id)
                       })
+                      toast('Note supprimée.', { undo: () => replace(snap) })
+                    }
                   }}
                 >
                   ✕

@@ -18,6 +18,8 @@ import {
   Page,
   Select,
   Table,
+  confirmer,
+  toast,
   useToday,
 } from '../ui'
 import { addDays, fmtDate, fmtHeures, mondayOf, todayISO, uid } from '../util'
@@ -88,7 +90,7 @@ function TableauPersonne({
   semaines: string[]
   today: string
 }) {
-  const { state, update } = useStore()
+  const { state, update, replace } = useStore()
   const actifs = state.projets.filter((p) => STATUTS_ACTIFS.includes(p.statut))
   const [ajoutees, setAjoutees] = useState<Couple[]>([])
   const [projetSel, setProjetSel] = useState(actifs[0]?.id ?? '')
@@ -127,13 +129,15 @@ function TableauPersonne({
       p.equipeProjet = [...new Set([...(p.equipeProjet || []), personne])]
     })
 
-  const desaffecter = (projetId: string) => {
-    if (!confirm(`Retirer ${personne} du projet ${projetId} ? (les heures déjà pointées restent)`)) return
+  const desaffecter = async (projetId: string) => {
+    const snap = state
+    if (!(await confirmer({ message: `Retirer ${personne} du projet ${projetId} ? (les heures déjà pointées restent)`, danger: true, confirmerLabel: 'Retirer' }))) return
     update((d) => {
       const p = d.projets.find((x) => x.id === projetId)
       if (!p) return
       p.equipeProjet = (p.equipeProjet || []).filter((n) => n !== personne)
     })
+    toast('Ligne retirée.', { undo: () => replace(snap) })
   }
 
   const heuresDe = (semaine: string, c: Couple): number | null => {
@@ -179,7 +183,7 @@ function TableauPersonne({
   const ajouterLigne = () => {
     if (!projetSel) return
     if (couples.some((c) => c.projetId === projetSel && c.phase === phaseSel)) {
-      alert('Cette ligne (projet + phase) est déjà dans le tableau.')
+      toast('Cette ligne (projet + phase) est déjà dans le tableau.', { tone: 'warn' })
       return
     }
     setAjoutees((ls) => [...ls, { projetId: projetSel, phase: phaseSel }])

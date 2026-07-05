@@ -21,6 +21,8 @@ import {
   Table,
   TextArea,
   TextInput,
+  confirmer,
+  toast,
   useToday,
 } from '../ui'
 import { fmtDate, fmtMoney, fold, uid } from '../util'
@@ -185,7 +187,7 @@ function ModalReference({
 // ---------- module ----------
 
 export function ReferencesContenu() {
-  const { state, update } = useStore()
+  const { state, update, replace } = useStore()
   const today = useToday()
 
   const [recherche, setRecherche] = useState('')
@@ -217,11 +219,13 @@ export function ReferencesContenu() {
     return `${entete}\n${corps}`
   }
 
-  const supprimer = (r: Reference) => {
-    if (!confirm(`Supprimer la référence « ${r.nom} » ?`)) return
+  const supprimer = async (r: Reference) => {
+    const snap = state
+    if (!(await confirmer({ message: `Supprimer la référence « ${r.nom} » ?`, danger: true, confirmerLabel: 'Supprimer' }))) return
     update((d) => {
       d.references = d.references.filter((x) => x.id !== r.id)
     })
+    toast('Référence supprimée.', { undo: () => replace(snap) })
   }
 
   const enregistrer = (ref: Reference) => {

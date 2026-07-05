@@ -9,7 +9,7 @@
 import { useState } from 'react'
 import type { AppState, MarcheTravaux, PhaseCode, Projet } from '../types'
 import { useStore } from '../store'
-import { Badge, Btn, Card, DateInput, EmptyState, Field, Icon, NumInput, navigate, Page, Select, Tabs, useRoute, useToday } from '../ui'
+import { Badge, Btn, Card, confirmer, DateInput, EmptyState, Field, Icon, NumInput, navigate, Page, Select, Tabs, useRoute, useToday } from '../ui'
 import { addDays, diffDays, fmtDate, fmtHeures, mondayOf, todayISO } from '../util'
 import { LIBELLES_PHASES, PHASES_ORDRE } from '../miqcp'
 import { daterPhases, facturesParDefaut } from '../echeancier'
@@ -142,8 +142,8 @@ function EditionDates({ projet: p }: { projet: Projet }) {
   // des phases (après un décalage). On ne touche jamais aux factures déjà
   // émises ou encaissées — seules les prévues sont régénérées.
   const prevuesDuProjet = state.factures.filter((f) => f.projetId === p.id && f.statut === 'prevue').length
-  const realignerEcheancier = () => {
-    if (prevuesDuProjet > 0 && !window.confirm(`Régénérer l'échéancier prévisionnel de ${p.id} ?\n\nLes ${prevuesDuProjet} facture(s) « prévue(s) » seront remplacées d'après les dates actuelles des phases. Les factures déjà émises ou encaissées ne bougent pas.`)) return
+  const realignerEcheancier = async () => {
+    if (prevuesDuProjet > 0 && !(await confirmer({ message: `Régénérer l'échéancier prévisionnel de ${p.id} ?\n\nLes ${prevuesDuProjet} facture(s) « prévue(s) » seront remplacées d'après les dates actuelles des phases. Les factures déjà émises ou encaissées ne bougent pas.`, danger: true }))) return
     update((d) => {
       const pr = d.projets.find((x) => x.id === p.id)
       if (!pr) return

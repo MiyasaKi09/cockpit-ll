@@ -27,6 +27,8 @@ import {
   Stat,
   Table,
   TextInput,
+  confirmer,
+  toast,
   useToday,
 } from '../ui'
 import { delaiMoyenPaiement, encaissementPrevu, nomProjet, projetById, retardFacture, ttc } from '../derive'
@@ -111,34 +113,14 @@ function FactureModal({
 
   const valider = () => {
     const numero = v.numero.trim()
-    if (creation && !numero) {
-      alert('Indiquer un numéro de facture.')
-      return
-    }
-    if (creation && state.factures.some((f) => f.id === numero)) {
-      alert(`Le numéro ${numero} existe déjà.`)
-      return
-    }
-    if (!v.projetId) {
-      alert('Choisir un projet.')
-      return
-    }
-    if (!v.libelle.trim()) {
-      alert('Indiquer un libellé.')
-      return
-    }
-    if (v.montantHT === null) {
-      alert('Indiquer le montant HT.')
-      return
-    }
-    if (!v.emission) {
-      alert("Indiquer la date d'émission.")
-      return
-    }
-    if (v.delaiJours === null) {
-      alert('Indiquer le délai de paiement (jours).')
-      return
-    }
+    if (creation && !numero) return toast('Indiquer un numéro de facture.', { tone: 'danger' })
+    if (creation && state.factures.some((f) => f.id === numero))
+      return toast(`Le numéro ${numero} existe déjà.`, { tone: 'danger' })
+    if (!v.projetId) return toast('Choisir un projet.', { tone: 'danger' })
+    if (!v.libelle.trim()) return toast('Indiquer un libellé.', { tone: 'danger' })
+    if (v.montantHT === null) return toast('Indiquer le montant HT.', { tone: 'danger' })
+    if (!v.emission) return toast("Indiquer la date d'émission.", { tone: 'danger' })
+    if (v.delaiJours === null) return toast('Indiquer le délai de paiement (jours).', { tone: 'danger' })
     onSave({ ...v, numero, libelle: v.libelle.trim() })
   }
 
@@ -244,7 +226,7 @@ function EncaisserModal({
           kind="primary"
           onClick={() => {
             if (!date) {
-              alert("Indiquer la date d'encaissement.")
+              toast("Indiquer la date d'encaissement.", { tone: 'danger' })
               return
             }
             onConfirm(date)
@@ -373,7 +355,7 @@ function emailFacture(state: AppState, f: Facture): void {
 // ---------- module ----------
 
 export default function Facturation() {
-  const { state, update } = useStore()
+  const { state, update, replace } = useStore()
   const today = useToday()
 
   const [filtreProjet, setFiltreProjet] = useState('')
@@ -426,11 +408,13 @@ export default function Facturation() {
       }
     })
 
-  const supprimer = (f: Facture) => {
-    if (!confirm(`Supprimer la facture ${f.id} — ${f.libelle} ?`)) return
+  const supprimer = async (f: Facture) => {
+    const snap = state
+    if (!(await confirmer({ message: `Supprimer la facture ${f.id} — ${f.libelle} ?`, danger: true, confirmerLabel: 'Supprimer' }))) return
     update((d) => {
       d.factures = d.factures.filter((y) => y.id !== f.id)
     })
+    toast('Facture supprimée.', { undo: () => replace(snap) })
   }
 
   const creer = (v: ValeursFacture) => {

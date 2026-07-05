@@ -25,6 +25,8 @@ import {
   TextArea,
   TextInput,
   NumInput,
+  confirmer,
+  toast,
   useToday,
 } from '../ui'
 import { diffDays, fmtDate, fold, todayISO, uid } from '../util'
@@ -93,7 +95,7 @@ function ListeRessources({ ongletInitial }: { ongletInitial: string }) {
 // ------------------------------------------------------------------
 
 function FicheMateriauPage({ id }: { id: string }) {
-  const { state, update } = useStore()
+  const { state, update, replace } = useStore()
   const [edition, setEdition] = useState(false)
   const m = state.materiaux.find((x) => x.id === id)
 
@@ -119,12 +121,14 @@ function FicheMateriauPage({ id }: { id: string }) {
           <Btn onClick={() => setEdition(true)}>Modifier</Btn>
           <Btn
             kind="danger"
-            onClick={() => {
-              if (confirm(`Supprimer ${m.nom} ?`)) {
+            onClick={async () => {
+              const snap = state
+              if (await confirmer({ message: `Supprimer ${m.nom} ?`, danger: true, confirmerLabel: 'Supprimer' })) {
                 update((d) => {
                   d.materiaux = d.materiaux.filter((x) => x.id !== m.id)
                   for (const pr of d.projets) pr.materiauxIds = pr.materiauxIds.filter((x) => x !== m.id)
                 })
+                toast('Matériau supprimé.', { undo: () => replace(snap) })
                 navigate('/ressources/materiaux')
               }
             }}
@@ -177,7 +181,7 @@ function FicheMateriauPage({ id }: { id: string }) {
 }
 
 function FicheArtisanPage({ id }: { id: string }) {
-  const { state, update } = useStore()
+  const { state, update, replace } = useStore()
   const today = useToday()
   const [edition, setEdition] = useState(false)
   const a = state.artisans.find((x) => x.id === id)
@@ -201,12 +205,14 @@ function FicheArtisanPage({ id }: { id: string }) {
           <Btn onClick={() => setEdition(true)}>Modifier</Btn>
           <Btn
             kind="danger"
-            onClick={() => {
-              if (confirm(`Supprimer ${a.nom} ?`)) {
+            onClick={async () => {
+              const snap = state
+              if (await confirmer({ message: `Supprimer ${a.nom} ?`, danger: true, confirmerLabel: 'Supprimer' })) {
                 update((d) => {
                   d.artisans = d.artisans.filter((x) => x.id !== a.id)
                   for (const pr of d.projets) pr.artisanIds = pr.artisanIds.filter((x) => x !== a.id)
                 })
+                toast('Artisan supprimé.', { undo: () => replace(snap) })
                 navigate('/ressources')
               }
             }}
@@ -289,7 +295,7 @@ function artisanVide(): Artisan {
 }
 
 function OngletArtisans() {
-  const { state, update } = useStore()
+  const { state, update, replace } = useStore()
   const today = useToday()
   const [recherche, setRecherche] = useState('')
   const [filtreLot, setFiltreLot] = useState('')
@@ -368,11 +374,14 @@ function OngletArtisans() {
                   <Btn
                     small
                     kind="danger"
-                    onClick={() => {
-                      if (confirm(`Supprimer ${a.nom} ?`))
+                    onClick={async () => {
+                      const snap = state
+                      if (await confirmer({ message: `Supprimer ${a.nom} ?`, danger: true, confirmerLabel: 'Supprimer' })) {
                         update((d) => {
                           d.artisans = d.artisans.filter((x) => x.id !== a.id)
                         })
+                        toast('Artisan supprimé.', { undo: () => replace(snap) })
+                      }
                     }}
                   >
                     Suppr.
@@ -471,7 +480,7 @@ function materiauVide(): Materiau {
 }
 
 function OngletMateriaux() {
-  const { state, update } = useStore()
+  const { state, update, replace } = useStore()
   const [recherche, setRecherche] = useState('')
   const [filtreTag, setFiltreTag] = useState('')
   const [edition, setEdition] = useState<Materiau | null>(null)
@@ -595,11 +604,14 @@ function OngletMateriaux() {
                   <Btn
                     small
                     kind="danger"
-                    onClick={() => {
-                      if (confirm(`Supprimer ${m.nom} ?`))
+                    onClick={async () => {
+                      const snap = state
+                      if (await confirmer({ message: `Supprimer ${m.nom} ?`, danger: true, confirmerLabel: 'Supprimer' })) {
                         update((d) => {
                           d.materiaux = d.materiaux.filter((x) => x.id !== m.id)
                         })
+                        toast('Matériau supprimé.', { undo: () => replace(snap) })
+                      }
                     }}
                   >
                     Suppr.

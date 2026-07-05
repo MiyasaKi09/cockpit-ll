@@ -383,6 +383,60 @@ export function RowMenu({ items }: { items: MenuAction[] }) {
   )
 }
 
+// ---------- confirmation (modale accessible, remplace confirm() natif) ----------
+
+interface ConfirmOpts {
+  titre?: string
+  message: ReactNode
+  confirmerLabel?: string
+  annulerLabel?: string
+  danger?: boolean
+}
+
+let confirmEnCours: { opts: ConfirmOpts; resolve: (v: boolean) => void } | null = null
+const confirmListeners = new Set<() => void>()
+const emettreConfirm = () => confirmListeners.forEach((l) => l())
+
+/** demande une confirmation via une modale accessible ; résout à true/false. */
+export function confirmer(opts: ConfirmOpts | string): Promise<boolean> {
+  const o = typeof opts === 'string' ? { message: opts } : opts
+  return new Promise((resolve) => {
+    confirmEnCours = { opts: o, resolve }
+    emettreConfirm()
+  })
+}
+
+function fermerConfirm(v: boolean) {
+  confirmEnCours?.resolve(v)
+  confirmEnCours = null
+  emettreConfirm()
+}
+
+/** conteneur de confirmation — à monter une fois à la racine de l'app. */
+export function ConfirmHost() {
+  const [, forcer] = useState(0)
+  useEffect(() => {
+    const l = () => forcer((x) => x + 1)
+    confirmListeners.add(l)
+    return () => {
+      confirmListeners.delete(l)
+    }
+  }, [])
+  if (!confirmEnCours) return null
+  const { opts } = confirmEnCours
+  return (
+    <Modal titre={opts.titre || 'Confirmer'} onClose={() => fermerConfirm(false)}>
+      <div style={{ whiteSpace: 'pre-line', marginBottom: 4 }}>{opts.message}</div>
+      <div className="form-foot">
+        <Btn onClick={() => fermerConfirm(false)}>{opts.annulerLabel || 'Annuler'}</Btn>
+        <Btn kind={opts.danger ? 'danger' : 'primary'} onClick={() => fermerConfirm(true)}>
+          {opts.confirmerLabel || 'Confirmer'}
+        </Btn>
+      </div>
+    </Modal>
+  )
+}
+
 // ---------- toasts + undo (feedback global, sans provider) ----------
 
 interface ToastItem {

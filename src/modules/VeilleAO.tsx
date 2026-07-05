@@ -29,7 +29,9 @@ import {
   Tabs,
   TextArea,
   TextInput,
+  confirmer,
   navigate,
+  toast,
   useRoute,
   useToday,
 } from '../ui'
@@ -617,14 +619,14 @@ function FicheModal({
   nouveau: boolean
   onClose: () => void
 }) {
-  const { update } = useStore()
+  const { state, update, replace } = useStore()
   const [c, setC] = useState<Consultation>({ ...initial })
   const maj = (patch: Partial<Consultation>) => setC((prev) => ({ ...prev, ...patch }))
 
   const enregistrer = () => {
     const intitule = c.intitule.trim()
     if (!intitule) {
-      alert("L'intitulé de la consultation est obligatoire.")
+      toast("L'intitulé de la consultation est obligatoire.", { tone: 'danger' })
       return
     }
     const propre: Consultation = { ...c, intitule }
@@ -644,11 +646,13 @@ function FicheModal({
     if (projetCree) navigate(`/projets/${projetCree}`)
   }
 
-  const supprimer = () => {
-    if (!confirm(`Supprimer la consultation « ${c.intitule || 'sans intitulé'} » ?`)) return
+  const supprimer = async () => {
+    const snap = state
+    if (!(await confirmer({ message: `Supprimer la consultation « ${c.intitule || 'sans intitulé'} » ?`, danger: true, confirmerLabel: 'Supprimer' }))) return
     update((d) => {
       d.consultations = d.consultations.filter((x) => x.id !== c.id)
     })
+    toast('Consultation supprimée.', { undo: () => replace(snap) })
     onClose()
   }
 

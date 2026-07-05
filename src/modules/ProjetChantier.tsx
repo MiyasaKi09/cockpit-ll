@@ -21,6 +21,8 @@ import {
   Table,
   TextArea,
   TextInput,
+  confirmer,
+  toast,
 } from '../ui'
 import type { Tone } from '../ui'
 import { fmtDate, fmtMoney, fmtPct, todayISO, uid } from '../util'
@@ -34,22 +36,24 @@ import { copier } from '../prompts'
 // ============================================================
 
 export function CarteMarches({ projet: p }: { projet: Projet }) {
-  const { state, update } = useStore()
+  const { state, update, replace } = useStore()
   const [modal, setModal] = useState<{ marche?: MarcheTravaux } | null>(null)
 
   const marches = state.marches.filter((m) => m.projetId === p.id)
 
-  const supprimer = (m: MarcheTravaux) => {
+  const supprimer = async (m: MarcheTravaux) => {
+    const snap = state
     const nbSits = state.situations.filter((s) => s.marcheId === m.id).length
     const question =
       nbSits > 0
         ? `Supprimer le marché « ${m.lot} — ${m.entreprise} » ?\n${nbSits} situation(s) y sont rattachées : elles seront conservées mais détachées du marché.`
         : `Supprimer le marché « ${m.lot} — ${m.entreprise} » ?`
-    if (!confirm(question)) return
+    if (!(await confirmer({ message: question, danger: true, confirmerLabel: 'Supprimer' }))) return
     update((d) => {
       d.marches = d.marches.filter((x) => x.id !== m.id)
       for (const s of d.situations) if (s.marcheId === m.id) s.marcheId = null
     })
+    toast('Marché supprimé.', { undo: () => replace(snap) })
   }
 
   return (
@@ -277,7 +281,7 @@ function participantsParDefaut(state: ReturnType<typeof useStore>['state'], p: P
 }
 
 export function CarteReunions({ projet: p }: { projet: Projet }) {
-  const { state, update } = useStore()
+  const { state, update, replace } = useStore()
   const [assistant, setAssistant] = useState<{ reunion: ReunionChantier; fichier?: File } | null>(null)
 
   const reunions = state.reunions
@@ -343,11 +347,14 @@ export function CarteReunions({ projet: p }: { projet: Projet }) {
                   <Btn
                     small
                     kind="danger"
-                    onClick={() => {
-                      if (confirm(`Supprimer « ${r.titre} » ?`))
+                    onClick={async () => {
+                      const snap = state
+                      if (await confirmer({ message: `Supprimer « ${r.titre} » ?`, danger: true, confirmerLabel: 'Supprimer' })) {
                         update((d) => {
                           d.reunions = d.reunions.filter((x) => x.id !== r.id)
                         })
+                        toast('Réunion supprimée.', { undo: () => replace(snap) })
+                      }
                     }}
                   >
                     Suppr.
@@ -406,9 +413,12 @@ function AssistantCR({
     const dureeSuspecte = file.size > 250 * 1024 * 1024
     if (
       dureeSuspecte &&
-      !confirm(
-        'Fichier volumineux : pour une réunion de plus de ~1 h 30, préférez un enregistrement mono compressé (m4a) ou coupez le fichier en deux. Tenter quand même ?',
-      )
+      !(await confirmer({
+        message:
+          'Fichier volumineux : pour une réunion de plus de ~1 h 30, préférez un enregistrement mono compressé (m4a) ou coupez le fichier en deux. Tenter quand même ?',
+        danger: true,
+        confirmerLabel: 'Tenter quand même',
+      }))
     )
       return
     setProgres({ etape: 'Préparation…' })

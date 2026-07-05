@@ -5,6 +5,7 @@ import { createContext, useCallback, useContext, useMemo, useState } from 'react
 import type { ReactNode } from 'react'
 import type { AppState, Personne } from './types'
 import { seedState, STATE_VERSION } from './seed'
+import { DEPARTEMENTS_DEFAUT } from './boamp'
 
 const STORAGE_KEY = 'cockpit-ll-v1'
 
@@ -44,6 +45,10 @@ function migrate(parsed: AppState): AppState {
     }
   })
   if (typeof parsed.settings?.fraisGenerauxAnnuels !== 'number') etat.settings.fraisGenerauxAnnuels = 30040
+  // veille AO : l'ancien défaut « 60, 80, 02 » s'élargit aux 3 régions complètes
+  if (etat.settings.veilleBoamp && etat.settings.veilleBoamp.departements.replace(/\s/g, '') === '60,80,02') {
+    etat.settings.veilleBoamp = { ...etat.settings.veilleBoamp, departements: DEPARTEMENTS_DEFAUT }
+  }
   etat.projets = (parsed.projets || []).map((p) => ({
     ...p,
     liens: Array.isArray(p.liens) ? p.liens : [],

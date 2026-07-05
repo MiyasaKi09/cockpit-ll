@@ -37,9 +37,13 @@ export interface CriteresBoamp {
   depuisJours: number
 }
 
+/** zone de chalandise par défaut : Hauts-de-France + Normandie + Île-de-France, au complet */
+export const DEPARTEMENTS_DEFAUT =
+  '02, 59, 60, 62, 80, 14, 27, 50, 61, 76, 75, 77, 78, 91, 92, 93, 94, 95'
+
 export const CRITERES_DEFAUT: CriteresBoamp = {
   motsCles: "maîtrise d'oeuvre, réhabilitation, architecte",
-  departements: '60, 80, 02',
+  departements: DEPARTEMENTS_DEFAUT,
   typeMarche: 'Services',
   depuisJours: 30,
 }

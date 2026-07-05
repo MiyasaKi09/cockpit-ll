@@ -22,12 +22,16 @@ import Ressources from './modules/Ressources'
 import Agenda from './modules/Agenda'
 import Parametres from './modules/Parametres'
 import Sante from './modules/Sante'
+import Calendrier from './modules/Calendrier'
+import Planning from './modules/Planning'
 
 const NAV: { groupe: string; items: { path: string; label: string }[] }[] = [
   {
     groupe: 'Pilotage',
     items: [
       { path: '', label: 'Cockpit' },
+      { path: 'calendrier', label: 'Calendrier' },
+      { path: 'planning', label: 'Planning' },
       { path: 'recherche', label: 'Recherche ( / )' },
       { path: 'demarrer', label: 'Bien démarrer' },
       { path: 'projets', label: 'Projets' },
@@ -141,6 +145,12 @@ export default function App() {
       break
     case 'sante':
       page = <Sante />
+      break
+    case 'calendrier':
+      page = <Calendrier />
+      break
+    case 'planning':
+      page = <Planning />
       break
     default:
       page = <Cockpit />

@@ -6,6 +6,7 @@
 // ============================================================
 
 import { useState } from 'react'
+import type { ReactNode } from 'react'
 import type { Phase, PhaseCode, Projet, StatutProjet, TypeMO } from '../types'
 import { useStore } from '../store'
 import {
@@ -281,6 +282,7 @@ function EspaceProjet({ projetId, onglet }: { projetId: string; onglet?: string 
       </p>
 
       <BandeauProjet projet={p} />
+      <LigneIdentite projet={p} />
 
       <Tabs
         tabs={ONGLETS.map((o) => ({ id: o.id, label: o.label }))}
@@ -324,7 +326,7 @@ function BandeauProjet({ projet: p }: { projet: Projet }) {
   const enRetard = state.factures.filter((f) => f.projetId === p.id && retardFacture(f, today) > 0)
 
   return (
-    <div className="grid4" style={{ marginBottom: 16 }}>
+    <div className="grid4" style={{ marginBottom: 8 }}>
       <Stat label="Honoraires totaux" value={<Money v={h.honorairesTotauxHT} />} sub={`taux ${fmtPct(h.tauxFinal, 2)}`} />
       <Stat
         label="Facturé / reste"
@@ -352,6 +354,33 @@ function BandeauProjet({ projet: p }: { projet: Projet }) {
         }
       />
     </div>
+  )
+}
+
+/** ligne « carte d'identité » sous le bandeau (dates, équipe, accès commande…) */
+function LigneIdentite({ projet: p }: { projet: Projet }) {
+  const items: ReactNode[] = []
+  if (p.dateLancement || p.dateCloture)
+    items.push(
+      <span key="dates">
+        📅 <DateF d={p.dateLancement ?? null} /> → <DateF d={p.dateCloture ?? null} />
+      </span>,
+    )
+  {
+    const equipe = [...new Set([p.responsable, p.coResponsable, ...(p.equipeProjet || [])].filter(Boolean))]
+    if (equipe.length > 0) items.push(<span key="resp">👤 {equipe.join(', ')}</span>)
+  }
+  if (p.chargeOperation) items.push(<span key="co">MOA : {p.chargeOperation}</span>)
+  if (p.accesCommande) items.push(<span key="acces">{p.accesCommande}</span>)
+  if (p.typologie || p.typeConstruction)
+    items.push(<span key="typo">{[p.typologie, p.typeConstruction].filter(Boolean).join(' · ')}</span>)
+  if (p.trajetAller) items.push(<span key="trajet">🚗 {p.trajetAller}</span>)
+  if (p.plaisir) items.push(<span key="plaisir" title="plaisir /5">{'★'.repeat(p.plaisir)}</span>)
+  if (items.length === 0) return null
+  return (
+    <p className="muted small" style={{ margin: '0 2px 16px', display: 'flex', gap: 14, flexWrap: 'wrap' }}>
+      {items}
+    </p>
   )
 }
 
@@ -885,10 +914,22 @@ function ModalEditionProjet({ projet, onClose }: { projet: Projet; onClose: () =
   const [ouvrage, setOuvrage] = useState(projet.ouvrage || '')
   const [montant, setMontant] = useState<number | null>(projet.montantTravauxHT ?? null)
   const [surface, setSurface] = useState<number | null>(projet.surfacePlancher ?? null)
+  const [surfaceExt, setSurfaceExt] = useState<number | null>(projet.surfaceExterieure ?? null)
   const [responsable, setResponsable] = useState(projet.responsable || '')
+  const [coResponsable, setCoResponsable] = useState(projet.coResponsable || '')
+  const [equipeProjet, setEquipeProjet] = useState<string[]>(projet.equipeProjet || [])
   const [plaisir, setPlaisir] = useState<number | null>(projet.plaisir ?? null)
   const [numEng, setNumEng] = useState(projet.numeroEngagement || '')
   const [notes, setNotes] = useState(projet.notes || '')
+  const [dateLancement, setDateLancement] = useState<string | null>(projet.dateLancement ?? null)
+  const [dateCloture, setDateCloture] = useState<string | null>(projet.dateCloture ?? null)
+  const [objetFacture, setObjetFacture] = useState(projet.objetFacture || '')
+  const [siretClient, setSiretClient] = useState(projet.siretClient || '')
+  const [chargeOperation, setChargeOperation] = useState(projet.chargeOperation || '')
+  const [accesCommande, setAccesCommande] = useState(projet.accesCommande || '')
+  const [typologie, setTypologie] = useState(projet.typologie || '')
+  const [typeConstruction, setTypeConstruction] = useState(projet.typeConstruction || '')
+  const [trajetAller, setTrajetAller] = useState(projet.trajetAller || '')
 
   const enregistrer = () => {
     if (nom.trim() === '') return
@@ -905,10 +946,22 @@ function ModalEditionProjet({ projet, onClose }: { projet: Projet; onClose: () =
       pr.ouvrage = ouvrage || null
       pr.montantTravauxHT = montant
       pr.surfacePlancher = surface
+      pr.surfaceExterieure = surfaceExt
       pr.responsable = responsable || undefined
+      pr.coResponsable = coResponsable || undefined
+      pr.equipeProjet = equipeProjet
       pr.plaisir = plaisir
       pr.numeroEngagement = numEng.trim() || undefined
       pr.notes = notes.trim() || undefined
+      pr.dateLancement = dateLancement
+      pr.dateCloture = dateCloture
+      pr.objetFacture = objetFacture.trim() || undefined
+      pr.siretClient = siretClient.trim() || undefined
+      pr.chargeOperation = chargeOperation.trim() || undefined
+      pr.accesCommande = accesCommande || undefined
+      pr.typologie = typologie.trim() || undefined
+      pr.typeConstruction = typeConstruction || undefined
+      pr.trajetAller = trajetAller.trim() || undefined
 
       // à la livraison, le projet devient automatiquement une référence
       if (livraison && !d.references.some((r) => fold(r.nom) === fold(pr.nom))) {
@@ -939,32 +992,150 @@ function ModalEditionProjet({ projet, onClose }: { projet: Projet; onClose: () =
     onClose()
   }
 
+  const Section = ({ titre }: { titre: string }) => (
+    <div
+      style={{
+        fontSize: 11,
+        fontWeight: 700,
+        textTransform: 'uppercase',
+        letterSpacing: '0.06em',
+        color: 'var(--ink-3)',
+        borderBottom: '1px solid var(--line)',
+        padding: '14px 0 4px',
+        marginBottom: 8,
+      }}
+    >
+      {titre}
+    </div>
+  )
+
   return (
-    <Modal titre={`Modifier ${projet.id}`} onClose={onClose}>
+    <Modal titre={`Modifier ${projet.id}`} onClose={onClose} large>
+      <Section titre="Identité" />
       <div className="form-row">
         <Field label="Nom du projet">
           <TextInput value={nom} onChange={setNom} />
-        </Field>
-      </div>
-      <div className="form-row">
-        <Field label="Type de maître d’ouvrage">
-          <Select value={typeMO} onChange={setTypeMO} options={TYPES_MO.map((t) => ({ value: t, label: t }))} />
         </Field>
         <Field label="Statut">
           <Select value={statut} onChange={setStatut} options={STATUTS.map((s) => ({ value: s, label: s }))} />
         </Field>
       </div>
       <div className="form-row">
+        <Field label="Lancement">
+          <DateInput value={dateLancement} onChange={setDateLancement} />
+        </Field>
+        <Field label="Clôture (prévue ou réelle)">
+          <DateInput value={dateCloture} onChange={setDateCloture} />
+        </Field>
+        <Field label="Adresse du projet">
+          <TextInput value={adresse} onChange={setAdresse} />
+        </Field>
+      </div>
+      <div className="form-row">
+        <Field label="Objet pour les factures" hint="rappelé sur chaque facture (ex. « Création d'une pension de famille au 19 rue… »)">
+          <TextInput value={objetFacture} onChange={setObjetFacture} />
+        </Field>
+      </div>
+      <div className="form-row">
+        <Field label="Type de maître d’ouvrage">
+          <Select value={typeMO} onChange={setTypeMO} options={TYPES_MO.map((t) => ({ value: t, label: t }))} />
+        </Field>
         <Field label="Maître d’ouvrage">
           <TextInput value={moa} onChange={setMoa} />
+        </Field>
+        <Field label="SIRET client">
+          <TextInput value={siretClient} onChange={setSiretClient} />
+        </Field>
+      </div>
+      <div className="form-row">
+        <Field label="Chargé·e d’opération client" hint="votre interlocuteur chez le MOA">
+          <TextInput value={chargeOperation} onChange={setChargeOperation} placeholder="ex. Thibaut Feuga" />
         </Field>
         <Field label="E-mail MOA (facturation)" hint="pré-remplit les e-mails sortants">
           <TextInput value={emailMOA} onChange={setEmailMOA} />
         </Field>
-        <Field label="Adresse / localisation">
-          <TextInput value={adresse} onChange={setAdresse} />
+        <Field label="N° marché / engagement">
+          <TextInput value={numEng} onChange={setNumEng} placeholder="ex. 220216" />
         </Field>
       </div>
+
+      <Section titre="Interne agence" />
+      <div className="form-row">
+        <Field label="Responsable">
+          <Select
+            value={responsable}
+            onChange={setResponsable}
+            options={[{ value: '', label: '—' }, ...state.settings.personnes.map((x) => ({ value: x, label: x }))]}
+          />
+        </Field>
+        <Field label="Co-responsable">
+          <Select
+            value={coResponsable}
+            onChange={setCoResponsable}
+            options={[{ value: '', label: '—' }, ...state.settings.personnes.map((x) => ({ value: x, label: x }))]}
+          />
+        </Field>
+        <Field label="Plaisir (note /5)" hint="oui, ça compte">
+          <Select
+            value={plaisir === null ? '' : String(plaisir)}
+            onChange={(v) => setPlaisir(v === '' ? null : Number(v))}
+            options={[{ value: '', label: '—' }, ...[1, 2, 3, 4, 5].map((n) => ({ value: String(n), label: '★'.repeat(n) }))]}
+          />
+        </Field>
+        <Field label="Travaillent sur le projet" hint="pré-remplit leur tableau de temps">
+          <div style={{ display: 'flex', gap: 14, paddingTop: 7 }}>
+            {state.settings.personnes.map((n) => (
+              <label key={n} className="small" style={{ display: 'flex', gap: 5, alignItems: 'center', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={equipeProjet.includes(n)}
+                  onChange={(e) =>
+                    setEquipeProjet(e.target.checked ? [...equipeProjet, n] : equipeProjet.filter((x) => x !== n))
+                  }
+                />
+                {n}
+              </label>
+            ))}
+          </div>
+        </Field>
+      </div>
+      <div className="form-row">
+        <Field label="Accès à la commande">
+          <Select
+            value={accesCommande}
+            onChange={setAccesCommande}
+            options={[
+              { value: '', label: '—' },
+              { value: 'AO', label: 'Appel d’offres' },
+              { value: 'Concours', label: 'Concours' },
+              { value: 'Gré à gré', label: 'Gré à gré' },
+              { value: 'Bouche à oreille', label: 'Bouche à oreille' },
+              { value: 'Client fidèle', label: 'Client fidèle' },
+            ]}
+          />
+        </Field>
+        <Field label="Typologie">
+          <TextInput value={typologie} onChange={setTypologie} placeholder="Logement, enseignement…" />
+        </Field>
+        <Field label="Type de construction">
+          <Select
+            value={typeConstruction}
+            onChange={setTypeConstruction}
+            options={[
+              { value: '', label: '—' },
+              { value: 'Neuf', label: 'Neuf' },
+              { value: 'Réhabilitation', label: 'Réhabilitation' },
+              { value: 'Extension', label: 'Extension' },
+              { value: 'Mixte', label: 'Mixte' },
+            ]}
+          />
+        </Field>
+        <Field label="Trajet aller" hint="repère logistique">
+          <TextInput value={trajetAller} onChange={setTrajetAller} placeholder="ex. 1 h 10 — A16" />
+        </Field>
+      </div>
+
+      <Section titre="Budget & surfaces" />
       <div className="form-row">
         <Field label="Type d’ouvrage (référentiel MIQCP)" hint="Détermine la plage du coefficient de complexité.">
           <Select
@@ -979,27 +1150,11 @@ function ModalEditionProjet({ projet, onClose }: { projet: Projet; onClose: () =
         <Field label="Montant de travaux HT (€)">
           <NumInput value={montant} onChange={setMontant} />
         </Field>
-      </div>
-      <div className="form-row">
         <Field label="Surface plancher (m²)" hint="active les ratios €/m²">
           <NumInput value={surface} onChange={setSurface} />
         </Field>
-        <Field label="Responsable interne">
-          <Select
-            value={responsable}
-            onChange={setResponsable}
-            options={[{ value: '', label: '—' }, ...state.settings.personnes.map((x) => ({ value: x, label: x }))]}
-          />
-        </Field>
-        <Field label="Plaisir (note /5)" hint="oui, ça compte">
-          <Select
-            value={plaisir === null ? '' : String(plaisir)}
-            onChange={(v) => setPlaisir(v === '' ? null : Number(v))}
-            options={[{ value: '', label: '—' }, ...[1, 2, 3, 4, 5].map((n) => ({ value: String(n), label: '★'.repeat(n) }))]}
-          />
-        </Field>
-        <Field label="N° marché / engagement">
-          <TextInput value={numEng} onChange={setNumEng} placeholder="ex. 220216" />
+        <Field label="Surface extérieure (m²)">
+          <NumInput value={surfaceExt} onChange={setSurfaceExt} />
         </Field>
       </div>
       <div className="form-row">

@@ -74,10 +74,32 @@ export interface Projet {
   surfacePlancher?: number | null
   /** responsable interne du projet (nom d'un membre de l'équipe) */
   responsable?: string
+  /** co-responsable interne */
+  coResponsable?: string
+  /** personnes qui travaillent sur le projet — pré-remplit leur tableau de temps */
+  equipeProjet?: string[]
   /** plaisir à travailler sur ce projet, note sur 5 — l'idée est bonne */
   plaisir?: number | null
   /** n° de marché / acte d'engagement (facturation publique) */
   numeroEngagement?: string
+  /** dates de vie du projet (fiche) */
+  dateLancement?: string | null
+  dateCloture?: string | null
+  /** objet à rappeler sur les factures (ex. « Création d'une pension de famille au… ») */
+  objetFacture?: string
+  siretClient?: string
+  /** chargé·e d'opération côté client */
+  chargeOperation?: string
+  /** comment la commande est arrivée : AO / Gré à gré / Concours / Bouche à oreille… */
+  accesCommande?: string
+  /** typologie (Logement, Enseignement, Tertiaire…) */
+  typologie?: string
+  /** Neuf / Réhabilitation / Extension / Mixte */
+  typeConstruction?: string
+  /** surface extérieure aménagée (m²) */
+  surfaceExterieure?: number | null
+  /** trajet aller agence → site (repère logistique) */
+  trajetAller?: string
 }
 
 /** courrier trié par la routine mail du matin — rangé au bon projet */

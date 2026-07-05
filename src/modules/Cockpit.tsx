@@ -8,7 +8,7 @@ import { useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import type { Alerte } from '../types'
 import { useStore } from '../store'
-import { Btn, Card, DateF, EmptyState, Icon, Money, Page, Progress, Stat, toast, useToday } from '../ui'
+import { Btn, Card, DateF, EmptyState, Icon, Money, Page, Stat, toast, useToday } from '../ui'
 import { alertesActives } from '../alerts'
 import { STATUTS_ACTIFS, caCible, caRealiseAnnee, meteoFinanciere } from '../derive'
 import { addDays, fmtDate, fmtMoney, fmtPct } from '../util'
@@ -214,7 +214,7 @@ function LigneCourrier({ personne }: { personne: string }) {
     <>
       {courriers.map((c) => (
         <div key={c.id} className={`alert-item ${c.urgence === 3 ? 'alert-3' : ''}`}>
-          <span className="alert-dot" style={{ background: c.urgence === 3 ? 'var(--danger)' : 'var(--accent)' }} />
+          <span className={`gmk gmk-${c.urgence === 3 ? 'triangle' : 'circle'}`} aria-hidden="true" />
           <div style={{ minWidth: 0 }}>
             <div className="alert-titre">
               <Icon name="mail" size={13} style={{ verticalAlign: '-0.15em' }} /> {c.objet}{' '}
@@ -316,7 +316,10 @@ function BoiteATraiter() {
       ) : (
         items.map((i) => (
           <div key={i.id} className="alert-item">
-            <span className="alert-dot" style={{ background: 'var(--accent)' }} />
+            <span
+              className={`gmk gmk-${i.id.startsWith('sit-') ? 'triangle' : i.id.startsWith('ao-') ? 'square' : 'circle'}`}
+              aria-hidden="true"
+            />
             <div style={{ minWidth: 0 }}>
               <div className="alert-titre">
                 {i.action}{' '}
@@ -442,7 +445,7 @@ export default function Cockpit() {
       <div style={{ marginBottom: 16 }}>
         <div className="grid3">
           <Stat
-            accent="blue"
+            accent="yellow"
             label="Trésorerie disponible"
             value={<Money v={meteo.tresorerie} />}
             tone={meteo.tresorerie !== null && meteo.tresorerie < 0 ? 'danger' : undefined}
@@ -459,7 +462,7 @@ export default function Cockpit() {
             }
           />
           <Stat
-            accent="yellow"
+            accent="blue"
             label="Facturable à 90 jours"
             value={<Money v={meteo.facturable90j} />}
             sub="factures à émettre ou en attente d'encaissement"
@@ -476,18 +479,18 @@ export default function Cockpit() {
           const ca = caRealiseAnnee(state, annee)
           const cible = caCible(state)
           const pct = ca / cible
+          const couleur = pct >= 1 ? 'var(--ok)' : pct >= 0.6 ? 'var(--c-blue)' : 'var(--c-red)'
           return (
-            <div style={{ margin: '10px 2px 0' }}>
-              <Progress
-                value={ca}
-                max={cible}
-                header={
-                  <>
-                    <span className="muted">Objectif CA {annee} — <a href="#/analyse">Analyse</a></span>
-                    <span><strong>{fmtMoney(ca)}</strong> <span className="muted">/ {fmtMoney(cible)} ({fmtPct(pct, 0)})</span></span>
-                  </>
-                }
-              />
+            <div className="gauge" style={{ marginTop: 12 }}>
+              <a href="#/analyse" className="gauge-t" style={{ color: 'inherit', textDecoration: 'none' }}>
+                CA {annee} · {fmtPct(pct, 0)}
+              </a>
+              <span className="gauge-bar">
+                <i style={{ width: `${Math.min(100, pct * 100)}%`, background: couleur }} />
+              </span>
+              <span className="gauge-t muted">
+                {fmtMoney(ca)} / {fmtMoney(cible)}
+              </span>
             </div>
           )
         })()}

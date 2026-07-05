@@ -36,6 +36,10 @@
   --cat-purple: #7c3aed;
   --cat-amber: #b45309;
   --cat-teal: #0e7490;
+  /* KPI bauhaus « Équilibré » (clair) — aplats primaires, bord & ombre noirs */
+  --kpi-y-bg: #f5b301; --kpi-y-fg: #141414; --kpi-y-bd: #141414; --kpi-y-sh: #141414; --kpi-y-lbl: #141414; --kpi-y-gm: #141414;
+  --kpi-b-bg: #1e5aa8; --kpi-b-fg: #ffffff; --kpi-b-bd: #141414; --kpi-b-sh: #141414; --kpi-b-lbl: rgba(255,255,255,.85); --kpi-b-gm: #ffffff;
+  --kpi-r-bg: #e63627; --kpi-r-fg: #ffffff; --kpi-r-bd: #141414; --kpi-r-sh: #141414; --kpi-r-lbl: rgba(255,255,255,.85); --kpi-r-gm: #ffffff;
 
   /* — géométrie — */
   --radius: 6px;
@@ -75,6 +79,9 @@
     --cat-purple: #a78bfa;
     --cat-amber: #d6a54a;
     --cat-teal: #38bdf8;
+    --kpi-y-bg: #241e0b; --kpi-y-fg: #f5b301; --kpi-y-bd: #f5b301; --kpi-y-sh: #f5b301; --kpi-y-lbl: #f5b301; --kpi-y-gm: #f5b301;
+    --kpi-b-bg: #0f1c2e; --kpi-b-fg: #eaf1fb; --kpi-b-bd: #3b82e8; --kpi-b-sh: #3b82e8; --kpi-b-lbl: #7daef2; --kpi-b-gm: #3b82e8;
+    --kpi-r-bg: #2a1210; --kpi-r-fg: #fbecea; --kpi-r-bd: #f26154; --kpi-r-sh: #f26154; --kpi-r-lbl: #f5877b; --kpi-r-gm: #f26154;
     --field-bg: #141418;
     --sidebar: #121216;
     --sidebar-ink: #a6a29a;
@@ -106,6 +113,9 @@
   --ok: #46b47c; --ok-soft: #16281f; --warn: #d6a54a; --warn-soft: #2a2110;
   --danger: #ec6a5c; --danger-soft: #2c1512; --field-bg: #141418;
   --cat-purple: #a78bfa; --cat-amber: #d6a54a; --cat-teal: #38bdf8;
+  --kpi-y-bg: #241e0b; --kpi-y-fg: #f5b301; --kpi-y-bd: #f5b301; --kpi-y-sh: #f5b301; --kpi-y-lbl: #f5b301; --kpi-y-gm: #f5b301;
+  --kpi-b-bg: #0f1c2e; --kpi-b-fg: #eaf1fb; --kpi-b-bd: #3b82e8; --kpi-b-sh: #3b82e8; --kpi-b-lbl: #7daef2; --kpi-b-gm: #3b82e8;
+  --kpi-r-bg: #2a1210; --kpi-r-fg: #fbecea; --kpi-r-bd: #f26154; --kpi-r-sh: #f26154; --kpi-r-lbl: #f5877b; --kpi-r-gm: #f26154;
   --sidebar: #121216; --sidebar-ink: #a6a29a; --sidebar-line: #2c2c34;
   --shadow-hard: 3px 3px 0 rgba(0, 0, 0, 0.55);
   --shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.35), 0 10px 30px rgba(0, 0, 0, 0.4);
@@ -327,6 +337,7 @@ pre {
 /* ---------- stats (météo financière) ---------- */
 
 .stat {
+  position: relative;
   background: var(--panel);
   border: 2px solid var(--border);
   border-radius: var(--radius);
@@ -353,14 +364,56 @@ pre {
 .stat-warn .stat-value { color: var(--warn); }
 .stat-danger .stat-value { color: var(--danger); }
 .stat-info .stat-value { color: var(--accent); }
-.stat-acc-blue { border-top: 5px solid var(--c-blue); }
-.stat-acc-yellow { border-top: 5px solid var(--c-yellow); }
-.stat-acc-red { border-top: 5px solid var(--c-red); }
+/* KPI bauhaus — blocs primaires pleins, bord franc, ombre dure, repère géométrique
+   (identité « Équilibré » A en clair, « Nuit atelier » D en sombre :
+   carré = repère, cercle = statut, triangle = alerte) */
+.stat-acc-yellow,
+.stat-acc-blue,
+.stat-acc-red {
+  border-width: 3px;
+  border-style: solid;
+  border-radius: var(--radius);
+}
+.stat-acc-yellow { background: var(--kpi-y-bg); color: var(--kpi-y-fg); border-color: var(--kpi-y-bd); box-shadow: 5px 5px 0 var(--kpi-y-sh); }
+.stat-acc-blue { background: var(--kpi-b-bg); color: var(--kpi-b-fg); border-color: var(--kpi-b-bd); box-shadow: 5px 5px 0 var(--kpi-b-sh); }
+.stat-acc-red { background: var(--kpi-r-bg); color: var(--kpi-r-fg); border-color: var(--kpi-r-bd); box-shadow: 5px 5px 0 var(--kpi-r-sh); }
+.stat-acc-yellow .stat-label { color: var(--kpi-y-lbl); }
+.stat-acc-blue .stat-label { color: var(--kpi-b-lbl); }
+.stat-acc-red .stat-label { color: var(--kpi-r-lbl); }
+.stat-acc-yellow .stat-value,
+.stat-acc-blue .stat-value,
+.stat-acc-red .stat-value { color: inherit; }
+.stat-acc-yellow .stat-sub,
+.stat-acc-blue .stat-sub,
+.stat-acc-red .stat-sub { color: inherit; opacity: 0.78; }
+.stat-acc-yellow .stat-sub a,
+.stat-acc-blue .stat-sub a,
+.stat-acc-red .stat-sub a { color: inherit; text-decoration: underline; }
+/* repères géométriques (coin haut-droit) : carré / cercle / triangle */
+.stat-gm { position: absolute; top: 12px; right: 12px; width: 15px; height: 15px; }
+.stat-acc-yellow .stat-gm { background: var(--kpi-y-gm); }
+.stat-acc-blue .stat-gm { background: var(--kpi-b-gm); border-radius: 50%; }
+.stat-acc-red .stat-gm { background: var(--kpi-r-gm); clip-path: polygon(50% 0, 100% 100%, 0 100%); }
 
 /* ---------- jauge de progression ---------- */
 .progress-head { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
 .progress-track { background: var(--line); border-radius: 99px; height: 8px; overflow: hidden; }
 .progress-fill { height: 100%; border-radius: 99px; }
+
+/* jauge encadrée (bauhaus) — objectif CA du Cockpit */
+.gauge {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  border: 2px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-hard);
+  background: var(--panel);
+  padding: 11px 16px;
+}
+.gauge-t { font-family: var(--font-mono); font-size: 11px; font-weight: 700; white-space: nowrap; letter-spacing: 0.02em; }
+.gauge-bar { flex: 1; height: 14px; border: 2px solid var(--border); background: var(--field-bg); overflow: hidden; min-width: 80px; }
+.gauge-bar > i { display: block; height: 100%; }
 
 /* ---------- Cockpit : inbox principale + rail latéral ---------- */
 .cockpit-cols { display: grid; grid-template-columns: minmax(0, 1fr) 316px; gap: 16px; align-items: start; }
@@ -604,6 +657,12 @@ textarea.input { resize: vertical; }
 
 /* ---------- icônes ---------- */
 .icon { display: inline-block; vertical-align: -0.15em; flex-shrink: 0; }
+
+/* repères géométriques fonctionnels : cercle = statut · triangle = alerte · carré = repère */
+.gmk { width: 15px; height: 15px; flex: 0 0 auto; }
+.gmk-circle { border-radius: 50%; background: var(--c-blue); }
+.gmk-square { background: var(--c-yellow); }
+.gmk-triangle { background: var(--c-red); clip-path: polygon(50% 0, 100% 100%, 0 100%); }
 
 /* ---------- menu de ligne « ··· » ---------- */
 .rowmenu { position: relative; display: inline-block; }

@@ -105,6 +105,7 @@ export function Stat({
 }) {
   return (
     <div className={`stat ${tone ? `stat-${tone}` : ''} ${accent ? `stat-acc-${accent}` : ''}`}>
+      {accent && <span className="stat-gm" aria-hidden="true" />}
       <div className="stat-label">{label}</div>
       <div className="stat-value">{value}</div>
       {sub && <div className="stat-sub">{sub}</div>}

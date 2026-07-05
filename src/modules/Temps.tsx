@@ -81,7 +81,13 @@ function TableauPersonne({
   const [projetSel, setProjetSel] = useState(actifs[0]?.id ?? '')
   const [phaseSel, setPhaseSel] = useState<PhaseCode>(() => phaseParDefaut(actifs[0], today))
 
-  // lignes affichées : couples pointés dans la fenêtre + ajouts manuels
+  // projets affectés à la personne (fiche projet ou chips ci-dessous)
+  const affectes = actifs.filter(
+    (p) => p.equipeProjet?.includes(personne) || p.responsable === personne || p.coResponsable === personne,
+  )
+
+  // lignes affichées : projets affectés (ligne prête d'office) + couples
+  // pointés dans la fenêtre + ajouts manuels
   const couples: Couple[] = []
   const vu = new Set<string>()
   const pousser = (c: Couple) => {
@@ -91,11 +97,28 @@ function TableauPersonne({
       couples.push(c)
     }
   }
+  for (const p of affectes) pousser({ projetId: p.id, phase: phaseParDefaut(p, today) })
   for (const t of state.temps) {
     if (t.personne === personne && semaines.includes(t.semaine)) pousser({ projetId: t.projetId, phase: t.phase })
   }
   ajoutees.forEach(pousser)
   couples.sort(triCouples)
+
+  const affecter = (projetId: string) =>
+    update((d) => {
+      const p = d.projets.find((x) => x.id === projetId)
+      if (!p) return
+      p.equipeProjet = [...new Set([...(p.equipeProjet || []), personne])]
+    })
+
+  const desaffecter = (projetId: string) => {
+    if (!confirm(`Retirer ${personne} du projet ${projetId} ? (les heures déjà pointées restent)`)) return
+    update((d) => {
+      const p = d.projets.find((x) => x.id === projetId)
+      if (!p) return
+      p.equipeProjet = (p.equipeProjet || []).filter((n) => n !== personne)
+    })
+  }
 
   const heuresDe = (semaine: string, c: Couple): number | null => {
     const e = state.temps.find(
@@ -167,8 +190,34 @@ function TableauPersonne({
 
   const semaineCourante = mondayOf(today)
 
+  const nonAffectes = actifs.filter((p) => !affectes.some((a) => a.id === p.id))
+
   return (
     <Card titre={personne}>
+      <div className="toolbar" style={{ marginBottom: 8, flexWrap: 'wrap' }}>
+        <span className="muted small">Affecté·e à :</span>
+        {affectes.length === 0 && <span className="muted small">aucun projet — cochez-les ici ou dans la fiche projet</span>}
+        {affectes.map((p) => (
+          <span key={p.id} className="badge badge-info" title={p.nom}>
+            {p.id}{' '}
+            <button
+              onClick={() => desaffecter(p.id)}
+              title={`Retirer ${personne} de ${p.id}`}
+              style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'inherit', padding: 0, fontWeight: 700 }}
+            >
+              ✕
+            </button>
+          </span>
+        ))}
+        {nonAffectes.length > 0 && (
+          <Select
+            value=""
+            onChange={(v) => v && affecter(v)}
+            options={[{ value: '', label: '+ affecter à…' }, ...nonAffectes.map((p) => ({ value: p.id, label: `${p.id} — ${p.nom}` }))]}
+            style={{ maxWidth: 220 }}
+          />
+        )}
+      </div>
       <div style={{ overflowX: 'auto' }}>
         <table className="table table-compact">
           <thead>

@@ -366,7 +366,10 @@ function LigneIdentite({ projet: p }: { projet: Projet }) {
         📅 <DateF d={p.dateLancement ?? null} /> → <DateF d={p.dateCloture ?? null} />
       </span>,
     )
-  if (p.responsable) items.push(<span key="resp">👤 {p.responsable}{p.coResponsable ? ` + ${p.coResponsable}` : ''}</span>)
+  {
+    const equipe = [...new Set([p.responsable, p.coResponsable, ...(p.equipeProjet || [])].filter(Boolean))]
+    if (equipe.length > 0) items.push(<span key="resp">👤 {equipe.join(', ')}</span>)
+  }
   if (p.chargeOperation) items.push(<span key="co">MOA : {p.chargeOperation}</span>)
   if (p.accesCommande) items.push(<span key="acces">{p.accesCommande}</span>)
   if (p.typologie || p.typeConstruction)
@@ -914,6 +917,7 @@ function ModalEditionProjet({ projet, onClose }: { projet: Projet; onClose: () =
   const [surfaceExt, setSurfaceExt] = useState<number | null>(projet.surfaceExterieure ?? null)
   const [responsable, setResponsable] = useState(projet.responsable || '')
   const [coResponsable, setCoResponsable] = useState(projet.coResponsable || '')
+  const [equipeProjet, setEquipeProjet] = useState<string[]>(projet.equipeProjet || [])
   const [plaisir, setPlaisir] = useState<number | null>(projet.plaisir ?? null)
   const [numEng, setNumEng] = useState(projet.numeroEngagement || '')
   const [notes, setNotes] = useState(projet.notes || '')
@@ -945,6 +949,7 @@ function ModalEditionProjet({ projet, onClose }: { projet: Projet; onClose: () =
       pr.surfaceExterieure = surfaceExt
       pr.responsable = responsable || undefined
       pr.coResponsable = coResponsable || undefined
+      pr.equipeProjet = equipeProjet
       pr.plaisir = plaisir
       pr.numeroEngagement = numEng.trim() || undefined
       pr.notes = notes.trim() || undefined
@@ -1076,6 +1081,22 @@ function ModalEditionProjet({ projet, onClose }: { projet: Projet; onClose: () =
             onChange={(v) => setPlaisir(v === '' ? null : Number(v))}
             options={[{ value: '', label: '—' }, ...[1, 2, 3, 4, 5].map((n) => ({ value: String(n), label: '★'.repeat(n) }))]}
           />
+        </Field>
+        <Field label="Travaillent sur le projet" hint="pré-remplit leur tableau de temps">
+          <div style={{ display: 'flex', gap: 14, paddingTop: 7 }}>
+            {state.settings.personnes.map((n) => (
+              <label key={n} className="small" style={{ display: 'flex', gap: 5, alignItems: 'center', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={equipeProjet.includes(n)}
+                  onChange={(e) =>
+                    setEquipeProjet(e.target.checked ? [...equipeProjet, n] : equipeProjet.filter((x) => x !== n))
+                  }
+                />
+                {n}
+              </label>
+            ))}
+          </div>
         </Field>
       </div>
       <div className="form-row">

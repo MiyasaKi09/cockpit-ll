@@ -76,6 +76,8 @@ export interface Projet {
   responsable?: string
   /** co-responsable interne */
   coResponsable?: string
+  /** personnes qui travaillent sur le projet — pré-remplit leur tableau de temps */
+  equipeProjet?: string[]
   /** plaisir à travailler sur ce projet, note sur 5 — l'idée est bonne */
   plaisir?: number | null
   /** n° de marché / acte d'engagement (facturation publique) */

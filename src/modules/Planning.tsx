@@ -9,11 +9,12 @@
 import { useState } from 'react'
 import type { AppState, MarcheTravaux, PhaseCode, Projet } from '../types'
 import { useStore } from '../store'
-import { Badge, Btn, Card, DateInput, EmptyState, Field, NumInput, Page, Select, useToday } from '../ui'
+import { Badge, Btn, Card, DateInput, EmptyState, Field, NumInput, navigate, Page, Select, Tabs, useRoute, useToday } from '../ui'
 import { addDays, diffDays, fmtDate, fmtHeures, mondayOf, todayISO } from '../util'
 import { LIBELLES_PHASES, PHASES_ORDRE } from '../miqcp'
 import { daterPhases, facturesParDefaut } from '../echeancier'
 import { STATUTS_ACTIFS, capaciteSemaine, chargePlanifieeSemaine } from '../derive'
+import { EcheancesContenu } from './Calendrier'
 
 const COULEURS_PHASES = [
   '#0e7490', '#2563eb', '#7c3aed', '#0891b2', '#059669', '#ca8a04',
@@ -727,10 +728,10 @@ function ouvrirChargePDF(state: AppState, debutLundi: string, nbSemaines: number
 
 type Mode = 'phases' | 'chantier' | 'charge'
 
-export default function Planning() {
+function GanttEtCharge({ vue }: { vue: 'gantt' | 'charge' }) {
   const { state } = useStore()
   const today = useToday()
-  const [mode, setMode] = useState<Mode>('phases')
+  const [mode, setMode] = useState<Mode>(vue === 'charge' ? 'charge' : 'phases')
   const [filtre, setFiltre] = useState('')
   const [debutF, setDebutF] = useState(() => addMonths(debutMois(todayISO()), -1))
   const [nbMois, setNbMois] = useState(12)
@@ -778,29 +779,28 @@ export default function Planning() {
         ? lignesCh.length === 0
         : state.settings.equipe.length === 0
 
+  const boutonPDF = (
+    <Btn kind="primary" onClick={exporterPDF} disabled={vide}>
+      🖨 Imprimer / PDF
+    </Btn>
+  )
+
   return (
-    <Page
-      titre="Planning"
-      sousTitre="Phases, chantier ou plan de charge. La ligne rouge = aujourd'hui ; tout glisse en deux clics."
-      actions={
-        <Btn kind="primary" onClick={exporterPDF} disabled={vide}>
-          🖨 Imprimer / PDF
-        </Btn>
-      }
-    >
-      <div className="toolbar" style={{ marginBottom: 4 }}>
-        <span style={{ display: 'inline-flex', gap: 4 }}>
-          <button className={`btn btn-small ${mode === 'phases' ? 'btn-primary' : ''}`} onClick={() => changerMode('phases')}>
-            Phases (conception)
-          </button>
-          <button className={`btn btn-small ${mode === 'chantier' ? 'btn-primary' : ''}`} onClick={() => changerMode('chantier')}>
-            Chantier (entreprises)
-          </button>
-          <button className={`btn btn-small ${mode === 'charge' ? 'btn-primary' : ''}`} onClick={() => changerMode('charge')}>
-            Plan de charge (équipe)
-          </button>
-        </span>
-      </div>
+    <>
+      {vue === 'gantt' && (
+        <div className="toolbar" style={{ marginBottom: 4 }}>
+          <span style={{ display: 'inline-flex', gap: 4 }}>
+            <button className={`btn btn-small ${mode === 'phases' ? 'btn-primary' : ''}`} onClick={() => changerMode('phases')}>
+              Phases (conception)
+            </button>
+            <button className={`btn btn-small ${mode === 'chantier' ? 'btn-primary' : ''}`} onClick={() => changerMode('chantier')}>
+              Chantier (entreprises)
+            </button>
+          </span>
+          <span className="spacer" />
+          {boutonPDF}
+        </div>
+      )}
 
       <div className="toolbar">
         <Btn onClick={() => setDebutF(addMonths(debutF, -1))}>‹</Btn>
@@ -824,6 +824,12 @@ export default function Planning() {
         <span className="muted small">
           {fmtDate(f.debut)} → {fmtDate(addDays(f.fin, -1))}
         </span>
+        {vue === 'charge' && (
+          <>
+            <span className="spacer" />
+            {boutonPDF}
+          </>
+        )}
       </div>
 
       <Card>
@@ -921,6 +927,33 @@ export default function Planning() {
 
       {projetSelectionne && mode === 'phases' && <EditionDates projet={projetSelectionne} />}
       {projetSelectionne && mode === 'chantier' && <EditionChantier projet={projetSelectionne} />}
+    </>
+  )
+}
+
+// ---------- module ----------
+
+const ONGLETS_PLANNING: { id: string; label: string }[] = [
+  { id: 'echeances', label: 'Échéances' },
+  { id: 'gantt', label: 'Gantt' },
+  { id: 'charge', label: 'Charge' },
+]
+
+export default function Planning({ ongletInitial = 'gantt' }: { ongletInitial?: string }) {
+  const route = useRoute()
+  const segment = route[0] === 'planning' ? route[1] : ongletInitial
+  const onglet = ONGLETS_PLANNING.some((o) => o.id === segment) ? segment! : 'gantt'
+
+  return (
+    <Page
+      titre="Planning"
+      sousTitre="Échéances, Gantt phases/chantier, plan de charge. La ligne rouge = aujourd'hui."
+    >
+      <Tabs tabs={ONGLETS_PLANNING} actif={onglet} onSelect={(id) => navigate(`/planning/${id}`)} />
+
+      {onglet === 'echeances' && <EcheancesContenu />}
+      {onglet === 'gantt' && <GanttEtCharge vue="gantt" />}
+      {onglet === 'charge' && <GanttEtCharge vue="charge" />}
     </Page>
   )
 }

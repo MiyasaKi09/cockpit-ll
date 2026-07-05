@@ -9,7 +9,7 @@
 import { useMemo, useState } from 'react'
 import type { AppState } from '../types'
 import { useStore } from '../store'
-import { Badge, Btn, Card, Page, useToday } from '../ui'
+import { Badge, Btn, Card, useToday } from '../ui'
 import { addDays, mondayOf, todayISO } from '../util'
 import { STATUTS_ACTIFS, encaissementPrevu } from '../derive'
 
@@ -142,7 +142,7 @@ function evenements(state: AppState): EvtCal[] {
 const NOMS_MOIS = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre']
 const JOURS = ['lun.', 'mar.', 'mer.', 'jeu.', 'ven.', 'sam.', 'dim.']
 
-export default function Calendrier() {
+export function EcheancesContenu() {
   const { state } = useStore()
   const today = useToday()
   const [annee, setAnnee] = useState(Number(todayISO().slice(0, 4)))
@@ -180,10 +180,10 @@ export default function Calendrier() {
   const iciEtMaintenant = `${annee}-${String(mois).padStart(2, '0')}` === moisCourant
 
   return (
-    <Page
-      titre="Calendrier"
-      sousTitre="Toutes les échéances au même endroit. Cliquez une pastille pour ouvrir sa source."
-    >
+    <>
+      <p className="small muted" style={{ margin: '0 0 4px' }}>
+        Toutes les échéances au même endroit. Cliquez une pastille pour ouvrir sa source.
+      </p>
       <div className="toolbar">
         <Btn onClick={() => naviguer(-1)}>‹</Btn>
         <Btn onClick={() => naviguer(1)}>›</Btn>
@@ -263,6 +263,6 @@ export default function Calendrier() {
           calendrier montre les échéances issues de vos données de pilotage.
         </p>
       </Card>
-    </Page>
+    </>
   )
 }

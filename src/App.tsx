@@ -19,7 +19,6 @@ import Classement from './modules/Classement'
 import Ressources from './modules/Ressources'
 import Agenda from './modules/Agenda'
 import Parametres from './modules/Parametres'
-import Calendrier from './modules/Calendrier'
 import Planning from './modules/Planning'
 
 const NAV: { groupe: string; items: { path: string; label: string }[] }[] = [
@@ -27,7 +26,6 @@ const NAV: { groupe: string; items: { path: string; label: string }[] }[] = [
     groupe: 'Pilotage',
     items: [
       { path: '', label: 'Cockpit' },
-      { path: 'calendrier', label: 'Calendrier' },
       { path: 'planning', label: 'Planning' },
       { path: 'recherche', label: 'Recherche ( / )' },
       { path: 'projets', label: 'Projets' },
@@ -138,7 +136,7 @@ export default function App() {
       page = <Parametres ongletInitial="branchements" />
       break
     case 'calendrier':
-      page = <Calendrier />
+      page = <Planning ongletInitial="echeances" />
       break
     case 'planning':
       page = <Planning />

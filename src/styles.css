@@ -602,6 +602,63 @@ textarea.input { resize: vertical; }
   * { transition: none !important; }
 }
 
+/* ---------- toasts ---------- */
+.toast-host {
+  position: fixed;
+  left: 50%;
+  bottom: 22px;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 300;
+  width: max-content;
+  max-width: min(560px, 92vw);
+}
+.toast {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px 10px 14px;
+  background: var(--ink);
+  color: var(--bg);
+  border: 2px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-hard);
+  font-size: 13.5px;
+}
+.toast-ok { border-left: 5px solid var(--ok); }
+.toast-warn { border-left: 5px solid var(--warn); }
+.toast-danger { border-left: 5px solid var(--danger); }
+.toast-msg { font-weight: 550; }
+.toast-undo {
+  border: 1.5px solid currentColor;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 700;
+  font-size: 12.5px;
+  border-radius: 5px;
+  padding: 2px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.toast-undo:hover { background: color-mix(in srgb, var(--bg) 18%, transparent); }
+.toast-x {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  opacity: 0.6;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 2px 4px;
+}
+.toast-x:hover { opacity: 1; }
+@media (prefers-reduced-motion: no-preference) {
+  .toast { animation: toast-in 0.16s ease-out; }
+  @keyframes toast-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+}
+
 /* ---------- palette de recherche (overlay « / ») ---------- */
 .cmdk-backdrop {
   position: fixed;

@@ -150,6 +150,70 @@ export function EmptyState({ children }: { children: ReactNode }) {
   return <div className="empty">{children}</div>
 }
 
+// ---------- toasts + undo (feedback global, sans provider) ----------
+
+interface ToastItem {
+  id: number
+  message: string
+  tone?: Tone
+  undo?: () => void
+}
+
+let toastsCourants: ToastItem[] = []
+let toastSeq = 1
+const toastListeners = new Set<() => void>()
+const emettreToasts = () => toastListeners.forEach((l) => l())
+
+function retirerToast(id: number) {
+  toastsCourants = toastsCourants.filter((t) => t.id !== id)
+  emettreToasts()
+}
+
+/** affiche un message éphémère ; `undo` ajoute un bouton « Annuler ». */
+export function toast(message: string, opts?: { tone?: Tone; undo?: () => void }) {
+  const id = toastSeq++
+  toastsCourants = [...toastsCourants, { id, message, tone: opts?.tone, undo: opts?.undo }]
+  emettreToasts()
+  setTimeout(() => retirerToast(id), opts?.undo ? 8000 : 4500)
+  return id
+}
+
+/** conteneur des toasts — à monter une fois à la racine de l'app. */
+export function ToastHost() {
+  const [, forcer] = useState(0)
+  useEffect(() => {
+    const l = () => forcer((x) => x + 1)
+    toastListeners.add(l)
+    return () => {
+      toastListeners.delete(l)
+    }
+  }, [])
+  if (toastsCourants.length === 0) return null
+  return (
+    <div className="toast-host" role="status" aria-live="polite">
+      {toastsCourants.map((t) => (
+        <div key={t.id} className={`toast ${t.tone ? `toast-${t.tone}` : ''}`}>
+          <span className="toast-msg">{t.message}</span>
+          {t.undo && (
+            <button
+              className="toast-undo"
+              onClick={() => {
+                t.undo!()
+                retirerToast(t.id)
+              }}
+            >
+              Annuler
+            </button>
+          )}
+          <button className="toast-x" onClick={() => retirerToast(t.id)} aria-label="Fermer">
+            ✕
+          </button>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 // ---------- boutons ----------
 
 export function Btn({

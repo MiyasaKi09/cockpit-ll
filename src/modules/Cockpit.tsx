@@ -8,7 +8,7 @@ import { useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import type { Alerte } from '../types'
 import { useStore } from '../store'
-import { Btn, Card, DateF, EmptyState, Money, Page, Progress, Stat, useToday } from '../ui'
+import { Btn, Card, DateF, EmptyState, Money, Page, Progress, Stat, toast, useToday } from '../ui'
 import { alertesActives } from '../alerts'
 import { STATUTS_ACTIFS, caCible, caRealiseAnnee, meteoFinanciere } from '../derive'
 import { addDays, fmtDate, fmtMoney, fmtPct } from '../util'
@@ -174,7 +174,7 @@ function itemsATraiter(state: ReturnType<typeof useStore>['state'], today: strin
 }
 
 function LigneCourrier({ personne }: { personne: string }) {
-  const { state, update } = useStore()
+  const { state, update, replace } = useStore()
   const courriers = state.courriers
     .filter((c) => c.statut === 'a_traiter')
     .filter((c) => !personne || !c.pour || c.pour === personne)
@@ -182,13 +182,17 @@ function LigneCourrier({ personne }: { personne: string }) {
 
   if (courriers.length === 0) return null
 
-  const traiter = (id: string) =>
+  const traiter = (id: string) => {
+    const snap = state
     update((d) => {
       const c = d.courriers.find((x) => x.id === id)
       if (c) c.statut = 'traite'
     })
+    toast('Courrier traité.', { undo: () => replace(snap) })
+  }
 
-  const versJournal = (id: string) =>
+  const versJournal = (id: string) => {
+    const snap = state
     update((d) => {
       const c = d.courriers.find((x) => x.id === id)
       if (!c || !c.projetId) return
@@ -203,6 +207,8 @@ function LigneCourrier({ personne }: { personne: string }) {
       })
       c.statut = 'traite'
     })
+    toast('Archivé dans le journal du projet.', { undo: () => replace(snap) })
+  }
 
   return (
     <>
@@ -261,9 +267,21 @@ function executerRapide(update: ReturnType<typeof useStore>['update'], a: Action
 }
 
 function BoiteATraiter() {
-  const { state, update } = useStore()
+  const { state, update, replace } = useStore()
   const today = useToday()
   const [personne, setPersonne] = useState('')
+
+  const faireRapide = (a: ActionRapide) => {
+    const snap = state
+    executerRapide(update, a)
+    const libelle =
+      a.kind === 'valider_situation'
+        ? 'Situation validée.'
+        : a.kind === 'emettre_facture'
+          ? 'Facture émise.'
+          : 'Note marquée faite.'
+    toast(libelle, { undo: () => replace(snap) })
+  }
 
   const tous = itemsATraiter(state, today)
   const items = personne ? tous.filter((i) => !i.pour || i.pour === personne) : tous
@@ -307,7 +325,7 @@ function BoiteATraiter() {
             </div>
             <div className="alert-actions">
               {i.rapide && (
-                <Btn small kind="primary" onClick={() => executerRapide(update, i.rapide!)} title="Fait sur place, sans changer de page">
+                <Btn small kind="primary" onClick={() => faireRapide(i.rapide!)} title="Fait sur place, sans changer de page">
                   {i.rapide.label}
                 </Btn>
               )}
@@ -325,7 +343,7 @@ function BoiteATraiter() {
 // ---------- module ----------
 
 export default function Cockpit() {
-  const { state, update } = useStore()
+  const { state, update, replace } = useStore()
   const today = useToday()
   const { evenements, direct } = useSurveillance(state, update)
 
@@ -333,13 +351,17 @@ export default function Cockpit() {
   const excel = state.settings.dernierImportExcel
   const alertes = alertesActives(state, today)
 
-  const snooze = (id: string, jours: number) =>
+  const snooze = (id: string, jours: number) => {
+    const snap = state
     update((d) => {
       d.settings.snoozes[id] = addDays(today, jours)
     })
+    toast(`Alerte en sommeil ${jours} jours.`, { undo: () => replace(snap) })
+  }
 
   // action rapide d'une alerte, exécutée sur place
-  const executerAlerte = (action: NonNullable<Alerte['action']>) =>
+  const executerAlerte = (action: NonNullable<Alerte['action']>) => {
+    const snap = state
     update((d) => {
       if (action.kind === 'emettre_facture') {
         const f = d.factures.find((x) => x.id === action.refId)
@@ -362,6 +384,14 @@ export default function Cockpit() {
         }
       }
     })
+    const libelle =
+      action.kind === 'emettre_facture'
+        ? 'Facture émise.'
+        : action.kind === 'valider_situation'
+          ? 'Situation validée.'
+          : 'Obligation faite.'
+    toast(libelle, { undo: () => replace(snap) })
+  }
 
   // phases en cours : projets actifs dont une phase encadre la date du jour
   const phasesEnCours = state.projets

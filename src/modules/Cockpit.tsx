@@ -10,8 +10,8 @@ import type { Alerte } from '../types'
 import { useStore } from '../store'
 import { Btn, Card, DateF, EmptyState, Money, Page, Stat, useToday } from '../ui'
 import { alertesActives } from '../alerts'
-import { STATUTS_ACTIFS, meteoFinanciere } from '../derive'
-import { addDays, fmtDate, fmtMoney } from '../util'
+import { STATUTS_ACTIFS, caRealiseAnnee, meteoFinanciere } from '../derive'
+import { addDays, fmtDate, fmtMoney, fmtPct } from '../util'
 import { useSurveillance } from '../surveillance'
 
 // ---------- petits composants locaux ----------
@@ -369,6 +369,24 @@ export default function Cockpit() {
             sub="honoraires restant à facturer (projets signés / en cours)"
           />
         </div>
+        {state.settings.caCibleHT > 0 && (() => {
+          const annee = Number(today.slice(0, 4))
+          const ca = caRealiseAnnee(state, annee)
+          const cible = state.settings.caCibleHT
+          const pct = ca / cible
+          const couleur = pct >= 1 ? 'var(--ok)' : pct >= 0.6 ? 'var(--warn)' : 'var(--danger)'
+          return (
+            <div style={{ margin: '10px 2px 0' }}>
+              <div className="small" style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
+                <span className="muted">Objectif CA {annee} — <a href="#/analyse">Analyse</a></span>
+                <span><strong>{fmtMoney(ca)}</strong> <span className="muted">/ {fmtMoney(cible)} ({fmtPct(pct, 0)})</span></span>
+              </div>
+              <div style={{ background: 'var(--line)', borderRadius: 99, height: 8, overflow: 'hidden' }}>
+                <div style={{ width: `${Math.min(100, pct * 100)}%`, height: '100%', background: couleur }} />
+              </div>
+            </div>
+          )
+        })()}
         {excel && (
           <p className="muted small" style={{ margin: '8px 2px 0' }}>
             Excel maître importé le {fmtDate(excel.date)} ({excel.fichier}) : carnet{' '}

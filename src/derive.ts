@@ -205,3 +205,11 @@ export function coutJourObjectif(state: AppState): number {
 export function enJours(state: AppState, heures: number): number {
   return state.settings.heuresParJour > 0 ? heures / state.settings.heuresParJour : 0
 }
+
+/** CA HT facturé (émis ou encaissé) sur une année civile — confronté à la cible */
+export function caRealiseAnnee(state: AppState, annee: number): number {
+  const prefixe = String(annee)
+  return state.factures
+    .filter((f) => f.statut !== 'prevue' && f.emission.slice(0, 4) === prefixe)
+    .reduce((s, f) => s + f.montantHT, 0)
+}

@@ -45,7 +45,7 @@ import {
   seuilPlancherActualise,
   totalPointsComplexite,
 } from '../miqcp'
-import { coutJourObjectif, coutReelTemps, coutsExternes, encaissementPrevu, enJours, factureHT, heuresPrevues, heuresReelles, retardFacture, ttc } from '../derive'
+import { coutHoraireMoyen, coutJourObjectif, coutReelTemps, coutsExternes, encaissementPrevu, enJours, factureHT, heuresPrevues, heuresReelles, retardFacture, ttc } from '../derive'
 import { assemble, contexteProjet } from '../prompts'
 import { facturesParDefaut } from '../echeancier'
 import ProjetNouveau from './ProjetNouveau'
@@ -524,7 +524,11 @@ function CarteHonoraires({ projet: p }: { projet: Projet }) {
   const h = calculHonoraires(p, state.settings)
   const hPrev = heuresPrevues(p)
   const tempsPasseVente = hPrev * state.settings.tauxHoraireVente
-  const coutPrevisionnel = hPrev * state.settings.coutHoraireRevient
+  // marge au COÛT RÉEL (comme Finances et Analyse) : plus de forfait.
+  // prévisionnel = heures prévues × coût horaire réel moyen de l'équipe + coûts externes
+  const coutHoraireReel = coutHoraireMoyen(state)
+  const coutExterne = coutsExternes(state, p.id)
+  const coutPrevisionnel = hPrev * coutHoraireReel + coutExterne
   const marge = h.honorairesTotauxHT - coutPrevisionnel
   const margePct = h.honorairesTotauxHT > 0 ? marge / h.honorairesTotauxHT : null
 
@@ -615,7 +619,8 @@ function CarteHonoraires({ projet: p }: { projet: Projet }) {
           {fmtMoney(marge)}
           {margePct !== null && <> ({fmtPct(margePct, 0)})</>}{' '}
           <span className="muted small">
-            (honoraires − {fmtHeures(hPrev)} × {fmtMoney(state.settings.coutHoraireRevient)}/h de revient)
+            (honoraires − {fmtHeures(hPrev)} × {fmtMoney(coutHoraireReel, true)}/h coût réel moyen
+            {coutExterne > 0 && <> − {fmtMoney(coutExterne)} externes</>})
           </span>
         </dd>
       </dl>
@@ -977,7 +982,7 @@ function ModalEditionProjet({ projet, onClose }: { projet: Projet; onClose: () =
           typeMO: pr.typeMO,
           moa: pr.moa,
           montantTravauxHT: pr.montantTravauxHT,
-          surfaceM2: null,
+          surfaceM2: pr.surfacePlancher ?? null,
           mission: pr.missionsComplHT > 0 ? 'Base + missions compl.' : 'Base',
           motsCles: [...new Set([...(pr.ouvrage ? [fold(pr.ouvrage.replace(/^\d+-\s*/, '')).split(' ')[0]] : []), ...tagsJournal])],
           attestation: false,

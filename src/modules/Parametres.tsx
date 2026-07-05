@@ -403,13 +403,8 @@ export default function Parametres() {
           <Field label="Nom de l'agence">
             <TextInput value={s.nomAgence} onChange={(v) => maj((d) => void (d.settings.nomAgence = v))} />
           </Field>
-          <Field label="Équipe (virgules)">
-            <TextInput
-              value={s.personnes.join(', ')}
-              onChange={(v) =>
-                maj((d) => void (d.settings.personnes = v.split(',').map((x) => x.trim()).filter(Boolean)))
-              }
-            />
+          <Field label="Équipe" hint="source unique : la carte « Équipe & coûts réels » ci-dessus">
+            <div className="input" style={{ background: '#f7f8fa' }}>{s.personnes.join(', ') || '—'}</div>
           </Field>
           <Field label="CA annuel cible HT (€)">
             <NumInput value={s.caCibleHT} onChange={(v) => maj((d) => void (d.settings.caCibleHT = v ?? 0))} />
@@ -455,6 +450,43 @@ export default function Parametres() {
           référence de négociation. Sous ~{fmtMoney((457347.05 * s.bt01Actuel) / s.bt01Ref1994)} de travaux
           actualisés, le guide renvoie au chiffrage en temps passé.
         </p>
+      </Card>
+
+      <Card titre="Coordonnées légales & bancaires — imprimées sur les factures">
+        <p className="small muted" style={{ marginBottom: 10 }}>
+          Ces informations apparaissent automatiquement sur les factures PDF (en-tête, pied de page,
+          bloc de règlement). À renseigner une fois.
+        </p>
+        <div className="form-row">
+          <Field label="Adresse de l'agence">
+            <TextInput value={s.adresseAgence || ''} onChange={(v) => maj((d) => void (d.settings.adresseAgence = v))} />
+          </Field>
+          <Field label="SIRET">
+            <TextInput value={s.siretAgence || ''} onChange={(v) => maj((d) => void (d.settings.siretAgence = v))} />
+          </Field>
+          <Field label="N° TVA intracom.">
+            <TextInput value={s.numeroTVA || ''} onChange={(v) => maj((d) => void (d.settings.numeroTVA = v))} />
+          </Field>
+        </div>
+        <div className="form-row">
+          <Field label="RCS">
+            <TextInput value={s.rcs || ''} onChange={(v) => maj((d) => void (d.settings.rcs = v))} placeholder="ex. Beauvais 900 123 456" />
+          </Field>
+          <Field label="Capital social">
+            <TextInput value={s.capitalSocial || ''} onChange={(v) => maj((d) => void (d.settings.capitalSocial = v))} placeholder="ex. 5 000 €" />
+          </Field>
+        </div>
+        <div className="form-row">
+          <Field label="Banque">
+            <TextInput value={s.banque || ''} onChange={(v) => maj((d) => void (d.settings.banque = v))} />
+          </Field>
+          <Field label="IBAN">
+            <TextInput value={s.iban || ''} onChange={(v) => maj((d) => void (d.settings.iban = v))} />
+          </Field>
+          <Field label="BIC">
+            <TextInput value={s.bic || ''} onChange={(v) => maj((d) => void (d.settings.bic = v))} />
+          </Field>
+        </div>
       </Card>
 
       <div className="grid2">

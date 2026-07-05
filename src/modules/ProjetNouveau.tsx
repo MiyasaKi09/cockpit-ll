@@ -62,13 +62,15 @@ export default function ProjetNouveau({ onClose }: { onClose: () => void }) {
       coefManuel: null,
       tauxRetenu,
       missionsComplHT: missionsCompl ?? 0,
+      dureeEtudesMois: dureeEtudes,
+      dureeChantierMois: dureeChantier,
       phases: [],
       liens: [],
       materiauxIds: [],
       artisanIds: [],
       journal: [],
     }),
-    [id, nom, typeMO, statut, moa, adresse, ouvrage, montant, tauxRetenu, missionsCompl],
+    [id, nom, typeMO, statut, moa, adresse, ouvrage, montant, tauxRetenu, missionsCompl, dureeEtudes, dureeChantier],
   )
 
   const h = calculHonoraires(brouillon, state.settings)

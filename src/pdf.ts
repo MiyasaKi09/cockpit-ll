@@ -36,7 +36,7 @@ export function ouvrirFacturePDF(state: AppState, f: Facture): void {
 <header>
   <div>
     <h1>${echapper(s.nomAgence)}</h1>
-    <div class="muted">Architecture — maîtrise d'œuvre<br>${echapper(s.personnes.join(' · '))}</div>
+    <div class="muted">Architecture — maîtrise d'œuvre<br>${echapper(s.personnes.join(' · '))}${s.adresseAgence ? `<br>${echapper(s.adresseAgence)}` : ''}${s.siretAgence ? `<br>SIRET ${echapper(s.siretAgence)}` : ''}${s.numeroTVA ? ` · TVA ${echapper(s.numeroTVA)}` : ''}</div>
   </div>
   <div style="text-align:right">
     <h1>Facture ${echapper(f.id)}</h1>
@@ -46,12 +46,12 @@ export function ouvrirFacturePDF(state: AppState, f: Facture): void {
 
 <div class="bloc">
   <strong>Maître d'ouvrage</strong><br>
-  ${echapper(p?.moa || '—')}${p?.emailMOA ? `<br><span class="muted">${echapper(p.emailMOA)}</span>` : ''}
+  ${echapper(p?.moa || '—')}${p?.siretClient ? `<br><span class="muted">SIRET ${echapper(p.siretClient)}</span>` : ''}${p?.emailMOA ? `<br><span class="muted">${echapper(p.emailMOA)}</span>` : ''}
 </div>
 
 <div class="bloc">
   <strong>Opération</strong><br>
-  ${echapper(p ? `${p.id} — ${p.nom}` : f.projetId)}${p?.adresse ? `<br><span class="muted">${echapper(p.adresse)}</span>` : ''}
+  ${echapper(p ? `${p.id} — ${p.nom}` : f.projetId)}${p?.adresse ? `<br><span class="muted">${echapper(p.adresse)}</span>` : ''}${p?.objetFacture ? `<br><span class="muted">${echapper(p.objetFacture)}</span>` : ''}${p?.numeroEngagement ? `<br><span class="muted">N° d'engagement / marché : ${echapper(p.numeroEngagement)}</span>` : ''}
 </div>
 
 <table>
@@ -70,13 +70,16 @@ export function ouvrirFacturePDF(state: AppState, f: Facture): void {
   </tbody>
 </table>
 
+${s.iban ? `<div class="bloc"><strong>Règlement par virement</strong><br>
+  ${s.banque ? `${echapper(s.banque)}<br>` : ''}IBAN ${echapper(s.iban)}${s.bic ? ` · BIC ${echapper(s.bic)}` : ''}</div>` : ''}
+
 <div class="mentions">
   TVA sur les encaissements (prestations de services). Paiement à ${f.delaiJours} jours.
   Tout retard de paiement entraîne de plein droit des pénalités au taux légal en vigueur ainsi
   qu'une indemnité forfaitaire de recouvrement de 40 € (art. L441-10 du Code de commerce) pour
   les professionnels. Escompte pour paiement anticipé : néant.<br>
-  Document généré par le Cockpit ${echapper(s.nomAgence)} — à vérifier avant envoi (coordonnées
-  bancaires et mentions légales complètes à ajouter selon votre papeterie).
+  ${[echapper(s.nomAgence), s.capitalSocial ? `SAS au capital de ${echapper(s.capitalSocial)}` : '', s.rcs ? `RCS ${echapper(s.rcs)}` : '', s.siretAgence ? `SIRET ${echapper(s.siretAgence)}` : ''].filter(Boolean).join(' · ')}
+  ${!s.iban ? '<br>Coordonnées bancaires à compléter dans Paramètres.' : ''}
 </div>
 </body></html>`
 

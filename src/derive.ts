@@ -432,3 +432,148 @@ export function honorairesDETduMois(state: AppState, s: Situation): number {
   if (travauxOp <= 0 || mois <= 0) return 0
   return Math.round(det.montantHT * (mois / travauxOp))
 }
+
+// ------------------------------------------------------------------
+// Synthèses de période (Analyse & Revue de pilotage) — CA facturé,
+// temps et coûts réels agrégés par projet, par mois, par personne.
+// ------------------------------------------------------------------
+
+export interface LigneAnalyse {
+  projetId: string
+  ca: number
+  coutTemps: number
+  coutExterne: number
+  margeReelle: number
+  jours: number
+  parJour: number | null
+  partCA: number
+  partTemps: number
+}
+
+export interface SyntheseAnalyse {
+  lignes: LigneAnalyse[]
+  totalCA: number
+  totalJours: number
+  totalCoutTemps: number
+  totalCoutExterne: number
+  joursHorsProjet: number
+  parJourMoyen: number | null
+}
+
+/** CA facturé (émis/encaissé), temps et coûts réels par projet sur [debut, fin] */
+export function analyserPeriode(state: AppState, debut: string, fin: string): SyntheseAnalyse {
+  const parProjet = new Map<string, LigneAnalyse>()
+  const ligne = (id: string): LigneAnalyse => {
+    if (!parProjet.has(id))
+      parProjet.set(id, { projetId: id, ca: 0, coutTemps: 0, coutExterne: 0, margeReelle: 0, jours: 0, parJour: null, partCA: 0, partTemps: 0 })
+    return parProjet.get(id)!
+  }
+
+  for (const f of state.factures) {
+    if (f.statut === 'prevue') continue
+    if (f.emission < debut || f.emission > fin) continue
+    ligne(f.projetId).ca += f.montantHT
+  }
+  for (const t of state.temps) {
+    if (t.semaine < debut || t.semaine > fin) continue
+    const l = ligne(t.projetId)
+    l.jours += enJours(state, t.heures)
+    l.coutTemps += t.heures * coutHoraireDe(state, t.personne)
+  }
+
+  let joursHorsProjet = 0
+  for (const t of state.tempsHorsProjet) {
+    if (t.semaine < debut || t.semaine > fin) continue
+    joursHorsProjet += enJours(state, t.heures)
+  }
+
+  const lignes = [...parProjet.values()].filter((l) => l.ca > 0 || l.jours > 0)
+  const totalCA = lignes.reduce((s, l) => s + l.ca, 0)
+  const totalJours = lignes.reduce((s, l) => s + l.jours, 0)
+  const totalCoutTemps = lignes.reduce((s, l) => s + l.coutTemps, 0)
+  for (const l of lignes) {
+    // même définition que l'onglet Finances : marge = CA − coût du temps − coûts externes
+    l.coutExterne = coutsExternes(state, l.projetId)
+    l.margeReelle = l.ca - l.coutTemps - l.coutExterne
+    l.parJour = l.jours > 0.05 ? l.ca / l.jours : null
+    l.partCA = totalCA > 0 ? l.ca / totalCA : 0
+    l.partTemps = totalJours > 0 ? l.jours / totalJours : 0
+  }
+  lignes.sort((a, b) => b.ca - a.ca)
+
+  return {
+    lignes,
+    totalCA,
+    totalJours,
+    totalCoutTemps,
+    totalCoutExterne: lignes.reduce((s, l) => s + l.coutExterne, 0),
+    joursHorsProjet,
+    parJourMoyen: totalJours > 0.05 ? totalCA / totalJours : null,
+  }
+}
+
+export interface CAMensuel {
+  lignes: { projetId: string; mois: number[]; total: number }[]
+  emisParMois: number[]
+  encaisseParMois: number[]
+  prevuParMois: number[]
+}
+
+/** Matrice CA facturé projets × 12 mois pour une année (émis / encaissé / prévu) */
+export function caParMois(state: AppState, annee: number): CAMensuel {
+  const parProjet = new Map<string, number[]>()
+  const emisParMois = Array(12).fill(0) as number[]
+  const encaisseParMois = Array(12).fill(0) as number[]
+  const prevuParMois = Array(12).fill(0) as number[]
+
+  for (const f of state.factures) {
+    const m = Number(f.emission.slice(5, 7)) - 1
+    if (f.emission.slice(0, 4) === String(annee)) {
+      if (f.statut === 'prevue') {
+        prevuParMois[m] += f.montantHT
+      } else {
+        if (!parProjet.has(f.projetId)) parProjet.set(f.projetId, Array(12).fill(0))
+        parProjet.get(f.projetId)![m] += f.montantHT
+        emisParMois[m] += f.montantHT
+      }
+    }
+    if (f.statut === 'encaissee' && f.encaissementReel?.slice(0, 4) === String(annee)) {
+      encaisseParMois[Number(f.encaissementReel.slice(5, 7)) - 1] += f.montantHT
+    }
+  }
+
+  const lignes = [...parProjet.entries()]
+    .map(([projetId, mois]) => ({ projetId, mois, total: mois.reduce((s, x) => s + x, 0) }))
+    .sort((a, b) => b.total - a.total)
+  return { lignes, emisParMois, encaisseParMois, prevuParMois }
+}
+
+export interface LigneTempsPersonne {
+  personne: string
+  heures: number
+  jours: number
+  cout: number
+}
+
+/** Temps pointé agrégé par personne (projets + hors-projet) sur [debut, fin] */
+export function tempsParPersonne(state: AppState, debut: string, fin: string): LigneTempsPersonne[] {
+  const par = new Map<string, { heures: number; cout: number }>()
+  const ajouter = (personne: string, heures: number) => {
+    const cur = par.get(personne) || { heures: 0, cout: 0 }
+    cur.heures += heures
+    cur.cout += heures * coutHoraireDe(state, personne)
+    par.set(personne, cur)
+  }
+  for (const t of state.temps) {
+    if (t.semaine < debut || t.semaine > fin) continue
+    ajouter(t.personne, t.heures)
+  }
+  for (const t of state.tempsHorsProjet) {
+    if (t.semaine < debut || t.semaine > fin) continue
+    ajouter(t.personne, t.heures)
+  }
+  return [...par.entries()]
+    .map(([personne, v]) => ({ personne, heures: v.heures, jours: enJours(state, v.heures), cout: v.cout }))
+    .filter((l) => l.heures > 0)
+    .sort((a, b) => b.heures - a.heures)
+}

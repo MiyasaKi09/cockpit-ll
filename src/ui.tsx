@@ -56,7 +56,12 @@ export function Page({
       <div className="page page-geo">
         <header className="page-wordmark-h">
           <h1 className="wordmark">{titre}</h1>
-          {meta && <div className="wordmark-meta">{meta}</div>}
+          {(meta || actions) && (
+            <div style={{ display: 'inline-flex', alignItems: 'center', gap: 14 }}>
+              {meta && <div className="wordmark-meta">{meta}</div>}
+              {actions}
+            </div>
+          )}
         </header>
         {children}
       </div>

@@ -32,6 +32,10 @@
   --c-yellow: #f5b301;
   --c-blue: #1e5aa8;
   --c-red: #e63627;
+  /* catégoriels (pastilles calendrier — adaptés au thème) */
+  --cat-purple: #7c3aed;
+  --cat-amber: #b45309;
+  --cat-teal: #0e7490;
 
   /* — géométrie — */
   --radius: 6px;
@@ -68,6 +72,9 @@
     --warn-soft: #2a2110;
     --danger: #ec6a5c;
     --danger-soft: #2c1512;
+    --cat-purple: #a78bfa;
+    --cat-amber: #d6a54a;
+    --cat-teal: #38bdf8;
     --field-bg: #141418;
     --sidebar: #121216;
     --sidebar-ink: #a6a29a;
@@ -98,6 +105,7 @@
   --accent: #4c8df0; --accent-soft: #17273c; --accent-ink: #0b1017;
   --ok: #46b47c; --ok-soft: #16281f; --warn: #d6a54a; --warn-soft: #2a2110;
   --danger: #ec6a5c; --danger-soft: #2c1512; --field-bg: #141418;
+  --cat-purple: #a78bfa; --cat-amber: #d6a54a; --cat-teal: #38bdf8;
   --sidebar: #121216; --sidebar-ink: #a6a29a; --sidebar-line: #2c2c34;
   --shadow-hard: 3px 3px 0 rgba(0, 0, 0, 0.55);
   --shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.35), 0 10px 30px rgba(0, 0, 0, 0.4);

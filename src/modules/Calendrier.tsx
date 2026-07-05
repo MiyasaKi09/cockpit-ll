@@ -26,11 +26,11 @@ const COULEURS = {
   rendu: 'var(--danger)',
   facture: 'var(--warn)',
   encaissement: 'var(--ok)',
-  ao: '#7c3aed',
+  ao: 'var(--cat-purple)',
   reunion: 'var(--accent)',
-  obligation: '#b45309',
+  obligation: 'var(--cat-amber)',
   crm: 'var(--ink-3)',
-  projet: '#0e7490',
+  projet: 'var(--cat-teal)',
 }
 
 /** tous les événements datés de l'état — calculé, jamais stocké */

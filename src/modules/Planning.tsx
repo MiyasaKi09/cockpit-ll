@@ -542,12 +542,20 @@ function ouvrirChantierPDF(state: AppState, lignes: LigneChantier[], f: Fenetre,
 // capacité hebdo. Rouge = surcharge, à rééquilibrer.
 // ============================================================
 
-/** couleur d'une cellule selon le taux de charge (planifié / capacité) */
+/** couleur d'une cellule à l'écran — tokens de thème (clair ET sombre) */
 function couleurCharge(ratio: number): { bg: string; fg: string } {
-  if (ratio <= 0.001) return { bg: 'transparent', fg: 'var(--muted, #94a3b8)' }
-  if (ratio > 1.001) return { bg: '#fde0e0', fg: '#b91c1c' } // surcharge
-  if (ratio >= 0.85) return { bg: '#fdf3c6', fg: '#854d0e' } // presque plein
-  return { bg: '#dcf5e3', fg: '#166534' } // marge disponible
+  if (ratio <= 0.001) return { bg: 'transparent', fg: 'var(--ink-3)' }
+  if (ratio > 1.001) return { bg: 'var(--danger-soft)', fg: 'var(--danger)' } // surcharge
+  if (ratio >= 0.85) return { bg: 'var(--warn-soft)', fg: 'var(--warn)' } // presque plein
+  return { bg: 'var(--ok-soft)', fg: 'var(--ok)' } // marge disponible
+}
+
+/** version impression : couleurs littérales, toujours sur fond blanc A4 */
+function couleurChargePDF(ratio: number): { bg: string; fg: string } {
+  if (ratio <= 0.001) return { bg: '#ffffff', fg: '#94a3b8' }
+  if (ratio > 1.001) return { bg: '#fde0e0', fg: '#b91c1c' }
+  if (ratio >= 0.85) return { bg: '#fdf3c6', fg: '#854d0e' }
+  return { bg: '#dcf5e3', fg: '#166534' }
 }
 
 /** liste des lundis (ISO) de la fenêtre */
@@ -653,9 +661,9 @@ function PlanDeCharge({ debutLundi, nbSemaines }: { debutLundi: string; nbSemain
       </table>
       <p className="muted small" style={{ marginTop: 10, display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
         Heures planifiées / semaine (phases datées réparties dans le temps et entre l'équipe affectée).
-        <span><span style={{ display: 'inline-block', width: 11, height: 11, borderRadius: 2, background: '#dcf5e3', marginRight: 4, verticalAlign: 'middle' }} />marge</span>
-        <span><span style={{ display: 'inline-block', width: 11, height: 11, borderRadius: 2, background: '#fdf3c6', marginRight: 4, verticalAlign: 'middle' }} />presque plein</span>
-        <span><span style={{ display: 'inline-block', width: 11, height: 11, borderRadius: 2, background: '#fde0e0', marginRight: 4, verticalAlign: 'middle' }} />surcharge</span>
+        <span><span style={{ display: 'inline-block', width: 11, height: 11, borderRadius: 2, background: 'var(--ok-soft)', marginRight: 4, verticalAlign: 'middle' }} />marge</span>
+        <span><span style={{ display: 'inline-block', width: 11, height: 11, borderRadius: 2, background: 'var(--warn-soft)', marginRight: 4, verticalAlign: 'middle' }} />presque plein</span>
+        <span><span style={{ display: 'inline-block', width: 11, height: 11, borderRadius: 2, background: 'var(--danger-soft)', marginRight: 4, verticalAlign: 'middle' }} />surcharge</span>
       </p>
     </div>
   )
@@ -680,8 +688,8 @@ function ouvrirChargePDF(state: AppState, debutLundi: string, nbSemaines: number
         .map((l) => {
           const h = chargePlanifieeSemaine(state, pers.nom, l)
           const ratio = cap > 0 ? h / cap : 0
-          const { bg, fg } = couleurCharge(ratio)
-          return `<td style="text-align:center;font-size:9px;padding:3px 2px;background:${bg === 'transparent' ? '#fff' : bg};color:${fg};font-weight:${ratio > 1.001 ? 800 : 600}">${h < 0.05 ? '·' : Math.round(h)}</td>`
+          const { bg, fg } = couleurChargePDF(ratio)
+          return `<td style="text-align:center;font-size:9px;padding:3px 2px;background:${bg};color:${fg};font-weight:${ratio > 1.001 ? 800 : 600}">${h < 0.05 ? '·' : Math.round(h)}</td>`
         })
         .join('')
       return `<tr><td style="padding:3px 6px;font-size:10px;white-space:nowrap;border-right:1px solid #e3e6ec"><strong>${echapper(pers.nom)}</strong> <span style="color:#5a6478">${Math.round(cap)} h</span></td>${cells}</tr>`
@@ -693,7 +701,7 @@ function ouvrirChargePDF(state: AppState, debutLundi: string, nbSemaines: number
       const t = equipe.reduce((s, pers) => s + chargePlanifieeSemaine(state, pers.nom, l), 0)
       const capEquipe = cap * equipe.length
       const ratio = capEquipe > 0 ? t / capEquipe : 0
-      const { fg } = couleurCharge(ratio)
+      const { fg } = couleurChargePDF(ratio)
       return `<td style="text-align:center;font-size:9px;padding:3px 2px;font-weight:700;color:${fg};border-top:1px solid #cdd3dd">${t < 0.05 ? '·' : Math.round(t)}</td>`
     })
     .join('')

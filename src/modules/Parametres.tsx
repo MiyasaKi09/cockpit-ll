@@ -23,6 +23,7 @@ import {
 import { download, fmtDate, fmtMoney, fmtPct, fold, todayISO, uid } from '../util'
 import { coefSuggere, coutAgenceAnnuel, coutAnnuelPersonne, coutHorairePersonne, coutHoraireMoyen, coutJourObjectif, objectifCA, tauxVente, tauxVenteObjectif } from '../derive'
 import { connecterGoogle, deconnecter, estConnecte } from '../google'
+import { connecterSync, deconnecterSync, envoyerLienMagique, pousserEtat, syncEtat, tirerEtat } from '../sync'
 
 const TYPES_MO: TypeMO[] = ['Public', 'Privé pro', 'Particulier']
 
@@ -205,6 +206,141 @@ function CarteSurveillance() {
           <li>« Écran de consentement OAuth » : type Externe, mode <strong>Test</strong>, ajoutez vos deux adresses comme utilisateurs test (pas besoin de validation Google pour un outil interne).</li>
           <li>« Identifiants » → « Créer des identifiants » → <strong>ID client OAuth</strong>, type « Application Web » ; dans « Origines JavaScript autorisées », ajoutez les adresses du site (ex. http://localhost:5173 et votre URL vercel.app).</li>
           <li>Copiez l’ID client ci-dessus, « Connecter Google », choisissez le compte : c’est fini.</li>
+        </ol>
+      </details>
+    </Card>
+  )
+}
+
+/** Synchronisation 2 postes via Supabase (offre gratuite) — opt-in, local-first préservé */
+function CarteSync() {
+  const { state, replace } = useStore()
+  const cfg = state.settings.sync || { url: '', anonKey: '', workspaceId: 'agence-ll', email: '' }
+  const [message, setMessage] = useState('')
+  const [occupe, setOccupe] = useState(false)
+  const [, forcer] = useState(0)
+  const etat = syncEtat()
+
+  const majSync = (champ: 'url' | 'anonKey' | 'workspaceId' | 'email', v: string) =>
+    replace({
+      ...state,
+      settings: {
+        ...state.settings,
+        sync: { ...(state.settings.sync || { url: '', anonKey: '', workspaceId: 'agence-ll' }), [champ]: v },
+      },
+    })
+
+  const connecterEtReconcilier = async () => {
+    setMessage('')
+    setOccupe(true)
+    try {
+      await connecterSync(cfg.url, cfg.anonKey, cfg.workspaceId)
+      if (!syncEtat().connecte) {
+        setMessage('Projet relié. Envoyez le lien magique, ouvrez-le sur ce poste, puis revenez « Synchroniser ».')
+        forcer((x) => x + 1)
+        return
+      }
+      const remote = await tirerEtat()
+      if (remote) {
+        // l'espace partagé fait foi à la connexion (on garde la config locale)
+        replace({ ...remote.data, settings: { ...remote.data.settings, sync: state.settings.sync } })
+        setMessage('Données de l’espace partagé récupérées — les 2 postes sont alignés.')
+      } else {
+        await pousserEtat(state)
+        setMessage('Espace partagé vide : vos données locales viennent de l’initialiser.')
+      }
+      forcer((x) => x + 1)
+    } catch (e) {
+      setMessage(`Impossible : ${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setOccupe(false)
+    }
+  }
+
+  const envoyer = async () => {
+    setMessage('')
+    try {
+      if (!syncEtat().connecte && (!cfg.url || !cfg.anonKey)) {
+        setMessage('Renseignez d’abord l’URL et la clé, puis « Relier le projet ».')
+        return
+      }
+      await connecterSync(cfg.url, cfg.anonKey, cfg.workspaceId)
+      await envoyerLienMagique(cfg.email || '')
+      setMessage(`Lien magique envoyé à ${cfg.email} — ouvrez-le depuis CE poste pour vous connecter.`)
+    } catch (e) {
+      setMessage(`Envoi impossible : ${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
+
+  const pousserMaintenant = async () => {
+    setOccupe(true)
+    try {
+      await pousserEtat(state)
+      setMessage('Vos données locales ont été poussées vers l’espace partagé (elles font foi).')
+      forcer((x) => x + 1)
+    } finally {
+      setOccupe(false)
+    }
+  }
+
+  const deconnecter = async () => {
+    await deconnecterSync()
+    setMessage('Déconnecté — ce poste repasse en mode local (localStorage).')
+    forcer((x) => x + 1)
+  }
+
+  return (
+    <Card titre="Synchronisation 2 postes — Supabase (offre gratuite, UE)">
+      <p className="small muted" style={{ marginBottom: 10 }}>
+        Optionnel. Une fois connecté, l’état de l’agence vit dans un espace partagé chiffré côté Supabase :
+        Julien et Zoé voient les mêmes données en temps réel, et c’est une sauvegarde automatique hors du
+        navigateur. Sans connexion, tout continue en local (localStorage) — la synchro ne bloque jamais.
+        La clé « publique » se colle ici sans risque : l’accès est verrouillé à vos 2 adresses.
+      </p>
+      <div className="form-row">
+        <Field label="URL du projet Supabase">
+          <TextInput value={cfg.url} onChange={(v) => majSync('url', v)} placeholder="https://xxxx.supabase.co" />
+        </Field>
+        <Field label="Clé publique (anon / publishable)">
+          <TextInput value={cfg.anonKey} onChange={(v) => majSync('anonKey', v)} placeholder="eyJhbGciOi…" />
+        </Field>
+      </div>
+      <div className="form-row">
+        <Field label="Identifiant d’espace" hint="le même sur les 2 postes (ex. agence-ll)">
+          <TextInput value={cfg.workspaceId} onChange={(v) => majSync('workspaceId', v)} placeholder="agence-ll" />
+        </Field>
+        <Field label="Votre e-mail (lien magique)" hint="julenglet@gmail.com ou zoefhebert@gmail.com">
+          <TextInput value={cfg.email || ''} onChange={(v) => majSync('email', v)} placeholder="julenglet@gmail.com" />
+        </Field>
+      </div>
+      <div className="toolbar" style={{ marginTop: 8, marginBottom: 0, flexWrap: 'wrap' }}>
+        {etat.connecte ? (
+          <>
+            <Badge tone="ok">connecté{etat.email ? ` — ${etat.email}` : ''}</Badge>
+            <Btn small kind="primary" onClick={connecterEtReconcilier} disabled={occupe}>Synchroniser maintenant</Btn>
+            <Btn small onClick={pousserMaintenant} disabled={occupe} title="Écrase l’espace partagé avec les données de CE poste">Pousser mes données</Btn>
+            <Btn small onClick={deconnecter}>Déconnecter</Btn>
+          </>
+        ) : (
+          <>
+            <Btn kind="primary" onClick={envoyer} disabled={occupe || !cfg.email}>Envoyer le lien magique</Btn>
+            <Btn small onClick={connecterEtReconcilier} disabled={occupe || !cfg.url || !cfg.anonKey}>Relier / synchroniser</Btn>
+          </>
+        )}
+        {etat.derniereSync && <span className="small muted">dernière synchro : {fmtDate(etat.derniereSync)}</span>}
+        {message && <span className="small">{message}</span>}
+      </div>
+      {etat.erreur && <p className="small danger-text" style={{ marginTop: 6 }}>Synchro : {etat.erreur}</p>}
+      <details style={{ marginTop: 10 }}>
+        <summary className="small" style={{ cursor: 'pointer', color: 'var(--accent)' }}>
+          Guide : créer le projet Supabase gratuit (une fois, ~5 min)
+        </summary>
+        <ol className="small" style={{ margin: '8px 0 0', paddingLeft: 18, lineHeight: 1.8 }}>
+          <li>supabase.com → « New project » (offre gratuite, région <strong>West EU / Frankfurt</strong>).</li>
+          <li>« SQL Editor » → collez le script fourni (table <code>workspace</code> + règles d’accès restreintes à vos 2 e-mails + temps réel) → Run.</li>
+          <li>« Authentication » → Providers → activez <strong>Email</strong> (lien magique) ; désactivez les inscriptions publiques (« Allow new users to sign up » off) — vos 2 comptes suffisent.</li>
+          <li>« Project Settings » → « API » : copiez <strong>Project URL</strong> et la clé <strong>anon / publishable</strong> ci-dessus.</li>
+          <li>« Envoyer le lien magique », ouvrez-le sur ce poste, puis « Synchroniser ». Faites de même sur le 2ᵉ poste avec le même identifiant d’espace.</li>
         </ol>
       </details>
     </Card>
@@ -630,6 +766,8 @@ export default function Parametres() {
           )}
         </Card>
       </div>
+
+      <CarteSync />
 
       <CarteSurveillance />
 

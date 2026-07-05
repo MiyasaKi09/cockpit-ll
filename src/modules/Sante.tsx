@@ -12,6 +12,7 @@ import { useStore } from '../store'
 import { Badge, Btn, Card, EmptyState, Page } from '../ui'
 import { diffDays, fmtDate, todayISO } from '../util'
 import { estConnecte } from '../google'
+import { syncEtat } from '../sync'
 import { dernierScan, journalSurveillance, scannerUneFois } from '../surveillance'
 import { CRITERES_DEFAUT, derniereRechercheBoamp, rechercherBoamp } from '../boamp'
 import { relaisDisponible } from '../relais'
@@ -517,6 +518,38 @@ function SanteDonnees() {
   )
 }
 
+function SanteSync() {
+  const { state } = useStore()
+  const cfg = state.settings.sync
+  const etat_ = syncEtat()
+  const etat: Etat = !cfg?.url || !cfg.anonKey ? 'coupe' : etat_.connecte ? 'ok' : 'attention'
+
+  return (
+    <Branchement etat={etat} titre="Synchronisation 2 postes — Supabase (temps réel + sauvegarde)">
+      {!cfg?.url || !cfg.anonKey ? (
+        <p className="small">
+          Pas encore configurée — optionnelle. Reliez un projet Supabase gratuit dans{' '}
+          <a href="#/parametres">Paramètres → Synchronisation</a> pour partager l’état entre Julien et Zoé en
+          temps réel (et l’avoir sauvegardé hors du navigateur). Sans elle, tout reste en local.
+        </p>
+      ) : (
+        <p className="small">
+          {etat_.connecte ? (
+            <Badge tone="ok">connecté{etat_.email ? ` — ${etat_.email}` : ''} · les 2 postes convergent en ~1–2 s</Badge>
+          ) : (
+            <>
+              <Badge tone="warn">session non connectée</Badge>{' '}
+              <a href="#/parametres">se connecter (lien magique) dans Paramètres</a>
+            </>
+          )}
+          {etat_.derniereSync && <span className="muted"> · dernière synchro : {fmtInstant(etat_.derniereSync)}</span>}
+          {etat_.erreur && <span className="danger-text"> · {etat_.erreur}</span>}
+        </p>
+      )}
+    </Branchement>
+  )
+}
+
 // ---------- page ----------
 
 export default function Sante() {
@@ -531,6 +564,7 @@ export default function Sante() {
       <SanteDrive />
       <SanteWhisper />
       <SanteRoutines />
+      <SanteSync />
       <SanteDonnees />
     </Page>
   )

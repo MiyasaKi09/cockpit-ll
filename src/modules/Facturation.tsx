@@ -259,11 +259,22 @@ function EncaisserModal({
 // ---------- carte « Relances à faire » ----------
 
 function CarteRelances({ state, today }: { state: AppState; today: string }) {
+  const { update } = useStore()
   const enRetard = state.factures
     .filter((f) => retardFacture(f, today) > 0)
     .sort((a, b) => retardFacture(b, today) - retardFacture(a, today))
 
   const projetClaude = state.prompts.find((t) => NIVEAUX_RELANCE.some((n) => n.tplId === t.id))?.projetClaude
+
+  // trace la relance quand son brouillon est copié (date + niveau + historique)
+  const marquerRelance = (id: string, niveau: number) =>
+    update((d) => {
+      const x = d.factures.find((y) => y.id === id)
+      if (!x) return
+      x.derniereRelance = today
+      x.niveauRelance = niveau
+      x.relances = [...(x.relances || []), { date: today, niveau }]
+    })
 
   return (
     <Card titre="Relances à faire">
@@ -278,7 +289,7 @@ function CarteRelances({ state, today }: { state: AppState; today: string }) {
           </p>
           <Table
             compact
-            head={['N°', 'Projet', 'Libellé', <span key="ttc" style={{ display: 'block', textAlign: 'right' }}>TTC</span>, 'Retard', 'Relance (brouillon)']}
+            head={['N°', 'Projet', 'Libellé', <span key="ttc" style={{ display: 'block', textAlign: 'right' }}>TTC</span>, 'Retard', 'Dernière relance', 'Relance (brouillon)']}
           >
             {enRetard.map((f) => {
               const retard = retardFacture(f, today)
@@ -298,6 +309,17 @@ function CarteRelances({ state, today }: { state: AppState; today: string }) {
                   <td>
                     <Badge tone="danger">{retard} j</Badge>
                   </td>
+                  <td className="small muted">
+                    {f.derniereRelance ? (
+                      <span title={(f.relances || []).map((r) => `${fmtDate(r.date)} — ${NIVEAUX_RELANCE[r.niveau]?.label ?? 'relance'}`).join('\n')}>
+                        {fmtDate(f.derniereRelance)}
+                        {f.niveauRelance != null && ` · ${NIVEAUX_RELANCE[f.niveauRelance]?.label ?? ''}`}
+                        {(f.relances?.length ?? 0) > 1 && ` (${f.relances!.length})`}
+                      </span>
+                    ) : (
+                      '— jamais'
+                    )}
+                  </td>
                   <td>
                     <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                       {NIVEAUX_RELANCE.map((n, i) => {
@@ -316,6 +338,7 @@ function CarteRelances({ state, today }: { state: AppState; today: string }) {
                             kind={i === conseille ? 'primary' : 'default'}
                             label={n.label}
                             text={() => assemble(t.corps, contexteFacture(state, f))}
+                            onCopied={() => marquerRelance(f.id, i)}
                           />
                         )
                       })}
@@ -572,7 +595,14 @@ export default function Facturation() {
                   <td>
                     <span title={LIBELLES_PHASES[f.phase]}>{f.phase}</span>
                   </td>
-                  <td>{f.libelle}</td>
+                  <td>
+                    {f.libelle}
+                    {f.situationId && (
+                      <a href="#/situations" className="muted small" title="Issue d'une situation de travaux validée" style={{ marginLeft: 6 }}>
+                        · situation
+                      </a>
+                    )}
+                  </td>
                   <td className="right">
                     <Money v={f.montantHT} />
                   </td>

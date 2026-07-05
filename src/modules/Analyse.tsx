@@ -10,6 +10,7 @@ import { useMemo, useState } from 'react'
 import type { AppState } from '../types'
 import { useStore } from '../store'
 import {
+  caCible,
   caRealiseAnnee,
   coutAgenceAnnuel,
   coutHoraireDe,
@@ -328,7 +329,7 @@ export default function Analyse() {
   const objectif = coutJourObjectif(state)
   const annee = Number(auj.slice(0, 4))
   const caRealise = caRealiseAnnee(state, annee)
-  const cible = state.settings.caCibleHT
+  const cible = caCible(state)
   const pctCible = cible > 0 ? caRealise / cible : null
 
   return (

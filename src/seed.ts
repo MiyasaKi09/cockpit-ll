@@ -6,7 +6,7 @@
 
 import type { AppState, Facture, PromptTemplate } from './types'
 
-export const STATE_VERSION = 6
+export const STATE_VERSION = 7
 
 const P = (v: number) => Math.round(v * 100) / 100
 

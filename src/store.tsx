@@ -71,6 +71,10 @@ function migrate(parsed: AppState): AppState {
     artisanIds: Array.isArray(p.artisanIds) ? p.artisanIds : [],
     journal: Array.isArray(p.journal) ? p.journal : [],
   }))
+  // v6 → v7 : facturation & situations pro (révision/RG sur les situations,
+  // lien situation↔facture DET, suivi des relances). Uniquement des champs
+  // optionnels : les situations et factures existantes sont conservées telles
+  // quelles (spread de `parsed`), rien à amorcer.
   return etat
 }
 

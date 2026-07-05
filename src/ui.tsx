@@ -159,11 +159,14 @@ export function CopyBtn({
   label = 'Copier',
   kind = 'primary',
   small,
+  onCopied,
 }: {
   text: string | (() => string)
   label?: string
   kind?: 'default' | 'primary' | 'ghost'
   small?: boolean
+  /** effet de bord après copie réussie (ex. tracer une relance) */
+  onCopied?: () => void
 }) {
   const [fait, setFait] = useState(false)
   return (
@@ -174,6 +177,7 @@ export function CopyBtn({
         const t = typeof text === 'function' ? text() : text
         if (await copier(t)) {
           setFait(true)
+          onCopied?.()
           setTimeout(() => setFait(false), 1800)
         }
       }}

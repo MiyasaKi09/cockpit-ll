@@ -45,7 +45,7 @@ import {
   seuilPlancherActualise,
   totalPointsComplexite,
 } from '../miqcp'
-import { coutHoraireMoyen, coutJourObjectif, coutReelTemps, coutsExternes, encaissementPrevu, enJours, factureHT, heuresPrevues, heuresReelles, retardFacture, ttc } from '../derive'
+import { coutHoraireMoyen, coutJourObjectif, coutReelTemps, coutsExternes, encaissementPrevu, enJours, factureHT, heuresPrevues, heuresReelles, retardFacture, tauxVente, ttc } from '../derive'
 import { assemble, contexteProjet } from '../prompts'
 import { facturesParDefaut } from '../echeancier'
 import ProjetNouveau from './ProjetNouveau'
@@ -523,7 +523,7 @@ function CarteHonoraires({ projet: p }: { projet: Projet }) {
   const { state, update } = useStore()
   const h = calculHonoraires(p, state.settings)
   const hPrev = heuresPrevues(p)
-  const tempsPasseVente = hPrev * state.settings.tauxHoraireVente
+  const tempsPasseVente = hPrev * tauxVente(state)
   // marge au COÛT RÉEL (comme Finances et Analyse) : plus de forfait.
   // prévisionnel = heures prévues × coût horaire réel moyen de l'équipe + coûts externes
   const coutHoraireReel = coutHoraireMoyen(state)
@@ -610,7 +610,7 @@ function CarteHonoraires({ projet: p }: { projet: Projet }) {
         <dd>
           <Money v={tempsPasseVente} />{' '}
           <span className="muted small">
-            ({fmtHeures(hPrev)} prévues × {fmtMoney(state.settings.tauxHoraireVente)}/h)
+            ({fmtHeures(hPrev)} prévues × {fmtMoney(tauxVente(state))}/h)
           </span>
         </dd>
 
@@ -768,7 +768,7 @@ function CartePhases({ projet: p }: { projet: Projet }) {
       return
     update((d) => {
       const pr = d.projets.find((x) => x.id === p.id)
-      if (pr) pr.phases = phasesParDefaut(h.honorairesBaseHT, d.settings.tauxHoraireVente)
+      if (pr) pr.phases = phasesParDefaut(h.honorairesBaseHT, tauxVente(d))
     })
   }
 

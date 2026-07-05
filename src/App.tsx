@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useStore } from './store'
-import { Icon, ToastHost, useRoute, useToday } from './ui'
+import { ConfirmHost, Icon, ToastHost, useRoute, useToday } from './ui'
 import { alertesActives } from './alerts'
 import { basculerTheme, themeCourant } from './theme'
 
@@ -192,6 +192,7 @@ export default function App() {
     </div>
     {rechercheOuverte && <RechercheOverlay onClose={() => setRechercheOuverte(false)} />}
     <ToastHost />
+    <ConfirmHost />
     </>
   )
 }

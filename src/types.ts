@@ -397,6 +397,12 @@ export type TypeAlerte =
   | 'sauvegarde'
 
 /** Alerte du fil d'urgences — calculée, jamais stockée (hors snooze) */
+/** action rapide attachée à une alerte, réalisable depuis le fil */
+export type ActionAlerte =
+  | { kind: 'emettre_facture'; refId: string; label: string }
+  | { kind: 'valider_situation'; refId: string; label: string }
+  | { kind: 'obligation_faite'; refId: string; label: string }
+
 export interface Alerte {
   /** identifiant stable (sert au snooze) */
   id: string
@@ -407,6 +413,8 @@ export interface Alerte {
   /** route hash vers la source — toute alerte est traçable */
   lien: string
   date?: string
+  /** action rapide contextuelle (émettre, valider, cocher…) */
+  action?: ActionAlerte
 }
 
 export interface ImportExcelMeta {

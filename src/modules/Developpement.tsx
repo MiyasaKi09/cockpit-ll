@@ -156,7 +156,7 @@ export default function Developpement() {
   return (
     <Page
       titre="Développement commercial"
-      sousTitre="Le pipeline en tableau : chaque consultation avance d'un clic, la valeur se somme par étape. « Gagnée » crée l'espace projet automatiquement."
+      sousTitre="Chaque consultation avance d'un clic ; « Gagnée » crée le projet."
     >
       <div className="grid3" style={{ marginBottom: 16 }}>
         <Card titre="Pipeline actif (hors gagné/perdu)">

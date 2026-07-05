@@ -173,7 +173,7 @@ export default function Recherche() {
   return (
     <Page
       titre="Recherche"
-      sousTitre="Tout est relié : cherchez un matériau, une entreprise, un contact, un mot d'une note — et retrouvez les projets où ils apparaissent."
+      sousTitre="Cherchez un matériau, une entreprise, un contact… et retrouvez les projets liés."
     >
       <div className="toolbar">
         <TextInput
@@ -191,7 +191,7 @@ export default function Recherche() {
 
       {q.trim().length < 2 ? (
         <Card>
-          <EmptyState>Tapez au moins 2 caractères. Exemples utiles : un nom d'entreprise pour voir tous ses chantiers, un matériau pour voir où il a été employé.</EmptyState>
+          <EmptyState>Tapez au moins 2 caractères.</EmptyState>
         </Card>
       ) : resultats.length === 0 ? (
         <Card>

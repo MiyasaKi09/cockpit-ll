@@ -123,7 +123,7 @@ function ListeProjets() {
   return (
     <Page
       titre="Projets"
-      sousTitre="Un espace par projet : pilotage, chantier, ressources, journal — tout s'ajoute au fil de l'eau, tout est interconnecté."
+      sousTitre="Un espace par projet ; tout s'y rattache."
       actions={<Btn kind="primary" onClick={() => setWizard(true)}>Nouveau projet</Btn>}
     >
       <div className="toolbar">

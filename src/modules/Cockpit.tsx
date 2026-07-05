@@ -294,7 +294,7 @@ function BoiteATraiter() {
       </p>
       <LigneCourrier personne={personne} />
       {items.length === 0 && nbCourriers === 0 ? (
-        <EmptyState>Rien à traiter — la boîte est vide. Les mails peuvent attendre.</EmptyState>
+        <EmptyState>Rien à traiter.</EmptyState>
       ) : (
         items.map((i) => (
           <div key={i.id} className="alert-item">
@@ -388,7 +388,6 @@ export default function Cockpit() {
       titre="Cockpit"
       sousTitre={
         <>
-          Claude propose, l'humain valide — intranet 100 % déterministe.{' '}
           {direct ? (
             <span className="badge badge-ok">⚡ Gmail & Agenda en direct</span>
           ) : (
@@ -475,7 +474,7 @@ export default function Cockpit() {
         }
       >
         {alertes.length === 0 ? (
-          <EmptyState>Rien d'urgent — le fil est calme.</EmptyState>
+          <EmptyState>Rien d'urgent.</EmptyState>
         ) : (
           GROUPES_ALERTES.map((g) => {
             const items = alertes.filter((a) => a.gravite === g.gravite)

@@ -206,12 +206,10 @@ function CarteBoamp() {
     })
 
   return (
-    <Card titre="Veille automatique — BOAMP + TED, les avis officiels arrivent tout seuls">
+    <Card titre="Veille automatique BOAMP + TED">
       <p className="small muted" style={{ marginBottom: 10 }}>
-        BOAMP (national) interrogé en direct, TED (marchés européens) via le relais du site — les deux
-        sur <strong>vos départements</strong>, uniquement les <strong>avis de marché en cours</strong> :
-        résultats, rectificatifs et avis expirés sont filtrés, mots-clés cherchés dans l'objet. Un clic
-        met l'annonce « À étudier ».
+        Sur <strong>vos départements</strong>, uniquement les <strong>marchés en cours</strong>.
+        Un clic : « À étudier ».
       </p>
       <div className="toolbar" style={{ flexWrap: 'wrap' }}>
         <Field label="Mots-clés (OU entre chaque, virgules)">
@@ -861,7 +859,7 @@ export default function VeilleAO() {
   return (
     <Page
       titre="Appels d'offres"
-      sousTitre="Le BOAMP arrive tout seul (API officielle gratuite) ; la routine hebdo complète avec TED et les sources privées. Avis Go / No-Go outillés par Claude — décision et bilan restent humains."
+      sousTitre="Le BOAMP arrive tout seul ; avis Go / No-Go outillés par Claude."
       actions={
         <Btn kind="primary" onClick={() => setFiche({ c: nouvelleConsultation(), nouveau: true })}>
           Nouvelle consultation

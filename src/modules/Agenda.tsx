@@ -78,7 +78,7 @@ export default function Agenda() {
   return (
     <Page
       titre="Réglementaire & CRM"
-      sousTitre="Obligations de l'agence avec rappels, contacts avec prochaine action — les deux alimentent le fil d'urgences."
+      sousTitre="Obligations et contacts à relancer — les deux alimentent le fil d'urgences."
       actions={
         <Btn onClick={exporterICS} title="Fichier .ics : obligations, rendus de phases et actions CRM — à importer dans Google Agenda (sans API)">
           Exporter vers l'agenda (.ics)

@@ -212,11 +212,8 @@ function EditionDates({ projet: p }: { projet: Projet }) {
         </Field>
       </div>
       <p className="muted small" style={{ margin: '8px 0' }}>
-        Toutes les phases se placent d'un coup à partir de ces 3 repères (réparties au prorata des
-        honoraires) — le projet tient sur une seule ligne. Ensuite, ◀ ▶ décale une phase d'une
-        semaine ; avec la case cochée, tout ce qui démarre après glisse d'autant. Après un décalage,
-        « Réaligner l'échéancier » recale les factures prévisionnelles sur les nouvelles dates (sans
-        toucher aux factures déjà émises).
+        ◀ ▶ décale une phase d'une semaine ; case cochée = les phases suivantes suivent.
+        « Réaligner l'échéancier » recale ensuite les factures prévues.
       </p>
       <table className="table table-compact">
         <thead>
@@ -784,7 +781,7 @@ export default function Planning() {
   return (
     <Page
       titre="Planning"
-      sousTitre="Le Gantt vivant de l'agence — phases de conception, lots de chantier, ou plan de charge de l'équipe (qui bosse sur quoi, qui est en surcharge). La ligne rouge marque aujourd'hui, tout glisse en deux clics, Imprimer/PDF pour diffuser."
+      sousTitre="Phases, chantier ou plan de charge. La ligne rouge = aujourd'hui ; tout glisse en deux clics."
       actions={
         <Btn kind="primary" onClick={exporterPDF} disabled={vide}>
           🖨 Imprimer / PDF

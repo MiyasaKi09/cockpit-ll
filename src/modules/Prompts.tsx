@@ -100,7 +100,7 @@ export default function Prompts() {
   return (
     <Page
       titre="Bibliothèque de prompts"
-      sousTitre="Un clic assemble le gabarit avec les données de la base et le copie — il ne reste qu'à le coller dans le bon Projet Claude. Les gabarits sont versionnés : une amélioration profite immédiatement à toute l'agence."
+      sousTitre="Un clic assemble le gabarit avec les données et le copie. Versionné : une amélioration profite à toute l'agence."
       actions={
         <Btn kind="primary" onClick={() => setCreation(true)}>
           Nouveau gabarit

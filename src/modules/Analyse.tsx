@@ -335,7 +335,7 @@ export default function Analyse() {
   return (
     <Page
       titre="Analyse — chaque mission paie-t-elle sa journée ?"
-      sousTitre="Le coût du temps est calculé personne par personne (salaire réel chargé, réglé dans Paramètres → Équipe) — pas de forfait. Vert : la mission couvre les coûts fixes ; rouge : elle en vit."
+      sousTitre="Coût du temps réel, personne par personne. Vert : la mission couvre ses coûts ; rouge : elle en vit."
     >
       {cible > 0 && (
         <Card titre={`Objectif de chiffre d'affaires ${annee}`}>

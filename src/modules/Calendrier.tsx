@@ -182,7 +182,7 @@ export default function Calendrier() {
   return (
     <Page
       titre="Calendrier"
-      sousTitre="Toutes les dates qui comptent, remplies automatiquement : rendus (◀), débuts de phase (▶), factures (€), encaissements (⬇), remises d'AO, réunions (🏗), obligations (⚖), CRM (👤). Cliquez une pastille pour ouvrir la source."
+      sousTitre="Toutes les échéances au même endroit. Cliquez une pastille pour ouvrir sa source."
     >
       <div className="toolbar">
         <Btn onClick={() => naviguer(-1)}>‹</Btn>

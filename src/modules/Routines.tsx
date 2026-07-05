@@ -21,7 +21,7 @@ export default function Routines() {
   return (
     <Page
       titre="Routines Claude & imports"
-      sousTitre="Configurées une fois dans Claude (routines programmées, accès Gmail/Drive/web), elles tournent sans intervention. Le Cockpit n'appelle jamais d'API : seuls les résultats font l'aller-retour — et l'humain valide toujours."
+      sousTitre="Configurées une fois dans Claude, elles tournent seules. Collez leurs résultats ci-dessous."
     >
       <ImportUniversel />
 
@@ -69,12 +69,6 @@ export default function Routines() {
             <strong> « à vérifier »</strong>, jamais validées toutes seules.
           </li>
         </ol>
-        <p className="small muted" style={{ marginTop: 10 }}>
-          Limites assumées du sans-API : pas d'automatisation en tâche de fond hors routines planifiées, un
-          geste de copier-coller subsiste sur les flux ponctuels. À deux, c'est un avantage déguisé — chaque
-          sortie est relue. Le jour où l'agence grandit, la bascule est propre : les pré-prompts deviennent
-          des appels API, la base et les règles ne changent pas.
-        </p>
       </Card>
     </Page>
   )

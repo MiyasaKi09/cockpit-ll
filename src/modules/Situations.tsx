@@ -861,13 +861,11 @@ export default function Situations() {
   return (
     <Page
       titre="Situations de travaux"
-      sousTitre="Secrétaire ++ — la routine lit situations@, l'humain vérifie et vise."
+      sousTitre="Les entreprises envoient à situations@ ; vous vérifiez et visez."
     >
       <div className="pill-note">
-        Circuit : les entreprises envoient leurs situations à situations@ → la routine Claude
-        quotidienne les extrait → import ici → vérification humaine → visa. La maîtrise d'œuvre
-        porte le risque sur le délai global de paiement : la date limite de vérification de
-        chaque situation est calculée en dur (délai contractuel du marché, 15 j par défaut).
+        La maîtrise d'œuvre porte le risque sur le délai de paiement : la date limite de
+        vérification est calculée d'après le délai du marché (15 j par défaut).
       </div>
       <CarteImport />
       <CarteAVerifier />

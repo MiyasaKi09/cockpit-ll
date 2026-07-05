@@ -556,7 +556,7 @@ export default function Sante() {
   return (
     <Page
       titre="Santé des branchements"
-      sousTitre="La réponse à « est-ce que tout marche ? » : l'état réel de chaque interconnexion, un bouton pour la tester, et le journal de ce qui a été capté. Vert = ça tourne."
+      sousTitre="« Est-ce que tout marche ? » — l'état de chaque branchement, un bouton pour tester. Vert = ça tourne."
     >
       <SanteGoogle />
       <SanteBoamp />

@@ -464,7 +464,7 @@ export default function Parametres() {
   return (
     <Page
       titre="Paramètres & données"
-      sousTitre="Réglages de l'agence, trésorerie, Excel maître et sauvegardes. En local, les données vivent dans ce navigateur : exportez régulièrement."
+      sousTitre="Réglages de l'agence, trésorerie, Excel et sauvegardes."
     >
       <div className="grid2">
         <Card titre="Trésorerie disponible (météo financière)">
@@ -770,15 +770,6 @@ export default function Parametres() {
       <CarteSync />
 
       <CarteSurveillance />
-
-      <Card titre="Données & confidentialité">
-        <ul className="small" style={{ margin: 0, paddingLeft: 18, lineHeight: 1.8 }}>
-          <li>Une seule source de vérité par donnée : la double saisie tue l'adoption.</li>
-          <li>Minimisation de ce qui est collé dans Claude : pas de données personnelles inutiles.</li>
-          <li>Réglages de confidentialité Claude vérifiés ; politique de rétention pour les e-mails traités.</li>
-          <li>Un module inutilisé pendant un mois se coupe sans état d'âme — maintenance plafonnée à ~1 j/mois.</li>
-        </ul>
-      </Card>
     </Page>
   )
 }

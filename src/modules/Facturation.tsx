@@ -264,8 +264,6 @@ function CarteRelances({ state, today }: { state: AppState; today: string }) {
     .filter((f) => retardFacture(f, today) > 0)
     .sort((a, b) => retardFacture(b, today) - retardFacture(a, today))
 
-  const projetClaude = state.prompts.find((t) => NIVEAUX_RELANCE.some((n) => n.tplId === t.id))?.projetClaude
-
   // trace la relance quand son brouillon est copié (date + niveau + historique)
   const marquerRelance = (id: string, niveau: number) =>
     update((d) => {
@@ -279,13 +277,11 @@ function CarteRelances({ state, today }: { state: AppState; today: string }) {
   return (
     <Card titre="Relances à faire">
       {enRetard.length === 0 ? (
-        <EmptyState>Aucune facture en retard — rien à relancer.</EmptyState>
+        <EmptyState>Aucun retard.</EmptyState>
       ) : (
         <>
           <p className="muted small" style={{ marginBottom: 10 }}>
-            Trois niveaux gradués — le niveau conseillé est en bleu. Chaque clic copie un brouillon
-            complet à coller dans le Projet Claude {projetClaude ? `« ${projetClaude} »` : 'dédié'} ;
-            relecture humaine avant tout envoi.
+            Trois niveaux ; le conseillé est en bleu.
           </p>
           <Table
             compact
@@ -497,7 +493,7 @@ export default function Facturation() {
   return (
     <Page
       titre="Facturation"
-      sousTitre="Échéancier des honoraires, encaissements et relances graduées — les brouillons de relance sont toujours relus avant envoi."
+      sousTitre="Échéancier des honoraires, encaissements et relances."
     >
       {/* ----- stats ----- */}
       <div

@@ -376,6 +376,10 @@ export interface Consultation {
   projetId?: string | null
   /** personne concernée (facultatif) */
   pour?: string
+  /** probabilité de succès saisie (0-1) — sinon déduite de l'étape */
+  probabilite?: number | null
+  /** date ISO du dernier changement d'étape — pour le vieillissement des cartes */
+  dernierMouvement?: string
   notes?: string
 }
 

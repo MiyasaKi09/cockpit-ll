@@ -1,7 +1,7 @@
 // Valeurs dérivées — une seule source de vérité par donnée :
 // le facturé vient des factures, les heures réelles du pointage.
 
-import type { AppState, Facture, MarcheTravaux, PhaseCode, Projet, Situation } from './types'
+import type { AppState, Consultation, Facture, MarcheTravaux, PhaseCode, Projet, Situation, StatutConsultation } from './types'
 import { calculHonoraires } from './miqcp'
 import { addDays, diffDays, fmtMoney, fold } from './util'
 
@@ -431,6 +431,38 @@ export function honorairesDETduMois(state: AppState, s: Situation): number {
   const mois = s.montantMoisHT || 0
   if (travauxOp <= 0 || mois <= 0) return 0
   return Math.round(det.montantHT * (mois / travauxOp))
+}
+
+// ------------------------------------------------------------------
+// Pipeline commercial — probabilité par étape, prévisionnel pondéré,
+// vieillissement des cartes.
+// ------------------------------------------------------------------
+
+/** probabilité de succès par défaut selon l'étape du pipeline */
+export const PROBA_ETAPE: Record<StatutConsultation, number> = {
+  a_etudier: 0.1,
+  go: 0.3,
+  deposee: 0.5,
+  gagnee: 1,
+  perdue: 0,
+  no_go: 0,
+}
+
+/** probabilité retenue : saisie sur la consultation, sinon barème d'étape */
+export function probaConsultation(c: Consultation): number {
+  return c.probabilite != null ? c.probabilite : PROBA_ETAPE[c.statut]
+}
+
+/** prévisionnel pondéré = Σ budget travaux × probabilité, sur les étapes actives */
+export function previsionnelPondere(consultations: Consultation[]): number {
+  return consultations
+    .filter((c) => c.statut === 'a_etudier' || c.statut === 'go' || c.statut === 'deposee')
+    .reduce((s, c) => s + (c.budgetTravaux || 0) * probaConsultation(c), 0)
+}
+
+/** jours écoulés depuis le dernier mouvement d'étape (null si inconnu) */
+export function ageCarte(c: Consultation, today: string): number | null {
+  return c.dernierMouvement ? Math.max(0, diffDays(c.dernierMouvement, today)) : null
 }
 
 // ------------------------------------------------------------------

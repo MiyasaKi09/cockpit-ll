@@ -27,7 +27,7 @@ import {
   toast,
   useToday,
 } from '../ui'
-import { addDays, addMonths, diffDays, download, fmtDate, fold, todayISO, uid } from '../util'
+import { addDays, addMonths, diffDays, download, fmtDate, fold, ouvrirGmail, todayISO, uid } from '../util'
 import { STATUTS_ACTIFS } from '../derive'
 
 const CANAUX: { value: CanalInteraction; label: string }[] = [
@@ -291,6 +291,29 @@ function contactVide(): Contact {
   return { id: uid('ct'), nom: '', organisme: '', role: '', type: 'MOA', email: '', tel: '', derniereInteraction: null, prochaineAction: '', dateProchaineAction: null, notes: '' }
 }
 
+/** ouvre un brouillon Gmail de relance pré-rempli, puis logue l'échange sortant */
+function relancerParMail(state: AppState, update: (fn: (d: AppState) => void) => void, c: Contact): void {
+  const agence = state.settings.nomAgence || 'l’agence'
+  const objet = c.prochaineAction ? `Relance — ${c.prochaineAction}` : `Suite à notre échange — ${agence}`
+  const corps =
+    `Bonjour${c.nom ? ` ${c.nom}` : ''},\n\n` +
+    `Je me permets de revenir vers vous${c.prochaineAction ? ` au sujet de : ${c.prochaineAction}` : ''}.\n\n` +
+    `Restant à votre disposition,\n${state.settings.personnes.join(' & ') || agence}\n${agence}`
+  ouvrirGmail(c.email || '', objet, corps)
+  update((d) => {
+    const x = d.contacts.find((y) => y.id === c.id)
+    if (!x) return
+    d.interactions.push({
+      id: uid('int'),
+      contactId: c.id,
+      date: todayISO(),
+      canal: 'mail',
+      resume: `Relance par mail${c.prochaineAction ? ` : ${c.prochaineAction}` : ''}.`,
+    })
+    x.derniereInteraction = todayISO()
+  })
+}
+
 /** relance faite : décale la prochaine action de relanceJours (ou la vide) + logue l'échange */
 function marquerRelanceFaite(state: AppState, update: (fn: (d: AppState) => void) => void, c: Contact): void {
   update((d) => {
@@ -391,6 +414,11 @@ function OngletContacts({ today }: { today: string }) {
                     )}
                   </td>
                   <td className="right" onClick={(e) => e.stopPropagation()} style={{ whiteSpace: 'nowrap' }}>
+                    {c.email && (
+                      <Btn small onClick={() => relancerParMail(state, update, c)} title="Ouvrir un brouillon Gmail de relance (et journaliser l'échange)">
+                        Relancer
+                      </Btn>
+                    )}{' '}
                     {c.dateProchaineAction && (
                       <Btn small kind="primary" onClick={() => marquerRelanceFaite(state, update, c)} title={c.relanceJours ? `Relance faite — replanifiée dans ${c.relanceJours} j` : 'Relance faite — action soldée'}>
                         ✓ Relance

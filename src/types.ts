@@ -370,6 +370,8 @@ export interface Consultation {
   dateLimite?: string | null
   statut: StatutConsultation
   avisGoNoGo?: string
+  /** notes de la grille Go/No-Go pondérée, par code de critère (0-4) */
+  scoresGoNoGo?: Record<string, number>
   classement?: number | null
   motifsResultat?: string
   /** projet créé automatiquement quand la consultation est gagnée */

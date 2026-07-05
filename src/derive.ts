@@ -466,6 +466,55 @@ export function ageCarte(c: Consultation, today: string): number | null {
 }
 
 // ------------------------------------------------------------------
+// Grille Go/No-Go pondérée — décision aidée mais déterministe.
+// Chaque critère est noté 0 (rédhibitoire) à 4 (idéal), pondéré ;
+// le score normalisé donne une recommandation. La décision reste humaine.
+// ------------------------------------------------------------------
+
+export interface CritereGoNoGo {
+  code: string
+  label: string
+  poids: number
+  aide: string
+}
+
+export const CRITERES_GO_NOGO: CritereGoNoGo[] = [
+  { code: 'references', label: 'Adéquation avec nos références', poids: 3, aide: 'a-t-on des références proches (typologie, montant) ?' },
+  { code: 'charge', label: 'Disponibilité / plan de charge', poids: 2, aide: 'a-t-on la capacité de produire dans les délais ?' },
+  { code: 'honoraires', label: 'Honoraires vs effort', poids: 2, aide: 'le budget justifie-t-il le temps de montage et de production ?' },
+  { code: 'distance', label: 'Proximité / déplacements', poids: 1, aide: 'le chantier est-il accessible sans trop de trajets ?' },
+  { code: 'concurrence', label: 'Concurrence / chances', poids: 1, aide: 'la concurrence attendue laisse-t-elle une vraie chance ?' },
+]
+
+export interface EvaluationGoNoGo {
+  note: number | null // 0-1, null si non évaluée
+  reco: 'Plutôt Go' | 'À étudier' | 'Plutôt No-Go' | null
+  tone: 'ok' | 'warn' | 'danger' | 'muted'
+  complet: boolean
+}
+
+/** évalue la grille : score pondéré normalisé (0-1) + recommandation */
+export function evaluerGoNoGo(scores: Record<string, number> | undefined): EvaluationGoNoGo {
+  if (!scores || Object.keys(scores).length === 0) {
+    return { note: null, reco: null, tone: 'muted', complet: false }
+  }
+  let obtenu = 0
+  let max = 0
+  for (const c of CRITERES_GO_NOGO) {
+    const s = scores[c.code]
+    if (s == null) continue
+    obtenu += s * c.poids
+    max += 4 * c.poids
+  }
+  if (max === 0) return { note: null, reco: null, tone: 'muted', complet: false }
+  const note = obtenu / max
+  const complet = CRITERES_GO_NOGO.every((c) => scores[c.code] != null)
+  const reco = note >= 0.65 ? 'Plutôt Go' : note >= 0.4 ? 'À étudier' : 'Plutôt No-Go'
+  const tone = note >= 0.65 ? 'ok' : note >= 0.4 ? 'warn' : 'danger'
+  return { note, reco, tone, complet }
+}
+
+// ------------------------------------------------------------------
 // Synthèses de période (Analyse & Revue de pilotage) — CA facturé,
 // temps et coûts réels agrégés par projet, par mois, par personne.
 // ------------------------------------------------------------------

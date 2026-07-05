@@ -1,11 +1,12 @@
 // Store applicatif — état unique persisté en localStorage.
 // `update(fn)` clone l'état, applique la mutation, persiste.
 
-import { createContext, useCallback, useContext, useMemo, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { AppState, Personne } from './types'
 import { seedState, STATE_VERSION } from './seed'
 import { DEPARTEMENTS_DEFAUT } from './boamp'
+import { connecterSync, demarrerRealtime, pousserEtat, syncActif } from './sync'
 
 const STORAGE_KEY = 'cockpit-ll-v1'
 
@@ -130,6 +131,56 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     persist(withVersion)
     setState(withVersion)
   }, [])
+
+  // --- Synchronisation Supabase (opt-in) — branchée DERRIÈRE la persistance ---
+  const appliquerDistant = useRef(false) // anti-écho B : une écriture distante ne se re-pousse pas
+  const refPush = useRef<AppState | null>(null) // baseline + garde StrictMode
+  const sync = state.settings.sync
+
+  // (a) connexion + temps réel. Deps PRIMITIVES : ne se relance qu'au changement de config.
+  useEffect(() => {
+    if (!sync?.url || !sync.anonKey || !sync.workspaceId) return
+    let vivant = true
+    let arreter: (() => void) | undefined
+    void (async () => {
+      try {
+        await connecterSync(sync.url, sync.anonKey, sync.workspaceId)
+        if (!vivant) return
+        arreter = demarrerRealtime((next) => {
+          appliquerDistant.current = true
+          // re-fusionne la config machine-locale (jamais synchronisée)
+          replace({ ...next, settings: { ...next.settings, sync } })
+        })
+      } catch {
+        // mauvaise config / hors-ligne → mode localStorage pur (jamais bloquant)
+      }
+    })()
+    return () => {
+      vivant = false
+      arreter?.()
+    }
+  }, [sync?.url, sync?.anonKey, sync?.workspaceId, replace])
+
+  // (b) push débouncé de l'état local vers l'espace partagé
+  useEffect(() => {
+    if (!syncActif()) return
+    if (appliquerDistant.current) {
+      // ce changement vient d'une réception distante → ne pas le renvoyer
+      appliquerDistant.current = false
+      refPush.current = state
+      return
+    }
+    if (refPush.current === null || refPush.current === state) {
+      // première activation ou re-montage StrictMode (même référence d'état)
+      refPush.current = state
+      return
+    }
+    const id = setTimeout(() => {
+      refPush.current = state
+      void pousserEtat(state)
+    }, 700)
+    return () => clearTimeout(id)
+  }, [state])
 
   const value = useMemo(() => ({ state, update, replace }), [state, update, replace])
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>

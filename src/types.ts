@@ -501,6 +501,16 @@ export interface Settings {
   derniersImports?: Record<string, string>
   /** dernier export JSON de sauvegarde (date ISO) */
   derniereSauvegarde?: string | null
+  /** synchronisation Supabase (opt-in, offre gratuite) — config MACHINE-LOCALE :
+   *  jamais poussée dans le document partagé (retirée à l'envoi, re-fusionnée à la réception) */
+  sync?: {
+    url: string
+    anonKey: string
+    /** clé de l'espace partagé (une ligne = tout l'état de l'agence) */
+    workspaceId: string
+    /** dernière adresse du lien magique (affichage) */
+    email?: string
+  }
 }
 
 export interface AppState {

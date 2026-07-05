@@ -58,6 +58,7 @@ export function computeAlertes(state: AppState, today: string): Alerte[] {
         detail: `${nomProjet(state, f.projetId)} · ${f.libelle} · prévue le ${fmtDate(f.emission)}`,
         lien: '#/facturation',
         date: f.emission,
+        action: { kind: 'emettre_facture', refId: f.id, label: '✓ Émettre' },
       })
     }
     const retard = retardFacture(f, today)
@@ -88,6 +89,7 @@ export function computeAlertes(state: AppState, today: string): Alerte[] {
       detail: `${nomProjet(state, sit.projetId)} · ${sit.montantMoisHT !== null ? fmtMoney(sit.montantMoisHT) + ' HT · ' : ''}limite de vérification ${fmtDate(limite)}${sit.confiance != null ? ` · confiance routine ${Math.round(sit.confiance * 100)} %` : ''}`,
       lien: '#/situations',
       date: limite,
+      action: { kind: 'valider_situation', refId: sit.id, label: '✓ Valider' },
     })
   }
   const moisCourant = monthKey(today)
@@ -143,6 +145,7 @@ export function computeAlertes(state: AppState, today: string): Alerte[] {
       detail: o.organisme,
       lien: '#/agenda',
       date: o.echeance,
+      action: { kind: 'obligation_faite', refId: o.id, label: '✓ Fait' },
     })
   }
 

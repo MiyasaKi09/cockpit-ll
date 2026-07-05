@@ -34,9 +34,11 @@ const GROUPES_ALERTES: { gravite: Alerte['gravite']; label: string }[] = [
 function AlerteLigne({
   a,
   onSnooze,
+  onAction,
 }: {
   a: Alerte
   onSnooze: (id: string, jours: number) => void
+  onAction: (action: NonNullable<Alerte['action']>) => void
 }) {
   return (
     <div className={`alert-item alert-${a.gravite}`}>
@@ -49,6 +51,11 @@ function AlerteLigne({
         </div>
       </div>
       <div className="alert-actions">
+        {a.action && (
+          <Btn small kind="primary" onClick={() => onAction(a.action!)} title="Fait sur place, sans changer de page">
+            {a.action.label}
+          </Btn>
+        )}
         <Btn small onClick={() => onSnooze(a.id, 7)} title="Mettre cette alerte en sommeil 7 jours">
           Sommeil 7 j
         </Btn>
@@ -89,6 +96,12 @@ function RienASignaler({ children }: { children: ReactNode }) {
 
 // ---------- boîte « À traiter » ----------
 
+/** action rapide réalisable SUR PLACE, sans changer de page */
+type ActionRapide =
+  | { kind: 'emettre_facture'; refId: string; label: string }
+  | { kind: 'valider_situation'; refId: string; label: string }
+  | { kind: 'note_faite'; refId: string; projetId: string; label: string }
+
 interface ItemATraiter {
   id: string
   action: string
@@ -96,6 +109,7 @@ interface ItemATraiter {
   lien: string
   date?: string
   pour?: string
+  rapide?: ActionRapide
 }
 
 function itemsATraiter(state: ReturnType<typeof useStore>['state'], today: string): ItemATraiter[] {
@@ -108,6 +122,7 @@ function itemsATraiter(state: ReturnType<typeof useStore>['state'], today: strin
       lien: '#/situations',
       date: s.dateReception,
       pour: s.pour,
+      rapide: { kind: 'valider_situation', refId: s.id, label: '✓ Valider' },
     })
   }
   for (const c of state.consultations.filter((x) => x.statut === 'a_etudier')) {
@@ -127,6 +142,7 @@ function itemsATraiter(state: ReturnType<typeof useStore>['state'], today: strin
       detail: `${f.projetId} · ${f.libelle} · prévue le ${fmtDate(f.emission)}`,
       lien: '#/facturation',
       date: f.emission,
+      rapide: { kind: 'emettre_facture', refId: f.id, label: '✓ Émettre' },
     })
   }
   for (const r of state.reunions.filter((x) => x.statut !== 'diffuse' && x.date <= today)) {
@@ -149,6 +165,7 @@ function itemsATraiter(state: ReturnType<typeof useStore>['state'], today: strin
         lien: `#/projets/${p.id}/journal`,
         date: n.date,
         pour: n.auteur,
+        rapide: { kind: 'note_faite', refId: n.id, projetId: p.id, label: '✓ Fait' },
       })
     }
   }
@@ -227,8 +244,24 @@ function LigneCourrier({ personne }: { personne: string }) {
   )
 }
 
+/** exécute une action rapide sur place (mutation du store) */
+function executerRapide(update: ReturnType<typeof useStore>['update'], a: ActionRapide): void {
+  update((d) => {
+    if (a.kind === 'emettre_facture') {
+      const f = d.factures.find((x) => x.id === a.refId)
+      if (f && f.statut === 'prevue') f.statut = 'emise'
+    } else if (a.kind === 'valider_situation') {
+      const s = d.situations.find((x) => x.id === a.refId)
+      if (s) s.statut = 'validee'
+    } else if (a.kind === 'note_faite') {
+      const n = d.projets.find((x) => x.id === a.projetId)?.journal.find((x) => x.id === a.refId)
+      if (n) n.fait = true
+    }
+  })
+}
+
 function BoiteATraiter() {
-  const { state } = useStore()
+  const { state, update } = useStore()
   const today = useToday()
   const [personne, setPersonne] = useState('')
 
@@ -274,8 +307,13 @@ function BoiteATraiter() {
               <div className="alert-detail">{i.detail}</div>
             </div>
             <div className="alert-actions">
-              <a className="btn btn-small btn-primary" href={i.lien}>
-                Traiter →
+              {i.rapide && (
+                <Btn small kind="primary" onClick={() => executerRapide(update, i.rapide!)} title="Fait sur place, sans changer de page">
+                  {i.rapide.label}
+                </Btn>
+              )}
+              <a className={`btn btn-small ${i.rapide ? 'btn-ghost' : 'btn-primary'}`} href={i.lien}>
+                {i.rapide ? 'ouvrir' : 'Traiter →'}
               </a>
             </div>
           </div>
@@ -299,6 +337,31 @@ export default function Cockpit() {
   const snooze = (id: string, jours: number) =>
     update((d) => {
       d.settings.snoozes[id] = addDays(today, jours)
+    })
+
+  // action rapide d'une alerte, exécutée sur place
+  const executerAlerte = (action: NonNullable<Alerte['action']>) =>
+    update((d) => {
+      if (action.kind === 'emettre_facture') {
+        const f = d.factures.find((x) => x.id === action.refId)
+        if (f && f.statut === 'prevue') f.statut = 'emise'
+      } else if (action.kind === 'valider_situation') {
+        const s = d.situations.find((x) => x.id === action.refId)
+        if (s) s.statut = 'validee'
+      } else if (action.kind === 'obligation_faite') {
+        const o = d.obligations.find((x) => x.id === action.refId)
+        if (!o) return
+        if (o.periodiciteMois) {
+          // reconduit à la prochaine échéance (même logique qu'Agenda)
+          const ym = o.echeance.slice(0, 7)
+          const [y, m] = ym.split('-').map(Number)
+          const totalM = m - 1 + o.periodiciteMois
+          const jour = Math.min(Number(o.echeance.slice(8, 10)), 28)
+          o.echeance = `${y + Math.floor(totalM / 12)}-${String((totalM % 12) + 1).padStart(2, '0')}-${String(jour).padStart(2, '0')}`
+        } else {
+          d.obligations = d.obligations.filter((x) => x.id !== o.id)
+        }
+      }
     })
 
   // phases en cours : projets actifs dont une phase encadre la date du jour
@@ -423,7 +486,7 @@ export default function Cockpit() {
                   {g.label} ({items.length})
                 </div>
                 {items.map((a) => (
-                  <AlerteLigne key={a.id} a={a} onSnooze={snooze} />
+                  <AlerteLigne key={a.id} a={a} onSnooze={snooze} onAction={executerAlerte} />
                 ))}
               </div>
             )

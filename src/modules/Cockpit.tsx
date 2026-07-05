@@ -10,7 +10,7 @@ import type { Alerte } from '../types'
 import { useStore } from '../store'
 import { Btn, Card, DateF, EmptyState, Money, Page, Stat, useToday } from '../ui'
 import { alertesActives } from '../alerts'
-import { STATUTS_ACTIFS, caRealiseAnnee, meteoFinanciere } from '../derive'
+import { STATUTS_ACTIFS, caCible, caRealiseAnnee, meteoFinanciere } from '../derive'
 import { addDays, fmtDate, fmtMoney, fmtPct } from '../util'
 import { useSurveillance } from '../surveillance'
 
@@ -432,10 +432,10 @@ export default function Cockpit() {
             sub="honoraires restant à facturer (projets signés / en cours)"
           />
         </div>
-        {state.settings.caCibleHT > 0 && (() => {
+        {caCible(state) > 0 && (() => {
           const annee = Number(today.slice(0, 4))
           const ca = caRealiseAnnee(state, annee)
-          const cible = state.settings.caCibleHT
+          const cible = caCible(state)
           const pct = ca / cible
           const couleur = pct >= 1 ? 'var(--ok)' : pct >= 0.6 ? 'var(--warn)' : 'var(--danger)'
           return (

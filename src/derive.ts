@@ -256,6 +256,33 @@ export function caRealiseAnnee(state: AppState, annee: number): number {
     .reduce((s, f) => s + f.montantHT, 0)
 }
 
+/** Objectif de chiffre d'affaires. Si une marge nette est visée, le CA cible
+ *  se déduit des coûts : pour dégager une marge m sur le CA, il faut
+ *  CA = coûts ÷ (1 − m). Sinon on retient la cible saisie à la main.
+ *  Les coûts (équipe chargée + frais généraux) incluent déjà la rémunération
+ *  des dirigeants : le « résultat visé » est le bénéfice APRÈS s'être payés. */
+export function objectifCA(state: AppState): {
+  marge: number | null
+  coutsAnnuels: number
+  caCible: number
+  resultatVise: number
+  auto: boolean
+} {
+  const coutsAnnuels = coutAgenceAnnuel(state)
+  const marge = state.settings.margeCiblePct ?? null
+  if (marge != null && marge > 0 && marge < 1) {
+    const caCible = coutsAnnuels / (1 - marge)
+    return { marge, coutsAnnuels, caCible, resultatVise: caCible - coutsAnnuels, auto: true }
+  }
+  const caCible = state.settings.caCibleHT
+  return { marge: null, coutsAnnuels, caCible, resultatVise: caCible - coutsAnnuels, auto: false }
+}
+
+/** CA cible retenu (calculé depuis la marge visée, sinon saisi) */
+export function caCible(state: AppState): number {
+  return objectifCA(state).caCible
+}
+
 // ------------------------------------------------------------------
 // Situations de travaux — décompte « net à payer » à certifier à
 // l'entreprise : cumul des travaux (+ révision) − retenue de garantie

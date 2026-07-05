@@ -458,7 +458,11 @@ export interface Settings {
   tauxHoraireVente: number
   coutHoraireRevient: number
   heuresParJour: number
+  /** objectif de CA saisi à la main (utilisé si margeCiblePct est vide) */
   caCibleHT: number
+  /** marge nette visée (0,20 = 20 %) : si renseignée, le CA cible est calculé
+   *  automatiquement = coût d'agence annuel ÷ (1 − marge) */
+  margeCiblePct?: number | null
   /** seuil de dérive heures (0.9 = alerte à 90 % du budget) */
   seuilDeriveHeures: number
   delaisPaiement: Record<TypeMO, number>

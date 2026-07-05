@@ -21,7 +21,7 @@ import {
   useToday,
 } from '../ui'
 import { download, fmtDate, fmtMoney, fmtPct, fold, todayISO, uid } from '../util'
-import { coefSuggere, coutAgenceAnnuel, coutAnnuelPersonne, coutHorairePersonne, coutHoraireMoyen, coutJourObjectif } from '../derive'
+import { coefSuggere, coutAgenceAnnuel, coutAnnuelPersonne, coutHorairePersonne, coutHoraireMoyen, coutJourObjectif, objectifCA } from '../derive'
 import { connecterGoogle, deconnecter, estConnecte } from '../google'
 
 const TYPES_MO: TypeMO[] = ['Public', 'Privé pro', 'Particulier']
@@ -406,15 +406,58 @@ export default function Parametres() {
           <Field label="Équipe" hint="source unique : la carte « Équipe & coûts réels » ci-dessus">
             <div className="input" style={{ background: '#f7f8fa' }}>{s.personnes.join(', ') || '—'}</div>
           </Field>
-          <Field label="CA annuel cible HT (€)">
-            <NumInput value={s.caCibleHT} onChange={(v) => maj((d) => void (d.settings.caCibleHT = v ?? 0))} />
+          <Field
+            label="Marge nette visée (%)"
+            hint="bénéfice après s'être payés — laissez vide pour saisir le CA cible à la main"
+          >
+            <NumInput
+              value={s.margeCiblePct != null ? Math.round(s.margeCiblePct * 1000) / 10 : null}
+              onChange={(v) => maj((d) => void (d.settings.margeCiblePct = v == null ? null : v / 100))}
+              placeholder="ex. 20"
+            />
           </Field>
         </div>
+        {(() => {
+          const o = objectifCA(state)
+          return (
+            <div style={{ margin: '2px 0 12px', padding: '10px 12px', background: 'var(--bg-soft, #f6f7fa)', borderRadius: 8 }}>
+              <div className="form-row" style={{ alignItems: 'flex-end' }}>
+                <Field
+                  label="CA annuel cible HT (€)"
+                  hint={o.auto ? 'calculé automatiquement depuis la marge visée' : 'saisi à la main (aucune marge visée)'}
+                >
+                  {o.auto ? (
+                    <div className="input" style={{ background: '#eef2fb', fontWeight: 700 }}>{fmtMoney(o.caCible)}</div>
+                  ) : (
+                    <NumInput value={s.caCibleHT} onChange={(v) => maj((d) => void (d.settings.caCibleHT = v ?? 0))} />
+                  )}
+                </Field>
+                <div className="muted small" style={{ flex: 1, minWidth: 240, paddingBottom: 6 }}>
+                  {o.auto ? (
+                    <>
+                      Coûts d'agence <strong>{fmtMoney(o.coutsAnnuels)}</strong> ÷ (1 − {fmtPct(o.marge!, 0)}) ={' '}
+                      <strong>{fmtMoney(o.caCible)}</strong> de CA à facturer pour dégager{' '}
+                      <strong>{fmtMoney(o.resultatVise)}</strong> de résultat ({fmtPct(o.marge!, 0)} du CA).
+                    </>
+                  ) : (
+                    <>
+                      Renseignez une <strong>marge nette visée</strong> pour que le CA cible se calcule tout seul
+                      (CA = coûts ÷ (1 − marge)). Coûts d'agence actuels : <strong>{fmtMoney(o.coutsAnnuels)}</strong>.
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+          )
+        })()}
         <div className="form-row">
-          <Field label="Taux horaire de vente (€)">
+          <Field
+            label="Taux horaire de vente (€)"
+            hint="prix d'une heure vendue : convertit les honoraires en budget d'heures (heures = honoraires ÷ ce taux) et fixe la productivité visée"
+          >
             <NumInput value={s.tauxHoraireVente} onChange={(v) => maj((d) => void (d.settings.tauxHoraireVente = v ?? 0))} />
           </Field>
-          <Field label="Coût horaire de revient" hint="calculé depuis l'équipe réelle (carte ci-dessus)">
+          <Field label="Coût horaire de revient" hint="ce qu'une heure coûte réellement (calculé depuis l'équipe) — l'écart avec le taux de vente = votre marge horaire">
             <div className="input" style={{ background: '#f7f8fa' }}>{fmtMoney(coutHoraireMoyen(state), true)} / h</div>
           </Field>
           <Field label="Heures / jour">

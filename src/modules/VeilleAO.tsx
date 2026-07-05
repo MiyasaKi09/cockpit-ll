@@ -208,9 +208,10 @@ function CarteBoamp() {
   return (
     <Card titre="Veille automatique — BOAMP + TED, les avis officiels arrivent tout seuls">
       <p className="small muted" style={{ marginBottom: 10 }}>
-        BOAMP (national) interrogé en direct, TED (marchés européens, France entière) via le relais du
-        site — uniquement les <strong>avis de marché en cours</strong> : résultats, rectificatifs et avis
-        expirés sont filtrés, mots-clés cherchés dans l'objet. Un clic met l'annonce « À étudier ».
+        BOAMP (national) interrogé en direct, TED (marchés européens) via le relais du site — les deux
+        sur <strong>vos départements</strong>, uniquement les <strong>avis de marché en cours</strong> :
+        résultats, rectificatifs et avis expirés sont filtrés, mots-clés cherchés dans l'objet. Un clic
+        met l'annonce « À étudier ».
       </p>
       <div className="toolbar" style={{ flexWrap: 'wrap' }}>
         <Field label="Mots-clés (OU entre chaque, virgules)">

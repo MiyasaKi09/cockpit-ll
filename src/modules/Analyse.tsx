@@ -200,6 +200,116 @@ function TableauPeriode({ titre, debut, fin, setDebut, setFin }: {
   )
 }
 
+// ------------------------------------------------------------------
+// Récap CA par mois — la matrice projets × mois de l'Excel de
+// pilotage : qui a facturé quoi, quel mois, et ce qui arrive.
+// ------------------------------------------------------------------
+
+const MOIS_COURTS = ['janv.', 'févr.', 'mars', 'avr.', 'mai', 'juin', 'juil.', 'août', 'sept.', 'oct.', 'nov.', 'déc.']
+
+function CarteCAMensuel() {
+  const { state } = useStore()
+  const [annee, setAnnee] = useState(Number(todayISO().slice(0, 4)))
+
+  const donnees = useMemo(() => {
+    const parProjet = new Map<string, number[]>()
+    const emisParMois = Array(12).fill(0) as number[]
+    const encaisseParMois = Array(12).fill(0) as number[]
+    const prevuParMois = Array(12).fill(0) as number[]
+
+    for (const f of state.factures) {
+      const m = Number(f.emission.slice(5, 7)) - 1
+      if (f.emission.slice(0, 4) === String(annee)) {
+        if (f.statut === 'prevue') {
+          prevuParMois[m] += f.montantHT
+        } else {
+          if (!parProjet.has(f.projetId)) parProjet.set(f.projetId, Array(12).fill(0))
+          parProjet.get(f.projetId)![m] += f.montantHT
+          emisParMois[m] += f.montantHT
+        }
+      }
+      if (f.statut === 'encaissee' && f.encaissementReel?.slice(0, 4) === String(annee)) {
+        encaisseParMois[Number(f.encaissementReel.slice(5, 7)) - 1] += f.montantHT
+      }
+    }
+
+    const lignes = [...parProjet.entries()]
+      .map(([projetId, mois]) => ({ projetId, mois, total: mois.reduce((s, x) => s + x, 0) }))
+      .sort((a, b) => b.total - a.total)
+    return { lignes, emisParMois, encaisseParMois, prevuParMois }
+  }, [state, annee])
+
+  const cellule = (v: number, cle: string | number, gras = false) => (
+    <td key={cle} className="right num" style={gras ? { fontWeight: 650 } : undefined}>
+      {v > 0 ? fmtMoney(v) : <span className="muted">·</span>}
+    </td>
+  )
+
+  return (
+    <Card
+      titre={`CA facturé par mois — ${annee}`}
+      actions={
+        <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+          <button className="btn btn-small" onClick={() => setAnnee(annee - 1)}>‹</button>
+          <strong>{annee}</strong>
+          <button className="btn btn-small" onClick={() => setAnnee(annee + 1)}>›</button>
+        </span>
+      }
+    >
+      {donnees.lignes.length === 0 && donnees.prevuParMois.every((x) => x === 0) ? (
+        <EmptyState>Aucune facture sur {annee}.</EmptyState>
+      ) : (
+        <div style={{ overflowX: 'auto' }}>
+          <table className="table table-compact">
+            <thead>
+              <tr>
+                <th>Mission</th>
+                {MOIS_COURTS.map((m) => (
+                  <th key={m} className="right">{m}</th>
+                ))}
+                <th className="right">Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr style={{ fontWeight: 650 }}>
+                <td>Total émis HT</td>
+                {donnees.emisParMois.map((v, i) => cellule(v, i, true))}
+                {cellule(donnees.emisParMois.reduce((s, x) => s + x, 0), 'total', true)}
+              </tr>
+              <tr className="muted">
+                <td>dont encaissé (date réelle)</td>
+                {donnees.encaisseParMois.map((v, i) => cellule(v, i))}
+                {cellule(donnees.encaisseParMois.reduce((s, x) => s + x, 0), 'total')}
+              </tr>
+              <tr className="muted">
+                <td>à venir (prévu à l'échéancier)</td>
+                {donnees.prevuParMois.map((v, i) => cellule(v, i))}
+                {cellule(donnees.prevuParMois.reduce((s, x) => s + x, 0), 'total')}
+              </tr>
+              {donnees.lignes.map((l) => (
+                <tr key={l.projetId}>
+                  <td>
+                    <a href={`#/projets/${l.projetId}`} title={nomProjet(state, l.projetId)}>
+                      {nomProjet(state, l.projetId).slice(0, 38)}
+                    </a>
+                  </td>
+                  {l.mois.map((v, i) => cellule(v, i))}
+                  {cellule(l.total, 'total', true)}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <p className="muted small" style={{ marginTop: 8 }}>
+        Montants HT par date d'émission — la ligne « encaissé » suit la date réelle d'encaissement,
+        « à venir » lit l'échéancier prévisionnel. Le pendant de la feuille Trésorerie de l'Excel,
+        rempli tout seul par la facturation.
+      </p>
+    </Card>
+  )
+}
+
 export default function Analyse() {
   const { state } = useStore()
   const auj = todayISO()
@@ -233,6 +343,7 @@ export default function Analyse() {
         />
       </div>
 
+      <CarteCAMensuel />
       <TableauPeriode titre="Période 1" debut={d1} fin={f1} setDebut={setD1} setFin={setF1} />
       <TableauPeriode titre="Période 2 (comparaison)" debut={d2} fin={f2} setDebut={setD2} setFin={setF2} />
     </Page>

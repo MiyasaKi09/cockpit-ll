@@ -2,12 +2,12 @@
 
 import { useEffect, useState } from 'react'
 import { useStore } from './store'
-import { navigate, useRoute, useToday } from './ui'
+import { useRoute, useToday } from './ui'
 import { alertesActives } from './alerts'
 import { basculerTheme, themeCourant } from './theme'
 
 import Cockpit from './modules/Cockpit'
-import Recherche from './modules/Recherche'
+import RechercheOverlay from './modules/RechercheOverlay'
 import Analyse from './modules/Analyse'
 import Projets from './modules/Projets'
 import Situations from './modules/Situations'
@@ -23,36 +23,39 @@ import Planning from './modules/Planning'
 
 const NAV: { groupe: string; items: { path: string; label: string }[] }[] = [
   {
-    groupe: 'Pilotage',
+    groupe: 'Piloter',
     items: [
       { path: '', label: 'Cockpit' },
       { path: 'planning', label: 'Planning' },
-      { path: 'recherche', label: 'Recherche ( / )' },
-      { path: 'projets', label: 'Projets' },
-      { path: 'situations', label: 'Situations de travaux' },
-      { path: 'facturation', label: 'Factures & relances' },
-      { path: 'temps', label: 'Temps' },
       { path: 'analyse', label: 'Analyse €/jour' },
     ],
   },
   {
-    groupe: 'Développement',
+    groupe: 'Produire',
+    items: [
+      { path: 'projets', label: 'Projets' },
+      { path: 'situations', label: 'Situations' },
+      { path: 'facturation', label: 'Factures' },
+      { path: 'temps', label: 'Temps' },
+    ],
+  },
+  {
+    groupe: 'Développer',
     items: [{ path: 'ao', label: 'Développement & AO' }],
+  },
+  {
+    groupe: 'Ressources',
+    items: [
+      { path: 'ressources', label: 'Matériaux & artisans' },
+      { path: 'agenda', label: 'Contacts & obligations' },
+    ],
   },
   {
     groupe: 'Claude',
     items: [{ path: 'prompts', label: 'Prompts & routines' }],
   },
   {
-    groupe: 'Ressources',
-    items: [
-      { path: 'classement', label: 'Classement documentaire' },
-      { path: 'ressources', label: 'Matériaux & artisans' },
-      { path: 'agenda', label: 'Obligations & contacts' },
-    ],
-  },
-  {
-    groupe: 'Agence',
+    groupe: 'Réglages',
     items: [{ path: 'parametres', label: 'Paramètres' }],
   },
 ]
@@ -63,15 +66,16 @@ export default function App() {
   const today = useToday()
   const nbAlertes = alertesActives(state, today).filter((a) => a.gravite >= 2).length
   const [theme, setTheme] = useState(themeCourant())
+  const [rechercheOuverte, setRechercheOuverte] = useState(false)
 
-  // « / » depuis n'importe où (hors champ de saisie) → Recherche
+  // « / » depuis n'importe où (hors champ de saisie) → palette de recherche
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey) return
       const cible = e.target as HTMLElement | null
       if (cible && (['INPUT', 'TEXTAREA', 'SELECT'].includes(cible.tagName) || cible.isContentEditable)) return
       e.preventDefault()
-      navigate('/recherche')
+      setRechercheOuverte(true)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -83,9 +87,6 @@ export default function App() {
   switch (section) {
     case '':
       page = <Cockpit />
-      break
-    case 'recherche':
-      page = <Recherche />
       break
     case 'analyse':
       page = <Analyse />
@@ -146,12 +147,17 @@ export default function App() {
   }
 
   return (
+    <>
     <div className="layout">
       <aside className="sidebar">
         <div className="brand">
           Cockpit L&L
           <small>intranet v2 — sans API</small>
         </div>
+        <button className="nav-search" onClick={() => setRechercheOuverte(true)} title="Recherche globale">
+          <span>Rechercher…</span>
+          <kbd>/</kbd>
+        </button>
         {NAV.map((g) => (
           <div key={g.groupe}>
             <div className="nav-group">{g.groupe}</div>
@@ -179,5 +185,7 @@ export default function App() {
       </aside>
       <main className="main">{page}</main>
     </div>
+    {rechercheOuverte && <RechercheOverlay onClose={() => setRechercheOuverte(false)} />}
+    </>
   )
 }

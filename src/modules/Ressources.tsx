@@ -68,6 +68,11 @@ function ListeRessources({ ongletInitial }: { ongletInitial: string }) {
     <Page
       titre="Matériaux & artisans"
       sousTitre="Notes de chantier, décennales surveillées, FDES pour l'argument carbone."
+      actions={
+        <a className="btn btn-small btn-ghost" href="#/classement" title="Renommer et ranger des lots de documents">
+          Classement documentaire →
+        </a>
+      }
     >
       <Tabs
         tabs={[

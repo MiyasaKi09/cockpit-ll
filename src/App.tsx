@@ -1,9 +1,10 @@
 // Coquille de l'application : barre latérale + routage hash.
 
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useStore } from './store'
 import { navigate, useRoute, useToday } from './ui'
 import { alertesActives } from './alerts'
+import { basculerTheme, themeCourant } from './theme'
 
 import Cockpit from './modules/Cockpit'
 import BienDemarrer from './modules/BienDemarrer'
@@ -79,6 +80,7 @@ export default function App() {
   const { state } = useStore()
   const today = useToday()
   const nbAlertes = alertesActives(state, today).filter((a) => a.gravite >= 2).length
+  const [theme, setTheme] = useState(themeCourant())
 
   // « / » depuis n'importe où (hors champ de saisie) → Recherche
   useEffect(() => {
@@ -183,6 +185,15 @@ export default function App() {
             ))}
           </div>
         ))}
+        <div className="sidebar-foot">
+          <button
+            className="theme-toggle"
+            onClick={() => setTheme(basculerTheme())}
+            title="Basculer clair / sombre"
+          >
+            {theme === 'dark' ? '☀ Thème clair' : '☾ Thème sombre'}
+          </button>
+        </div>
       </aside>
       <main className="main">{page}</main>
     </div>

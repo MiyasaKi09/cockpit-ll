@@ -441,7 +441,13 @@ export default function Cockpit() {
           <Stat
             accent="yellow"
             label="Trésorerie"
-            value={<Money v={meteo.tresorerie} />}
+            value={
+              meteo.tresorerie === null ? (
+                <a href="#/parametres" style={{ fontSize: 15, color: 'inherit' }}>renseigner →</a>
+              ) : (
+                <Money v={meteo.tresorerie} />
+              )
+            }
             tone={meteo.tresorerie !== null && meteo.tresorerie < 0 ? 'danger' : undefined}
           />
           <Stat accent="blue" label="Facturable 90 j" value={<Money v={meteo.facturable90j} />} />

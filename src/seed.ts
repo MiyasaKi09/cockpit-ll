@@ -276,6 +276,8 @@ export function seedState(): AppState {
         adresse: 'Oise (60)',
         ouvrage: '12- Logements collectifs',
         montantTravauxHT: 1400000,
+        responsable: 'Julien',
+        coResponsable: 'Zoé',
         notesComplexite: {
           'Qualité du sol et du sous-sol': 1,
           'Contraintes physiques': 1,
@@ -329,6 +331,8 @@ export function seedState(): AppState {
         adresse: 'Vermandovillers (80)',
         ouvrage: '11- Maisons individuelles',
         montantTravauxHT: 180000,
+        responsable: 'Zoé',
+        coResponsable: 'Julien',
         notesComplexite: {},
         coefManuel: null,
         tauxRetenu: 0.12,

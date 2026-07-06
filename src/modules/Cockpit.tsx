@@ -11,7 +11,7 @@ import { useStore } from '../store'
 import { Btn, Card, DateF, EmptyState, Icon, Money, Page, Stat, toast, useToday } from '../ui'
 import { alertesActives } from '../alerts'
 import { STATUTS_ACTIFS, caCible, caRealiseAnnee, meteoFinanciere } from '../derive'
-import { addDays, fmtDate, fmtMoney, fmtPct } from '../util'
+import { addDays, fmtDate, fmtMoney, fmtPct, ouvrirGmail } from '../util'
 import { useSurveillance } from '../surveillance'
 
 // ---------- petits composants locaux ----------
@@ -24,6 +24,10 @@ const STYLE_GROUPE: CSSProperties = {
   color: 'var(--ink-3)',
   margin: '12px 2px 6px',
 }
+
+// types d'alertes déjà traitables dans la boîte « À traiter » : on ne les répète
+// pas dans le fil d'urgences pour éviter le doublon sur le même écran.
+const TYPES_DANS_INBOX = new Set<Alerte['type']>(['situation_a_verifier', 'facture_a_emettre', 'cr_en_attente'])
 
 const GROUPES_ALERTES: { gravite: Alerte['gravite']; label: string }[] = [
   { gravite: 3, label: 'Critique' },
@@ -191,6 +195,14 @@ function LigneCourrier({ personne }: { personne: string }) {
     toast('Courrier traité.', { undo: () => replace(snap) })
   }
 
+  const repondre = (c: (typeof courriers)[number]) => {
+    const corps =
+      `Bonjour,\n\n` +
+      `Suite à votre message « ${c.objet} » :\n\n[à compléter]\n\n` +
+      `Cordialement,\n${state.settings.personnes.join(' & ') || state.settings.nomAgence}\n${state.settings.nomAgence}`
+    ouvrirGmail(c.de, `Re: ${c.objet}`, corps)
+  }
+
   const versJournal = (id: string) => {
     const snap = state
     update((d) => {
@@ -238,6 +250,11 @@ function LigneCourrier({ personne }: { personne: string }) {
             </div>
           </div>
           <div className="alert-actions">
+            {c.de && (
+              <Btn small kind="primary" onClick={() => repondre(c)} title="Ouvre un brouillon de réponse dans Gmail">
+                Répondre
+              </Btn>
+            )}
             {c.projetId && (
               <Btn small kind="ghost" onClick={() => versJournal(c.id)} title="Archive le mail dans le journal du projet et le marque traité">
                 → Journal
@@ -352,6 +369,8 @@ export default function Cockpit() {
   const meteo = meteoFinanciere(state, today)
   const excel = state.settings.dernierImportExcel
   const alertes = alertesActives(state, today)
+  // le fil ne répète pas ce qui est déjà actionnable dans la boîte « À traiter »
+  const alertesFil = alertes.filter((a) => !TYPES_DANS_INBOX.has(a.type))
 
   const snooze = (id: string, jours: number) => {
     const snap = state
@@ -466,19 +485,19 @@ export default function Cockpit() {
       <Card
         titre="Fil d'urgences"
         actions={
-          alertes.length > 0 ? (
+          alertesFil.length > 0 ? (
             <span className="muted small">
-              {alertes.length} alerte{alertes.length > 1 ? 's' : ''} active
-              {alertes.length > 1 ? 's' : ''}
+              {alertesFil.length} alerte{alertesFil.length > 1 ? 's' : ''} active
+              {alertesFil.length > 1 ? 's' : ''}
             </span>
           ) : undefined
         }
       >
-        {alertes.length === 0 ? (
-          <EmptyState>Rien d'urgent.</EmptyState>
+        {alertesFil.length === 0 ? (
+          <EmptyState>Rien d'urgent — tout est dans « À traiter » ci-dessus.</EmptyState>
         ) : (
           GROUPES_ALERTES.map((g) => {
-            const items = alertes.filter((a) => a.gravite === g.gravite)
+            const items = alertesFil.filter((a) => a.gravite === g.gravite)
             if (items.length === 0) return null
             return (
               <div key={g.gravite}>

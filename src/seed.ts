@@ -46,6 +46,27 @@ Voici ma dictée brute de la visite (présents, remarques, décisions, points pa
 4. Génère le DOCX prêt à relire — je relis avant toute diffusion.`,
   },
   {
+    id: 'tpl-note-synthese',
+    titre: 'Note de synthèse projet',
+    domaine: 'Projet',
+    projetClaude: 'Secrétariat',
+    contexte: 'projet',
+    version: 1,
+    majLe: '2026-07-01',
+    corps: `Rédige une note de synthèse d'avancement pour le projet {{projet_nom}} ({{projet_id}}), au {{date}}, destinée au maître d'ouvrage.
+
+Contexte du projet :
+{{fiche}}
+
+Heures passées : {{heures_pointees}} h sur {{heures_prevues}} h prévues.
+
+À faire :
+1. Une note courte et claire (une page maximum), ton professionnel et rassurant.
+2. Structure : où en est-on (phase en cours), ce qui a été fait depuis le dernier point, les prochaines étapes datées, les points d'attention ou décisions attendues de la MOA.
+3. Pas de jargon technique inutile ; des phrases que la MOA comprend.
+4. Termine par une phrase d'ouverture (disponibilité pour un point). Je relis avant envoi.`,
+  },
+  {
     id: 'tpl-analyse-rc',
     titre: 'Analyser le RC / DCE',
     domaine: 'Appels d’offres',

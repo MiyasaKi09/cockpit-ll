@@ -179,7 +179,7 @@ export type IconName =
   | 'bolt' | 'activity' | 'mail' | 'hardhat' | 'scale' | 'rocket' | 'flag'
   | 'user' | 'shield' | 'printer' | 'file' | 'trophy' | 'sun' | 'moon'
   | 'mic' | 'camera' | 'phone' | 'calendar' | 'car' | 'users' | 'arrowDown'
-  | 'alert' | 'star' | 'search' | 'check' | 'party'
+  | 'alert' | 'star' | 'search' | 'check' | 'party' | 'menu'
 
 const ICON_PATHS: Record<IconName, ReactNode> = {
   bolt: <path d="M13 2 4 14h6l-1 8 9-12h-6l1-8z" />,
@@ -286,6 +286,13 @@ const ICON_PATHS: Record<IconName, ReactNode> = {
     <>
       <circle cx="11" cy="11" r="8" />
       <path d="m21 21-4.3-4.3" />
+    </>
+  ),
+  menu: (
+    <>
+      <path d="M4 6h16" />
+      <path d="M4 12h16" />
+      <path d="M4 18h16" />
     </>
   ),
   check: <path d="M20 6 9 17l-5-5" />,

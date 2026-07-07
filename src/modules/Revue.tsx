@@ -137,6 +137,11 @@ export default function Revue() {
           <span className="muted small">→</span>
           <ChampDate value={fin} onChange={majFin} />
         </span>
+        <span className="spacer" />
+        <span className="muted small">
+          Le bilan daté et imprimable du pilotage. Pour disséquer le €/jour par mission, voir l'
+          <a href="#/analyse">Analyse €/jour</a>.
+        </span>
       </div>
 
       {/* ---------- bandeau KPI ---------- */}

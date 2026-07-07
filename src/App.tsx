@@ -22,42 +22,35 @@ import Agenda from './modules/Agenda'
 import Parametres from './modules/Parametres'
 import Planning from './modules/Planning'
 
-const NAV: { groupe: string; items: { path: string; label: string }[] }[] = [
+// Le moteur temps → marge → facturation est l'interface : six écrans
+// quotidiens en tête, le reste en « Atelier » (accessible, discret).
+const NAV: { groupe: string; sec?: boolean; items: { path: string; label: string }[] }[] = [
   {
-    groupe: 'Piloter',
+    groupe: 'Quotidien',
     items: [
       { path: '', label: 'Cockpit' },
-      { path: 'revue', label: 'Revue de pilotage' },
-      { path: 'planning', label: 'Planning' },
-      { path: 'analyse', label: 'Analyse €/jour' },
-    ],
-  },
-  {
-    groupe: 'Produire',
-    items: [
       { path: 'projets', label: 'Projets' },
-      { path: 'situations', label: 'Situations' },
-      { path: 'facturation', label: 'Factures' },
       { path: 'temps', label: 'Temps' },
+      { path: 'facturation', label: 'Factures' },
+      { path: 'analyse', label: 'Analyse €/jour' },
+      { path: 'revue', label: 'Revue de pilotage' },
     ],
   },
   {
-    groupe: 'Développer',
-    items: [{ path: 'ao', label: 'Développement & AO' }],
-  },
-  {
-    groupe: 'Ressources',
+    groupe: 'Atelier',
+    sec: true,
     items: [
+      { path: 'situations', label: 'Situations' },
+      { path: 'planning', label: 'Planning' },
+      { path: 'ao', label: 'Développement & AO' },
       { path: 'ressources', label: 'Matériaux & artisans' },
       { path: 'agenda', label: 'Contacts & obligations' },
+      { path: 'prompts', label: 'Prompts & routines' },
     ],
-  },
-  {
-    groupe: 'Claude',
-    items: [{ path: 'prompts', label: 'Prompts & routines' }],
   },
   {
     groupe: 'Réglages',
+    sec: true,
     items: [{ path: 'parametres', label: 'Paramètres' }],
   },
 ]
@@ -173,7 +166,7 @@ export default function App() {
               <a
                 key={it.path}
                 href={`#/${it.path}`}
-                className={`nav-item ${section === it.path ? 'active' : ''}`}
+                className={`nav-item ${g.sec ? 'nav-item-sec' : ''} ${section === it.path ? 'active' : ''}`}
               >
                 <span>{it.label}</span>
                 {it.path === '' && nbAlertes > 0 && <span className="nav-count">{nbAlertes}</span>}

@@ -233,7 +233,12 @@ export default function Analyse() {
   return (
     <Page
       titre="Analyse — chaque mission paie-t-elle sa journée ?"
-      sousTitre="Coût du temps réel, personne par personne. Vert : la mission couvre ses coûts ; rouge : elle en vit."
+      sousTitre={
+        <>
+          Comparaison du €/jour réel par mission sur deux périodes réglables. Pour le bilan daté
+          et imprimable de tout le pilotage, voir la <a href="#/revue">Revue de pilotage</a>.
+        </>
+      }
     >
       {cible > 0 && (
         <Card titre={`Objectif de chiffre d'affaires ${annee}`}>

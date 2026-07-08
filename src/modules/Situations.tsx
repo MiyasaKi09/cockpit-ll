@@ -30,7 +30,7 @@ import {
   toast,
   useToday,
 } from '../ui'
-import { clamp, diffDays, fmtMois, fmtMoney, fmtPct, fold, monthKey, ouvrirGmail } from '../util'
+import { clamp, diffDays, fmtDate, fmtMois, fmtMoney, fmtPct, fold, monthKey, ouvrirGmail } from '../util'
 import {
   dateLimiteVerif,
   decompteSituation,
@@ -586,102 +586,111 @@ function CarteAVerifier() {
   const enEdition = editionId ? state.situations.find((s) => s.id === editionId) : undefined
   const enRejet = rejetId ? state.situations.find((s) => s.id === rejetId) : undefined
 
+  // regroupement par projet : on vérifie chantier par chantier, pas en vrac
+  const projetIds = [...new Set(aVerifier.map((s) => s.projetId))]
+
   return (
     <Card titre={`À vérifier (${aVerifier.length})`}>
       {aVerifier.length === 0 ? (
         <EmptyState>Aucune situation en attente de vérification.</EmptyState>
       ) : (
-        <Table
-          head={[
-            'Entreprise',
-            'Lot',
-            'Projet',
-            'Mois',
-            'Mois HT',
-            'Cumul HT',
-            'Net à payer',
-            'Confiance',
-            'Reçue le',
-            'Vérifier avant',
-            'Actions',
-          ]}
-        >
-          {aVerifier.map((s) => {
-            const marche = s.marcheId ? state.marches.find((m) => m.id === s.marcheId) : undefined
-            const limite = dateLimiteVerif(state, s)
-            const jours = diffDays(today, limite)
-            return (
-              <tr key={s.id} title={s.source || undefined}>
-                <td>{s.entreprise}</td>
-                <td>{s.lot || '—'}</td>
-                <td>
-                  <LienProjet state={state} projetId={s.projetId} />
-                </td>
-                <td>
-                  {fmtMois(s.mois)}
-                  {s.numero != null && <span className="muted small"> n°{s.numero}</span>}
-                </td>
-                <td className="right">
-                  <Money v={s.montantMoisHT} />
-                </td>
-                <td className="right">
-                  <Money v={s.montantCumulHT} />
-                </td>
-                <td className="right">
-                  <NetAPayer state={state} sit={s} /> <BadgeCoherence state={state} sit={s} />
-                </td>
-                <td>
-                  <BadgeConfiance v={s.confiance} />
-                </td>
-                <td>
-                  <DateF d={s.dateReception} />
-                </td>
-                <td>
-                  <DateF d={limite} />{' '}
-                  {jours < 0 ? (
-                    <Badge tone="danger">dépassée de {-jours} j</Badge>
-                  ) : jours <= 3 ? (
-                    <Badge tone="danger">{jours === 0 ? 'aujourd’hui' : `J−${jours}`}</Badge>
-                  ) : null}
-                </td>
-                <td>
-                  <div style={{ display: 'flex', gap: 6, alignItems: 'center', justifyContent: 'flex-end' }}>
-                    {marche && tplVerif ? (
-                      <CopyBtn
-                        small
-                        kind="default"
-                        label="Vérifier avec Claude"
-                        text={() => assemble(tplVerif.corps, contexteMarche(state, marche, s))}
-                      />
-                    ) : (
-                      <Btn
-                        small
-                        disabled
-                        title={
-                          !marche
-                            ? 'Rattachez d’abord la situation à un marché (bouton « Éditer »).'
-                            : 'Gabarit « tpl-verif-situation » introuvable dans la bibliothèque de prompts.'
-                        }
-                      >
-                        Vérifier avec Claude
-                      </Btn>
-                    )}
-                    <Btn small kind="primary" onClick={() => valider(s.id)}>
-                      Valider
-                    </Btn>
-                    <RowMenu
-                      items={[
-                        { label: 'Décompte (PDF)', onClick: () => ouvrirDecompteSituationPDF(state, s), title: 'Certificat de paiement imprimable (net à payer)' },
-                        { label: 'Éditer', onClick: () => setEditionId(s.id) },
-                        { label: 'Rejeter…', onClick: () => { setRejetId(s.id); setMotifRejet('') }, danger: true },
-                      ]}
-                    />
-                  </div>
-                </td>
-              </tr>
-            )
-          })}
-        </Table>
+        projetIds.map((pid) => {
+          const duProjet = aVerifier.filter((s) => s.projetId === pid)
+          const totalMois = duProjet.reduce((t, s) => t + (s.montantMoisHT || 0), 0)
+          return (
+            <div key={pid} style={{ marginBottom: 14 }}>
+              <div
+                className="small"
+                style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap', margin: '0 0 6px', fontWeight: 700 }}
+              >
+                <LienProjet state={state} projetId={pid} />
+                <span className="muted" style={{ fontWeight: 500 }}>
+                  {duProjet.length} situation{duProjet.length > 1 ? 's' : ''} · {fmtMoney(totalMois)} HT ce mois
+                </span>
+              </div>
+              <Table
+                compact
+                head={['Entreprise / lot', 'Mois', 'Mois HT', 'Cumul HT', 'Net à payer', 'Confiance', 'Vérifier avant', 'Actions']}
+              >
+                {duProjet.map((s) => {
+                  const marche = s.marcheId ? state.marches.find((m) => m.id === s.marcheId) : undefined
+                  const limite = dateLimiteVerif(state, s)
+                  const jours = diffDays(today, limite)
+                  return (
+                    <tr key={s.id}>
+                      <td>
+                        <strong>{s.entreprise}</strong>
+                        <div className="muted small">
+                          {s.lot || '—'}
+                          {s.source ? ` · ${s.source}` : ''}
+                        </div>
+                      </td>
+                      <td style={{ whiteSpace: 'nowrap' }}>
+                        {fmtMois(s.mois)}
+                        {s.numero != null && <span className="muted small"> n°{s.numero}</span>}
+                        <div className="muted small">reçue le {fmtDate(s.dateReception)}</div>
+                      </td>
+                      <td className="right">
+                        <Money v={s.montantMoisHT} />
+                      </td>
+                      <td className="right">
+                        <Money v={s.montantCumulHT} />
+                      </td>
+                      <td className="right">
+                        <NetAPayer state={state} sit={s} /> <BadgeCoherence state={state} sit={s} />
+                      </td>
+                      <td>
+                        <BadgeConfiance v={s.confiance} />
+                      </td>
+                      <td>
+                        <DateF d={limite} />{' '}
+                        {jours < 0 ? (
+                          <Badge tone="danger">dépassée de {-jours} j</Badge>
+                        ) : jours <= 3 ? (
+                          <Badge tone="danger">{jours === 0 ? 'aujourd’hui' : `J−${jours}`}</Badge>
+                        ) : null}
+                      </td>
+                      <td>
+                        <div style={{ display: 'flex', gap: 6, alignItems: 'center', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                          {marche && tplVerif ? (
+                            <CopyBtn
+                              small
+                              kind="default"
+                              label="Vérifier avec Claude"
+                              text={() => assemble(tplVerif.corps, contexteMarche(state, marche, s))}
+                            />
+                          ) : (
+                            <Btn
+                              small
+                              disabled
+                              title={
+                                !marche
+                                  ? 'Rattachez d’abord la situation à un marché (bouton « Éditer »).'
+                                  : 'Gabarit « tpl-verif-situation » introuvable dans la bibliothèque de prompts.'
+                              }
+                            >
+                              Vérifier avec Claude
+                            </Btn>
+                          )}
+                          <Btn small kind="primary" onClick={() => valider(s.id)}>
+                            Valider
+                          </Btn>
+                          <RowMenu
+                            items={[
+                              { label: 'Décompte (PDF)', onClick: () => ouvrirDecompteSituationPDF(state, s), title: 'Certificat de paiement imprimable (net à payer)' },
+                              { label: 'Éditer', onClick: () => setEditionId(s.id) },
+                              { label: 'Rejeter…', onClick: () => { setRejetId(s.id); setMotifRejet('') }, danger: true },
+                            ]}
+                          />
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </Table>
+            </div>
+          )
+        })
       )}
       {tplVerif && aVerifier.length > 0 && (
         <p className="muted small">
@@ -719,73 +728,75 @@ function CarteHistorique() {
   const today = useToday()
   const traitees = state.situations
     .filter((s) => s.statut !== 'a_verifier')
-    .sort(
-      (a, b) => b.dateReception.localeCompare(a.dateReception) || b.mois.localeCompare(a.mois),
-    )
-    .slice(0, 20)
+    .sort((a, b) => b.mois.localeCompare(a.mois) || b.dateReception.localeCompare(a.dateReception))
+
+  // par projet, les 6 dernières de chaque chantier : l'historique se lit chantier par chantier
+  const projetIds = [...new Set(traitees.map((s) => s.projetId))]
 
   return (
-    <Card titre="Historique">
+    <Card titre="Historique — par projet">
       {traitees.length === 0 ? (
         <EmptyState>Aucune situation validée ou rejetée pour l’instant.</EmptyState>
       ) : (
-        <details>
-          <summary className="clickable" style={{ cursor: 'pointer' }}>
-            Afficher les {traitees.length} dernières situations traitées
-          </summary>
-          <div style={{ marginTop: 10 }}>
-            <Table
-              compact
-              head={['Entreprise', 'Lot', 'Projet', 'Mois', 'Mois HT', 'Cumul HT', 'Net à payer', 'Statut', 'Reçue le', 'Actions']}
-            >
-              {traitees.map((s) => (
-                <tr key={s.id} title={s.source || undefined}>
-                  <td>{s.entreprise}</td>
-                  <td>{s.lot || '—'}</td>
-                  <td>
-                    <LienProjet state={state} projetId={s.projetId} />
-                  </td>
-                  <td>{fmtMois(s.mois)}</td>
-                  <td className="right">
-                    <Money v={s.montantMoisHT} />
-                  </td>
-                  <td className="right">
-                    <Money v={s.montantCumulHT} />
-                  </td>
-                  <td className="right">
-                    <NetAPayer state={state} sit={s} /> <BadgeCoherence state={state} sit={s} />
-                  </td>
-                  <td>
-                    <BadgeStatutSituation statut={s.statut} />
-                  </td>
-                  <td>
-                    <DateF d={s.dateReception} />
-                  </td>
-                  <td>
-                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                      <Btn small kind="ghost" onClick={() => ouvrirDecompteSituationPDF(state, s)} title="Décompte / certificat de paiement">
-                        Décompte
-                      </Btn>
-                      {s.statut === 'validee' && (
-                        <Btn
-                          small
-                          onClick={() => facturerDET(state, update, today, s)}
-                          title={
-                            s.factureId
-                              ? `Honoraires DET déjà facturés (${s.factureId}) — recréer si besoin`
-                              : "Créer la facture d'honoraires DET d'avancement pour ce mois"
-                          }
-                        >
-                          {s.factureId ? 'DET ✓' : 'Facturer DET'}
-                        </Btn>
+        projetIds.map((pid) => {
+          const duProjet = traitees.filter((s) => s.projetId === pid).slice(0, 6)
+          return (
+            <div key={pid} style={{ marginBottom: 14 }}>
+              <div className="small" style={{ margin: '0 0 6px', fontWeight: 700 }}>
+                <LienProjet state={state} projetId={pid} />
+              </div>
+              <Table
+                compact
+                head={['Entreprise / lot', 'Mois', 'Mois HT', 'Cumul HT', 'Net à payer', 'Statut', 'Actions']}
+              >
+                {duProjet.map((s) => (
+                  <tr key={s.id} title={s.source || undefined}>
+                    <td>
+                      <strong>{s.entreprise}</strong>
+                      <div className="muted small">{s.lot || '—'}</div>
+                    </td>
+                    <td>{fmtMois(s.mois)}</td>
+                    <td className="right">
+                      <Money v={s.montantMoisHT} />
+                    </td>
+                    <td className="right">
+                      <Money v={s.montantCumulHT} />
+                    </td>
+                    <td className="right">
+                      <NetAPayer state={state} sit={s} /> <BadgeCoherence state={state} sit={s} />
+                    </td>
+                    <td>
+                      <BadgeStatutSituation statut={s.statut} />
+                      {s.statut === 'rejetee' && s.notes && (
+                        <div className="muted small" style={{ maxWidth: 260 }}>{s.notes.split('\n').pop()}</div>
                       )}
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </Table>
-          </div>
-        </details>
+                    </td>
+                    <td>
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                        <Btn small kind="ghost" onClick={() => ouvrirDecompteSituationPDF(state, s)} title="Décompte / certificat de paiement">
+                          Décompte
+                        </Btn>
+                        {s.statut === 'validee' && (
+                          <Btn
+                            small
+                            onClick={() => facturerDET(state, update, today, s)}
+                            title={
+                              s.factureId
+                                ? `Honoraires DET déjà facturés (${s.factureId}) — recréer si besoin`
+                                : "Créer la facture d'honoraires DET d'avancement pour ce mois"
+                            }
+                          >
+                            {s.factureId ? 'DET ✓' : 'Facturer DET'}
+                          </Btn>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </Table>
+            </div>
+          )
+        })
       )}
     </Card>
   )

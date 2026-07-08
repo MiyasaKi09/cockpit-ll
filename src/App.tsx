@@ -21,6 +21,7 @@ import Ressources from './modules/Ressources'
 import Agenda from './modules/Agenda'
 import Parametres from './modules/Parametres'
 import Planning from './modules/Planning'
+import { AssistantPage } from './modules/Assistant'
 
 // Le moteur temps → marge → facturation est l'interface : six écrans
 // quotidiens en tête, le reste en « Atelier » (accessible, discret).
@@ -34,6 +35,7 @@ const NAV: { groupe: string; sec?: boolean; items: { path: string; label: string
       { path: 'facturation', label: 'Factures' },
       { path: 'analyse', label: 'Analyse €/jour' },
       { path: 'revue', label: 'Revue de pilotage' },
+      { path: 'assistant', label: 'Assistant' },
     ],
   },
   {
@@ -62,6 +64,14 @@ export default function App() {
   const nbAlertes = alertesActives(state, today).filter((a) => a.gravite >= 2).length
   const [theme, setTheme] = useState(themeCourant())
   const [rechercheOuverte, setRechercheOuverte] = useState(false)
+  /** tiroir de navigation mobile (ouvert par le hamburger de la topbar) */
+  const [navOuverte, setNavOuverte] = useState(false)
+
+  // changer d'écran referme le tiroir mobile
+  const cheminCourant = route.join('/')
+  useEffect(() => {
+    setNavOuverte(false)
+  }, [cheminCourant])
 
   // « / » depuis n'importe où (hors champ de saisie) → palette de recherche
   useEffect(() => {
@@ -140,14 +150,28 @@ export default function App() {
     case 'planning':
       page = <Planning />
       break
+    case 'assistant':
+      page = <AssistantPage />
+      break
     default:
       page = <Cockpit />
   }
 
   return (
     <>
+    <header className="topbar">
+      <button className="topbar-burger" onClick={() => setNavOuverte(true)} title="Ouvrir le menu" aria-label="Ouvrir le menu">
+        <Icon name="menu" size={19} />
+      </button>
+      <div className="brand">Cockpit L&L</div>
+      <span className="spacer" />
+      <button className="topbar-burger" onClick={() => setRechercheOuverte(true)} title="Recherche globale" aria-label="Recherche globale">
+        <Icon name="search" size={17} />
+      </button>
+    </header>
     <div className="layout">
-      <aside className="sidebar">
+      {navOuverte && <div className="nav-back" onClick={() => setNavOuverte(false)} />}
+      <aside className={`sidebar ${navOuverte ? 'ouverte' : ''}`}>
         <div className="brand">
           Cockpit L&L
           <small>intranet v2 — sans API</small>

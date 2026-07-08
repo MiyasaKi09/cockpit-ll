@@ -16,6 +16,7 @@ import {
   DateF,
   DateInput,
   EmptyState,
+  Etoiles,
   Field,
   Modal,
   Page,
@@ -258,6 +259,7 @@ function FicheArtisanPage({ id }: { id: string }) {
           )}
         </Card>
       </div>
+      <CarteEvaluations artisanId={a.id} />
       {edition && (
         <FicheArtisan
           initiale={structuredClone(a)}
@@ -277,6 +279,53 @@ function FicheArtisanPage({ id }: { id: string }) {
 }
 
 const fmtMoneyLocal = (v: number) => new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }).format(v)
+
+/** historique des notes de chantier — une ligne par projet où l'entreprise a été évaluée */
+function CarteEvaluations({ artisanId }: { artisanId: string }) {
+  const { state } = useStore()
+  const evals = state.evaluations
+    .filter((e) => e.artisanId === artisanId)
+    .sort((a, b) => b.date.localeCompare(a.date))
+  const moyenne = evals.length > 0 ? evals.reduce((s, e) => s + e.note, 0) / evals.length : null
+
+  return (
+    <Card
+      titre="Comportement chantier par chantier"
+      actions={
+        moyenne !== null ? (
+          <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+            <Etoiles note={Math.round(moyenne)} />
+            <span className="muted small">moyenne {moyenne.toFixed(1).replace('.', ',')} / 5 · {evals.length} chantier{evals.length > 1 ? 's' : ''}</span>
+          </span>
+        ) : undefined
+      }
+    >
+      {evals.length === 0 ? (
+        <EmptyState>
+          Pas encore de note — l'entreprise se note depuis la fiche projet (onglet Ressources & liens),
+          chantier par chantier.
+        </EmptyState>
+      ) : (
+        <Table compact head={['Projet', 'Note', 'Commentaire', 'Le']}>
+          {evals.map((e) => {
+            const pr = state.projets.find((x) => x.id === e.projetId)
+            return (
+              <tr key={e.id}>
+                <td>
+                  <a href={`#/projets/${e.projetId}`}>{e.projetId}</a>
+                  {pr && <span className="muted small"> — {pr.nom.slice(0, 40)}</span>}
+                </td>
+                <td><Etoiles note={e.note} /></td>
+                <td className="small">{e.commentaire || '—'}</td>
+                <td className="small muted"><DateF d={e.date} /></td>
+              </tr>
+            )
+          })}
+        </Table>
+      )}
+    </Card>
+  )
+}
 
 // ------------------------------------------------------------------
 // Artisans

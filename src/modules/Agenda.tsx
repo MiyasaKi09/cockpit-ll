@@ -64,8 +64,11 @@ export default function Agenda() {
         'END:VEVENT',
       )
     }
-    for (const o of state.obligations)
+    for (const o of state.obligations) {
       pousse(`oblig-${o.id}`, o.echeance, `⚑ ${o.libelle}`, [o.organisme, o.notes].filter(Boolean).join(' — '))
+      if (o.contrat && o.dateRenouvellement)
+        pousse(`renouv-${o.id}`, o.dateRenouvellement, `⚑ Renouvellement : ${o.libelle} — décider avant cette date`, o.organisme || '')
+    }
     for (const p of state.projets.filter((x) => STATUTS_ACTIFS.includes(x.statut)))
       for (const ph of p.phases)
         if (ph.fin && ph.montantHT > 0) pousse(`phase-${p.id}-${ph.code}`, ph.fin, `Rendu ${p.id} · ${ph.code} — ${p.nom}`)
@@ -90,12 +93,15 @@ export default function Agenda() {
       <Tabs
         tabs={[
           { id: 'obligations', label: 'Obligations réglementaires' },
+          { id: 'contrats', label: 'Contrats de l’agence' },
           { id: 'contacts', label: 'Contacts (CRM)' },
         ]}
         actif={onglet}
         onSelect={setOnglet}
       />
-      {onglet === 'obligations' ? <OngletObligations today={today} /> : <OngletContacts today={today} />}
+      {onglet === 'obligations' && <OngletObligations today={today} />}
+      {onglet === 'contrats' && <OngletContrats today={today} />}
+      {onglet === 'contacts' && <OngletContacts today={today} />}
     </Page>
   )
 }
@@ -124,8 +130,9 @@ function OngletObligations({ today }: { today: string }) {
   const [edition, setEdition] = useState<Obligation | null>(null)
   const [creation, setCreation] = useState(false)
 
+  // les contrats de l'agence vivent dans leur propre onglet
   const obligations = useMemo(
-    () => [...state.obligations].sort((a, b) => a.echeance.localeCompare(b.echeance)),
+    () => state.obligations.filter((o) => !o.contrat).sort((a, b) => a.echeance.localeCompare(b.echeance)),
     [state.obligations],
   )
 
@@ -220,6 +227,163 @@ function OngletObligations({ today }: { today: string }) {
   )
 }
 
+// ------------------------------------------------------------------
+// Contrats de l'agence (assurances, licences, bail, abonnements…)
+// ------------------------------------------------------------------
+
+function contratVide(): Obligation {
+  return {
+    id: uid('ob'),
+    libelle: '',
+    organisme: '',
+    echeance: addDays(todayISO(), 30),
+    periodiciteMois: 12,
+    rappelJours: 30,
+    notes: '',
+    contrat: true,
+    montantAnnuel: null,
+  }
+}
+
+function OngletContrats({ today }: { today: string }) {
+  const { state, update, replace } = useStore()
+  const [edition, setEdition] = useState<Obligation | null>(null)
+  const [creation, setCreation] = useState(false)
+
+  const contrats = useMemo(
+    () => state.obligations.filter((o) => o.contrat).sort((a, b) => a.echeance.localeCompare(b.echeance)),
+    [state.obligations],
+  )
+  const totalAnnuel = contrats.reduce((somme, o) => somme + (o.montantAnnuel || 0), 0)
+
+  /** cellule Renouvellement : date + badge selon l'urgence de la décision */
+  const celluleRenouvellement = (o: Obligation) => {
+    if (!o.dateRenouvellement) return <span className="muted">—</span>
+    const dj = diffDays(today, o.dateRenouvellement)
+    return (
+      <span>
+        <DateF d={o.dateRenouvellement} />{' '}
+        {dj < 0 ? (
+          <Badge tone="muted">reconduit</Badge>
+        ) : dj <= 45 ? (
+          <Badge tone={dj <= 15 ? 'danger' : 'warn'}>décider sous {dj} j</Badge>
+        ) : null}
+      </span>
+    )
+  }
+
+  return (
+    <>
+      <div className="toolbar">
+        <span className="muted small">
+          Assurances, licences, bail, abonnements… coût annuel et date limite de résiliation sous les yeux.
+        </span>
+        <span className="spacer" />
+        <Btn kind="primary" onClick={() => setCreation(true)}>
+          Nouveau contrat
+        </Btn>
+      </div>
+
+      <Card>
+        {contrats.length === 0 ? (
+          <EmptyState>
+            Aucun contrat suivi. Ajoutez MAF, multirisque, licences logiciels, bail… — le Cockpit
+            rappellera la fenêtre de résiliation 45 jours avant chaque reconduction tacite.
+          </EmptyState>
+        ) : (
+          <>
+            <Table head={['Contrat', 'Organisme', 'Coût annuel', 'Prochaine échéance', 'Renouvellement', 'Contrat signé', '']}>
+              {contrats.map((o) => {
+                const dj = diffDays(today, o.echeance)
+                const enRappel = today >= addDays(o.echeance, -o.rappelJours)
+                return (
+                  <tr key={o.id} className="clickable" onClick={() => setEdition(structuredClone(o))}>
+                    <td>
+                      <strong>{o.libelle}</strong>
+                      {o.notes && <div className="muted small">{o.notes}</div>}
+                    </td>
+                    <td>{o.organisme || '—'}</td>
+                    <td className="right">
+                      <Money v={o.montantAnnuel} />
+                      {o.montantAnnuel ? <span className="muted small"> / an</span> : null}
+                    </td>
+                    <td>
+                      <DateF d={o.echeance} />{' '}
+                      {dj < 0 ? (
+                        <Badge tone="danger">dépassée de {-dj} j</Badge>
+                      ) : enRappel ? (
+                        <Badge tone="warn">dans {dj} j</Badge>
+                      ) : null}
+                    </td>
+                    <td>{celluleRenouvellement(o)}</td>
+                    <td onClick={(e) => e.stopPropagation()}>
+                      {o.documentUrl ? (
+                        <a href={o.documentUrl} target="_blank" rel="noreferrer">
+                          ouvrir
+                        </a>
+                      ) : (
+                        <span className="muted">—</span>
+                      )}
+                    </td>
+                    <td className="right" onClick={(e) => e.stopPropagation()} style={{ whiteSpace: 'nowrap' }}>
+                      <Btn
+                        small
+                        kind="primary"
+                        onClick={() => {
+                          if (o.periodiciteMois) {
+                            update((d) => {
+                              const x = d.obligations.find((y) => y.id === o.id)
+                              if (x) x.echeance = echeanceSuivante(x.echeance, x.periodiciteMois!)
+                            })
+                            toast('Échéance reconduite.', { tone: 'ok' })
+                          }
+                        }}
+                        title="Paiement fait → échéance reconduite"
+                      >
+                        ✓ Payé
+                      </Btn>{' '}
+                      <Btn
+                        small
+                        kind="danger"
+                        onClick={async () => {
+                          const snap = state
+                          if (await confirmer({ message: `Supprimer le contrat « ${o.libelle} » ?`, danger: true, confirmerLabel: 'Supprimer' })) {
+                            update((d) => {
+                              d.obligations = d.obligations.filter((x) => x.id !== o.id)
+                            })
+                            toast('Contrat supprimé.', { undo: () => replace(snap) })
+                          }
+                        }}
+                      >
+                        Suppr.
+                      </Btn>
+                    </td>
+                  </tr>
+                )
+              })}
+            </Table>
+            <p className="small" style={{ marginBottom: 0, marginTop: 10 }}>
+              Total des contrats suivis : <strong><Money v={totalAnnuel} /> / an</strong>
+              <span className="muted"> — à rapprocher des frais généraux saisis dans Paramètres.</span>
+            </p>
+          </>
+        )}
+      </Card>
+
+      {(edition || creation) && (
+        <FicheObligation
+          initiale={edition || contratVide()}
+          creation={creation}
+          onClose={() => {
+            setEdition(null)
+            setCreation(false)
+          }}
+        />
+      )}
+    </>
+  )
+}
+
 function FicheObligation({
   initiale,
   creation,
@@ -231,9 +395,13 @@ function FicheObligation({
 }) {
   const { update } = useStore()
   const [o, setO] = useState<Obligation>(initiale)
+  const estContrat = Boolean(o.contrat)
 
   return (
-    <Modal titre={creation ? 'Nouvelle obligation' : o.libelle} onClose={onClose}>
+    <Modal
+      titre={creation ? (estContrat ? 'Nouveau contrat' : 'Nouvelle obligation') : o.libelle}
+      onClose={onClose}
+    >
       <Field label="Libellé">
         <TextInput value={o.libelle} onChange={(v) => setO({ ...o, libelle: v })} />
       </Field>
@@ -241,7 +409,7 @@ function FicheObligation({
         <Field label="Organisme">
           <TextInput value={o.organisme || ''} onChange={(v) => setO({ ...o, organisme: v })} />
         </Field>
-        <Field label="Prochaine échéance">
+        <Field label={estContrat ? 'Prochaine échéance de paiement' : 'Prochaine échéance'}>
           <DateInput value={o.echeance} onChange={(v) => setO({ ...o, echeance: v || todayISO() })} />
         </Field>
       </div>
@@ -253,6 +421,24 @@ function FicheObligation({
           <NumInput value={o.rappelJours} onChange={(v) => setO({ ...o, rappelJours: v ?? 30 })} />
         </Field>
       </div>
+      {estContrat && (
+        <>
+          <div className="form-row">
+            <Field label="Coût annuel (€)" hint="alimente le total des frais fixes contractuels">
+              <NumInput value={o.montantAnnuel ?? null} onChange={(v) => setO({ ...o, montantAnnuel: v })} />
+            </Field>
+            <Field label="Renouvellement — décider avant le" hint="date limite pour résilier ou renégocier ; alerte 45 j avant">
+              <DateInput
+                value={o.dateRenouvellement || null}
+                onChange={(v) => setO({ ...o, dateRenouvellement: v || undefined })}
+              />
+            </Field>
+          </div>
+          <Field label="Lien vers le contrat (Drive…)">
+            <TextInput value={o.documentUrl || ''} onChange={(v) => setO({ ...o, documentUrl: v })} placeholder="https://…" />
+          </Field>
+        </>
+      )}
       <Field label="Notes">
         <TextArea value={o.notes || ''} onChange={(v) => setO({ ...o, notes: v })} rows={2} />
       </Field>

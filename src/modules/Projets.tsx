@@ -53,6 +53,7 @@ import { assemble, contexteProjet } from '../prompts'
 import { facturesParDefaut } from '../echeancier'
 import ProjetNouveau from './ProjetNouveau'
 import ProjetChantier from './ProjetChantier'
+import ProjetPlanning from './ProjetPlanning'
 import ProjetRessources from './ProjetRessources'
 import ProjetJournal from './ProjetJournal'
 import ProjetDocuments from './ProjetDocuments'
@@ -204,6 +205,7 @@ function ListeProjets() {
 
 const ONGLETS = [
   { id: 'pilotage', label: 'Pilotage & honoraires' },
+  { id: 'planning', label: 'Planning' },
   { id: 'chantier', label: 'Chantier & CR' },
   { id: 'ressources', label: 'Ressources & liens' },
   { id: 'journal', label: 'Journal' },
@@ -311,6 +313,7 @@ function EspaceProjet({ projetId, onglet }: { projetId: string; onglet?: string 
           <CartePhases projet={p} />
         </>
       )}
+      {actif === 'planning' && <ProjetPlanning projet={p} />}
       {actif === 'chantier' && <ProjetChantier projet={p} />}
       {actif === 'ressources' && <ProjetRessources projet={p} />}
       {actif === 'journal' && <ProjetJournal projet={p} />}

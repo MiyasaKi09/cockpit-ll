@@ -129,10 +129,14 @@ export interface ReunionChantier {
   id: string
   projetId: string
   date: string // ISO
+  /** heure de la réunion (HH:MM) — reprogrammable en un geste */
+  heure?: string
   titre: string
   /** liste des convoqués, pré-remplie depuis les marchés + MOA */
   participants: string
   statut: StatutReunion
+  /** texte du compte-rendu, conservé sur la réunion (généré par l'assistant ou collé) */
+  cr?: string
   notes?: string
 }
 
@@ -299,6 +303,15 @@ export interface Obligation {
   periodiciteMois?: number | null
   rappelJours: number
   notes?: string
+  // --- champs contrat (optionnels — une obligation ordinaire les ignore) ---
+  /** true = contrat de l'agence (assurance, licences, bail…) — onglet Contrats */
+  contrat?: boolean
+  /** coût annuel du contrat — donne le total des frais fixes contractuels */
+  montantAnnuel?: number | null
+  /** date limite pour résilier / renégocier avant reconduction tacite */
+  dateRenouvellement?: string
+  /** lien vers le contrat signé (Drive…) */
+  documentUrl?: string
 }
 
 export type TypeContact = 'MOA' | 'Prospect' | 'Entreprise' | 'BET' | 'Autre'
@@ -415,6 +428,7 @@ export type TypeAlerte =
   | 'situation_manquante'
   | 'derive_heures'
   | 'obligation'
+  | 'contrat_renouvellement'
   | 'crm'
   | 'decennale'
   | 'cr_en_attente'
@@ -546,6 +560,34 @@ export interface AppState {
   courriers: Courrier[]
   tempsHorsProjet: TempsHorsProjet[]
   absences: Absence[]
+  evaluations: EvaluationEntreprise[]
+  documents: DocumentCorpus[]
+}
+
+/** document du corpus de l'assistant : texte réglementaire (Légifrance,
+ *  Licence Ouverte — TOUJOURS avec sa source et sa version) ou modèle de
+ *  document servant à la génération. Jamais de texte AFNOR/CSTB protégé. */
+export interface DocumentCorpus {
+  id: string
+  titre: string
+  type: 'reglementaire' | 'modele'
+  /** provenance exacte : nom du texte, identifiant Légifrance, date de version */
+  source?: string
+  url?: string
+  texte: string
+  ajouteLe: string // ISO
+}
+
+/** note d'une entreprise sur UN chantier — l'historique multi-chantiers
+ *  se lit sur la fiche entreprise (une évaluation par couple artisan × projet) */
+export interface EvaluationEntreprise {
+  id: string
+  artisanId: string
+  projetId: string
+  /** 1 (à éviter) → 5 (excellente) */
+  note: number
+  commentaire?: string
+  date: string // ISO
 }
 
 /** congé / absence d'une personne — réduit sa capacité dans le plan de charge */

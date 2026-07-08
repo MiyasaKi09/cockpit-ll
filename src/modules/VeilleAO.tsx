@@ -902,12 +902,48 @@ function ConsultationsContenu() {
   const today = useToday()
   const [q, setQ] = useState('')
   const [filtreStatut, setFiltreStatut] = useState('')
+  const [filtreTypologie, setFiltreTypologie] = useState('')
+  const [filtreBudget, setFiltreBudget] = useState('')
+  const [filtreEcheance, setFiltreEcheance] = useState('')
+  const [tri, setTri] = useState('defaut')
   const [fiche, setFiche] = useState<{ c: Consultation; nouveau: boolean } | null>(null)
 
   const consultations = state.consultations
   const fq = fold(q)
+
+  // typologies réellement présentes — le filtre suit les données, pas un référentiel figé
+  const typologies = [...new Set(consultations.map((c) => (c.typologie || '').trim()).filter(Boolean))].sort(
+    (a, b) => a.localeCompare(b),
+  )
+
+  const passeBudget = (c: Consultation): boolean => {
+    if (!filtreBudget) return true
+    const b = c.budgetTravaux
+    if (filtreBudget === 'sans') return b == null
+    if (b == null) return false
+    if (filtreBudget === 'moins500') return b < 500_000
+    if (filtreBudget === '500a2000') return b >= 500_000 && b < 2_000_000
+    return b >= 2_000_000
+  }
+
+  const passeEcheance = (c: Consultation): boolean => {
+    if (!filtreEcheance) return true
+    if (filtreEcheance === 'sans') return !c.dateLimite
+    if (!c.dateLimite) return false
+    const dj = diffDays(today, c.dateLimite)
+    if (filtreEcheance === 'depassee') return dj < 0
+    if (filtreEcheance === 'j10') return dj >= 0 && dj <= 10
+    return dj >= 0 && dj <= 30
+  }
+
+  /** note 0–1 pour le tri ; les consultations non notées passent en fin */
+  const noteGoNoGo = (c: Consultation): number => evaluerGoNoGo(c.scoresGoNoGo).note ?? -1
+
   const visibles = consultations
     .filter((c) => !filtreStatut || c.statut === filtreStatut)
+    .filter((c) => !filtreTypologie || (c.typologie || '').trim() === filtreTypologie)
+    .filter(passeBudget)
+    .filter(passeEcheance)
     .filter(
       (c) =>
         !fq ||
@@ -915,12 +951,18 @@ function ConsultationsContenu() {
           `${c.intitule} ${c.acheteur || ''} ${c.lieu || ''} ${c.typologie || ''} ${c.source || ''}`,
         ).includes(fq),
     )
-    .sort(
-      (a, b) =>
+    .sort((a, b) => {
+      if (tri === 'gonogo')
+        return noteGoNoGo(b) - noteGoNoGo(a) || (a.dateLimite || '9999').localeCompare(b.dateLimite || '9999')
+      if (tri === 'limite')
+        return (a.dateLimite || '9999').localeCompare(b.dateLimite || '9999') || a.intitule.localeCompare(b.intitule)
+      if (tri === 'budget') return (b.budgetTravaux ?? -1) - (a.budgetTravaux ?? -1) || a.intitule.localeCompare(b.intitule)
+      return (
         ORDRE_STATUTS[a.statut] - ORDRE_STATUTS[b.statut] ||
         (a.dateLimite || '9999').localeCompare(b.dateLimite || '9999') ||
-        a.intitule.localeCompare(b.intitule),
-    )
+        a.intitule.localeCompare(b.intitule)
+      )
+    })
 
   const optionsStatut = [
     { value: '', label: `Tous les statuts (${consultations.length})` },
@@ -929,6 +971,38 @@ function ConsultationsContenu() {
       label: `${s.label} (${consultations.filter((c) => c.statut === s.value).length})`,
     })),
   ]
+  const optionsTypologie = [
+    { value: '', label: 'Toutes typologies' },
+    ...typologies.map((t) => ({ value: t, label: t })),
+  ]
+  const optionsBudget = [
+    { value: '', label: 'Tous budgets' },
+    { value: 'moins500', label: 'Travaux < 500 k€' },
+    { value: '500a2000', label: '500 k€ – 2 M€' },
+    { value: 'plus2000', label: '> 2 M€' },
+    { value: 'sans', label: 'Budget non renseigné' },
+  ]
+  const optionsEcheance = [
+    { value: '', label: 'Toutes échéances' },
+    { value: 'j10', label: 'Limite sous 10 j' },
+    { value: 'j30', label: 'Limite sous 30 j' },
+    { value: 'depassee', label: 'Limite dépassée' },
+    { value: 'sans', label: 'Sans date limite' },
+  ]
+  const optionsTri = [
+    { value: 'defaut', label: 'Tri : statut puis limite' },
+    { value: 'gonogo', label: 'Tri : score Go/No-Go' },
+    { value: 'limite', label: 'Tri : date limite' },
+    { value: 'budget', label: 'Tri : budget travaux' },
+  ]
+  const filtresActifs = Boolean(q || filtreStatut || filtreTypologie || filtreBudget || filtreEcheance)
+  const reinitialiser = () => {
+    setQ('')
+    setFiltreStatut('')
+    setFiltreTypologie('')
+    setFiltreBudget('')
+    setFiltreEcheance('')
+  }
 
   const ouvrir = (c: Consultation) => setFiche({ c: { ...c }, nouveau: false })
 
@@ -941,14 +1015,25 @@ function ConsultationsContenu() {
       </div>
 
       <Card titre="Toutes les consultations">
-        <div className="toolbar">
+        <div className="toolbar" style={{ flexWrap: 'wrap' }}>
           <TextInput
             value={q}
             onChange={setQ}
-            placeholder="Rechercher (intitulé, acheteur, lieu, typologie…)"
-            style={{ minWidth: 260 }}
+            placeholder="Rechercher (intitulé, acheteur, lieu / zone…)"
+            style={{ minWidth: 240 }}
           />
           <Select value={filtreStatut} onChange={setFiltreStatut} options={optionsStatut} />
+          {typologies.length > 0 && (
+            <Select value={filtreTypologie} onChange={setFiltreTypologie} options={optionsTypologie} />
+          )}
+          <Select value={filtreBudget} onChange={setFiltreBudget} options={optionsBudget} />
+          <Select value={filtreEcheance} onChange={setFiltreEcheance} options={optionsEcheance} />
+          <Select value={tri} onChange={setTri} options={optionsTri} />
+          {filtresActifs && (
+            <Btn small kind="ghost" onClick={reinitialiser}>
+              Réinitialiser
+            </Btn>
+          )}
           <span className="spacer" />
           <span className="muted small">
             {visibles.length} / {consultations.length} consultation(s)
@@ -998,7 +1083,13 @@ function ConsultationsContenu() {
                 <td>
                   {(() => {
                     const e = evaluerGoNoGo(c.scoresGoNoGo)
-                    return e.reco ? <Badge tone={e.tone}>{e.reco}</Badge> : <span className="muted">—</span>
+                    if (!e.reco) return <span className="muted">—</span>
+                    return (
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                        <Badge tone={e.tone}>{e.reco}</Badge>
+                        {e.note !== null && <span className="muted small num">{fmtPct(e.note, 0)}</span>}
+                      </span>
+                    )
                   })()}
                 </td>
                 <td className="right">

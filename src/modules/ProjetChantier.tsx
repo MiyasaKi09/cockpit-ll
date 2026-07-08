@@ -27,7 +27,7 @@ import {
 import type { Tone } from '../ui'
 import { fmtDate, fmtMoney, fmtPct, todayISO, uid } from '../util'
 import { MODELES_WHISPER, transcrireFichier, type ProgresTranscription } from '../transcription'
-import { CONTRAT_CR, genererDocxCR, parseRetourCR } from '../crdocx'
+import { CONTRAT_CR, genererDocxCR, parseRetourCR, retourVersTexte } from '../crdocx'
 import { lireRacine, nomConforme, rangerFichier, supporteFS } from '../fsdrive'
 import { copier } from '../prompts'
 
@@ -283,6 +283,8 @@ function participantsParDefaut(state: ReturnType<typeof useStore>['state'], p: P
 export function CarteReunions({ projet: p }: { projet: Projet }) {
   const { state, update, replace } = useStore()
   const [assistant, setAssistant] = useState<{ reunion: ReunionChantier; fichier?: File } | null>(null)
+  const [reprog, setReprog] = useState<ReunionChantier | null>(null)
+  const [lectureCR, setLectureCR] = useState<ReunionChantier | null>(null)
 
   const reunions = state.reunions
     .filter((r) => r.projetId === p.id)
@@ -294,6 +296,7 @@ export function CarteReunions({ projet: p }: { projet: Projet }) {
       id: uid('reu'),
       projetId: p.id,
       date: todayISO(),
+      heure: '14:00',
       titre: `Réunion de chantier n°${n}`,
       participants: participantsParDefaut(state, p),
       statut: 'cr_a_generer',
@@ -332,15 +335,30 @@ export function CarteReunions({ projet: p }: { projet: Projet }) {
           transcription démarre, le prompt se copie tout seul, et le DOCX final part dans le Drive.
         </EmptyState>
       ) : (
-        <Table compact head={['Réunion', 'Date', 'Statut', 'Notes', '']}>
+        <Table compact head={['Réunion', 'Quand', 'Statut', 'CR', '']}>
           {reunions.map((r) => (
             <tr key={r.id}>
-              <td><strong>{r.titre}</strong></td>
-              <td>{fmtDate(r.date)}</td>
+              <td>
+                <strong>{r.titre}</strong>
+                {r.notes && <div className="muted small">{r.notes}</div>}
+              </td>
+              <td style={{ whiteSpace: 'nowrap' }}>
+                {fmtDate(r.date)}
+                {r.heure && <span className="mono"> · {r.heure}</span>}
+              </td>
               <td><Badge tone={LIBELLE_STATUT[r.statut].tone}>{LIBELLE_STATUT[r.statut].label}</Badge></td>
-              <td className="small muted">{r.notes || ''}</td>
+              <td>
+                {r.cr ? (
+                  <Btn small kind="ghost" onClick={() => setLectureCR(r)}>Voir le CR</Btn>
+                ) : (
+                  <span className="muted small">—</span>
+                )}
+              </td>
               <td className="right">
-                <span style={{ display: 'inline-flex', gap: 6 }}>
+                <span style={{ display: 'inline-flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                  <Btn small onClick={() => setReprog(r)} title="Changer la date ou l'heure en un geste">
+                    Reprogrammer
+                  </Btn>
                   <Btn small kind={r.statut === 'diffuse' ? 'default' : 'primary'} onClick={() => setAssistant({ reunion: r })}>
                     {r.statut === 'diffuse' ? 'Rouvrir' : 'Assistant CR'}
                   </Btn>
@@ -374,7 +392,77 @@ export function CarteReunions({ projet: p }: { projet: Projet }) {
           onClose={() => setAssistant(null)}
         />
       )}
+      {reprog && <ModalReprogrammation reunion={reprog} onClose={() => setReprog(null)} />}
+      {lectureCR && (
+        <ModalCR
+          reunion={state.reunions.find((r) => r.id === lectureCR.id) || lectureCR}
+          onClose={() => setLectureCR(null)}
+        />
+      )}
     </Card>
+  )
+}
+
+/** reprogrammation « dernière minute » : date + heure, rien d'autre */
+function ModalReprogrammation({ reunion, onClose }: { reunion: ReunionChantier; onClose: () => void }) {
+  const { update } = useStore()
+  const [date, setDate] = useState<string | null>(reunion.date)
+  const [heure, setHeure] = useState(reunion.heure || '')
+
+  const enregistrer = () => {
+    if (!date) return toast('Indiquer la date.', { tone: 'danger' })
+    update((d) => {
+      const r = d.reunions.find((x) => x.id === reunion.id)
+      if (!r) return
+      r.date = date
+      r.heure = heure || undefined
+    })
+    toast(`« ${reunion.titre} » reprogrammée au ${fmtDate(date)}${heure ? ` à ${heure}` : ''}.`, { tone: 'ok' })
+    onClose()
+  }
+
+  return (
+    <Modal titre={`Reprogrammer — ${reunion.titre}`} onClose={onClose}>
+      <div className="form-row">
+        <Field label="Date">
+          <DateInput value={date} onChange={setDate} />
+        </Field>
+        <Field label="Heure">
+          <input className="input" type="time" value={heure} onChange={(e) => setHeure(e.target.value)} />
+        </Field>
+      </div>
+      <div className="form-foot">
+        <Btn onClick={onClose}>Annuler</Btn>
+        <Btn kind="primary" onClick={enregistrer}>Reprogrammer</Btn>
+      </div>
+    </Modal>
+  )
+}
+
+/** le CR vit sur la réunion : lisible, corrigeable, copiable — jamais perdu */
+function ModalCR({ reunion, onClose }: { reunion: ReunionChantier; onClose: () => void }) {
+  const { update } = useStore()
+  const [texte, setTexte] = useState(reunion.cr || '')
+
+  const enregistrer = () => {
+    update((d) => {
+      const r = d.reunions.find((x) => x.id === reunion.id)
+      if (r) r.cr = texte.trim() || undefined
+    })
+    toast('CR enregistré sur la réunion.', { tone: 'ok' })
+    onClose()
+  }
+
+  return (
+    <Modal titre={`CR — ${reunion.titre} (${fmtDate(reunion.date)}${reunion.heure ? ` · ${reunion.heure}` : ''})`} onClose={onClose} large>
+      <TextArea rows={16} mono value={texte} onChange={setTexte} />
+      <div className="form-foot">
+        <CopyBtn text={() => texte} label="Copier le CR" kind="default" />
+        <span className="spacer" />
+        <Btn onClick={onClose}>Fermer</Btn>
+        <Btn kind="primary" onClick={enregistrer}>Enregistrer</Btn>
+      </div>
+    </Modal>
   )
 }
 
@@ -490,7 +578,11 @@ function AssistantCR({
         a.click()
         URL.revokeObjectURL(url)
       }
-      maj((r) => { r.statut = 'cr_a_relire' })
+      maj((r) => {
+        r.statut = 'cr_a_relire'
+        // le texte du CR reste sur la réunion : relisible et cherchable plus tard
+        r.cr = retourVersTexte(retour)
+      })
       setRetourClaude('')
       setMessageDocx(
         chemin
@@ -514,6 +606,14 @@ function AssistantCR({
             type="date"
             value={reunion.date}
             onChange={(e) => maj((r) => { r.date = e.target.value || todayISO() })}
+          />
+        </Field>
+        <Field label="Heure">
+          <input
+            className="input"
+            type="time"
+            value={reunion.heure || ''}
+            onChange={(e) => maj((r) => { r.heure = e.target.value || undefined })}
           />
         </Field>
       </div>

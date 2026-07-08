@@ -173,13 +173,47 @@ export function EmptyState({ children }: { children: ReactNode }) {
   return <div className="empty">{children}</div>
 }
 
+/** notation 1-5 en étoiles — cliquable si onChange est fourni, sinon lecture seule */
+export function Etoiles({
+  note,
+  onChange,
+  titre,
+}: {
+  note: number | null | undefined
+  onChange?: (n: number) => void
+  titre?: string
+}) {
+  return (
+    <span className="etoiles" title={titre}>
+      {[1, 2, 3, 4, 5].map((n) => {
+        const pleine = note != null && n <= note
+        return onChange ? (
+          <button
+            key={n}
+            type="button"
+            className={`etoile ${pleine ? 'pleine' : ''}`}
+            onClick={() => onChange(n)}
+            aria-label={`${n} sur 5`}
+          >
+            {pleine ? '★' : '☆'}
+          </button>
+        ) : (
+          <span key={n} className={`etoile ${pleine ? 'pleine' : ''}`} aria-hidden="true">
+            {pleine ? '★' : '☆'}
+          </span>
+        )
+      })}
+    </span>
+  )
+}
+
 // ---------- icônes (jeu de traits, style Lucide, currentColor) ----------
 
 export type IconName =
   | 'bolt' | 'activity' | 'mail' | 'hardhat' | 'scale' | 'rocket' | 'flag'
   | 'user' | 'shield' | 'printer' | 'file' | 'trophy' | 'sun' | 'moon'
   | 'mic' | 'camera' | 'phone' | 'calendar' | 'car' | 'users' | 'arrowDown'
-  | 'alert' | 'star' | 'search' | 'check' | 'party'
+  | 'alert' | 'star' | 'search' | 'check' | 'party' | 'menu'
 
 const ICON_PATHS: Record<IconName, ReactNode> = {
   bolt: <path d="M13 2 4 14h6l-1 8 9-12h-6l1-8z" />,
@@ -286,6 +320,13 @@ const ICON_PATHS: Record<IconName, ReactNode> = {
     <>
       <circle cx="11" cy="11" r="8" />
       <path d="m21 21-4.3-4.3" />
+    </>
+  ),
+  menu: (
+    <>
+      <path d="M4 6h16" />
+      <path d="M4 12h16" />
+      <path d="M4 18h16" />
     </>
   ),
   check: <path d="M20 6 9 17l-5-5" />,

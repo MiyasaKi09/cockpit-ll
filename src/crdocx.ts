@@ -77,6 +77,62 @@ export function parseRetourCR(brut: string): { retour?: RetourCR; erreur?: strin
   }
 }
 
+/** rendu texte lisible du CR — conservé sur la réunion (relecture, historique, recherche) */
+export function retourVersTexte(retour: RetourCR): string {
+  const bloc = (titre: string, lignes: string[]): string =>
+    lignes.length > 0 ? `${titre}\n${lignes.map((l) => `- ${l}`).join('\n')}` : ''
+  return [
+    bloc('Présents :', retour.presents),
+    bloc('Excusés :', retour.excuses),
+    bloc('Absents convoqués :', retour.absents_convoques),
+    retour.avancement ? `Avancement général :\n${retour.avancement}` : '',
+    retour.points.length > 0
+      ? `Points par lot :\n${retour.points
+          .map(
+            (pt) =>
+              `- [${pt.lot}${pt.numero ? ` · ${pt.numero}` : ''}] ${pt.texte}${pt.responsable ? ` → ${pt.responsable}` : ''}${pt.echeance ? ` (pour le ${pt.echeance})` : ''}`,
+          )
+          .join('\n')}`
+      : '',
+    bloc('Décisions :', retour.decisions),
+    bloc('En attente :', retour.en_attente),
+    retour.prochaine_reunion ? `Prochaine réunion : ${retour.prochaine_reunion}` : '',
+  ]
+    .filter(Boolean)
+    .join('\n\n')
+}
+
+/** transforme un texte brut (brouillon de l'assistant) en DOCX sobre, une ligne = un paragraphe */
+export async function texteVersDocx(titre: string, texte: string): Promise<Blob> {
+  const { Document, HeadingLevel, Packer, Paragraph, TextRun } = await import('docx')
+  const doc = new Document({
+    styles: { default: { document: { run: { font: 'Arial', size: 21 } } } },
+    sections: [
+      {
+        children: [
+          new Paragraph({
+            heading: HeadingLevel.HEADING_1,
+            spacing: { after: 160 },
+            children: [new TextRun({ text: titre })],
+          }),
+          new Paragraph({
+            spacing: { after: 240 },
+            children: [new TextRun({ text: 'BROUILLON généré par l’assistant — à relire avant tout usage.', size: 18, color: '9A3412' })],
+          }),
+          ...texte.split('\n').map(
+            (ligne) =>
+              new Paragraph({
+                spacing: { after: 80 },
+                children: [new TextRun({ text: ligne })],
+              }),
+          ),
+        ],
+      },
+    ],
+  })
+  return Packer.toBlob(doc)
+}
+
 /** construit le DOCX du CR — mise en page maison, identique pour tous les CR */
 export async function genererDocxCR(
   settings: Settings,

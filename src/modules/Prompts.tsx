@@ -111,7 +111,8 @@ export function PromptsContenu() {
 
       {parDomaine.map(([domaine, gabarits]) => (
         <Card key={domaine} titre={domaine}>
-          <table className="table">
+          {/* table-cartes : sur téléphone chaque gabarit devient une carte empilée */}
+          <table className="table table-cartes">
             <tbody>
               {gabarits.map((t) => (
                 <tr key={t.id}>

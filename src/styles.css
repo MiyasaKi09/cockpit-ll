@@ -382,6 +382,7 @@ pre {
 .grid4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
 @media (max-width: 1000px) {
   .grid3, .grid4 { grid-template-columns: 1fr 1fr; }
+  .cockpit-cols { grid-template-columns: 1fr; }
 }
 @media (max-width: 700px) {
   .grid2, .grid3, .grid4 { grid-template-columns: 1fr; }
@@ -476,7 +477,7 @@ pre {
 .cockpit-rail { display: flex; flex-direction: column; gap: 14px; }
 .cockpit-rail .card { box-shadow: none; background: var(--bg-soft); }
 .cockpit-rail-stack { display: flex; flex-direction: column; gap: 16px; }
-@media (max-width: 1040px) { .cockpit-cols { grid-template-columns: 1fr; } }
+/* repli du rail : géré dans le palier 1000 px commun (cartes & grilles) */
 
 /* ---------- badges (chips à bord franc) ---------- */
 
@@ -760,7 +761,7 @@ textarea.input { resize: vertical; }
 .toast-host {
   position: fixed;
   left: 50%;
-  bottom: 22px;
+  bottom: calc(22px + env(safe-area-inset-bottom, 0px));
   transform: translateX(-50%);
   display: flex;
   flex-direction: column;
@@ -904,6 +905,27 @@ button.etoile { cursor: pointer; }
 button.etoile:hover { color: var(--warn); }
 .etoile.pleine { color: var(--c-yellow); }
 
+/* ---------- frises planning (Gantt) & matrices ---------- */
+
+/* colonne libellés + piste temporelle — remplace les grids inline des modules */
+.plan-frise { display: grid; grid-template-columns: 190px 1fr; gap: 8px; align-items: center; }
+.plan-frise-chantier { grid-template-columns: 210px 1fr; gap: 6px; }
+.plan-frise-projet { grid-template-columns: 150px 1fr; gap: 8px; }
+/* première colonne figée des matrices larges (heatmap de charge, grille des temps) */
+.col-figee { position: sticky; left: 0; background: var(--panel); z-index: 1; }
+.temps-libelle { min-width: 190px; }
+@media (max-width: 700px) {
+  .temps-libelle { min-width: 140px; }
+}
+
+/* ---------- calendrier mensuel ---------- */
+
+.cal-grille { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+.cal-jour { min-height: 86px; }
+.cal-jour::before { display: none; } /* étiquette de jour — visible en liste mobile seulement */
+.cal-evt-extra { display: none; } /* au-delà de 4 évènements : cachés sur desktop (compteur « +N ») */
+.cal-evt-long { display: none; } /* intitulé complet — liste mobile seulement (title inaccessible au doigt) */
+
 /* ---------- topbar & tiroir mobile (en fin de fichier : gagne la cascade) ---------- */
 
 .topbar { display: none; }
@@ -918,7 +940,7 @@ button.etoile:hover { color: var(--warn); }
     z-index: 40;
     background: var(--sidebar);
     border-bottom: 2px solid var(--sidebar-line);
-    padding: 8px 12px;
+    padding: calc(8px + env(safe-area-inset-top, 0px)) 12px 8px;
   }
   .topbar .brand { padding: 0; font-size: 16px; }
   .topbar-burger {
@@ -946,6 +968,8 @@ button.etoile:hover { color: var(--warn); }
     transition: transform 0.2s ease;
     border-right-width: 2px;
     box-shadow: none;
+    padding-top: calc(18px + env(safe-area-inset-top, 0px));
+    padding-left: calc(12px + env(safe-area-inset-left, 0px));
   }
   .sidebar.ouverte { transform: none; box-shadow: 6px 0 0 rgba(15, 12, 5, 0.18); }
   .nav-back {
@@ -954,7 +978,7 @@ button.etoile:hover { color: var(--warn); }
     z-index: 55;
     background: rgba(15, 12, 5, 0.45);
   }
-  .main { padding: 16px 14px 60px; max-width: none; }
+  .main { padding: 16px 14px calc(60px + env(safe-area-inset-bottom, 0px)); max-width: none; }
   .page-h { flex-wrap: wrap; }
   .page-wordmark-h { flex-wrap: wrap; row-gap: 6px; }
   /* rien ne déborde de l'écran : tout ce qui est large défile dans son bloc */
@@ -970,4 +994,117 @@ button.etoile:hover { color: var(--warn); }
   .alert-actions { margin-left: 0; width: 100%; padding-left: 23px; flex-wrap: wrap; }
   .kv { grid-template-columns: 1fr; row-gap: 2px; }
   .form-row > .field { min-width: 100%; }
+}
+
+/* ---------- téléphone (≤ 700 px) : reflow structurel ----------
+   Placé APRÈS le bloc 880 px pour gagner la cascade. Entre 701 et
+   880 px, les tableaux gardent le filet « display:block + scroll »
+   ci-dessus ; sous 700 px ils deviennent des CARTES empilées. */
+
+@media (max-width: 700px) {
+  /* --- tableaux de données → cartes empilées ---
+     le composant Table (ui.tsx) pose la classe table-cartes et un
+     data-label (texte de l'en-tête) sur chaque cellule */
+  .table-wrap { overflow-x: visible; }
+  .table.table-cartes { display: block; overflow-x: visible; }
+  .table-cartes thead { display: none; }
+  .table-cartes tbody { display: block; }
+  .table-cartes tr {
+    display: block;
+    border: 1.5px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--panel);
+    margin-bottom: 10px;
+    padding: 6px 0;
+  }
+  .table-cartes tr:last-child { margin-bottom: 0; }
+  .table-cartes td, .table-cartes tbody th {
+    display: block;
+    border-bottom: none;
+    padding: 4px 12px;
+    text-align: left;
+    /* neutralise les width/maxWidth inline dimensionnés pour desktop
+       (seul moyen sans retoucher tous les modules ; sans effet desktop) */
+    width: auto !important;
+    max-width: none !important;
+    min-width: 0 !important;
+    white-space: normal;
+  }
+  .table-cartes td.right, .table-cartes td.num { text-align: left; }
+  .table-cartes td:empty { display: none; }
+  .table-cartes td[data-label] {
+    display: grid;
+    grid-template-columns: minmax(90px, 38%) 1fr;
+    gap: 2px 10px;
+    align-items: baseline;
+  }
+  .table-cartes td[data-label]::before {
+    content: attr(data-label);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-weight: 600;
+    color: var(--ink-2);
+  }
+  /* rangée-titre de groupe (cellule colSpan) : séparateur pleine largeur */
+  .table-cartes td[data-section] {
+    padding: 5px 12px;
+    font-weight: 700;
+    background: var(--bg-soft) !important;
+  }
+  .table-cartes tr.clickable:hover td { background: transparent; }
+  .table-cartes tr.clickable:hover { background: var(--bg-soft); }
+
+  /* --- onglets : bandeau défilant au doigt --- */
+  .tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .tabs::-webkit-scrollbar { display: none; }
+  /* margin-bottom:-2px créerait un scroll vertical parasite avec overflow-x */
+  .tab { flex: 0 0 auto; margin-bottom: 0; }
+
+  /* --- modales quasi plein écran --- */
+  .modal-back { padding: 10px 8px calc(10px + env(safe-area-inset-bottom, 0px)); }
+  .modal, .modal-large { width: 100%; max-height: calc(100dvh - 20px); }
+
+  /* --- frises planning : colonne libellés réduite, piste qui défile ---
+     min-width généreux : sur 12 mois, les graduations ont besoin de place */
+  .plan-frise, .plan-frise-chantier { grid-template-columns: 130px 1fr; min-width: 660px; }
+  .plan-frise-projet { grid-template-columns: 110px 1fr; min-width: 520px; }
+
+  /* --- calendrier mensuel → liste agenda verticale --- */
+  .cal-grille { grid-template-columns: 1fr; }
+  .cal-nom-jour, .cal-hors-mois, .cal-vide { display: none; }
+  .cal-jour { min-height: 0; }
+  .cal-jour .cal-num { display: none; }
+  .cal-jour::before {
+    content: attr(data-jour);
+    display: block;
+    font-weight: 700;
+    font-size: 12px;
+    margin-bottom: 2px;
+  }
+  .cal-evt { white-space: normal !important; }
+  .cal-evt-extra { display: flex; }
+  .cal-evt-plus { display: none; } /* tout est affiché : le compteur « +N » n'a plus d'objet */
+  .cal-evt-court { display: none; }
+  .cal-evt-long { display: inline; }
+}
+
+/* ---------- tactile (indépendant de la largeur) ----------
+   iOS Safari zoome sur tout champ < 16 px ; les cibles < 40 px
+   sont pénibles au doigt. Le desktop souris n'est pas concerné. */
+
+@media (pointer: coarse) {
+  .input, select.input, textarea.input, .table .input { font-size: 16px; }
+  .btn { min-height: 40px; }
+  .btn-small { min-height: 36px; padding: 6px 10px; }
+  .tab { padding: 10px 14px; }
+  .rowmenu-item { padding: 10px 12px; }
+  input[type='checkbox'], input[type='radio'] { width: 18px; height: 18px; }
+  .etoile { font-size: 19px; padding: 2px; }
 }

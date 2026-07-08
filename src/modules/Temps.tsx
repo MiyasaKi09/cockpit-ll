@@ -242,7 +242,7 @@ function TableauPersonne({
         <table className="table table-compact">
           <thead>
             <tr>
-              <th style={{ minWidth: 190 }}>Projet · phase</th>
+              <th className="col-figee temps-libelle">Projet · phase</th>
               {semaines.map((s) => (
                 <th key={s} className="right" title={`semaine du ${fmtDate(s)}`}>
                   {enTeteSemaine(s)}
@@ -264,7 +264,7 @@ function TableauPersonne({
               const p = state.projets.find((x) => x.id === c.projetId)
               return (
                 <tr key={`${c.projetId}|${c.phase}`}>
-                  <td>
+                  <td className="col-figee">
                     <a href={`#/projets/${c.projetId}`}>{c.projetId}</a> · {c.phase}
                     <div className="muted small" title={LIBELLES_PHASES[c.phase]}>
                       {p ? (p.nom.length > 30 ? p.nom.slice(0, 30) + '…' : p.nom) : 'projet inconnu'}
@@ -288,7 +288,7 @@ function TableauPersonne({
             </tr>
             {CATEGORIES_HORS_PROJET.map((cat) => (
               <tr key={cat}>
-                <td className="small">{cat}</td>
+                <td className="small col-figee">{cat}</td>
                 {semaines.map((s) => (
                   <td key={s} className="right">
                     <NumInput value={hpDe(s, cat)} onChange={(v) => poserHP(s, cat, v)} style={{ width: 58 }} />
@@ -298,7 +298,7 @@ function TableauPersonne({
               </tr>
             ))}
             <tr style={{ fontWeight: 650 }}>
-              <td>Total semaine</td>
+              <td className="col-figee">Total semaine</td>
               {semaines.map((s) => {
                 const t = totalColonne(s)
                 const ecart = Math.abs(t - theorique)

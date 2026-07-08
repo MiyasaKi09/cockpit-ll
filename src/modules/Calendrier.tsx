@@ -210,21 +210,22 @@ export function EcheancesContenu() {
       </div>
 
       <Card>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 4 }}>
+        <div className="cal-grille">
           {JOURS.map((j) => (
-            <div key={j} className="muted small" style={{ fontWeight: 700, textAlign: 'center', padding: '2px 0' }}>
+            <div key={j} className="cal-nom-jour muted small" style={{ fontWeight: 700, textAlign: 'center', padding: '2px 0' }}>
               {j}
             </div>
           ))}
-          {grille.map((jour) => {
+          {grille.map((jour, idx) => {
             const dansMois = jour.slice(5, 7) === premier.slice(5, 7)
             const duJour = evts.get(jour) || []
             const estAujourdhui = jour === today
             return (
               <div
                 key={jour}
+                className={`cal-jour${dansMois ? '' : ' cal-hors-mois'}${duJour.length === 0 ? ' cal-vide' : ''}`}
+                data-jour={`${JOURS[idx % 7]} ${Number(jour.slice(8, 10))}${estAujourdhui ? " — aujourd'hui" : ''}`}
                 style={{
-                  minHeight: 86,
                   border: `1px solid ${estAujourdhui ? 'var(--accent)' : 'var(--line)'}`,
                   borderWidth: estAujourdhui ? 2 : 1,
                   borderRadius: 8,
@@ -233,14 +234,15 @@ export function EcheancesContenu() {
                   opacity: dansMois ? 1 : 0.55,
                 }}
               >
-                <div className="small" style={{ fontWeight: estAujourdhui ? 800 : 600, color: estAujourdhui ? 'var(--accent)' : undefined }}>
+                <div className="small cal-num" style={{ fontWeight: estAujourdhui ? 800 : 600, color: estAujourdhui ? 'var(--accent)' : undefined }}>
                   {Number(jour.slice(8, 10))}
                 </div>
-                {duJour.slice(0, 4).map((e, i) => (
+                {duJour.map((e, i) => (
                   <a
                     key={i}
                     href={e.lien}
                     title={e.titreLong}
+                    className={`cal-evt${i >= 4 ? ' cal-evt-extra' : ''}`}
                     style={{
                       display: 'flex',
                       alignItems: 'center',
@@ -260,11 +262,12 @@ export function EcheancesContenu() {
                     ) : (
                       <span style={{ fontSize: 8 }}>●</span>
                     )}
-                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{e.label}</span>
+                    <span className="cal-evt-court" style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{e.label}</span>
+                    <span className="cal-evt-long">{e.titreLong}</span>
                   </a>
                 ))}
                 {duJour.length > 4 && (
-                  <div className="muted" style={{ fontSize: 10 }} title={duJour.slice(4).map((e) => e.titreLong).join('\n')}>
+                  <div className="muted cal-evt-plus" style={{ fontSize: 10 }} title={duJour.slice(4).map((e) => e.titreLong).join('\n')}>
                     +{duJour.length - 4} autre(s)
                   </div>
                 )}

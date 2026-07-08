@@ -92,7 +92,8 @@ function BlocReponse({ reponse, modele }: { reponse: string; modele?: string }) 
 function OngletQuestion({ dispo }: { dispo: boolean }) {
   const { state } = useStore()
   const reglementaires = state.documents.filter((d) => d.type === 'reglementaire')
-  const [coches, setCoches] = useState<Set<string>>(() => new Set(reglementaires.map((d) => d.id)))
+  // rien de coché par défaut : on ne paie (et n'envoie) que les textes utiles à la question
+  const [coches, setCoches] = useState<Set<string>>(() => new Set())
   const [question, setQuestion] = useState('')
   const [difficile, setDifficile] = useState(false)
   const [enCours, setEnCours] = useState(false)
@@ -149,19 +150,31 @@ function OngletQuestion({ dispo }: { dispo: boolean }) {
       <Card titre="Question réglementaire">
         <p className="muted" style={{ marginTop: 0 }}>
           L’assistant répond uniquement à partir des textes cochés, avec citation des passages.
-          Si la réponse n’y est pas, il le dit — il n’invente pas.
+          Si la réponse n’y est pas, il le dit — il n’invente pas. Cochez seulement les textes
+          utiles à la question : plus la sélection est courte, plus la réponse est précise et
+          économe.
         </p>
         <div style={{ display: 'grid', gap: 6, marginBottom: 12 }}>
           {reglementaires.map((d) => (
             <label key={d.id} style={{ display: 'flex', alignItems: 'baseline', gap: 8, cursor: 'pointer' }}>
               <input type="checkbox" checked={coches.has(d.id)} onChange={() => basculer(d.id)} />
               <span>
-                {d.titre}
-                {d.source && <span className="muted"> — {d.source}</span>}
+                {d.titre} <span className="muted small">({Math.max(1, Math.round(d.texte.length / 1000))} k)</span>
+                {d.source && <span className="muted small"> — {d.source}</span>}
               </span>
             </label>
           ))}
         </div>
+        {(() => {
+          const poids = reglementaires.filter((d) => coches.has(d.id)).reduce((s, d) => s + d.texte.length, 0)
+          if (poids <= 400_000) return null
+          return (
+            <div className="pill-note" style={{ marginBottom: 10, borderColor: 'var(--warn)' }}>
+              Sélection très volumineuse ({Math.round(poids / 1000)} k caractères) — l’assistant
+              risque de refuser ou de coûter cher. Gardez les textes du thème de la question.
+            </div>
+          )
+        })()}
         <Field label="Votre question">
           <TextArea
             value={question}
@@ -380,6 +393,107 @@ const TYPES_CORPUS = [
   { value: 'modele', label: 'Modèle de document' },
 ]
 
+// ---------- bibliothèque : packs officiels pré-curatés (public/corpus) ----------
+
+/** entrée du catalogue public/corpus/index.json */
+interface PackCatalogue {
+  fichier: string
+  id: string
+  titre: string
+  description: string
+  version: string
+  nbDocs: number
+  taille: number
+  docIds: string[]
+}
+
+/** contenu d'un pack public/corpus/<id>.json */
+interface PackCorpus {
+  id: string
+  docs: { id: string; titre: string; type: 'reglementaire' | 'modele'; source?: string; url?: string; texte: string }[]
+}
+
+/** au-delà de ce poids de corpus, la synchro et le stockage local ralentissent */
+const SEUIL_POIDS_CORPUS = 2_000_000
+
+/** packs Légifrance prêts à l'emploi, générés par scripts/recolte-corpus.py
+ *  (données DILA / Licence Ouverte, version de consolidation affichée) */
+function CarteBibliotheque() {
+  const { state, update, replace } = useStore()
+  const [catalogue, setCatalogue] = useState<PackCatalogue[] | null>(null)
+  const [erreur, setErreur] = useState(false)
+  const [chargement, setChargement] = useState<string | null>(null)
+
+  useEffect(() => {
+    void fetch('/corpus/index.json')
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+      .then((j) => setCatalogue(j as PackCatalogue[]))
+      .catch(() => setErreur(true))
+  }, [])
+
+  const idsPresents = useMemo(() => new Set(state.documents.map((d) => d.id)), [state.documents])
+
+  const ajouter = async (entree: PackCatalogue) => {
+    setChargement(entree.id)
+    try {
+      const r = await fetch(`/corpus/${entree.fichier}`)
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      const pack = (await r.json()) as PackCorpus
+      const snap = state
+      update((d) => {
+        for (const doc of pack.docs) {
+          const nouveau = { ...doc, ajouteLe: todayISO() }
+          const i = d.documents.findIndex((x) => x.id === doc.id)
+          if (i >= 0) d.documents[i] = nouveau
+          else d.documents.push(nouveau)
+        }
+      })
+      toast(`Pack « ${entree.titre} » ajouté au corpus (${pack.docs.length} document(s)).`, {
+        undo: () => replace(snap),
+      })
+    } catch {
+      toast('Pack introuvable — la bibliothèque n’est disponible que sur le site déployé.', { tone: 'danger' })
+    } finally {
+      setChargement(null)
+    }
+  }
+
+  if (erreur || catalogue === null) return null
+
+  return (
+    <Card titre="Bibliothèque — textes officiels prêts à l'emploi">
+      <p className="muted" style={{ marginTop: 0 }}>
+        Packs extraits de Légifrance (données DILA, Licence Ouverte) avec leur date de
+        consolidation — sécurité incendie, accessibilité, marchés, garanties, urbanisme. Un clic
+        les ajoute au corpus ; re-cliquer remplace par la version du pack.
+      </p>
+      <Table head={['Pack', 'Version consolidée', 'Contenu', '']}>
+        {catalogue.map((p) => {
+          const dansCorpus = p.docIds.filter((id) => idsPresents.has(id)).length
+          const dejaTout = p.docIds.length > 0 && dansCorpus === p.docIds.length
+          return (
+            <tr key={p.id}>
+              <td>
+                <strong>{p.titre}</strong>
+                <div className="muted small">{p.description}</div>
+              </td>
+              <td className="small">{fmtDate(p.version)}</td>
+              <td className="small muted">
+                {p.nbDocs} doc(s) · {Math.round(p.taille / 1000)} k car.
+              </td>
+              <td className="right">
+                <Btn small kind={dejaTout ? 'default' : 'primary'} onClick={() => void ajouter(p)} disabled={chargement !== null}>
+                  {chargement === p.id ? 'Ajout…' : dejaTout ? 'Remplacer' : dansCorpus > 0 ? 'Mettre à jour' : 'Ajouter au corpus'}
+                </Btn>
+              </td>
+            </tr>
+          )
+        })}
+      </Table>
+    </Card>
+  )
+}
+
 function OngletCorpus() {
   const { state, update } = useStore()
   const [ajout, setAjout] = useState(false)
@@ -423,7 +537,10 @@ function OngletCorpus() {
     })
   }
 
+  const poidsCorpus = state.documents.reduce((somme, d) => somme + d.texte.length, 0)
+
   return (
+    <>
     <Card
       titre="Corpus de l’assistant"
       actions={
@@ -507,6 +624,20 @@ function OngletCorpus() {
           ))}
         </Table>
       )}
+      {state.documents.length > 0 && (
+        <p className="small" style={{ marginTop: 10, marginBottom: 0 }}>
+          Poids total du corpus : <strong>{Math.round(poidsCorpus / 1000)} k caractères</strong>
+          {poidsCorpus > SEUIL_POIDS_CORPUS && (
+            <span className="muted">
+              {' '}
+              — corpus volumineux : la sauvegarde locale et la synchro ralentissent, retirez les
+              packs que vous n’utilisez pas.
+            </span>
+          )}
+        </p>
+      )}
     </Card>
+    <CarteBibliotheque />
+    </>
   )
 }

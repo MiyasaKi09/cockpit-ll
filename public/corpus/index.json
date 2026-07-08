@@ -1,0 +1,117 @@
+[
+ {
+  "fichier": "marches-publics.json",
+  "id": "marches-publics",
+  "titre": "Marchés publics — exécution & maîtrise d'œuvre",
+  "description": "Code de la commande publique : délais de paiement, avances et acomptes, retenue de garantie, sous-traitance, et le livre MOA/MOE (loi MOP codifiée, concours, rémunération).",
+  "version": "2026-05-28",
+  "nbDocs": 3,
+  "taille": 147788,
+  "docIds": [
+   "lf-ccp-execution-l",
+   "lf-ccp-execution-r",
+   "lf-ccp-moe"
+  ]
+ },
+ {
+  "fichier": "incendie-cch.json",
+  "id": "incendie-cch",
+  "titre": "Sécurité incendie — socle CCH (classement ERP)",
+  "description": "Code de la construction et de l'habitation : objectifs de sécurité, classement des ERP en types et catégories, autorisations de travaux, commissions de sécurité, ERP existants.",
+  "version": "2026-07-01",
+  "nbDocs": 2,
+  "taille": 78650,
+  "docIds": [
+   "lf-cch-incendie-l",
+   "lf-cch-incendie-r"
+  ]
+ },
+ {
+  "fichier": "accessibilite-cch.json",
+  "id": "accessibilite-cch",
+  "titre": "Accessibilité handicap — socle CCH",
+  "description": "Code de la construction et de l'habitation : obligations d'accessibilité des ERP et des logements, dérogations, attestations, agendas d'accessibilité programmée.",
+  "version": "2026-07-01",
+  "nbDocs": 2,
+  "taille": 89879,
+  "docIds": [
+   "lf-cch-access-l",
+   "lf-cch-access-r"
+  ]
+ },
+ {
+  "fichier": "garanties-construction.json",
+  "id": "garanties-construction",
+  "titre": "Garanties & assurances construction",
+  "description": "Code civil (contrat d'entreprise, réception, garanties biennale et décennale des constructeurs) et Code des assurances (obligations décennale et dommages-ouvrage).",
+  "version": "2026-06-27",
+  "nbDocs": 2,
+  "taille": 24903,
+  "docIds": [
+   "lf-cciv-louage",
+   "lf-cass-decennale"
+  ]
+ },
+ {
+  "fichier": "urbanisme-autorisations.json",
+  "id": "urbanisme-autorisations",
+  "titre": "Urbanisme — autorisations (PC / DP)",
+  "description": "Code de l'urbanisme : champ d'application des permis et déclarations préalables, composition du dossier de PC, délais d'instruction, recours obligatoire à l'architecte.",
+  "version": "2026-07-01",
+  "nbDocs": 2,
+  "taille": 150293,
+  "docIds": [
+   "lf-curb-champ",
+   "lf-curb-dossier"
+  ]
+ },
+ {
+  "fichier": "incendie-erp-arretes.json",
+  "id": "incendie-erp-arretes",
+  "titre": "Sécurité incendie ERP — règlement complet (volumineux)",
+  "description": "Règlement de sécurité contre l'incendie dans les ERP, consolidé (arrêté du 25 juin 1980) : dispositions générales (GN, CO, AM, DF, MS…), 5e catégorie (PE) et établissements spéciaux (chapiteaux, gares, parcs de stationnement…). ~1,2 M de caractères : cochez la partie utile à la question.",
+  "version": "2025-07-13",
+  "nbDocs": 12,
+  "taille": 1245852,
+  "docIds": [
+   "lf-arrete-1980-1",
+   "lf-arrete-1980-2",
+   "lf-arrete-1980-3",
+   "lf-arrete-1980-4",
+   "lf-arrete-1980-5",
+   "lf-arrete-1980-6",
+   "lf-arrete-1980-7",
+   "lf-arrete-1980-8",
+   "lf-arrete-1980-9",
+   "lf-arrete-1980-10",
+   "lf-arrete-1980-11",
+   "lf-arrete-1980-12"
+  ]
+ },
+ {
+  "fichier": "accessibilite-arretes.json",
+  "id": "accessibilite-arretes",
+  "titre": "Accessibilité handicap — arrêtés d'application",
+  "description": "Arrêté du 20 avril 2017 (ERP neufs et installations ouvertes au public) et arrêté du 8 décembre 2014 (ERP situés dans un cadre bâti existant).",
+  "version": "2025-07-13",
+  "nbDocs": 2,
+  "taille": 160688,
+  "docIds": [
+   "lf-arrete-2017",
+   "lf-arrete-2014"
+  ]
+ },
+ {
+  "fichier": "profession-architecte.json",
+  "id": "profession-architecte",
+  "titre": "Profession — loi de 1977 & déontologie",
+  "description": "Loi n°77-2 du 3 janvier 1977 sur l'architecture (recours obligatoire, seuils) et code de déontologie des architectes (décret n°80-217).",
+  "version": "2025-07-13",
+  "nbDocs": 2,
+  "taille": 60545,
+  "docIds": [
+   "lf-loi-1977",
+   "lf-deonto"
+  ]
+ }
+]

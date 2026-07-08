@@ -89,7 +89,8 @@ def rendre(sections):
 
 
 def decouper(titre, texte):
-    """coupe un texte trop long en parties (aux frontières de sections)"""
+    """coupe un texte trop long en parties (aux frontières de sections) ;
+    chaque partie est titrée par sa première section pour rester repérable"""
     if len(texte) <= MAX_CARACTERES_DOC:
         return [(titre, texte)]
     blocs = texte.split("\n## ")
@@ -104,7 +105,15 @@ def decouper(titre, texte):
     if courant:
         parties.append(courant)
     n = len(parties)
-    return [(f"{titre} ({i + 1}/{n})", p) for i, p in enumerate(parties)]
+
+    def etiquette(part):
+        m = re.search(r"## ([^\n]+)", part)
+        if not m:
+            return ""
+        e = re.sub(r"\s+", " ", m.group(1)).strip(" .")
+        return f" · {e[:52]}" if e else ""
+
+    return [(f"{titre} — {i + 1}/{n}{etiquette(p)}", p) for i, p in enumerate(parties)]
 
 
 # ------------------------------------------------------------------
@@ -238,8 +247,9 @@ def docs_code(dossier, nom_code, legitext, cibles):
         if not texte:
             print(f"  ⚠ AUCUN article pour {slug} ({nom_code})", file=sys.stderr)
             continue
-        for t, part in decouper(titre_doc, texte):
-            suffixe = "" if t == titre_doc else "-" + t.rsplit("(", 1)[1].rstrip(")").replace("/", "sur")
+        parties = decouper(titre_doc, texte)
+        for i, (t, part) in enumerate(parties):
+            suffixe = "" if len(parties) == 1 else f"-{i + 1}"
             docs.append({
                 "id": f"lf-{slug}{suffixe}",
                 "titre": t,
@@ -349,11 +359,10 @@ def construire_packs_codes(dossier):
 TNC = [
     {
         "pack": "incendie-erp-arretes",
-        "titre_pack": "Sécurité incendie ERP — règlement (arrêtés)",
-        "description": "Arrêté du 25 juin 1980 (règlement de sécurité contre l'incendie dans les ERP, dispositions générales) et arrêté du 22 juin 1990 (5e catégorie — petits établissements).",
+        "titre_pack": "Sécurité incendie ERP — règlement complet (volumineux)",
+        "description": "Règlement de sécurité contre l'incendie dans les ERP, consolidé (arrêté du 25 juin 1980) : dispositions générales (GN, CO, AM, DF, MS…), 5e catégorie (PE) et établissements spéciaux (chapiteaux, gares, parcs de stationnement…). ~1,2 M de caractères : cochez la partie utile à la question.",
         "textes": [
-            (r"^Arrêté du 25 juin 1980\b.*sécurité", "arrete-1980", "Arrêté du 25 juin 1980 — Règlement de sécurité incendie ERP (dispositions générales)"),
-            (r"^Arrêté du 22 juin 1990\b.*(sécurité|5e|cinquième)", "arrete-1990", "Arrêté du 22 juin 1990 — ERP de 5e catégorie (petits établissements)"),
+            (r"^Arrêté du 25 juin 1980\b.*sécurité", "arrete-1980", "Règlement sécurité incendie ERP (arr. 25 juin 1980)"),
         ],
     },
     {
@@ -368,10 +377,10 @@ TNC = [
     {
         "pack": "profession-architecte",
         "titre_pack": "Profession — loi de 1977 & déontologie",
-        "description": "Loi n°77-2 du 3 janvier 1977 sur l'architecture (recours obligatoire, seuils) et décret n°80-217 du 20 mars 1980 portant code des devoirs professionnels (déontologie) des architectes.",
+        "description": "Loi n°77-2 du 3 janvier 1977 sur l'architecture (recours obligatoire, seuils) et code de déontologie des architectes (décret n°80-217).",
         "textes": [
-            (r"77-2 du 3 janvier 1977 sur l'architecture", "loi-1977", "Loi n°77-2 du 3 janvier 1977 sur l'architecture"),
-            (r"80-217 du 20 mars 1980", "deonto-1980", "Décret n°80-217 — Code des devoirs professionnels des architectes (déontologie)"),
+            # le code de déontologie est ajouté par main() depuis sa version code consolidé
+            (r"^Loi n° ?77-2 du 3 janvier 1977", "loi-1977", "Loi n°77-2 du 3 janvier 1977 sur l'architecture"),
         ],
     },
 ]
@@ -407,10 +416,18 @@ def compter_articles(dossier_texte):
     return n
 
 
-def construire_packs_tnc(dossier_dump, version_dump):
-    print("indexation des textes non codifiés…")
-    index = indexer_tnc(dossier_dump)
-    print(f"  {len(index)} textes en vigueur indexés")
+def construire_packs_tnc(dossier_dump, version_dump, cache_index=None):
+    if cache_index and os.path.exists(cache_index):
+        with open(cache_index, encoding="utf-8") as f:
+            index = [tuple(e) for e in json.load(f)]
+        print(f"  index chargé depuis le cache ({len(index)} textes)")
+    else:
+        print("indexation des textes non codifiés…")
+        index = indexer_tnc(dossier_dump)
+        print(f"  {len(index)} textes en vigueur indexés")
+        if cache_index:
+            with open(cache_index, "w", encoding="utf-8") as f:
+                json.dump([list(e) for e in index], f)
     packs = []
     for entree in TNC:
         docs = []
@@ -437,8 +454,9 @@ def construire_packs_tnc(dossier_dump, version_dump):
                 if noms:
                     legitext = noms[0]
             url = f"https://www.legifrance.gouv.fr/loda/id/{legitext}/" if legitext else "https://www.legifrance.gouv.fr/"
-            for t, part in decouper(titre, texte):
-                suffixe = "" if t == titre else "-" + t.rsplit("(", 1)[1].rstrip(")").replace("/", "sur")
+            parties = decouper(titre, texte)
+            for i, (t, part) in enumerate(parties):
+                suffixe = "" if len(parties) == 1 else f"-{i + 1}"
                 docs.append({
                     "id": f"lf-{slug}{suffixe}",
                     "titre": t,
@@ -465,12 +483,21 @@ def main():
     ap.add_argument("--codes", required=True, help="dossier des XML codes.droit.org")
     ap.add_argument("--dump", help="dossier d'extraction (partielle) du dump LEGI DILA")
     ap.add_argument("--version-dump", default="?", help="date de consolidation du dump (AAAA-MM-JJ)")
+    ap.add_argument("--index-cache", help="fichier JSON où (re)lire l'index des titres TNC")
     ap.add_argument("--sortie", default="public/corpus")
     args = ap.parse_args()
 
     packs = construire_packs_codes(args.codes)
     if args.dump:
-        packs += construire_packs_tnc(args.dump, args.version_dump)
+        packs_tnc = construire_packs_tnc(args.dump, args.version_dump, args.index_cache)
+        # le code de déontologie est un code consolidé (pas un TNC) : il rejoint le pack profession
+        docs_deonto, _v = docs_code(args.codes, "Code de déontologie des architectes", "LEGITEXT000006074232", [
+            ("deonto", "Code de déontologie des architectes (décret n°80-217)", r".", None),
+        ])
+        for p in packs_tnc:
+            if p["id"] == "profession-architecte":
+                p["docs"] += docs_deonto
+        packs += packs_tnc
 
     os.makedirs(args.sortie, exist_ok=True)
     index = []

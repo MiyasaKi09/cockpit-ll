@@ -351,17 +351,19 @@ function projetsAvecChantier(state: AppState): Projet[] {
   )
 }
 
-function BarreChantier({ ligne, fenetre: f }: { ligne: LigneChantier; fenetre: Fenetre }) {
+function BarreChantier({ ligne, fenetre: f, today }: { ligne: LigneChantier; fenetre: Fenetre; today: string }) {
   const { marche: m } = ligne
   const debut = m.dateDebut || m.dateFin!
   const fin = m.dateFin || m.dateDebut!
   if (fin < f.debut || debut >= f.fin) return <div style={{ height: 26 }} />
   const gauche = pos(f, debut)
   const largeur = Math.max(1.4, pos(f, addDays(fin, 1)) - gauche)
+  // pilotage : fin contractuelle dépassée sans réception prononcée = lot en retard
+  const retard = Boolean(m.actif && m.dateFin && m.dateFin < today && !m.dateReception)
   return (
     <div style={{ position: 'relative', height: 26, background: 'var(--bg-soft, #f6f7fa)', borderRadius: 5 }}>
       <div
-        title={`${m.lot} — ${m.entreprise}\n${fmtDate(debut)} → ${fmtDate(fin)}`}
+        title={`${m.lot} — ${m.entreprise}\n${fmtDate(debut)} → ${fmtDate(fin)}${m.dateReception ? `\nRéception : ${fmtDate(m.dateReception)}` : retard ? '\nEN RETARD — réception non prononcée' : ''}`}
         style={{
           position: 'absolute',
           left: `${gauche}%`,
@@ -369,6 +371,7 @@ function BarreChantier({ ligne, fenetre: f }: { ligne: LigneChantier; fenetre: F
           top: 3,
           bottom: 3,
           background: ligne.couleur,
+          border: retard ? '2px solid var(--danger)' : 'none',
           borderRadius: 4,
           color: '#fff',
           fontSize: 10,
@@ -381,6 +384,21 @@ function BarreChantier({ ligne, fenetre: f }: { ligne: LigneChantier; fenetre: F
       >
         {m.entreprise}
       </div>
+      {m.dateReception && m.dateReception >= f.debut && m.dateReception < f.fin && (
+        <div
+          title={`Réception le ${fmtDate(m.dateReception)}`}
+          style={{
+            position: 'absolute',
+            left: `calc(${pos(f, m.dateReception)}% - 5px)`,
+            top: 1,
+            width: 0,
+            height: 0,
+            borderLeft: '6px solid transparent',
+            borderRight: '6px solid transparent',
+            borderTop: '11px solid var(--ok)',
+          }}
+        />
+      )}
     </div>
   )
 }
@@ -839,10 +857,11 @@ function ouvrirChargePDF(state: AppState, debutLundi: string, nbSemaines: number
 
 type Mode = 'phases' | 'chantier' | 'charge'
 
-function GanttEtCharge({ vue }: { vue: 'gantt' | 'charge' }) {
+function GanttEtCharge({ vue }: { vue: 'etudes' | 'chantier' | 'charge' }) {
   const { state } = useStore()
   const today = useToday()
-  const [mode, setMode] = useState<Mode>(vue === 'charge' ? 'charge' : 'phases')
+  /** une vue = un onglet — plus de bascule cachée à l'intérieur */
+  const mode: Mode = vue === 'etudes' ? 'phases' : vue
   const [filtre, setFiltre] = useState('')
   const [debutF, setDebutF] = useState(() => addMonths(debutMois(todayISO()), -1))
   const [nbMois, setNbMois] = useState(12)
@@ -878,11 +897,6 @@ function GanttEtCharge({ vue }: { vue: 'gantt' | 'charge' }) {
     else ouvrirChargePDF(state, debutLundi, nbSemaines, today)
   }
 
-  const changerMode = (m: Mode) => {
-    setMode(m)
-    setFiltre('')
-  }
-
   const vide =
     mode === 'phases'
       ? projets.length === 0
@@ -898,23 +912,13 @@ function GanttEtCharge({ vue }: { vue: 'gantt' | 'charge' }) {
     </Btn>
   )
 
+  const lotsEnRetard =
+    mode === 'chantier'
+      ? lignesCh.filter((l) => l.marche.actif && l.marche.dateFin && l.marche.dateFin < today && !l.marche.dateReception)
+      : []
+
   return (
     <>
-      {vue === 'gantt' && (
-        <div className="toolbar" style={{ marginBottom: 4 }}>
-          <span style={{ display: 'inline-flex', gap: 4 }}>
-            <button className={`btn btn-small ${mode === 'phases' ? 'btn-primary' : ''}`} onClick={() => changerMode('phases')}>
-              Phases (conception)
-            </button>
-            <button className={`btn btn-small ${mode === 'chantier' ? 'btn-primary' : ''}`} onClick={() => changerMode('chantier')}>
-              Chantier (entreprises)
-            </button>
-          </span>
-          <span className="spacer" />
-          {boutonPDF}
-        </div>
-      )}
-
       <div className="toolbar">
         <Btn onClick={() => setDebutF(addMonths(debutF, -1))}>‹</Btn>
         <Btn onClick={() => setDebutF(addMonths(debutF, 1))}>›</Btn>
@@ -937,13 +941,20 @@ function GanttEtCharge({ vue }: { vue: 'gantt' | 'charge' }) {
         <span className="muted small">
           {fmtDate(f.debut)} → {fmtDate(addDays(f.fin, -1))}
         </span>
-        {vue === 'charge' && (
-          <>
-            <span className="spacer" />
-            {boutonPDF}
-          </>
-        )}
+        <span className="spacer" />
+        {boutonPDF}
       </div>
+
+      {lotsEnRetard.length > 0 && (
+        <div className="pill-note" style={{ marginBottom: 10, borderColor: 'var(--danger)' }}>
+          <strong>En retard</strong> — {lotsEnRetard.length} lot{lotsEnRetard.length > 1 ? 's' : ''} au-delà de la fin
+          contractuelle sans réception :{' '}
+          {lotsEnRetard
+            .map((l) => `${l.marche.lot} (${l.marche.entreprise}, fin ${fmtDate(l.marche.dateFin)})`)
+            .join(' · ')}
+          . Prononcer la réception (fiche projet → Chantier) ou recaler les dates.
+        </div>
+      )}
 
       <Card>
         {mode === 'charge' ? (
@@ -1016,7 +1027,7 @@ function GanttEtCharge({ vue }: { vue: 'gantt' | 'charge' }) {
                   </div>
                 </div>
                 <div style={{ position: 'relative' }}>
-                  <BarreChantier ligne={l} fenetre={f} />
+                  <BarreChantier ligne={l} fenetre={f} today={today} />
                   {today >= f.debut && today < f.fin && (
                     <div style={{ position: 'absolute', left: `${pos(f, today)}%`, top: -3, bottom: -3, width: 2, background: 'var(--danger)' }} title={`aujourd'hui — ${fmtDate(today)}`} />
                   )}
@@ -1049,24 +1060,28 @@ function GanttEtCharge({ vue }: { vue: 'gantt' | 'charge' }) {
 
 const ONGLETS_PLANNING: { id: string; label: string }[] = [
   { id: 'echeances', label: 'Échéances' },
-  { id: 'gantt', label: 'Gantt' },
-  { id: 'charge', label: 'Charge' },
+  { id: 'etudes', label: 'Études' },
+  { id: 'chantier', label: 'Chantier / OPC' },
+  { id: 'charge', label: 'Charge & absences' },
 ]
 
-export default function Planning({ ongletInitial = 'gantt' }: { ongletInitial?: string }) {
+export default function Planning({ ongletInitial = 'etudes' }: { ongletInitial?: string }) {
   const route = useRoute()
-  const segment = route[0] === 'planning' ? route[1] : ongletInitial
-  const onglet = ONGLETS_PLANNING.some((o) => o.id === segment) ? segment! : 'gantt'
+  let segment = route[0] === 'planning' ? route[1] : ongletInitial
+  // compatibilité : l'ancien onglet « gantt » (bascule cachée) devient « études »
+  if (segment === 'gantt') segment = 'etudes'
+  const onglet = ONGLETS_PLANNING.some((o) => o.id === segment) ? segment! : 'etudes'
 
   return (
     <Page
       titre="Planning"
-      sousTitre="Échéances, Gantt phases/chantier, plan de charge. La ligne rouge = aujourd'hui."
+      sousTitre="Une vue par usage : échéances datées, phases d'études, pilotage du chantier lot par lot, charge de l'équipe. La ligne rouge = aujourd'hui."
     >
       <Tabs tabs={ONGLETS_PLANNING} actif={onglet} onSelect={(id) => navigate(`/planning/${id}`)} />
 
       {onglet === 'echeances' && <EcheancesContenu />}
-      {onglet === 'gantt' && <GanttEtCharge vue="gantt" />}
+      {onglet === 'etudes' && <GanttEtCharge vue="etudes" />}
+      {onglet === 'chantier' && <GanttEtCharge vue="chantier" />}
       {onglet === 'charge' && <GanttEtCharge vue="charge" />}
     </Page>
   )

@@ -114,15 +114,17 @@ export async function testerEcriture(racine: FSDirHandle): Promise<void> {
   if (relu !== 'cockpit-ok') throw new Error('Le fichier relu diffère de ce qui a été écrit.')
 }
 
-/** liste les fichiers de <racine>/<projet>/<sousDossier> (dossier absent → liste vide) —
- *  permet de lire le contenu du Drive (ex. les CCTP déposés dans 04_PRO-DCE) */
+/** liste les fichiers de <racine>/<dossierProjet>/<sousDossier> (dossier absent →
+ *  liste vide) — lit le contenu du Drive (ex. les CCTP déposés dans 04_PRO-DCE).
+ *  `nomDossierProjet` = slugProjet(p) : passer la chaîne évite de dépendre de
+ *  l'objet Projet (identité instable côté React). */
 export async function listerFichiersProjet(
   racine: FSDirHandle,
-  p: Projet,
+  nomDossierProjet: string,
   sousDossier: string,
 ): Promise<FSFileHandle[]> {
   if (!(await verifierPermission(racine))) throw new Error('Accès au dossier refusé.')
-  const dossierProjet = await racine.getDirectoryHandle(slugProjet(p), { create: false }).catch(() => null)
+  const dossierProjet = await racine.getDirectoryHandle(nomDossierProjet, { create: false }).catch(() => null)
   if (!dossierProjet) return []
   const sous = await dossierProjet.getDirectoryHandle(sousDossier, { create: false }).catch(() => null)
   if (!sous) return []

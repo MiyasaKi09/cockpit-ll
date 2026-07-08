@@ -21,30 +21,32 @@ async function textePdfLignes(fichier: File): Promise<string> {
   const worker = (await import('pdfjs-dist/build/pdf.worker.min.mjs?url')).default
   pdfjs.GlobalWorkerOptions.workerSrc = worker
   const pdf = await pdfjs.getDocument({ data: await fichier.arrayBuffer() }).promise
-  const pages: string[] = []
-  for (let i = 1; i <= pdf.numPages; i++) {
-    const page = await pdf.getPage(i)
-    const contenu = await page.getTextContent()
-    const lignes: string[] = []
-    let ligne = ''
-    let dernierY: number | null = null
-    for (const it of contenu.items) {
-      if (!('str' in it)) continue
-      const y = Array.isArray(it.transform) ? (it.transform[5] as number) : null
-      if (dernierY !== null && y !== null && Math.abs(y - dernierY) > 2 && ligne.trim()) {
-        lignes.push(ligne)
-        ligne = ''
+  // pages indépendantes : extraction en parallèle (un CCTP fait souvent 100+ pages)
+  const pages = await Promise.all(
+    Array.from({ length: pdf.numPages }, async (_, idx) => {
+      const page = await pdf.getPage(idx + 1)
+      const contenu = await page.getTextContent()
+      const lignes: string[] = []
+      let ligne = ''
+      let dernierY: number | null = null
+      for (const it of contenu.items) {
+        if (!('str' in it)) continue
+        const y = Array.isArray(it.transform) ? (it.transform[5] as number) : null
+        if (dernierY !== null && y !== null && Math.abs(y - dernierY) > 2 && ligne.trim()) {
+          lignes.push(ligne)
+          ligne = ''
+        }
+        ligne += (ligne && it.str ? ' ' : '') + it.str
+        if (it.hasEOL) {
+          lignes.push(ligne)
+          ligne = ''
+        }
+        if (y !== null) dernierY = y
       }
-      ligne += (ligne && it.str ? ' ' : '') + it.str
-      if (it.hasEOL) {
-        lignes.push(ligne)
-        ligne = ''
-      }
-      if (y !== null) dernierY = y
-    }
-    if (ligne.trim()) lignes.push(ligne)
-    pages.push(lignes.join('\n'))
-  }
+      if (ligne.trim()) lignes.push(ligne)
+      return lignes.join('\n')
+    }),
+  )
   return pages.join('\n\n').replace(/[ \t]+/g, ' ').trim()
 }
 
@@ -73,6 +75,10 @@ const RE_LOT = /^(?:C\.?C\.?T\.?P\.?\s*[-–—:]?\s*)?LOT\s*(?:N\s*[°ºo]\s*)?
 
 /** article numéroté : « 2.3.1 Maçonnerie de soubassement » (≥ 2 niveaux) */
 const RE_ARTICLE = /^(\d{1,2}(?:\.\d{1,3}){1,4})\.?\s+(\S.{1,149})$/
+
+/** une « désignation » qui commence par une unité de mesure est en réalité
+ *  une phrase coupée par l'extraction PDF (ex. « 2.50 m de hauteur… ») */
+const RE_UNITE = /^(m|cm|mm|ml|m2|m²|m3|m³|kg|t|l|u|h|j|%|€)\b/i
 
 /** retire les pointillés de sommaire et le numéro de page en fin de ligne */
 function nettoyerLigne(brute: string): string {
@@ -131,6 +137,9 @@ export function analyserCCTP(texte: string, nomFichier?: string): LotAnalyse[] {
   const vusParLot: Set<string>[] = []
   let courant: LotAnalyse | null = null
   let vus: Set<string> = new Set()
+  // lot « fourre-tout » ouvert avant le premier en-tête (sommaire général) :
+  // il est écarté dès qu'au moins un lot nommé existe
+  let fourreTout: LotAnalyse | null = null
 
   const ouvrirLot = (numero: string, intitule: string) => {
     // le même en-tête revient à chaque page (en-têtes/pieds de page) : on regroupe
@@ -161,10 +170,12 @@ export function analyserCCTP(texte: string, nomFichier?: string): LotAnalyse[] {
     if (!article) continue
     const designation = article[2].replace(/\s+/g, ' ').trim()
     if (!designationPlausible(designation)) continue
+    if (RE_UNITE.test(designation)) continue
     if (!courant) {
       // document sans en-tête de lot : un seul lot, à nommer dans l'aperçu
       const intitule = (nomFichier || 'CCTP importé').replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ').trim()
       ouvrirLot('', intitule)
+      fourreTout = courant
     }
     // sommaire + corps : le même numéro apparaît deux fois — le corps (sans
     // numéro de page en fin de ligne) remplace la version sommaire
@@ -180,16 +191,24 @@ export function analyserCCTP(texte: string, nomFichier?: string): LotAnalyse[] {
   }
 
   for (const lot of lots) {
+    // un chapitre qui a des sous-articles n'est pas un ouvrage : on garde les feuilles
+    const parents = new Set<string>()
+    for (const e of lot.elements) {
+      if (!e.article) continue
+      const segments = e.article.split('.')
+      for (let i = 1; i < segments.length; i++) parents.add(segments.slice(0, i).join('.'))
+    }
     lot.elements = lot.elements
-      // un chapitre qui a des sous-articles n'est pas un ouvrage : on garde les feuilles
-      .filter(
-        (e) => !lot.elements.some((x) => x !== e && x.article && e.article && x.article.startsWith(e.article + '.')),
-      )
+      .filter((e) => !e.article || !parents.has(e.article))
       // les articles de généralités (objet, normes, garanties…) n'entrent pas au planning
-      .filter((e) => !GENERALITES.has(fold(e.designation).replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ')))
+      .filter((e) => !GENERALITES.has(fold(e.designation).replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim()))
   }
 
-  return lots.filter((l) => l.elements.length > 0)
+  let resultat = lots.filter((l) => l.elements.length > 0)
+  // un sommaire général avant le premier en-tête de lot ne doit pas doublonner
+  // les vrais lots : le fourre-tout s'efface dès qu'un lot nommé existe
+  if (fourreTout && resultat.length > 1) resultat = resultat.filter((l) => l !== fourreTout)
+  return resultat
 }
 
 // ---------- secours : contrat JSON pour un Projet Claude ----------
@@ -280,7 +299,13 @@ export function rapprocherMarcheLot(
   }
   const intit = fold(lot.intitule)
   if (intit.length < 4) return null
-  return marches.find((m) => fold(m.lot).includes(intit) || intit.includes(fold(m.lot.replace(/^lot\s*\S*\s*[-–—:]?\s*/i, '')))) || null
+  return (
+    marches.find((m) => {
+      const reste = fold(m.lot.replace(/^lot\s*\S*\s*[-–—:]?\s*/i, ''))
+      // « Lot 02 » sans intitulé donne un reste vide : includes('') matcherait tout
+      return fold(m.lot).includes(intit) || (reste.length >= 4 && intit.includes(reste))
+    }) || null
+  )
 }
 
 /** fenêtre de dates d'un lot : intervention du marché rattaché, sinon phase DET */
@@ -298,6 +323,21 @@ export function fenetreLot(
 }
 
 // ---------- génération des tâches datées du planning travaux ----------
+
+/** répartition séquentielle de n créneaux sur la fenêtre [debut, fin] —
+ *  la seule « intelligence » de datation, partagée par la génération et
+ *  la replanification */
+export function repartirDates(fenetre: { debut: string; fin: string }, n: number): { debut: string; fin: string }[] {
+  if (n <= 0) return []
+  const jours = diffDays(fenetre.debut, fenetre.fin) + 1
+  const pas = Math.max(1, Math.floor(jours / n))
+  return Array.from({ length: n }, (_, i) => {
+    const debut = addDays(fenetre.debut, Math.min(i * pas, jours - 1))
+    let fin = i === n - 1 ? fenetre.fin : addDays(fenetre.debut, Math.min((i + 1) * pas - 1, jours - 1))
+    if (fin < debut) fin = debut
+    return { debut, fin }
+  })
+}
 
 /**
  * Transforme les éléments d'un lot DCE en tâches datées : répartition
@@ -318,17 +358,11 @@ export function genererTaches(
   const aPlanifier = lot.elements.filter((e) => !dejaVus.has(e.id))
   const fenetre = fenetreLot(lot, marches, projet)
   const libelle = libelleLot(lot)
+  const creneaux = fenetre ? repartirDates(fenetre, aPlanifier.length) : []
 
   const taches: TacheChantier[] = aPlanifier.map((e, i) => {
-    let debut: string | null = null
-    let fin: string | null = null
-    if (fenetre) {
-      const jours = diffDays(fenetre.debut, fenetre.fin) + 1
-      const pas = Math.max(1, Math.floor(jours / aPlanifier.length))
-      debut = addDays(fenetre.debut, Math.min(i * pas, jours - 1))
-      fin = i === aPlanifier.length - 1 ? fenetre.fin : addDays(fenetre.debut, Math.min((i + 1) * pas - 1, jours - 1))
-      if (fin < debut) fin = debut
-    }
+    const debut = creneaux[i]?.debut ?? null
+    const fin = creneaux[i]?.fin ?? null
     return {
       id: uid('tache'),
       projetId: projet.id,

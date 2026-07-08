@@ -144,6 +144,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   // --- Synchronisation Supabase (opt-in) — branchée DERRIÈRE la persistance ---
   const appliquerDistant = useRef(false) // anti-écho B : une écriture distante ne se re-pousse pas
   const refPush = useRef<AppState | null>(null) // baseline + garde StrictMode
+  const refEtat = useRef(state) // dernier état local (fusion des réceptions distantes)
+  refEtat.current = state
   const sync = state.settings.sync
 
   // (a) connexion + temps réel. Deps PRIMITIVES : ne se relance qu'au changement de config.
@@ -157,8 +159,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         if (!vivant) return
         arreter = demarrerRealtime((next) => {
           appliquerDistant.current = true
+          // un poste pas encore à jour envoie un document qui ignore les
+          // collections récentes : on garde alors les données locales au lieu
+          // de les effacer (schéma additif — v10 → v11 : lotsDce, tachesChantier)
+          const distant = { ...next }
+          const local = refEtat.current
+          if (!Array.isArray(distant.lotsDce)) distant.lotsDce = local.lotsDce
+          if (!Array.isArray(distant.tachesChantier)) distant.tachesChantier = local.tachesChantier
           // re-fusionne la config machine-locale (jamais synchronisée)
-          replace({ ...next, settings: { ...next.settings, sync } })
+          replace({ ...distant, settings: { ...distant.settings, sync } })
         })
       } catch {
         // mauvaise config / hors-ligne → mode localStorage pur (jamais bloquant)

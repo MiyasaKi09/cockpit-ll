@@ -22,21 +22,22 @@ import {
   toast,
   useToday,
 } from '../ui'
-import { diffDays, fmtDate, todayISO, uid } from '../util'
+import { diffDays, fmtDate, fold, todayISO, uid } from '../util'
 import { couleurPhase } from './Planning'
 
 const NOMS_MOIS = ['janv.', 'févr.', 'mars', 'avr.', 'mai', 'juin', 'juil.', 'août', 'sept.', 'oct.', 'nov.', 'déc.']
 
-const LIBELLE_STATUT_TACHE: Record<StatutTache, { label: string; tone: 'muted' | 'info' | 'ok' }> = {
-  prevu: { label: 'prévu', tone: 'muted' },
-  en_cours: { label: 'en cours', tone: 'info' },
-  fait: { label: 'fait', tone: 'ok' },
+const LIBELLE_STATUT_TACHE: Record<StatutTache, string> = {
+  prevu: 'prévu',
+  en_cours: 'en cours',
+  fait: 'fait',
 }
 
 function couleurTache(t: TacheChantier, today: string): string {
   if (t.statut === 'fait') return 'var(--ok)'
-  if (t.statut === 'en_cours') return 'var(--warn)'
+  // le retard prime : une tâche dépassée non faite est rouge, même « en cours »
   if (t.fin && t.fin < today) return 'var(--danger)'
+  if (t.statut === 'en_cours') return 'var(--warn)'
   return 'var(--accent)'
 }
 
@@ -95,7 +96,7 @@ export default function ProjetPlanning({ projet: p }: { projet: Projet }) {
             élément prévu au DCE se poser sur le planning.
           </EmptyState>
         </Card>
-        <CarteTaches projet={p} />
+        <CarteTaches projet={p} taches={taches} groupes={groupes} />
       </>
     )
   }
@@ -242,7 +243,7 @@ export default function ProjetPlanning({ projet: p }: { projet: Projet }) {
                     return (
                       <div
                         key={t.id}
-                        title={`${t.designation} · ${fmtDate(t.debut)} → ${fmtDate(t.fin)} (${LIBELLE_STATUT_TACHE[t.statut].label})`}
+                        title={`${t.designation} · ${fmtDate(t.debut)} → ${fmtDate(t.fin)} (${LIBELLE_STATUT_TACHE[t.statut]})`}
                         style={{
                           position: 'absolute',
                           left: `${gauche}%`,
@@ -281,7 +282,7 @@ export default function ProjetPlanning({ projet: p }: { projet: Projet }) {
         </p>
       </Card>
 
-      <CarteTaches projet={p} />
+      <CarteTaches projet={p} taches={taches} groupes={groupes} />
     </>
   )
 }
@@ -290,14 +291,20 @@ export default function ProjetPlanning({ projet: p }: { projet: Projet }) {
 // Planning travaux détaillé — chaque élément du DCE, daté ici
 // ============================================================
 
-function CarteTaches({ projet: p }: { projet: Projet }) {
+function CarteTaches({
+  projet: p,
+  taches,
+  groupes,
+}: {
+  projet: Projet
+  /** tâches et groupes calculés par le parent — mêmes données que la frise */
+  taches: TacheChantier[]
+  groupes: string[]
+}) {
   const { state, update, replace } = useStore()
   const today = useToday()
   const [filtre, setFiltre] = useState('')
   const [modalAjout, setModalAjout] = useState(false)
-
-  const taches = state.tachesChantier.filter((t) => t.projetId === p.id)
-  const groupes = [...new Set(taches.map((t) => t.lot))].sort((a, b) => a.localeCompare(b))
 
   const aDater = taches.filter((t) => !t.debut || !t.fin).length
   const enRetard = taches.filter((t) => t.statut !== 'fait' && t.fin && t.fin < today).length
@@ -349,11 +356,7 @@ function CarteTaches({ projet: p }: { projet: Projet }) {
         {groupes.map((g) => {
           const duGroupe = taches
             .filter((t) => t.lot === g)
-            .filter(
-              (t) =>
-                !filtre.trim() ||
-                (t.designation + ' ' + t.lot).toLowerCase().includes(filtre.trim().toLowerCase()),
-            )
+            .filter((t) => !filtre.trim() || fold(t.designation + ' ' + t.lot).includes(fold(filtre)))
             .sort((a, b) => (a.debut || '9999').localeCompare(b.debut || '9999') || a.designation.localeCompare(b.designation))
           if (duGroupe.length === 0) return null
           return (
@@ -370,24 +373,32 @@ function CarteTaches({ projet: p }: { projet: Projet }) {
                   <tr key={t.id}>
                     <td style={{ maxWidth: 380 }}>
                       {t.designation}
-                      {!t.debut && !t.fin && <> <Badge tone="warn">à dater</Badge></>}
+                      {(!t.debut || !t.fin) && <> <Badge tone="warn">à dater</Badge></>}
                       {retard && <> <Badge tone="danger">en retard</Badge></>}
                     </td>
                     <td style={{ width: 140 }}>
-                      <DateInput value={t.debut} onChange={(v) => maj(t.id, (x) => { x.debut = v })} />
+                      <DateInput
+                        value={t.debut}
+                        onChange={(v) => maj(t.id, (x) => {
+                          x.debut = v
+                          if (v && x.fin && x.fin < v) x.fin = v
+                        })}
+                      />
                     </td>
                     <td style={{ width: 140 }}>
-                      <DateInput value={t.fin} onChange={(v) => maj(t.id, (x) => { x.fin = v })} />
+                      <DateInput
+                        value={t.fin}
+                        onChange={(v) => maj(t.id, (x) => {
+                          x.fin = v
+                          if (v && x.debut && x.debut > v) x.debut = v
+                        })}
+                      />
                     </td>
                     <td style={{ width: 120 }}>
                       <Select
                         value={t.statut}
                         onChange={(v) => maj(t.id, (x) => { x.statut = v as StatutTache })}
-                        options={[
-                          { value: 'prevu', label: 'prévu' },
-                          { value: 'en_cours', label: 'en cours' },
-                          { value: 'fait', label: 'fait' },
-                        ]}
+                        options={Object.entries(LIBELLE_STATUT_TACHE).map(([value, label]) => ({ value, label }))}
                       />
                     </td>
                     <td className="right" style={{ width: 70 }}>

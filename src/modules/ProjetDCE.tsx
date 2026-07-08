@@ -28,11 +28,13 @@ import { fmtDate, fold, todayISO, uid } from '../util'
 import {
   analyserCCTP,
   extraireTexteFichier,
+  fenetreLot,
   genererTaches,
   libelleLot,
   parseRetourCCTP,
   promptExtractionCCTP,
   rapprocherMarcheLot,
+  repartirDates,
   versElements,
   type LotAnalyse,
 } from '../cctp'
@@ -50,6 +52,12 @@ import {
 
 /** sous-dossier normalisé du DCE dans l'arborescence projet */
 const DOSSIER_DCE = '04_PRO-DCE'
+
+/** numéro de lot normalisé : « 2 » et « 02 » désignent le même lot */
+function numeroNormalise(n: string): string {
+  const t = n.trim()
+  return /^\d+$/.test(t) ? t.padStart(2, '0') : t
+}
 
 // ============================================================
 // Aperçu avant import — l'humain valide ce que le site a compris
@@ -96,7 +104,7 @@ function ModalApercu({
       const lot: LotDCE = {
         id: uid('lotdce'),
         projetId: p.id,
-        numero: l.numero.trim(),
+        numero: numeroNormalise(l.numero),
         intitule: l.intitule.trim() || 'Lot sans intitulé',
         marcheId: l.marcheId || null,
         fichier: l.fichier,
@@ -208,6 +216,9 @@ function CarteImportCCTP({ projet: p }: { projet: Projet }) {
     if (supporteFS) void lireRacine().then(setRacine)
   }, [])
 
+  // le scan ne dépend que du dossier visé (slug) — pas de l'identité de
+  // l'objet projet, qui change à chaque écriture du store (re-scan inutile)
+  const slug = slugProjet(p)
   const scanner = useCallback(async () => {
     if (!racine) return
     try {
@@ -219,11 +230,11 @@ function CarteImportCCTP({ projet: p }: { projet: Projet }) {
         return
       }
       setPermissionRequise(false)
-      setFichiersDrive(await listerFichiersProjet(racine, p, DOSSIER_DCE))
+      setFichiersDrive(await listerFichiersProjet(racine, slug, DOSSIER_DCE))
     } catch (e) {
       setMessage(`Lecture du Drive impossible : ${e instanceof Error ? e.message : String(e)}`)
     }
-  }, [racine, p])
+  }, [racine, slug])
 
   useEffect(() => {
     void scanner()
@@ -231,7 +242,10 @@ function CarteImportCCTP({ projet: p }: { projet: Projet }) {
 
   const dejaImporte = (l: LotAnalyse): boolean =>
     state.lotsDce.some(
-      (x) => x.projetId === p.id && x.numero === (l.numero || '').trim() && fold(x.intitule) === fold(l.intitule),
+      (x) =>
+        x.projetId === p.id &&
+        numeroNormalise(x.numero) === numeroNormalise(l.numero || '') &&
+        fold(x.intitule) === fold(l.intitule),
     )
 
   const ouvrirApercu = (lots: LotAnalyse[], source: 'analyse' | 'claude', fichier?: string) => {
@@ -555,6 +569,11 @@ function CarteLotsDCE({ projet: p }: { projet: Projet }) {
       }))
     )
       return
+    const fenetre = fenetreLot(state.lotsDce.find((x) => x.id === lot.id) || lot, state.marches, p)
+    if (!fenetre) {
+      toast('Pas de fenêtre de dates : datez le marché rattaché (onglet Chantier) ou la phase DET.', { tone: 'warn' })
+      return
+    }
     update((d) => {
       const l = d.lotsDce.find((x) => x.id === lot.id)
       if (!l) return
@@ -562,15 +581,10 @@ function CarteLotsDCE({ projet: p }: { projet: Projet }) {
       const taches = d.tachesChantier
         .filter((t) => t.lotDceId === lot.id)
         .sort((a, b) => (ordre.get(a.elementId || '') ?? 999) - (ordre.get(b.elementId || '') ?? 999))
-      const modele = genererTaches(
-        { ...p, phases: d.projets.find((x) => x.id === p.id)?.phases || p.phases },
-        { ...l, elements: taches.map((t, i) => ({ id: t.elementId || `t-${i}`, designation: t.designation })) },
-        d.marches,
-        [],
-      )
+      const creneaux = repartirDates(fenetre, taches.length)
       taches.forEach((t, i) => {
-        t.debut = modele.taches[i]?.debut ?? t.debut
-        t.fin = modele.taches[i]?.fin ?? t.fin
+        t.debut = creneaux[i].debut
+        t.fin = creneaux[i].fin
       })
     })
     toast('Dates replanifiées sur la fenêtre du lot.', { tone: 'ok' })
@@ -600,7 +614,7 @@ function CarteLotsDCE({ projet: p }: { projet: Projet }) {
       d.lotsDce.push({
         id: uid('lotdce'),
         projetId: p.id,
-        numero: numero.trim(),
+        numero: numeroNormalise(numero),
         intitule: intitule.trim(),
         marcheId: null,
         source: 'manuel',

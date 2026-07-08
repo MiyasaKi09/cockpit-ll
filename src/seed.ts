@@ -875,17 +875,23 @@ export function seedState(): AppState {
         id: 'r-p03-18',
         projetId: 'P03',
         date: '2026-06-24',
+        heure: '14:00',
         titre: 'Réunion de chantier n°18',
         participants: 'Commune de Breteuil (MOA) · SARL Martin BTP · Charpentes Leroy · Bureau de contrôle',
         statut: 'diffuse',
-        notes:
-          'EXEMPLE — CR diffusé : dallage RDC réceptionné ; charpente : levage semaine 27 confirmé ; ' +
-          'bureau de contrôle relancé sur le ferraillage du préau ; prochaine réunion le 01/07.',
+        cr:
+          'Présents :\n- Commune de Breteuil (M. le Maire adjoint)\n- SARL Martin BTP (M. Martin)\n- Charpentes Leroy (M. Leroy)\n\n' +
+          'Avancement général :\nDallage RDC coulé et réceptionné. Charpente : levage confirmé semaine 27.\n\n' +
+          'Points par lot :\n- [Lot 01 — Gros œuvre] Reprise d’enduit sur pignon nord → SARL Martin BTP (pour le 03/07)\n- [Lot 02 — Charpente] Plan de levage à diffuser → Charpentes Leroy (pour le 30/06)\n\n' +
+          'En attente :\n- Avis du bureau de contrôle sur le ferraillage du préau (relancé)\n\n' +
+          'Prochaine réunion : 01/07 à 14 h 30',
+        notes: 'EXEMPLE.',
       },
       {
         id: 'r-p03-19',
         projetId: 'P03',
         date: '2026-07-01',
+        heure: '14:30',
         titre: 'Réunion de chantier n°19',
         participants: 'Commune de Breteuil (MOA) · SARL Martin BTP · Charpentes Leroy',
         statut: 'cr_a_generer',
@@ -895,6 +901,7 @@ export function seedState(): AppState {
         id: 'r-p03-20',
         projetId: 'P03',
         date: '2026-07-08',
+        heure: '10:30',
         titre: 'Réunion de chantier n°20',
         participants: 'Commune de Breteuil (MOA) · SARL Martin BTP · Charpentes Leroy · Menuiserie Dubois',
         statut: 'a_preparer',

@@ -129,10 +129,14 @@ export interface ReunionChantier {
   id: string
   projetId: string
   date: string // ISO
+  /** heure de la réunion (HH:MM) — reprogrammable en un geste */
+  heure?: string
   titre: string
   /** liste des convoqués, pré-remplie depuis les marchés + MOA */
   participants: string
   statut: StatutReunion
+  /** texte du compte-rendu, conservé sur la réunion (généré par l'assistant ou collé) */
+  cr?: string
   notes?: string
 }
 

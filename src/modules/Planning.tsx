@@ -21,7 +21,7 @@ const COULEURS_PHASES = [
   '#ea580c', '#dc2626', '#9333ea', '#4f46e5', '#16a34a', '#b45309',
 ]
 
-function couleurPhase(code: PhaseCode): string {
+export function couleurPhase(code: PhaseCode): string {
   const i = PHASES_ORDRE.indexOf(code)
   return COULEURS_PHASES[(i === -1 ? PHASES_ORDRE.length : i) % COULEURS_PHASES.length]
 }

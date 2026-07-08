@@ -179,6 +179,28 @@ export interface ElementCCTP {
   localisation?: string
 }
 
+/** ligne de prix d'une DPGF — un ouvrage chiffré du DCE */
+export interface LigneDPGF {
+  id: string
+  /** numéro d'article tel qu'écrit dans la DPGF (souvent aligné sur le CCTP) */
+  article?: string
+  designation: string
+  unite?: string
+  quantite?: number | null
+  prixUnitaireHT?: number | null
+  totalHT?: number | null
+}
+
+/** DPGF d'un lot — les prix du DCE, structurés et traçables jusqu'au fichier */
+export interface DpgfLot {
+  /** chemin du fichier source dans le Drive (ou nom du fichier déposé) */
+  fichier?: string
+  importeLe: string // ISO
+  /** total HT lu sur le document (contrôle de cohérence avec la somme des lignes) */
+  totalHT?: number | null
+  lignes: LigneDPGF[]
+}
+
 /** lot du DCE avec son CCTP structuré — la source du planning travaux détaillé.
  *  Créé par l'analyse déterministe d'un CCTP (PDF/texte), par le retour JSON
  *  d'un Projet Claude, ou à la main. Toujours traçable jusqu'au fichier. */
@@ -197,6 +219,8 @@ export interface LotDCE {
   importeLe: string // ISO
   /** éléments d'ouvrage prévus au CCTP */
   elements: ElementCCTP[]
+  /** prix du lot (DPGF importée) — null/absent tant que rien n'est chiffré */
+  dpgf?: DpgfLot | null
 }
 
 export type StatutTache = 'prevu' | 'en_cours' | 'fait'

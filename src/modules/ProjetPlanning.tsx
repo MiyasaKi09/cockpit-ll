@@ -22,7 +22,8 @@ import {
   toast,
   useToday,
 } from '../ui'
-import { diffDays, fmtDate, fold, todayISO, uid } from '../util'
+import { diffDays, fmtDate, fmtMoney, fold, todayISO, uid } from '../util'
+import { montantElement, sommeLignes } from '../dpgf'
 import { couleurPhase } from './Planning'
 
 const NOMS_MOIS = ['janv.', 'févr.', 'mars', 'avr.', 'mai', 'juin', 'juil.', 'août', 'sept.', 'oct.', 'nov.', 'déc.']
@@ -310,6 +311,21 @@ function CarteTaches({
   const enRetard = taches.filter((t) => t.statut !== 'fait' && t.fin && t.fin < today).length
   const faites = taches.filter((t) => t.statut === 'fait').length
 
+  // montants issus des DPGF importées (onglet DCE & CCTP) — dérivés, jamais stockés
+  const lotsDce = state.lotsDce.filter((l) => l.projetId === p.id)
+  const montantDe = (t: TacheChantier): number | null => {
+    if (!t.lotDceId || !t.elementId) return null
+    const lot = lotsDce.find((l) => l.id === t.lotDceId)
+    if (!lot?.dpgf) return null
+    const element = lot.elements.find((e) => e.id === t.elementId)
+    return element ? montantElement(lot.dpgf.lignes, element) : null
+  }
+  const totalDpgfDe = (groupe: string): number | null => {
+    const lotId = taches.find((t) => t.lot === groupe && t.lotDceId)?.lotDceId
+    const lot = lotId ? lotsDce.find((l) => l.id === lotId) : null
+    return lot?.dpgf ? sommeLignes(lot.dpgf.lignes) : null
+  }
+
   const maj = (id: string, fn: (t: TacheChantier) => void) =>
     update((d) => {
       const t = d.tachesChantier.find((x) => x.id === id)
@@ -364,15 +380,20 @@ function CarteTaches({
               <tr>
                 <td colSpan={5} style={{ background: 'var(--bg-soft)', fontWeight: 700 }}>
                   {g}
-                  <span className="muted small" style={{ fontWeight: 400 }}> — {duGroupe.length} élément(s)</span>
+                  <span className="muted small" style={{ fontWeight: 400 }}>
+                    {' '}— {duGroupe.length} élément(s)
+                    {totalDpgfDe(g) !== null && <> · DPGF {fmtMoney(totalDpgfDe(g))}</>}
+                  </span>
                 </td>
               </tr>
               {duGroupe.map((t) => {
                 const retard = t.statut !== 'fait' && t.fin && t.fin < today
+                const montant = montantDe(t)
                 return (
                   <tr key={t.id}>
                     <td style={{ maxWidth: 380 }}>
                       {t.designation}
+                      {montant !== null && <span className="muted small"> · {fmtMoney(montant, true)}</span>}
                       {(!t.debut || !t.fin) && <> <Badge tone="warn">à dater</Badge></>}
                       {retard && <> <Badge tone="danger">en retard</Badge></>}
                     </td>

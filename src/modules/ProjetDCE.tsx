@@ -7,7 +7,7 @@
 // toujours relu avant import).
 
 import { useCallback, useEffect, useState } from 'react'
-import type { LotDCE, Projet, TacheChantier } from '../types'
+import type { DpgfLot, LotDCE, Projet, TacheChantier } from '../types'
 import { useStore } from '../store'
 import {
   Badge,
@@ -24,7 +24,7 @@ import {
   confirmer,
   toast,
 } from '../ui'
-import { fmtDate, fold, todayISO, uid } from '../util'
+import { fmtDate, fmtMoney, fold, todayISO, uid } from '../util'
 import {
   analyserCCTP,
   extraireTexteFichier,
@@ -38,6 +38,16 @@ import {
   versElements,
   type LotAnalyse,
 } from '../cctp'
+import {
+  analyserDpgfTexte,
+  analyserDpgfXlsx,
+  elementsDepuisLignes,
+  parseRetourDPGF,
+  promptExtractionDPGF,
+  sommeLignes,
+  versLignes,
+  type DpgfAnalyse,
+} from '../dpgf'
 import {
   lireRacine,
   listerFichiersProjet,
@@ -446,6 +456,462 @@ function CarteImportCCTP({ projet: p }: { projet: Projet }) {
 }
 
 // ============================================================
+// DPGF — les prix du DCE : import, aperçu validé, vue chiffrée
+// ============================================================
+
+interface DpgfApercu extends DpgfAnalyse {
+  inclus: boolean
+  /** lot DCE existant à chiffrer — '' = créer un nouveau lot */
+  lotId: string
+  fichier?: string
+}
+
+function ModalApercuDpgf({
+  projet: p,
+  lots,
+  onClose,
+}: {
+  projet: Projet
+  lots: DpgfApercu[]
+  onClose: () => void
+}) {
+  const { state, update, replace } = useStore()
+  const [liste, setListe] = useState<DpgfApercu[]>(lots)
+  const lotsProjet = state.lotsDce.filter((l) => l.projetId === p.id)
+
+  const maj = (i: number, champs: Partial<DpgfApercu>) =>
+    setListe((prev) => prev.map((l, j) => (j === i ? { ...l, ...champs } : l)))
+
+  const nbInclus = liste.filter((l) => l.inclus).length
+
+  const importer = () => {
+    const snap = state
+    // calculé AVANT la mutation (le producteur du store peut être rejoué)
+    const chiffrages: { lotId: string; dpgf: DpgfLot }[] = []
+    const nouveauxLots: LotDCE[] = []
+    const nouvellesTaches: TacheChantier[] = []
+    const dejaAuPlanning = [...state.tachesChantier]
+    let sansDate = false
+    for (const l of liste) {
+      if (!l.inclus || l.lignes.length === 0) continue
+      const dpgf: DpgfLot = {
+        fichier: l.fichier,
+        importeLe: todayISO(),
+        totalHT: l.totalHT ?? null,
+        lignes: versLignes(l.lignes),
+      }
+      if (l.lotId) {
+        chiffrages.push({ lotId: l.lotId, dpgf })
+      } else {
+        const lot: LotDCE = {
+          id: uid('lotdce'),
+          projetId: p.id,
+          numero: numeroNormalise(l.numero),
+          intitule: l.intitule.trim() || 'Lot sans intitulé',
+          marcheId: rapprocherMarcheLot(
+            { numero: l.numero, intitule: l.intitule },
+            state.marches.filter((m) => m.projetId === p.id),
+          )?.id || null,
+          fichier: l.fichier,
+          source: 'dpgf',
+          importeLe: todayISO(),
+          elements: elementsDepuisLignes(dpgf.lignes),
+          dpgf,
+        }
+        nouveauxLots.push(lot)
+        const res = genererTaches(p, lot, state.marches, dejaAuPlanning)
+        nouvellesTaches.push(...res.taches)
+        dejaAuPlanning.push(...res.taches)
+        if (res.sansDate) sansDate = true
+      }
+    }
+    update((d) => {
+      for (const c of chiffrages) {
+        const lot = d.lotsDce.find((x) => x.id === c.lotId)
+        if (lot) lot.dpgf = c.dpgf
+      }
+      d.lotsDce.push(...nouveauxLots)
+      d.tachesChantier.push(...nouvellesTaches)
+    })
+    const morceaux = [
+      chiffrages.length > 0 ? `${chiffrages.length} lot(s) chiffré(s)` : '',
+      nouveauxLots.length > 0 ? `${nouveauxLots.length} lot(s) créé(s)` : '',
+      nouvellesTaches.length > 0 ? `${nouvellesTaches.length} tâche(s) au planning` : '',
+    ].filter(Boolean)
+    toast(
+      `DPGF importée — ${morceaux.join(', ')}${sansDate ? ' (tâches « à dater » : datez le marché ou la phase DET puis « Replanifier »)' : ''}.`,
+      { tone: 'ok', undo: () => replace(snap) },
+    )
+    onClose()
+  }
+
+  return (
+    <Modal titre={`Aperçu DPGF — ${liste.length} lot(s) chiffré(s)`} onClose={onClose} large>
+      <p className="small muted" style={{ marginTop: 0 }}>
+        Relisez avant d'importer : rattachez chaque DPGF à son lot du DCE (le chiffrage s'ajoute au
+        lot), ou laissez « créer un nouveau lot » — ses ouvrages entreront aussi au planning travaux.
+      </p>
+      {liste.map((l, i) => {
+        const somme = sommeLignes(l.lignes)
+        const ecart = l.totalHT != null ? somme - l.totalHT : null
+        const cible = l.lotId ? lotsProjet.find((x) => x.id === l.lotId) : null
+        return (
+          <div key={i} style={{ border: '1px solid var(--line)', borderRadius: 6, padding: 10, marginBottom: 10 }}>
+            <div className="form-row" style={{ alignItems: 'flex-end' }}>
+              <Field label="Importer">
+                <input
+                  type="checkbox"
+                  checked={l.inclus}
+                  onChange={(e) => maj(i, { inclus: e.target.checked })}
+                  style={{ width: 18, height: 18 }}
+                />
+              </Field>
+              <Field label="N° de lot">
+                <TextInput value={l.numero} onChange={(v) => maj(i, { numero: v })} placeholder="02" />
+              </Field>
+              <Field label="Intitulé">
+                <TextInput value={l.intitule} onChange={(v) => maj(i, { intitule: v })} />
+              </Field>
+              <Field label="Lot du DCE à chiffrer" hint="« créer » dérive aussi les ouvrages du planning">
+                <Select
+                  value={l.lotId}
+                  onChange={(v) => maj(i, { lotId: v })}
+                  options={[
+                    { value: '', label: '— créer un nouveau lot —' },
+                    ...lotsProjet.map((x) => ({ value: x.id, label: libelleLot(x) })),
+                  ]}
+                />
+              </Field>
+            </div>
+            <p className="small" style={{ margin: '4px 0' }}>
+              <Badge tone="info">{l.lignes.length} ligne(s) · {fmtMoney(somme)}</Badge>{' '}
+              {l.totalHT != null && (
+                <Badge tone={ecart !== null && Math.abs(ecart) > 1 ? 'warn' : 'ok'}>
+                  total document {fmtMoney(l.totalHT)}
+                  {ecart !== null && Math.abs(ecart) > 1 ? ` · écart ${fmtMoney(ecart)}` : ' · cohérent'}
+                </Badge>
+              )}{' '}
+              {cible?.dpgf && <Badge tone="warn">remplace la DPGF existante du lot</Badge>}
+              {l.fichier && <span className="muted"> · source : {l.fichier}</span>}
+            </p>
+            <div style={{ maxHeight: 180, overflowY: 'auto', background: 'var(--bg-soft)', borderRadius: 4, padding: '6px 10px' }}>
+              {l.lignes.map((x, j) => (
+                <div key={j} className="small" style={{ padding: '2px 0' }}>
+                  {x.article && <span className="mono muted">{x.article}</span>} {x.designation}
+                  <span className="muted">
+                    {x.unite ? ` · ${x.unite}` : ''}
+                    {x.quantite != null ? ` · ${x.quantite}` : ''}
+                    {x.prixUnitaireHT != null ? ` × ${fmtMoney(x.prixUnitaireHT, true)}` : ''}
+                  </span>
+                  {x.totalHT != null && <strong> = {fmtMoney(x.totalHT, true)}</strong>}
+                </div>
+              ))}
+            </div>
+          </div>
+        )
+      })}
+      <div className="form-foot">
+        <Btn onClick={onClose}>Annuler</Btn>
+        <Btn kind="primary" onClick={importer} disabled={nbInclus === 0}>
+          Importer {nbInclus} DPGF
+        </Btn>
+      </div>
+    </Modal>
+  )
+}
+
+/** vue chiffrée d'un lot : la DPGF formatée, comparée au document et au marché */
+function ModalDpgf({ lot, onClose }: { lot: LotDCE; onClose: () => void }) {
+  const { state, update, replace } = useStore()
+  const courant = state.lotsDce.find((l) => l.id === lot.id) || lot
+  const dpgf = courant.dpgf
+  const marche = courant.marcheId ? state.marches.find((m) => m.id === courant.marcheId) : null
+
+  if (!dpgf) return null
+  const somme = sommeLignes(dpgf.lignes)
+  const ecartDoc = dpgf.totalHT != null ? somme - dpgf.totalHT : null
+  const montantMarche = marche ? marche.montantInitialHT + marche.avenantsHT : null
+  const ecartMarche = montantMarche !== null ? montantMarche - somme : null
+
+  const retirer = async () => {
+    const snap = state
+    if (!(await confirmer({ message: `Retirer la DPGF de « ${libelleLot(courant)} » ? (les éléments et tâches du lot sont conservés)`, danger: true, confirmerLabel: 'Retirer' }))) return
+    update((d) => {
+      const l = d.lotsDce.find((x) => x.id === lot.id)
+      if (l) l.dpgf = null
+    })
+    toast('DPGF retirée.', { undo: () => replace(snap) })
+    onClose()
+  }
+
+  return (
+    <Modal titre={`DPGF — ${libelleLot(courant)}`} onClose={onClose} large>
+      <p className="small" style={{ marginTop: 0, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <Badge tone="info">{dpgf.lignes.length} ligne(s) · somme {fmtMoney(somme)}</Badge>
+        {dpgf.totalHT != null && (
+          <Badge tone={ecartDoc !== null && Math.abs(ecartDoc) > 1 ? 'warn' : 'ok'}>
+            total document {fmtMoney(dpgf.totalHT)}
+            {ecartDoc !== null && Math.abs(ecartDoc) > 1 ? ` · écart ${fmtMoney(ecartDoc)}` : ''}
+          </Badge>
+        )}
+        {marche && montantMarche !== null && (
+          <Badge tone={ecartMarche !== null && Math.abs(ecartMarche) > montantMarche * 0.05 ? 'warn' : 'muted'}>
+            marché {marche.entreprise} : {fmtMoney(montantMarche)}
+            {ecartMarche !== null ? ` (${ecartMarche >= 0 ? '+' : ''}${fmtMoney(ecartMarche)} vs DPGF)` : ''}
+          </Badge>
+        )}
+        {dpgf.fichier && <span className="muted">source : {dpgf.fichier} · importée le {fmtDate(dpgf.importeLe)}</span>}
+      </p>
+      <Table
+        compact
+        head={[
+          'Article',
+          'Désignation',
+          'U',
+          <span key="q" className="right">Qté</span>,
+          <span key="pu" className="right">PU HT</span>,
+          <span key="t" className="right">Total HT</span>,
+        ]}
+      >
+        {dpgf.lignes.map((x) => (
+          <tr key={x.id}>
+            <td className="mono small">{x.article || '—'}</td>
+            <td>{x.designation}</td>
+            <td className="small muted">{x.unite || ''}</td>
+            <td className="right num">{x.quantite ?? ''}</td>
+            <td className="right num">{x.prixUnitaireHT != null ? fmtMoney(x.prixUnitaireHT, true) : ''}</td>
+            <td className="right num">{x.totalHT != null ? fmtMoney(x.totalHT, true) : ''}</td>
+          </tr>
+        ))}
+        <tr style={{ fontWeight: 700 }}>
+          <td colSpan={5}>Total des lignes</td>
+          <td className="right num">{fmtMoney(somme, true)}</td>
+        </tr>
+      </Table>
+      <div className="form-foot">
+        <Btn kind="danger" onClick={() => void retirer()}>Retirer la DPGF</Btn>
+        <span className="spacer" />
+        <Btn onClick={onClose}>Fermer</Btn>
+      </div>
+    </Modal>
+  )
+}
+
+function CarteDpgf({ projet: p }: { projet: Projet }) {
+  const { state } = useStore()
+  const [racine, setRacine] = useState<FSDirHandle | null>(null)
+  const [fichiersDrive, setFichiersDrive] = useState<FSFileHandle[] | null>(null)
+  const [permissionRequise, setPermissionRequise] = useState(false)
+  const [enCours, setEnCours] = useState(false)
+  const [message, setMessage] = useState('')
+  const [rangerAuDrive, setRangerAuDrive] = useState(true)
+  const [retourClaude, setRetourClaude] = useState('')
+  const [apercu, setApercu] = useState<DpgfApercu[] | null>(null)
+
+  useEffect(() => {
+    if (supporteFS) void lireRacine().then(setRacine)
+  }, [])
+
+  const slug = slugProjet(p)
+  const scanner = useCallback(async () => {
+    if (!racine) return
+    try {
+      const perm = (await racine.queryPermission?.({ mode: 'readwrite' })) || 'granted'
+      if (perm !== 'granted') {
+        setPermissionRequise(true)
+        return
+      }
+      setPermissionRequise(false)
+      setFichiersDrive(await listerFichiersProjet(racine, slug, DOSSIER_DCE))
+    } catch (e) {
+      setMessage(`Lecture du Drive impossible : ${e instanceof Error ? e.message : String(e)}`)
+    }
+  }, [racine, slug])
+
+  useEffect(() => {
+    void scanner()
+  }, [scanner])
+
+  const ouvrirApercu = (lots: DpgfAnalyse[], fichier?: string) => {
+    const lotsProjet = state.lotsDce.filter((l) => l.projetId === p.id)
+    setApercu(
+      lots.map((l) => {
+        // rattachement automatique au lot DCE de même numéro / intitulé
+        const cible =
+          lotsProjet.find((x) => l.numero && numeroNormalise(x.numero) === numeroNormalise(l.numero)) ||
+          lotsProjet.find((x) => fold(x.intitule) === fold(l.intitule))
+        return { ...l, inclus: true, lotId: cible?.id || '', fichier }
+      }),
+    )
+  }
+
+  const analyserFichier = async (file: File, cheminDrive?: string) => {
+    setMessage('')
+    setEnCours(true)
+    try {
+      let lots: DpgfAnalyse[]
+      if (/\.(xlsx|xls)$/i.test(file.name)) {
+        lots = await analyserDpgfXlsx(file)
+      } else {
+        const texte = await extraireTexteFichier(file)
+        lots = texte.length >= 200 ? analyserDpgfTexte(texte, file.name) : []
+      }
+      if (lots.length === 0) {
+        setMessage(
+          `« ${file.name} » : aucune ligne de prix détectée (scan, mise en page atypique ?) — passez par le secours Claude ci-dessous.`,
+        )
+        return
+      }
+      let chemin = cheminDrive
+      if (!chemin && rangerAuDrive && racine) {
+        try {
+          chemin = await rangerFichier(racine, p, DOSSIER_DCE, file, nomConforme(p, 'DPGF', '', file.name))
+          await scanner()
+        } catch {
+          // rangement impossible (permission) : l'analyse reste valable
+        }
+      }
+      ouvrirApercu(lots, chemin || file.name)
+    } catch (e) {
+      setMessage(`Analyse impossible : ${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setEnCours(false)
+    }
+  }
+
+  const analyserDrive = async (fh: FSFileHandle) => {
+    try {
+      const file = await fh.getFile()
+      await analyserFichier(file, `${slug}/${DOSSIER_DCE}/${fh.name}`)
+    } catch (e) {
+      setMessage(`Lecture de « ${fh.name} » impossible : ${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
+
+  const analyserRetourClaude = () => {
+    setMessage('')
+    const { lots, erreur } = parseRetourDPGF(retourClaude)
+    if (erreur || !lots) {
+      setMessage(`Retour illisible : ${erreur}`)
+      return
+    }
+    ouvrirApercu(lots)
+  }
+
+  const candidatsDrive = (fichiersDrive || []).filter((f) => /\.(xlsx|xls|pdf|txt)$/i.test(f.name))
+
+  return (
+    <Card titre="Lire une DPGF — les prix du DCE, récupérés et mis en forme">
+      <div className="pill-note">
+        Déposez les DPGF (Excel ou PDF, un lot par feuille ou un classeur complet) : le site détecte
+        les colonnes (désignation, unité, quantité, PU, total), rattache chaque chiffrage à son lot du
+        DCE et <strong>rapporte les montants sur le planning travaux</strong>. Contrôles intégrés :
+        somme des lignes vs total du document, DPGF vs montant du marché signé.
+      </div>
+
+      {/* --- depuis le Drive du projet --- */}
+      {supporteFS && racine && (
+        <div style={{ marginTop: 12 }}>
+          <strong className="small">Depuis le Drive du projet — {slug}/{DOSSIER_DCE}</strong>
+          {permissionRequise && (
+            <p className="small" style={{ margin: '4px 0' }}>
+              <Btn
+                small
+                onClick={() => {
+                  void (async () => {
+                    if (await verifierPermission(racine)) await scanner()
+                  })()
+                }}
+              >
+                Autoriser la lecture du Drive
+              </Btn>
+            </p>
+          )}
+          {fichiersDrive === null ? null : candidatsDrive.length === 0 ? (
+            <p className="muted small" style={{ margin: '4px 0' }}>
+              Aucun fichier Excel ou PDF dans {DOSSIER_DCE} — déposez-y les DPGF, le dossier du projet
+              évolue avec le DCE.
+            </p>
+          ) : (
+            <Table compact head={['Fichier', '']}>
+              {candidatsDrive.map((f) => (
+                <tr key={f.name}>
+                  <td className="small mono">{f.name}</td>
+                  <td className="right">
+                    <Btn small kind="primary" disabled={enCours} onClick={() => void analyserDrive(f)}>
+                      Analyser (DPGF)
+                    </Btn>
+                  </td>
+                </tr>
+              ))}
+            </Table>
+          )}
+          <Btn small kind="ghost" onClick={() => void scanner()}>Actualiser</Btn>
+        </div>
+      )}
+
+      {/* --- fichier déposé --- */}
+      <div className="form-row" style={{ marginTop: 12, alignItems: 'flex-end' }}>
+        <Field label="Ou déposer une DPGF (Excel ou PDF)">
+          <input
+            className="input"
+            type="file"
+            accept=".xlsx,.xls,.pdf,.txt"
+            disabled={enCours}
+            onChange={(e) => {
+              const f = e.target.files?.[0]
+              if (f) void analyserFichier(f)
+              e.target.value = ''
+            }}
+          />
+        </Field>
+        {racine && (
+          <Field label="Rangement" hint={`copie le fichier dans ${DOSSIER_DCE} à la nomenclature`}>
+            <label className="small" style={{ display: 'flex', gap: 6, alignItems: 'center', height: 34 }}>
+              <input
+                type="checkbox"
+                checked={rangerAuDrive}
+                onChange={(e) => setRangerAuDrive(e.target.checked)}
+              />
+              ranger aussi dans le Drive
+            </label>
+          </Field>
+        )}
+      </div>
+      {enCours && <p className="small"><Badge tone="info">analyse en cours…</Badge></p>}
+      {message && <p className="small warn-text" style={{ marginTop: 6 }}>{message}</p>}
+
+      {/* --- secours Claude --- */}
+      <details style={{ marginTop: 12 }}>
+        <summary className="small">Secours — DPGF scannée ou atypique : faire structurer par Claude</summary>
+        <p className="small muted" style={{ margin: '8px 0 6px' }}>
+          Copiez le prompt, collez-le dans un Projet Claude <strong>avec les fichiers DPGF joints</strong>,
+          puis rapportez sa réponse ci-dessous : l'aperçu de relecture reste le même — rien n'entre
+          sans validation humaine.
+        </p>
+        <div className="toolbar">
+          <CopyBtn text={() => promptExtractionDPGF(p)} label="Copier le prompt d'extraction DPGF" />
+        </div>
+        <TextArea
+          value={retourClaude}
+          onChange={setRetourClaude}
+          rows={4}
+          mono
+          placeholder="Collez ici la réponse complète de Claude (le bloc JSON est détecté tout seul)…"
+        />
+        <div className="toolbar" style={{ marginTop: 6 }}>
+          <Btn kind="primary" small disabled={!retourClaude.trim()} onClick={analyserRetourClaude}>
+            Analyser le retour
+          </Btn>
+        </div>
+      </details>
+
+      {apercu && <ModalApercuDpgf projet={p} lots={apercu} onClose={() => setApercu(null)} />}
+    </Card>
+  )
+}
+
+// ============================================================
 // Lots du DCE — bibliothèque structurée, reliée aux marchés
 // ============================================================
 
@@ -523,6 +989,7 @@ function ModalElements({ lot, onClose }: { lot: LotDCE; onClose: () => void }) {
 function CarteLotsDCE({ projet: p }: { projet: Projet }) {
   const { state, update, replace } = useStore()
   const [elementsDe, setElementsDe] = useState<LotDCE | null>(null)
+  const [dpgfDe, setDpgfDe] = useState<LotDCE | null>(null)
   const [modalLot, setModalLot] = useState(false)
   const [numero, setNumero] = useState('')
   const [intitule, setIntitule] = useState('')
@@ -639,7 +1106,7 @@ function CarteLotsDCE({ projet: p }: { projet: Projet }) {
           d'ouvrage, et le planning travaux se remplit tout seul.
         </EmptyState>
       ) : (
-        <Table compact head={['Lot', 'Éléments', 'Au planning', 'Marché rattaché', 'Source', '']}>
+        <Table compact head={['Lot', 'Éléments', 'Au planning', 'DPGF HT', 'Marché rattaché', 'Source', '']}>
           {lots.map((l) => (
             <tr key={l.id}>
               <td>
@@ -647,6 +1114,15 @@ function CarteLotsDCE({ projet: p }: { projet: Projet }) {
               </td>
               <td className="num">{l.elements.length}</td>
               <td className="num">{nbTaches(l.id)}</td>
+              <td className="right">
+                {l.dpgf ? (
+                  <Btn small kind="ghost" onClick={() => setDpgfDe(l)} title="Voir la DPGF formatée">
+                    {fmtMoney(sommeLignes(l.dpgf.lignes))}
+                  </Btn>
+                ) : (
+                  <span className="muted small">—</span>
+                )}
+              </td>
               <td>
                 <Select
                   value={l.marcheId || ''}
@@ -682,6 +1158,7 @@ function CarteLotsDCE({ projet: p }: { projet: Projet }) {
       </p>
 
       {elementsDe && <ModalElements lot={elementsDe} onClose={() => setElementsDe(null)} />}
+      {dpgfDe && <ModalDpgf lot={dpgfDe} onClose={() => setDpgfDe(null)} />}
       {modalLot && (
         <Modal titre="Nouveau lot (saisie manuelle)" onClose={() => setModalLot(false)}>
           <div className="form-row">
@@ -706,6 +1183,7 @@ export default function ProjetDCE({ projet }: { projet: Projet }) {
   return (
     <>
       <CarteImportCCTP projet={projet} />
+      <CarteDpgf projet={projet} />
       <CarteLotsDCE projet={projet} />
     </>
   )

@@ -11,7 +11,8 @@
    "lf-ccp-execution-l",
    "lf-ccp-execution-r",
    "lf-ccp-moe"
-  ]
+  ],
+  "theme": "Marchés publics"
  },
  {
   "fichier": "incendie-cch.json",
@@ -24,7 +25,8 @@
   "docIds": [
    "lf-cch-incendie-l",
    "lf-cch-incendie-r"
-  ]
+  ],
+  "theme": "Sécurité incendie"
  },
  {
   "fichier": "accessibilite-cch.json",
@@ -37,7 +39,8 @@
   "docIds": [
    "lf-cch-access-l",
    "lf-cch-access-r"
-  ]
+  ],
+  "theme": "Accessibilité PMR"
  },
  {
   "fichier": "garanties-construction.json",
@@ -50,7 +53,8 @@
   "docIds": [
    "lf-cciv-louage",
    "lf-cass-decennale"
-  ]
+  ],
+  "theme": "Garanties & assurances"
  },
  {
   "fichier": "urbanisme-autorisations.json",
@@ -63,7 +67,8 @@
   "docIds": [
    "lf-curb-champ",
    "lf-curb-dossier"
-  ]
+  ],
+  "theme": "Urbanisme"
  },
  {
   "fichier": "incendie-erp-arretes.json",
@@ -86,7 +91,8 @@
    "lf-arrete-1980-10",
    "lf-arrete-1980-11",
    "lf-arrete-1980-12"
-  ]
+  ],
+  "theme": "Sécurité incendie"
  },
  {
   "fichier": "accessibilite-arretes.json",
@@ -99,7 +105,8 @@
   "docIds": [
    "lf-arrete-2017",
    "lf-arrete-2014"
-  ]
+  ],
+  "theme": "Accessibilité PMR"
  },
  {
   "fichier": "profession-architecte.json",
@@ -112,6 +119,7 @@
   "docIds": [
    "lf-loi-1977",
    "lf-deonto"
-  ]
+  ],
+  "theme": "Profession"
  }
 ]

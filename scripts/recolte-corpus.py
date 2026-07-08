@@ -278,6 +278,7 @@ def construire_packs_codes(dossier):
     ])
     packs.append({
         "id": "marches-publics",
+        "theme": "Marchés publics",
         "titre": "Marchés publics — exécution & maîtrise d'œuvre",
         "description": "Code de la commande publique : délais de paiement, avances et acomptes, retenue de garantie, sous-traitance, et le livre MOA/MOE (loi MOP codifiée, concours, rémunération).",
         "version": v,
@@ -293,6 +294,7 @@ def construire_packs_codes(dossier):
     ])
     packs.append({
         "id": "incendie-cch",
+        "theme": "Sécurité incendie",
         "titre": "Sécurité incendie — socle CCH (classement ERP)",
         "description": "Code de la construction et de l'habitation : objectifs de sécurité, classement des ERP en types et catégories, autorisations de travaux, commissions de sécurité, ERP existants.",
         "version": v,
@@ -308,6 +310,7 @@ def construire_packs_codes(dossier):
     ])
     packs.append({
         "id": "accessibilite-cch",
+        "theme": "Accessibilité PMR",
         "titre": "Accessibilité handicap — socle CCH",
         "description": "Code de la construction et de l'habitation : obligations d'accessibilité des ERP et des logements, dérogations, attestations, agendas d'accessibilité programmée.",
         "version": v,
@@ -325,6 +328,7 @@ def construire_packs_codes(dossier):
     ])
     packs.append({
         "id": "garanties-construction",
+        "theme": "Garanties & assurances",
         "titre": "Garanties & assurances construction",
         "description": "Code civil (contrat d'entreprise, réception, garanties biennale et décennale des constructeurs) et Code des assurances (obligations décennale et dommages-ouvrage).",
         "version": max(v_cc, v_ass),
@@ -340,6 +344,7 @@ def construire_packs_codes(dossier):
     ])
     packs.append({
         "id": "urbanisme-autorisations",
+        "theme": "Urbanisme",
         "titre": "Urbanisme — autorisations (PC / DP)",
         "description": "Code de l'urbanisme : champ d'application des permis et déclarations préalables, composition du dossier de PC, délais d'instruction, recours obligatoire à l'architecte.",
         "version": v,
@@ -359,6 +364,7 @@ def construire_packs_codes(dossier):
 TNC = [
     {
         "pack": "incendie-erp-arretes",
+        "theme": "Sécurité incendie",
         "titre_pack": "Sécurité incendie ERP — règlement complet (volumineux)",
         "description": "Règlement de sécurité contre l'incendie dans les ERP, consolidé (arrêté du 25 juin 1980) : dispositions générales (GN, CO, AM, DF, MS…), 5e catégorie (PE) et établissements spéciaux (chapiteaux, gares, parcs de stationnement…). ~1,2 M de caractères : cochez la partie utile à la question.",
         "textes": [
@@ -367,6 +373,7 @@ TNC = [
     },
     {
         "pack": "accessibilite-arretes",
+        "theme": "Accessibilité PMR",
         "titre_pack": "Accessibilité handicap — arrêtés d'application",
         "description": "Arrêté du 20 avril 2017 (ERP neufs et installations ouvertes au public) et arrêté du 8 décembre 2014 (ERP situés dans un cadre bâti existant).",
         "textes": [
@@ -376,6 +383,7 @@ TNC = [
     },
     {
         "pack": "profession-architecte",
+        "theme": "Profession",
         "titre_pack": "Profession — loi de 1977 & déontologie",
         "description": "Loi n°77-2 du 3 janvier 1977 sur l'architecture (recours obligatoire, seuils) et code de déontologie des architectes (décret n°80-217).",
         "textes": [
@@ -468,6 +476,7 @@ def construire_packs_tnc(dossier_dump, version_dump, cache_index=None):
         if docs:
             packs.append({
                 "id": entree["pack"],
+                "theme": entree.get("theme", ""),
                 "titre": entree["titre_pack"],
                 "description": entree["description"],
                 "version": version_dump,
@@ -509,6 +518,7 @@ def main():
         index.append({
             "fichier": fichier,
             "id": pack["id"],
+            "theme": pack.get("theme", ""),
             "titre": pack["titre"],
             "description": pack["description"],
             "version": pack["version"],

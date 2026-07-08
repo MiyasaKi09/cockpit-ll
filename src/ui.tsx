@@ -1,7 +1,7 @@
 // Kit UI partagé — composants sobres, cohérents sur tous les modules.
 
-import { useEffect, useRef, useState } from 'react'
-import type { CSSProperties, ReactNode } from 'react'
+import { Children, Fragment, cloneElement, isValidElement, useEffect, useRef, useState } from 'react'
+import type { CSSProperties, ReactElement, ReactNode } from 'react'
 import { copier } from './prompts'
 import { fmtDate, fmtMoney, parseNum, todayISO } from './util'
 
@@ -789,11 +789,17 @@ export function Tabs({
   actif: string
   onSelect: (id: string) => void
 }) {
+  // sur mobile le bandeau défile : l'onglet actif se recentre tout seul
+  const refActif = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    refActif.current?.scrollIntoView({ inline: 'nearest', block: 'nearest' })
+  }, [actif])
   return (
     <div className="tabs">
       {tabs.map((t) => (
         <button
           key={t.id}
+          ref={t.id === actif ? refActif : undefined}
           className={`tab ${t.id === actif ? 'tab-active' : ''}`}
           onClick={() => onSelect(t.id)}
         >
@@ -806,6 +812,44 @@ export function Tabs({
 
 // ---------- tableau simple ----------
 
+/** texte brut d'un en-tête de colonne (les heads peuvent être des <span>) */
+function texteDe(n: ReactNode): string {
+  if (n == null || typeof n === 'boolean') return ''
+  if (typeof n === 'string' || typeof n === 'number') return String(n)
+  if (Array.isArray(n)) return n.map(texteDe).join('')
+  if (isValidElement(n)) return texteDe((n.props as { children?: ReactNode }).children)
+  return ''
+}
+
+/** pose data-label (texte de l'en-tête) sur chaque cellule des rangées —
+ *  c'est ce qui permet le rendu « cartes empilées » sur téléphone (CSS pur).
+ *  Limite connue : des <tr> rendus via un composant intermédiaire ne sont
+ *  pas étiquetés (dégradation propre : carte sans libellés). */
+function etiqueterLignes(children: ReactNode, labels: string[]): ReactNode {
+  return Children.map(children, (enfant) => {
+    if (!isValidElement(enfant)) return enfant
+    if (enfant.type === Fragment) {
+      const props = enfant.props as { children?: ReactNode }
+      return cloneElement(enfant as ReactElement<{ children?: ReactNode }>, undefined, etiqueterLignes(props.children, labels))
+    }
+    if (enfant.type !== 'tr') return enfant
+    let col = 0
+    const ligne = enfant as ReactElement<{ children?: ReactNode }>
+    const cellules = Children.map(ligne.props.children, (cell) => {
+      if (!isValidElement(cell) || (cell.type !== 'td' && cell.type !== 'th')) return cell
+      const cellule = cell as ReactElement<{ colSpan?: number }>
+      const span = Number(cellule.props.colSpan || 1)
+      const label = span === 1 ? labels[col] : ''
+      col += span
+      const extra: Record<string, string> = {}
+      if (label) extra['data-label'] = label
+      if (span > 1) extra['data-section'] = '1'
+      return Object.keys(extra).length > 0 ? cloneElement(cellule, extra) : cellule
+    })
+    return cloneElement(ligne, undefined, cellules)
+  })
+}
+
 export function Table({
   head,
   children,
@@ -815,9 +859,10 @@ export function Table({
   children: ReactNode
   compact?: boolean
 }) {
+  const labels = head.map(texteDe)
   return (
     <div className="table-wrap">
-      <table className={`table ${compact ? 'table-compact' : ''}`}>
+      <table className={`table table-cartes ${compact ? 'table-compact' : ''}`}>
         <thead>
           <tr>
             {head.map((h, i) => (
@@ -825,7 +870,7 @@ export function Table({
             ))}
           </tr>
         </thead>
-        <tbody>{children}</tbody>
+        <tbody>{etiqueterLignes(children, labels)}</tbody>
       </table>
     </div>
   )

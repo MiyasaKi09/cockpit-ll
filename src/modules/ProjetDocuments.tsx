@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { Projet } from '../types'
 import { useStore } from '../store'
-import { Badge, Btn, Card, EmptyState, Field, Select, TextInput } from '../ui'
+import { Badge, Btn, Card, EmptyState, Field, Select, Table, TextInput } from '../ui'
 import { todayISO } from '../util'
 import {
   choisirRacine as choisirRacineFS,
@@ -241,33 +241,31 @@ export default function ProjetDocuments({ projet: p }: { projet: Projet }) {
               Le dossier {slugProjet(p)} n'existe pas encore — « Créer l'arborescence » ci-dessus.
             </EmptyState>
           ) : (
-            <table className="table table-compact">
-              <tbody>
-                {ARBORESCENCE.map((a) => {
-                  const e = etat.find((x) => x.dossier === a.dossier)
-                  return (
-                    <tr key={a.dossier}>
-                      <td style={{ width: 170 }}>
-                        <strong>{a.dossier}</strong>
-                      </td>
-                      <td className="muted small">{a.description}</td>
-                      <td className="right" style={{ width: 130 }}>
-                        {!e || e.nbFichiers < 0 ? (
-                          <Badge tone="muted">absent</Badge>
-                        ) : e.nbFichiers === 0 ? (
-                          <Badge tone="muted">vide</Badge>
-                        ) : (
-                          <Badge tone="ok">{e.nbFichiers} fichier{e.nbFichiers > 1 ? 's' : ''}</Badge>
-                        )}
-                      </td>
-                      <td className="small muted" style={{ maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {e?.dernier || ''}
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
+            <Table compact head={['Dossier', 'Contenu', 'Fichiers', 'Dernier fichier']}>
+              {ARBORESCENCE.map((a) => {
+                const e = etat.find((x) => x.dossier === a.dossier)
+                return (
+                  <tr key={a.dossier}>
+                    <td style={{ width: 170 }}>
+                      <strong>{a.dossier}</strong>
+                    </td>
+                    <td className="muted small">{a.description}</td>
+                    <td className="right" style={{ width: 130 }}>
+                      {!e || e.nbFichiers < 0 ? (
+                        <Badge tone="muted">absent</Badge>
+                      ) : e.nbFichiers === 0 ? (
+                        <Badge tone="muted">vide</Badge>
+                      ) : (
+                        <Badge tone="ok">{e.nbFichiers} fichier{e.nbFichiers > 1 ? 's' : ''}</Badge>
+                      )}
+                    </td>
+                    <td className="small muted" style={{ maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {e?.dernier || ''}
+                    </td>
+                  </tr>
+                )
+              })}
+            </Table>
           )}
           <p className="muted small" style={{ marginTop: 8 }}>
             Lecture 100 % déterministe : le dossier le plus récemment alimenté indique où en est le projet

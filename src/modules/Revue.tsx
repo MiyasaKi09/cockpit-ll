@@ -17,7 +17,7 @@ import {
   tempsParPersonne,
 } from '../derive'
 import { alertesActives } from '../alerts'
-import { Badge, Btn, Card, EmptyState, Icon, Money, Page, Progress, Stat, useToday } from '../ui'
+import { Badge, Btn, Card, EmptyState, Icon, Money, Page, Progress, Stat, Table, useToday } from '../ui'
 import { ouvrirRevuePDF } from '../pdf'
 import { addDays, addMonths, fmtDate, fmtMoney, fmtPct, monthKey } from '../util'
 
@@ -191,18 +191,17 @@ export default function Revue() {
         {syn.lignes.length === 0 ? (
           <EmptyState>Aucune facture émise ni heure pointée sur la période.</EmptyState>
         ) : (
-          <table className="table table-compact">
-            <thead>
-              <tr>
-                <th>Mission</th>
-                <th className="right">CA HT</th>
-                <th className="right">Coût temps</th>
-                <th className="right">Marge</th>
-                <th className="right">Jours</th>
-                <th className="right">€ / jour</th>
-              </tr>
-            </thead>
-            <tbody>
+          <Table
+            compact
+            head={[
+              'Mission',
+              <span key="ca" className="right">CA HT</span>,
+              <span key="ct" className="right">Coût temps</span>,
+              <span key="ma" className="right">Marge</span>,
+              <span key="j" className="right">Jours</span>,
+              <span key="pj" className="right">€ / jour</span>,
+            ]}
+          >
               <tr style={{ fontWeight: 650 }}>
                 <td>Total / moyenne</td>
                 <td className="right num">{fmtMoney(syn.totalCA)}</td>
@@ -229,8 +228,7 @@ export default function Revue() {
                   </td>
                 </tr>
               ))}
-            </tbody>
-          </table>
+          </Table>
         )}
       </Card>
 
@@ -239,16 +237,15 @@ export default function Revue() {
         {tpp.length === 0 ? (
           <EmptyState>Aucune heure pointée sur la période.</EmptyState>
         ) : (
-          <table className="table table-compact">
-            <thead>
-              <tr>
-                <th>Personne</th>
-                <th className="right">Heures</th>
-                <th className="right">Jours</th>
-                <th className="right">Coût réel</th>
-              </tr>
-            </thead>
-            <tbody>
+          <Table
+            compact
+            head={[
+              'Personne',
+              <span key="h" className="right">Heures</span>,
+              <span key="j" className="right">Jours</span>,
+              <span key="c" className="right">Coût réel</span>,
+            ]}
+          >
               {tpp.map((l) => (
                 <tr key={l.personne}>
                   <td>{l.personne}</td>
@@ -257,8 +254,7 @@ export default function Revue() {
                   <td className="right num">{fmtMoney(l.cout)}</td>
                 </tr>
               ))}
-            </tbody>
-          </table>
+          </Table>
         )}
       </Card>
 
@@ -271,7 +267,7 @@ export default function Revue() {
             <table className="table table-compact">
               <thead>
                 <tr>
-                  <th>Mission</th>
+                  <th className="col-figee">Mission</th>
                   {MOIS_COURTS.map((m) => (
                     <th key={m} className="right">{m}</th>
                   ))}
@@ -280,21 +276,21 @@ export default function Revue() {
               </thead>
               <tbody>
                 <tr style={{ fontWeight: 650 }}>
-                  <td>Total émis HT</td>
+                  <td className="col-figee">Total émis HT</td>
                   {cam.emisParMois.map((v, i) => (
                     <td key={i} className="right num">{v > 0 ? fmtMoney(v) : <span className="muted">·</span>}</td>
                   ))}
                   <td className="right num">{fmtMoney(cam.emisParMois.reduce((s, x) => s + x, 0))}</td>
                 </tr>
                 <tr className="muted">
-                  <td>dont encaissé</td>
+                  <td className="col-figee">dont encaissé</td>
                   {cam.encaisseParMois.map((v, i) => (
                     <td key={i} className="right num">{v > 0 ? fmtMoney(v) : '·'}</td>
                   ))}
                   <td className="right num">{fmtMoney(cam.encaisseParMois.reduce((s, x) => s + x, 0))}</td>
                 </tr>
                 <tr className="muted">
-                  <td>à venir (prévu)</td>
+                  <td className="col-figee">à venir (prévu)</td>
                   {cam.prevuParMois.map((v, i) => (
                     <td key={i} className="right num">{v > 0 ? fmtMoney(v) : '·'}</td>
                   ))}
@@ -302,7 +298,7 @@ export default function Revue() {
                 </tr>
                 {cam.lignes.map((l) => (
                   <tr key={l.projetId}>
-                    <td>
+                    <td className="col-figee">
                       <a href={`#/projets/${l.projetId}`} title={nomProjet(state, l.projetId)}>
                         {nomProjet(state, l.projetId).slice(0, 38)}
                       </a>
@@ -324,17 +320,16 @@ export default function Revue() {
         {facturesPeriode.length === 0 ? (
           <EmptyState>Aucune facture prévue à émettre entre ces deux dates.</EmptyState>
         ) : (
-          <table className="table table-compact">
-            <thead>
-              <tr>
-                <th>N°</th>
-                <th>Projet</th>
-                <th>Libellé</th>
-                <th className="right">HT</th>
-                <th className="right">Prévue le</th>
-              </tr>
-            </thead>
-            <tbody>
+          <Table
+            compact
+            head={[
+              'N°',
+              'Projet',
+              'Libellé',
+              <span key="ht" className="right">HT</span>,
+              <span key="d" className="right">Prévue le</span>,
+            ]}
+          >
               {facturesPeriode.map((f) => (
                 <tr key={f.id}>
                   <td>{f.id}</td>
@@ -344,8 +339,7 @@ export default function Revue() {
                   <td className="right">{fmtDate(f.emission)}</td>
                 </tr>
               ))}
-            </tbody>
-          </table>
+          </Table>
         )}
       </Card>
 

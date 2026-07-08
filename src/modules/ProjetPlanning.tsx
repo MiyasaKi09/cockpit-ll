@@ -136,7 +136,7 @@ export default function ProjetPlanning({ projet: p }: { projet: Projet }) {
   }
 
   const ligne = (cle: string, gauche: React.ReactNode, contenu: React.ReactNode) => (
-    <div key={cle} style={{ display: 'grid', gridTemplateColumns: '150px 1fr', gap: 8, alignItems: 'center', minWidth: 560 }}>
+    <div key={cle} className="plan-frise plan-frise-projet">
       <div className="small" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{gauche}</div>
       <div style={{ position: 'relative', height: 26, background: 'var(--bg-soft)', borderRadius: 2 }}>
         {contenu}
@@ -159,7 +159,7 @@ export default function ProjetPlanning({ projet: p }: { projet: Projet }) {
         <div style={{ overflowX: 'auto' }}>
           <div style={{ display: 'grid', rowGap: 6 }}>
             {/* graduations mois */}
-            <div style={{ display: 'grid', gridTemplateColumns: '150px 1fr', gap: 8, minWidth: 560 }}>
+            <div className="plan-frise plan-frise-projet">
               <div />
               <div style={{ position: 'relative', height: 18 }}>
                 {mois.map((m) => (

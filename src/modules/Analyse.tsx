@@ -17,7 +17,7 @@ import {
   coutJourObjectif,
   nomProjet,
 } from '../derive'
-import { Badge, Card, EmptyState, Page, Stat } from '../ui'
+import { Badge, Card, EmptyState, Page, Stat, Table } from '../ui'
 import { addDays, fmtMoney, fmtPct, todayISO } from '../util'
 
 function CouleurParJour({ v, objectif }: { v: number | null; objectif: number }) {
@@ -65,20 +65,19 @@ function TableauPeriode({ titre, debut, fin, setDebut, setFin }: {
         <EmptyState>Aucune facture émise ni heure pointée sur cette période.</EmptyState>
       ) : (
         <>
-          <table className="table table-compact">
-            <thead>
-              <tr>
-                <th>Mission</th>
-                <th className="right">CA facturé HT</th>
-                <th className="right">Coût du temps (réel)</th>
-                <th className="right">Marge réelle</th>
-                <th className="right">Jours</th>
-                <th className="right">€ / jour réel</th>
-                <th className="right">Part CA</th>
-                <th className="right">Part temps</th>
-              </tr>
-            </thead>
-            <tbody>
+          <Table
+            compact
+            head={[
+              'Mission',
+              <span key="ca" className="right">CA facturé HT</span>,
+              <span key="ct" className="right">Coût du temps (réel)</span>,
+              <span key="ma" className="right">Marge réelle</span>,
+              <span key="j" className="right">Jours</span>,
+              <span key="pj" className="right">€ / jour réel</span>,
+              <span key="pca" className="right">Part CA</span>,
+              <span key="pt" className="right">Part temps</span>,
+            ]}
+          >
               <tr style={{ fontWeight: 650 }}>
                 <td>Total / moyenne</td>
                 <td className="right num">{fmtMoney(syn.totalCA)}</td>
@@ -119,8 +118,7 @@ function TableauPeriode({ titre, debut, fin, setDebut, setFin }: {
                   <td className="right num">{fmtPct(l.partTemps, 0)}</td>
                 </tr>
               ))}
-            </tbody>
-          </table>
+          </Table>
           <p className="muted small" style={{ marginTop: 8 }}>
             Temps hors projet sur la période : {Math.round(syn.joursHorsProjet)} j
             {totalAvecHP > 0 && <> — part facturable : {fmtPct(syn.totalJours / totalAvecHP, 0)}</>}.
@@ -169,7 +167,7 @@ function CarteCAMensuel() {
           <table className="table table-compact">
             <thead>
               <tr>
-                <th>Mission</th>
+                <th className="col-figee">Mission</th>
                 {MOIS_COURTS.map((m) => (
                   <th key={m} className="right">{m}</th>
                 ))}
@@ -178,23 +176,23 @@ function CarteCAMensuel() {
             </thead>
             <tbody>
               <tr style={{ fontWeight: 650 }}>
-                <td>Total émis HT</td>
+                <td className="col-figee">Total émis HT</td>
                 {donnees.emisParMois.map((v, i) => cellule(v, i, true))}
                 {cellule(donnees.emisParMois.reduce((s, x) => s + x, 0), 'total', true)}
               </tr>
               <tr className="muted">
-                <td>dont encaissé (date réelle)</td>
+                <td className="col-figee">dont encaissé (date réelle)</td>
                 {donnees.encaisseParMois.map((v, i) => cellule(v, i))}
                 {cellule(donnees.encaisseParMois.reduce((s, x) => s + x, 0), 'total')}
               </tr>
               <tr className="muted">
-                <td>à venir (prévu à l'échéancier)</td>
+                <td className="col-figee">à venir (prévu à l'échéancier)</td>
                 {donnees.prevuParMois.map((v, i) => cellule(v, i))}
                 {cellule(donnees.prevuParMois.reduce((s, x) => s + x, 0), 'total')}
               </tr>
               {donnees.lignes.map((l) => (
                 <tr key={l.projetId}>
-                  <td>
+                  <td className="col-figee">
                     <a href={`#/projets/${l.projetId}`} title={nomProjet(state, l.projetId)}>
                       {nomProjet(state, l.projetId).slice(0, 38)}
                     </a>

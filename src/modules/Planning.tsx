@@ -9,7 +9,7 @@
 import { useState } from 'react'
 import type { AppState, MarcheTravaux, PhaseCode, Projet } from '../types'
 import { useStore } from '../store'
-import { Badge, Btn, Card, confirmer, DateInput, EmptyState, Field, Icon, NumInput, navigate, Page, Select, Tabs, TextInput, toast, useRoute, useToday } from '../ui'
+import { Badge, Btn, Card, confirmer, DateInput, EmptyState, Field, Icon, NumInput, navigate, Page, Select, Table, Tabs, TextInput, toast, useRoute, useToday } from '../ui'
 import { addDays, diffDays, fmtDate, fmtHeures, mondayOf, todayISO, uid } from '../util'
 import { LIBELLES_PHASES, PHASES_ORDRE } from '../miqcp'
 import { daterPhases, facturesParDefaut } from '../echeancier'
@@ -216,44 +216,34 @@ function EditionDates({ projet: p }: { projet: Projet }) {
         ◀ ▶ décale une phase d'une semaine ; case cochée = les phases suivantes suivent.
         « Réaligner l'échéancier » recale ensuite les factures prévues.
       </p>
-      <table className="table table-compact">
-        <thead>
-          <tr>
-            <th>Phase</th>
-            <th>Début</th>
-            <th>Fin</th>
-            <th>Décaler</th>
+      <Table compact head={['Phase', 'Début', 'Fin', 'Décaler']}>
+        {phases.map((ph) => (
+          <tr key={ph.code}>
+            <td>
+              <span
+                style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 3, background: couleurPhase(ph.code), marginRight: 6 }}
+              />
+              <strong>{ph.code}</strong> <span className="muted small">{LIBELLES_PHASES[ph.code]}</span>
+            </td>
+            <td>
+              <DateInput value={ph.debut ?? null} onChange={(v) => majDate(ph.code, 'debut', v)} />
+            </td>
+            <td>
+              <DateInput value={ph.fin ?? null} onChange={(v) => majDate(ph.code, 'fin', v)} />
+            </td>
+            <td>
+              <span style={{ display: 'inline-flex', gap: 4 }}>
+                <Btn small onClick={() => decaler(ph.code, -7)} title="Avancer d'une semaine">
+                  ◀ 1 sem
+                </Btn>
+                <Btn small onClick={() => decaler(ph.code, 7)} title="Repousser d'une semaine">
+                  1 sem ▶
+                </Btn>
+              </span>
+            </td>
           </tr>
-        </thead>
-        <tbody>
-          {phases.map((ph) => (
-            <tr key={ph.code}>
-              <td>
-                <span
-                  style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 3, background: couleurPhase(ph.code), marginRight: 6 }}
-                />
-                <strong>{ph.code}</strong> <span className="muted small">{LIBELLES_PHASES[ph.code]}</span>
-              </td>
-              <td>
-                <DateInput value={ph.debut ?? null} onChange={(v) => majDate(ph.code, 'debut', v)} />
-              </td>
-              <td>
-                <DateInput value={ph.fin ?? null} onChange={(v) => majDate(ph.code, 'fin', v)} />
-              </td>
-              <td>
-                <span style={{ display: 'inline-flex', gap: 4 }}>
-                  <Btn small onClick={() => decaler(ph.code, -7)} title="Avancer d'une semaine">
-                    ◀ 1 sem
-                  </Btn>
-                  <Btn small onClick={() => decaler(ph.code, 7)} title="Repousser d'une semaine">
-                    1 sem ▶
-                  </Btn>
-                </span>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+        ))}
+      </Table>
     </Card>
   )
 }
@@ -454,38 +444,28 @@ function EditionChantier({ projet: p }: { projet: Projet }) {
             tous les lots qui démarrent après glissent aussi. Les dates se saisissent aussi dans la
             fiche marché (onglet Chantier).
           </p>
-          <table className="table table-compact">
-            <thead>
-              <tr>
-                <th>Lot · entreprise</th>
-                <th>Début</th>
-                <th>Fin</th>
-                <th>Décaler</th>
+          <Table compact head={['Lot · entreprise', 'Début', 'Fin', 'Décaler']}>
+            {lots.map((m, i) => (
+              <tr key={m.id}>
+                <td>
+                  <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 3, background: couleurLot(i), marginRight: 6 }} />
+                  <strong>{m.lot}</strong> <span className="muted small">{m.entreprise}</span>
+                </td>
+                <td>
+                  <DateInput value={m.dateDebut ?? null} onChange={(v) => majDate(m.id, 'dateDebut', v)} />
+                </td>
+                <td>
+                  <DateInput value={m.dateFin ?? null} onChange={(v) => majDate(m.id, 'dateFin', v)} />
+                </td>
+                <td>
+                  <span style={{ display: 'inline-flex', gap: 4 }}>
+                    <Btn small onClick={() => decaler(m.id, -7)}>◀ 1 sem</Btn>
+                    <Btn small onClick={() => decaler(m.id, 7)}>1 sem ▶</Btn>
+                  </span>
+                </td>
               </tr>
-            </thead>
-            <tbody>
-              {lots.map((m, i) => (
-                <tr key={m.id}>
-                  <td>
-                    <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 3, background: couleurLot(i), marginRight: 6 }} />
-                    <strong>{m.lot}</strong> <span className="muted small">{m.entreprise}</span>
-                  </td>
-                  <td>
-                    <DateInput value={m.dateDebut ?? null} onChange={(v) => majDate(m.id, 'dateDebut', v)} />
-                  </td>
-                  <td>
-                    <DateInput value={m.dateFin ?? null} onChange={(v) => majDate(m.id, 'dateFin', v)} />
-                  </td>
-                  <td>
-                    <span style={{ display: 'inline-flex', gap: 4 }}>
-                      <Btn small onClick={() => decaler(m.id, -7)}>◀ 1 sem</Btn>
-                      <Btn small onClick={() => decaler(m.id, 7)}>1 sem ▶</Btn>
-                    </span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+            ))}
+          </Table>
         </>
       )}
     </Card>
@@ -614,7 +594,7 @@ function PlanDeCharge({ debutLundi, nbSemaines }: { debutLundi: string; nbSemain
       <table className="table table-compact" style={{ minWidth: 620, borderCollapse: 'separate', borderSpacing: 0 }}>
         <thead>
           <tr>
-            <th style={{ textAlign: 'left', position: 'sticky', left: 0, background: 'var(--bg, #fff)', zIndex: 1 }}>
+            <th className="col-figee" style={{ textAlign: 'left' }}>
               Personne
             </th>
             {lundis.map((l) => (
@@ -639,7 +619,7 @@ function PlanDeCharge({ debutLundi, nbSemaines }: { debutLundi: string; nbSemain
         <tbody>
           {equipe.map((pers) => (
             <tr key={pers.id}>
-              <td style={{ position: 'sticky', left: 0, background: 'var(--bg, #fff)', zIndex: 1, whiteSpace: 'nowrap' }}>
+              <td className="col-figee" style={{ whiteSpace: 'nowrap' }}>
                 <strong>{pers.nom}</strong>{' '}
                 <span className="muted small">{Math.round(cap)} h/sem</span>
               </td>
@@ -661,11 +641,13 @@ function PlanDeCharge({ debutLundi, nbSemaines }: { debutLundi: string; nbSemain
                 }
                 const ratio = capP > 0 ? h / capP : 0
                 const { bg, fg } = couleurCharge(ratio)
+                const detail = `${pers.nom} · semaine du ${fmtDate(l)} — ${fmtHeures(h)} planifiées / ${Math.round(capP)} h capacité${absH > 0 ? ` (${Math.round(absH)} h de congé)` : ''} (${Math.round(ratio * 100)} %)`
                 return (
                   <td
                     key={l}
-                    style={{ textAlign: 'center', background: bg, color: fg, fontSize: 11, fontWeight: ratio > 1.001 ? 800 : 600, padding: '4px 2px', boxShadow: absH > 0 ? 'inset 0 -3px 0 var(--ink-3)' : undefined }}
-                    title={`${pers.nom} · semaine du ${fmtDate(l)}\n${fmtHeures(h)} planifiées / ${Math.round(capP)} h capacité${absH > 0 ? ` (${Math.round(absH)} h de congé)` : ''} (${Math.round(ratio * 100)} %)`}
+                    style={{ textAlign: 'center', background: bg, color: fg, fontSize: 11, fontWeight: ratio > 1.001 ? 800 : 600, padding: '4px 2px', boxShadow: absH > 0 ? 'inset 0 -3px 0 var(--ink-3)' : undefined, cursor: 'pointer' }}
+                    title={detail}
+                    onClick={() => toast(detail)}
                   >
                     {h < 0.05 ? '·' : Math.round(h)}
                   </td>
@@ -674,7 +656,7 @@ function PlanDeCharge({ debutLundi, nbSemaines }: { debutLundi: string; nbSemain
             </tr>
           ))}
           <tr>
-            <td style={{ position: 'sticky', left: 0, background: 'var(--bg, #fff)', zIndex: 1 }}>
+            <td className="col-figee">
               <span className="muted small">Équipe · {Math.round(cap * equipe.length)} h/sem</span>
             </td>
             {lundis.map((l) => {
@@ -759,17 +741,8 @@ function GestionAbsences() {
             <Btn kind="primary" onClick={ajouter}>Ajouter</Btn>
           </div>
           {absences.length > 0 && (
-            <table className="table table-compact" style={{ marginTop: 12 }}>
-              <thead>
-                <tr>
-                  <th>Personne</th>
-                  <th>Du</th>
-                  <th>Au</th>
-                  <th>Motif</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
+            <div style={{ marginTop: 12 }}>
+              <Table compact head={['Personne', 'Du', 'Au', 'Motif', '']}>
                 {absences.map((a) => (
                   <tr key={a.id}>
                     <td><strong>{a.personne}</strong></td>
@@ -781,8 +754,8 @@ function GestionAbsences() {
                     </td>
                   </tr>
                 ))}
-              </tbody>
-            </table>
+              </Table>
+            </div>
           )}
         </>
       )}
@@ -966,7 +939,8 @@ function GanttEtCharge({ vue }: { vue: 'etudes' | 'chantier' | 'charge' }) {
               après avoir sélectionné un projet ci-dessous.
             </EmptyState>
           ) : (
-            <div style={{ display: 'grid', gridTemplateColumns: '190px 1fr', rowGap: 8, alignItems: 'center' }}>
+            <div style={{ overflowX: 'auto' }}>
+            <div className="plan-frise">
               <div />
               <div style={{ position: 'relative', height: 20 }}>
                 {mois.map((m) => (
@@ -997,6 +971,7 @@ function GanttEtCharge({ vue }: { vue: 'etudes' | 'chantier' | 'charge' }) {
                 </div>
               ))}
             </div>
+            </div>
           )
         ) : lignesCh.length === 0 ? (
           <EmptyState>
@@ -1004,7 +979,8 @@ function GanttEtCharge({ vue }: { vue: 'etudes' | 'chantier' | 'charge' }) {
             Chantier d'un projet, ou via « Ajuster le planning chantier » après avoir choisi un projet.
           </EmptyState>
         ) : (
-          <div style={{ display: 'grid', gridTemplateColumns: '210px 1fr', rowGap: 6, alignItems: 'center' }}>
+          <div style={{ overflowX: 'auto' }}>
+          <div className="plan-frise plan-frise-chantier">
             <div />
             <div style={{ position: 'relative', height: 20 }}>
               {mois.map((m) => (
@@ -1034,6 +1010,7 @@ function GanttEtCharge({ vue }: { vue: 'etudes' | 'chantier' | 'charge' }) {
                 </div>
               </div>
             ))}
+          </div>
           </div>
         )}
         {mode === 'phases' && (

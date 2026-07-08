@@ -70,8 +70,9 @@ export interface LotAnalyse {
   elements: ElementAnalyse[]
 }
 
-/** en-tête de lot : « LOT N° 02 — GROS ŒUVRE », « Lot 3 : Charpente »… */
-const RE_LOT = /^(?:C\.?C\.?T\.?P\.?\s*[-–—:]?\s*)?LOT\s*(?:N\s*[°ºo]\s*)?(\d{1,2})\s*([A-Za-z])?\s*[-–—:.]?\s+(.{3,60})$/i
+/** en-tête de lot : « LOT N° 02 — GROS ŒUVRE », « Lot 3 : Charpente »…
+ *  (réutilisé par l'analyse des DPGF — même allotissement) */
+export const RE_LOT = /^(?:C\.?C\.?T\.?P\.?\s*[-–—:]?\s*)?LOT\s*(?:N\s*[°ºo]\s*)?(\d{1,2})\s*([A-Za-z])?\s*[-–—:.]?\s+(.{3,60})$/i
 
 /** article numéroté : « 2.3.1 Maçonnerie de soubassement » (≥ 2 niveaux) */
 const RE_ARTICLE = /^(\d{1,2}(?:\.\d{1,3}){1,4})\.?\s+(\S.{1,149})$/

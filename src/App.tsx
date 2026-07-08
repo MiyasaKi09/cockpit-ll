@@ -21,6 +21,7 @@ import Ressources from './modules/Ressources'
 import Agenda from './modules/Agenda'
 import Parametres from './modules/Parametres'
 import Planning from './modules/Planning'
+import { AssistantPage } from './modules/Assistant'
 
 // Le moteur temps → marge → facturation est l'interface : six écrans
 // quotidiens en tête, le reste en « Atelier » (accessible, discret).
@@ -34,6 +35,7 @@ const NAV: { groupe: string; sec?: boolean; items: { path: string; label: string
       { path: 'facturation', label: 'Factures' },
       { path: 'analyse', label: 'Analyse €/jour' },
       { path: 'revue', label: 'Revue de pilotage' },
+      { path: 'assistant', label: 'Assistant' },
     ],
   },
   {
@@ -147,6 +149,9 @@ export default function App() {
       break
     case 'planning':
       page = <Planning />
+      break
+    case 'assistant':
+      page = <AssistantPage />
       break
     default:
       page = <Cockpit />

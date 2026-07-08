@@ -6,7 +6,7 @@
 
 import type { AppState, Facture, PromptTemplate } from './types'
 
-export const STATE_VERSION = 9
+export const STATE_VERSION = 10
 
 const P = (v: number) => Math.round(v * 100) / 100
 
@@ -947,5 +947,7 @@ export function seedState(): AppState {
         date: '2026-06-25',
       },
     ],
+
+    documents: [],
   }
 }

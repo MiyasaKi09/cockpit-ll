@@ -551,6 +551,21 @@ export interface AppState {
   tempsHorsProjet: TempsHorsProjet[]
   absences: Absence[]
   evaluations: EvaluationEntreprise[]
+  documents: DocumentCorpus[]
+}
+
+/** document du corpus de l'assistant : texte réglementaire (Légifrance,
+ *  Licence Ouverte — TOUJOURS avec sa source et sa version) ou modèle de
+ *  document servant à la génération. Jamais de texte AFNOR/CSTB protégé. */
+export interface DocumentCorpus {
+  id: string
+  titre: string
+  type: 'reglementaire' | 'modele'
+  /** provenance exacte : nom du texte, identifiant Légifrance, date de version */
+  source?: string
+  url?: string
+  texte: string
+  ajouteLe: string // ISO
 }
 
 /** note d'une entreprise sur UN chantier — l'historique multi-chantiers

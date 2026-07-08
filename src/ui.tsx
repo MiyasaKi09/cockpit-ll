@@ -173,6 +173,40 @@ export function EmptyState({ children }: { children: ReactNode }) {
   return <div className="empty">{children}</div>
 }
 
+/** notation 1-5 en étoiles — cliquable si onChange est fourni, sinon lecture seule */
+export function Etoiles({
+  note,
+  onChange,
+  titre,
+}: {
+  note: number | null | undefined
+  onChange?: (n: number) => void
+  titre?: string
+}) {
+  return (
+    <span className="etoiles" title={titre}>
+      {[1, 2, 3, 4, 5].map((n) => {
+        const pleine = note != null && n <= note
+        return onChange ? (
+          <button
+            key={n}
+            type="button"
+            className={`etoile ${pleine ? 'pleine' : ''}`}
+            onClick={() => onChange(n)}
+            aria-label={`${n} sur 5`}
+          >
+            {pleine ? '★' : '☆'}
+          </button>
+        ) : (
+          <span key={n} className={`etoile ${pleine ? 'pleine' : ''}`} aria-hidden="true">
+            {pleine ? '★' : '☆'}
+          </span>
+        )
+      })}
+    </span>
+  )
+}
+
 // ---------- icônes (jeu de traits, style Lucide, currentColor) ----------
 
 export type IconName =

@@ -546,6 +546,19 @@ export interface AppState {
   courriers: Courrier[]
   tempsHorsProjet: TempsHorsProjet[]
   absences: Absence[]
+  evaluations: EvaluationEntreprise[]
+}
+
+/** note d'une entreprise sur UN chantier — l'historique multi-chantiers
+ *  se lit sur la fiche entreprise (une évaluation par couple artisan × projet) */
+export interface EvaluationEntreprise {
+  id: string
+  artisanId: string
+  projetId: string
+  /** 1 (à éviter) → 5 (excellente) */
+  note: number
+  commentaire?: string
+  date: string // ISO
 }
 
 /** congé / absence d'une personne — réduit sa capacité dans le plan de charge */

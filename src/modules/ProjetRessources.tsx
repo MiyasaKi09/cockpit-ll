@@ -5,7 +5,7 @@
 import { useState } from 'react'
 import type { Projet } from '../types'
 import { useStore } from '../store'
-import { Badge, Btn, Card, EmptyState, Field, Modal, Select, Table, TextInput } from '../ui'
+import { Badge, Btn, Card, EmptyState, Etoiles, Field, Modal, Select, Table, TextInput, toast } from '../ui'
 import { fmtDate, fold, todayISO, uid } from '../util'
 
 export default function ProjetRessources({ projet: p }: { projet: Projet }) {
@@ -24,9 +24,11 @@ export default function ProjetRessources({ projet: p }: { projet: Projet }) {
         <CarteMateriauxLies projet={p} maj={maj} />
         <CarteArtisansLies projet={p} maj={maj} />
       </div>
+      <CarteContactsLies projet={p} />
       <p className="muted small">
-        Les fiches complètes vivent dans <a href="#/ressources">Matériaux & artisans</a> — ici, on rattache
-        au projet ce qui le concerne : pas de double saisie, l'agence entière profite de chaque fiche.
+        Les fiches complètes vivent dans <a href="#/ressources">Matériaux & artisans</a> et dans le{' '}
+        <a href="#/agenda">CRM</a> — ici, on rattache au projet ce qui le concerne : pas de double
+        saisie, l'agence entière profite de chaque fiche.
       </p>
     </>
   )
@@ -232,40 +234,94 @@ function CarteMateriauxLies({ projet: p, maj }: { projet: Projet; maj: Maj }) {
 
 function CarteArtisansLies({ projet: p, maj }: { projet: Projet; maj: Maj }) {
   const { state, update } = useStore()
+  /** artisan dont on est en train d'éditer le commentaire d'évaluation */
+  const [commentePour, setCommentePour] = useState<string | null>(null)
+  const [brouillon, setBrouillon] = useState('')
 
   const lies = p.artisanIds
     .map((id) => state.artisans.find((a) => a.id === id))
     .filter((a): a is NonNullable<typeof a> => Boolean(a))
   const disponibles = state.artisans.filter((a) => !p.artisanIds.includes(a.id))
 
+  const evalDe = (artisanId: string) =>
+    state.evaluations.find((e) => e.artisanId === artisanId && e.projetId === p.id)
+
+  const noter = (artisanId: string, note: number) =>
+    update((d) => {
+      const ex = d.evaluations.find((e) => e.artisanId === artisanId && e.projetId === p.id)
+      if (ex) {
+        ex.note = note
+        ex.date = todayISO()
+      } else {
+        d.evaluations.push({ id: uid('ev'), artisanId, projetId: p.id, note, date: todayISO() })
+      }
+    })
+
+  const commenter = (artisanId: string) => {
+    update((d) => {
+      const ex = d.evaluations.find((e) => e.artisanId === artisanId && e.projetId === p.id)
+      if (ex) ex.commentaire = brouillon.trim() || undefined
+    })
+    setCommentePour(null)
+    setBrouillon('')
+  }
+
   return (
     <Card titre="Artisans consultés / pressentis">
       {lies.length === 0 ? (
         <EmptyState>Aucun artisan rattaché — utile dès la consultation des entreprises.</EmptyState>
       ) : (
-        <Table compact head={['Entreprise', 'Lots', '']}>
-          {lies.map((a) => (
-            <tr key={a.id}>
-              <td>
-                <a href={`#/ressources/artisan/${a.id}`}><strong>{a.nom}</strong></a>
-                {a.contactNom && <div className="muted small">{a.contactNom}{a.tel ? ` · ${a.tel}` : ''}</div>}
-              </td>
-              <td>
-                {a.lots.slice(0, 3).map((l) => (
-                  <Badge key={l} tone="muted">{l}</Badge>
-                ))}
-              </td>
-              <td className="right">
-                <Btn
-                  small
-                  kind="ghost"
-                  onClick={() => maj((pr) => { pr.artisanIds = pr.artisanIds.filter((x) => x !== a.id) })}
-                >
-                  Retirer
-                </Btn>
-              </td>
-            </tr>
-          ))}
+        <Table compact head={['Entreprise', 'Note (ce chantier)', '']}>
+          {lies.map((a) => {
+            const ev = evalDe(a.id)
+            return (
+              <tr key={a.id}>
+                <td>
+                  <a href={`#/ressources/artisan/${a.id}`}><strong>{a.nom}</strong></a>
+                  <div className="muted small">
+                    {a.lots.slice(0, 2).join(', ')}
+                    {a.contactNom ? ` · ${a.contactNom}` : ''}
+                  </div>
+                </td>
+                <td>
+                  <Etoiles
+                    note={ev?.note ?? null}
+                    onChange={(n) => noter(a.id, n)}
+                    titre="Comment l'entreprise s'est comportée sur CE chantier"
+                  />
+                  {commentePour === a.id ? (
+                    <div className="toolbar" style={{ margin: '6px 0 0' }}>
+                      <TextInput value={brouillon} onChange={setBrouillon} placeholder="Commentaire (délais, qualité, SAV…)" />
+                      <Btn small kind="primary" onClick={() => commenter(a.id)}>OK</Btn>
+                    </div>
+                  ) : ev?.commentaire ? (
+                    <div className="muted small" style={{ maxWidth: 260 }}>{ev.commentaire}</div>
+                  ) : null}
+                </td>
+                <td className="right" style={{ whiteSpace: 'nowrap' }}>
+                  {ev && commentePour !== a.id && (
+                    <Btn
+                      small
+                      kind="ghost"
+                      onClick={() => {
+                        setCommentePour(a.id)
+                        setBrouillon(ev.commentaire || '')
+                      }}
+                    >
+                      Commenter
+                    </Btn>
+                  )}{' '}
+                  <Btn
+                    small
+                    kind="ghost"
+                    onClick={() => maj((pr) => { pr.artisanIds = pr.artisanIds.filter((x) => x !== a.id) })}
+                  >
+                    Retirer
+                  </Btn>
+                </td>
+              </tr>
+            )
+          })}
         </Table>
       )}
       <QuickAttach
@@ -283,6 +339,80 @@ function CarteArtisansLies({ projet: p, maj }: { projet: Projet; maj: Maj }) {
       />
       <p className="muted small" style={{ marginTop: 6 }}>
         Fiche complète (lots, décennale…) : cliquez le nom. <a href="#/ressources">Annuaire complet →</a>
+      </p>
+    </Card>
+  )
+}
+
+// ------------------------------------------------------------------
+// Contacts du projet (CRM) — lier ou créer un contact sans quitter la fiche
+// ------------------------------------------------------------------
+
+function CarteContactsLies({ projet: p }: { projet: Projet }) {
+  const { state, update } = useStore()
+
+  const lies = state.contacts.filter((c) => c.projetsIds?.includes(p.id))
+  const disponibles = state.contacts.filter((c) => !c.projetsIds?.includes(p.id))
+
+  return (
+    <Card titre="Contacts du projet (CRM)">
+      {lies.length === 0 ? (
+        <EmptyState>Aucun contact rattaché — MOA, BET, mairie… tapez un nom ci-dessous.</EmptyState>
+      ) : (
+        <Table compact head={['Contact', 'Type', 'Joindre', '']}>
+          {lies.map((c) => (
+            <tr key={c.id}>
+              <td>
+                <strong>{c.nom}</strong>
+                {c.organisme && <div className="muted small">{c.organisme}</div>}
+              </td>
+              <td>
+                <Badge tone="muted">{c.type}</Badge>
+                {c.role ? <span className="muted small"> {c.role}</span> : null}
+              </td>
+              <td className="small">{c.email || c.tel || '—'}</td>
+              <td className="right">
+                <Btn
+                  small
+                  kind="ghost"
+                  onClick={() =>
+                    update((d) => {
+                      const x = d.contacts.find((y) => y.id === c.id)
+                      if (x) x.projetsIds = (x.projetsIds || []).filter((id) => id !== p.id)
+                    })
+                  }
+                >
+                  Détacher
+                </Btn>
+              </td>
+            </tr>
+          ))}
+        </Table>
+      )}
+      <QuickAttach
+        placeholder="Tapez un contact (ex. « Mme Lefèvre ») puis Entrée…"
+        disponibles={disponibles.map((c) => ({ id: c.id, nom: c.nom, detail: c.organisme }))}
+        onExistant={(id) =>
+          update((d) => {
+            const c = d.contacts.find((y) => y.id === id)
+            if (c) c.projetsIds = [...new Set([...(c.projetsIds || []), p.id])]
+          })
+        }
+        onCreer={(nom) => {
+          update((d) => {
+            d.contacts.push({
+              id: uid('ct'),
+              nom,
+              type: 'Autre',
+              projetsIds: [p.id],
+              notes: `Créé depuis ${p.id} (${fmtDate(todayISO())}).`,
+            })
+          })
+          toast(`Contact « ${nom} » créé et rattaché à ${p.id} — type et coordonnées à compléter dans le CRM.`, { tone: 'ok' })
+        }}
+      />
+      <p className="muted small" style={{ marginTop: 6 }}>
+        Relances, journal d'échanges et fiches complètes : <a href="#/agenda">Contacts & obligations →</a>
       </p>
     </Card>
   )

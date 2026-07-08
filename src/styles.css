@@ -888,6 +888,22 @@ textarea.input { resize: vertical; }
 .cmdk-item-detail { font-size: 12px; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cmdk-item-projets { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; max-width: 220px; }
 
+/* ---------- étoiles (notation entreprise) ---------- */
+
+.etoiles { display: inline-flex; gap: 1px; white-space: nowrap; }
+.etoile {
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-size: 15px;
+  line-height: 1;
+  color: var(--ink-3);
+}
+button.etoile { cursor: pointer; }
+button.etoile:hover { color: var(--warn); }
+.etoile.pleine { color: var(--c-yellow); }
+
 /* ---------- topbar & tiroir mobile (en fin de fichier : gagne la cascade) ---------- */
 
 .topbar { display: none; }

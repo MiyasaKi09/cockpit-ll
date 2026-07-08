@@ -6,7 +6,7 @@
 
 import type { AppState, Facture, PromptTemplate } from './types'
 
-export const STATE_VERSION = 8
+export const STATE_VERSION = 9
 
 const P = (v: number) => Math.round(v * 100) / 100
 
@@ -921,5 +921,24 @@ export function seedState(): AppState {
     ],
 
     absences: [],
+
+    evaluations: [
+      {
+        id: 'ev-1',
+        artisanId: 'ar-1',
+        projetId: 'P03',
+        note: 4,
+        commentaire: 'EXEMPLE — bon rythme, dallage propre ; réserve sur la tenue du planning en fin de lot.',
+        date: '2026-06-25',
+      },
+      {
+        id: 'ev-2',
+        artisanId: 'ar-3',
+        projetId: 'P03',
+        note: 3,
+        commentaire: 'EXEMPLE — qualité OK, démarrage laborieux (2 semaines de retard au levage).',
+        date: '2026-06-25',
+      },
+    ],
   }
 }

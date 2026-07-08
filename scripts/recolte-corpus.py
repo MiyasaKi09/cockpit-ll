@@ -278,6 +278,7 @@ def construire_packs_codes(dossier):
     ])
     packs.append({
         "id": "marches-publics",
+        "theme": "Marchés publics",
         "titre": "Marchés publics — exécution & maîtrise d'œuvre",
         "description": "Code de la commande publique : délais de paiement, avances et acomptes, retenue de garantie, sous-traitance, et le livre MOA/MOE (loi MOP codifiée, concours, rémunération).",
         "version": v,
@@ -293,6 +294,7 @@ def construire_packs_codes(dossier):
     ])
     packs.append({
         "id": "incendie-cch",
+        "theme": "Sécurité incendie",
         "titre": "Sécurité incendie — socle CCH (classement ERP)",
         "description": "Code de la construction et de l'habitation : objectifs de sécurité, classement des ERP en types et catégories, autorisations de travaux, commissions de sécurité, ERP existants.",
         "version": v,
@@ -308,6 +310,7 @@ def construire_packs_codes(dossier):
     ])
     packs.append({
         "id": "accessibilite-cch",
+        "theme": "Accessibilité PMR",
         "titre": "Accessibilité handicap — socle CCH",
         "description": "Code de la construction et de l'habitation : obligations d'accessibilité des ERP et des logements, dérogations, attestations, agendas d'accessibilité programmée.",
         "version": v,
@@ -325,6 +328,7 @@ def construire_packs_codes(dossier):
     ])
     packs.append({
         "id": "garanties-construction",
+        "theme": "Garanties & assurances",
         "titre": "Garanties & assurances construction",
         "description": "Code civil (contrat d'entreprise, réception, garanties biennale et décennale des constructeurs) et Code des assurances (obligations décennale et dommages-ouvrage).",
         "version": max(v_cc, v_ass),
@@ -340,8 +344,87 @@ def construire_packs_codes(dossier):
     ])
     packs.append({
         "id": "urbanisme-autorisations",
+        "theme": "Urbanisme",
         "titre": "Urbanisme — autorisations (PC / DP)",
         "description": "Code de l'urbanisme : champ d'application des permis et déclarations préalables, composition du dossier de PC, délais d'instruction, recours obligatoire à l'architecte.",
+        "version": v,
+        "docs": docs,
+    })
+
+    CCH = "LEGITEXT000006074096"
+
+    # --- Acoustique (partie CCH) ---
+    docs, v = docs_code(dossier, "Code de la construction et de l'habitation", CCH, [
+        ("cch-acoustique", "CCH — Acoustique des bâtiments (isolement, bruits, attestation)",
+         r"Livre Ier .* > Titre V : (Qualité sanitaire|QUALITÉ SANITAIRE) > Chapitre IV : (Acou|AC)", None),
+    ])
+    packs.append({
+        "id": "acoustique-cch",
+        "theme": "Acoustique",
+        "titre": "Acoustique du bâtiment — socle CCH",
+        "description": "Code de la construction et de l'habitation : exigences d'isolement acoustique, protection contre les bruits, attestation de prise en compte de la réglementation acoustique.",
+        "version": v,
+        "docs": docs,
+    })
+
+    # --- Ascenseurs (partie CCH) ---
+    docs, v = docs_code(dossier, "Code de la construction et de l'habitation", CCH, [
+        ("cch-ascenseurs", "CCH — Ascenseurs : sécurité, entretien, contrôle technique",
+         r"Livre Ier .* > Titre III : (Règles générales de sécurité|RÈGLES GÉNÉRALES DE SÉCURITÉ) > Chapitre [IV]+ : .*scenseur", None),
+    ])
+    packs.append({
+        "id": "ascenseurs-cch",
+        "theme": "Ascenseurs",
+        "titre": "Ascenseurs — socle CCH",
+        "description": "Code de la construction et de l'habitation : obligations de sécurité des ascenseurs, entretien, contrôle technique quinquennal, travaux de mise en sécurité.",
+        "version": v,
+        "docs": docs,
+    })
+
+    # --- Thermique / RE2020 (partie CCH) ---
+    docs, v = docs_code(dossier, "Code de la construction et de l'habitation", CCH, [
+        ("cch-thermique-l", "CCH (législatif) — Performance énergétique et environnementale des bâtiments",
+         r"Partie législative > Livre Ier .* > Titre VII : Performance énergétique", None),
+        ("cch-thermique-r", "CCH (réglementaire) — RE2020 : exigences des constructions et rénovations",
+         r"Partie réglementaire > Livre Ier .* > Titre VII : PERFORMANCE ÉNERGÉTIQUE", r"Livre III|Aides diverses"),
+    ])
+    packs.append({
+        "id": "thermique-re2020",
+        "theme": "Thermique / RE2020",
+        "titre": "Thermique & RE2020 — socle CCH",
+        "description": "Code de la construction et de l'habitation, titre « Performance énergétique et environnementale » : exigences RE2020 des constructions neuves, rénovation énergétique, DPE et audit énergétique. (Les valeurs de calcul détaillées sont fixées par arrêtés — pack « Arrêtés énergie » à part.)",
+        "version": v,
+        "docs": docs,
+    })
+
+    # --- Amiante & plomb : diagnostics avant travaux sur le bâti existant ---
+    docs_trav, v_trav = docs_code(dossier, "Code du travail", "LEGITEXT000006072050", [
+        ("trav-amiante", "Code du travail — Risque amiante : repérage avant travaux, obligations du donneur d'ordre",
+         r"Section 3 : Risques d'exposition à l'amiante", None),
+    ])
+    docs_sante, v_sante = docs_code(dossier, "Code de la santé publique", "LEGITEXT000006072665", [
+        ("sante-plomb-amiante", "Code de la santé publique — Plomb (CREP) et amiante (DTA) dans les immeubles bâtis",
+         r"Livre III .* > Titre III .* > Chapitre IV : (Lutte contre la prése|LUTTE CONTRE LA PRÉSE)", None),
+    ])
+    packs.append({
+        "id": "amiante-plomb",
+        "theme": "Amiante & plomb",
+        "titre": "Amiante & plomb — diagnostics du bâti existant",
+        "description": "Code du travail (repérage amiante avant travaux, obligations du maître d'ouvrage) et Code de la santé publique (constat de risque d'exposition au plomb, dossier technique amiante) — incontournables en réhabilitation.",
+        "version": max(v_trav, v_sante),
+        "docs": docs_trav + docs_sante,
+    })
+
+    # --- ICPE : régime des installations classées (législatif) ---
+    docs, v = docs_code(dossier, "Code de l'environnement", "LEGITEXT000006074220", [
+        ("env-icpe-l", "Code de l'environnement — Installations classées (ICPE) : nomenclature, autorisation, enregistrement, déclaration",
+         r"Partie législative > Livre V .* > Titre Ier : Installations classées", None),
+    ])
+    packs.append({
+        "id": "icpe",
+        "theme": "ICPE",
+        "titre": "ICPE — régime des installations classées (législatif)",
+        "description": "Code de l'environnement, régime des installations classées pour la protection de l'environnement : définition, nomenclature, autorisation / enregistrement / déclaration — utile quand un projet relève d'une installation classée.",
         "version": v,
         "docs": docs,
     })
@@ -359,6 +442,7 @@ def construire_packs_codes(dossier):
 TNC = [
     {
         "pack": "incendie-erp-arretes",
+        "theme": "Sécurité incendie",
         "titre_pack": "Sécurité incendie ERP — règlement complet (volumineux)",
         "description": "Règlement de sécurité contre l'incendie dans les ERP, consolidé (arrêté du 25 juin 1980) : dispositions générales (GN, CO, AM, DF, MS…), 5e catégorie (PE) et établissements spéciaux (chapiteaux, gares, parcs de stationnement…). ~1,2 M de caractères : cochez la partie utile à la question.",
         "textes": [
@@ -367,6 +451,7 @@ TNC = [
     },
     {
         "pack": "accessibilite-arretes",
+        "theme": "Accessibilité PMR",
         "titre_pack": "Accessibilité handicap — arrêtés d'application",
         "description": "Arrêté du 20 avril 2017 (ERP neufs et installations ouvertes au public) et arrêté du 8 décembre 2014 (ERP situés dans un cadre bâti existant).",
         "textes": [
@@ -376,11 +461,30 @@ TNC = [
     },
     {
         "pack": "profession-architecte",
+        "theme": "Profession",
         "titre_pack": "Profession — loi de 1977 & déontologie",
         "description": "Loi n°77-2 du 3 janvier 1977 sur l'architecture (recours obligatoire, seuils) et code de déontologie des architectes (décret n°80-217).",
         "textes": [
             # le code de déontologie est ajouté par main() depuis sa version code consolidé
             (r"^Loi n° ?77-2 du 3 janvier 1977", "loi-1977", "Loi n°77-2 du 3 janvier 1977 sur l'architecture"),
+        ],
+    },
+    {
+        "pack": "gaz-arretes",
+        "theme": "Gaz / plomberie",
+        "titre_pack": "Sécurité gaz — arrêté du 23 février 2018",
+        "description": "Arrêté du 23 février 2018 (règles techniques et de sécurité applicables aux installations de gaz combustible des bâtiments d'habitation), qui a remplacé l'arrêté du 2 août 1977.",
+        "textes": [
+            (r"^Arrêté du 23 février 2018\b.*installations de gaz", "arrete-gaz-2018", "Arrêté du 23 février 2018 — Sécurité des installations de gaz des bâtiments d'habitation"),
+        ],
+    },
+    {
+        "pack": "energie-re2020-arrete",
+        "theme": "Thermique / RE2020",
+        "titre_pack": "RE2020 — arrêté « exigences » du 4 août 2021",
+        "description": "Arrêté du 4 août 2021 relatif aux exigences de performance énergétique et environnementale des constructions de bâtiments (RE2020) : indicateurs, seuils, méthode de calcul.",
+        "textes": [
+            (r"^Arrêté du 4 août 2021\b.*(performance énergétique|exigences)", "arrete-re2020-2021", "Arrêté du 4 août 2021 — Exigences RE2020 des constructions neuves"),
         ],
     },
 ]
@@ -468,6 +572,7 @@ def construire_packs_tnc(dossier_dump, version_dump, cache_index=None):
         if docs:
             packs.append({
                 "id": entree["pack"],
+                "theme": entree.get("theme", ""),
                 "titre": entree["titre_pack"],
                 "description": entree["description"],
                 "version": version_dump,
@@ -509,6 +614,7 @@ def main():
         index.append({
             "fichier": fichier,
             "id": pack["id"],
+            "theme": pack.get("theme", ""),
             "titre": pack["titre"],
             "description": pack["description"],
             "version": pack["version"],

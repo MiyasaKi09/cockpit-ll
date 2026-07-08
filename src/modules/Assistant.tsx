@@ -11,7 +11,7 @@
 //     JAMAIS de texte AFNOR / CSTB (DTU, NF, Eurocodes) — protégés.
 // ============================================================
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../store'
 import { Badge, Btn, Card, CopyBtn, EmptyState, Field, Page, Select, Table, Tabs, TextArea, TextInput, toast, useToday } from '../ui'
 import { assistantDisponible, interrogerAssistant } from '../assistant'
@@ -89,11 +89,55 @@ function BlocReponse({ reponse, modele }: { reponse: string; modele?: string }) 
 
 // ---------- Onglet 1 : question réglementaire sur le corpus ----------
 
+/** thème d'un document — porté par le pack à l'import, déduit de l'id pour
+ *  les documents ajoutés avant l'arrivée des thèmes (aucune migration) */
+const PREFIXES_THEME: [string, string][] = [
+  ['lf-cch-incendie', 'Sécurité incendie'],
+  ['lf-arrete-1980', 'Sécurité incendie'],
+  ['lf-arrete-1990', 'Sécurité incendie'],
+  ['lf-cch-access', 'Accessibilité PMR'],
+  ['lf-arrete-2017', 'Accessibilité PMR'],
+  ['lf-arrete-2014', 'Accessibilité PMR'],
+  ['lf-ccp-', 'Marchés publics'],
+  ['lf-cciv-', 'Garanties & assurances'],
+  ['lf-cass-', 'Garanties & assurances'],
+  ['lf-curb-', 'Urbanisme'],
+  ['lf-loi-1977', 'Profession'],
+  ['lf-deonto', 'Profession'],
+  ['lf-cch-acoustique', 'Acoustique'],
+  ['lf-cch-ascenseurs', 'Ascenseurs'],
+  ['lf-cch-thermique', 'Thermique / RE2020'],
+  ['lf-arrete-re2020', 'Thermique / RE2020'],
+  ['lf-trav-amiante', 'Amiante & plomb'],
+  ['lf-sante-plomb-amiante', 'Amiante & plomb'],
+  ['lf-env-icpe', 'ICPE'],
+  ['lf-arrete-gaz', 'Gaz / plomberie'],
+]
+
+function themeDoc(d: DocumentCorpus): string {
+  if (d.groupe) return d.groupe
+  const p = PREFIXES_THEME.find(([prefixe]) => d.id.startsWith(prefixe))
+  return p ? p[1] : 'Autres documents'
+}
+
 function OngletQuestion({ dispo }: { dispo: boolean }) {
   const { state } = useStore()
   const reglementaires = state.documents.filter((d) => d.type === 'reglementaire')
   // rien de coché par défaut : on ne paie (et n'envoie) que les textes utiles à la question
   const [coches, setCoches] = useState<Set<string>>(() => new Set())
+  /** thèmes dépliés (le détail document par document reste accessible) */
+  const [ouverts, setOuverts] = useState<Set<string>>(() => new Set())
+
+  const groupes = useMemo(() => {
+    const m = new Map<string, typeof reglementaires>()
+    for (const d of reglementaires) {
+      const t = themeDoc(d)
+      const liste = m.get(t)
+      if (liste) liste.push(d)
+      else m.set(t, [d])
+    }
+    return [...m.entries()]
+  }, [reglementaires])
   const [question, setQuestion] = useState('')
   const [difficile, setDifficile] = useState(false)
   const [enCours, setEnCours] = useState(false)
@@ -150,20 +194,73 @@ function OngletQuestion({ dispo }: { dispo: boolean }) {
       <Card titre="Question réglementaire">
         <p className="muted" style={{ marginTop: 0 }}>
           L’assistant répond uniquement à partir des textes cochés, avec citation des passages.
-          Si la réponse n’y est pas, il le dit — il n’invente pas. Cochez seulement les textes
-          utiles à la question : plus la sélection est courte, plus la réponse est précise et
-          économe.
+          Si la réponse n’y est pas, il le dit — il n’invente pas. Cochez le thème de la
+          question (sécurité incendie, PMR…) ; « Détail » permet d’affiner document par
+          document pour une réponse plus précise et moins chère.
         </p>
-        <div style={{ display: 'grid', gap: 6, marginBottom: 12 }}>
-          {reglementaires.map((d) => (
-            <label key={d.id} style={{ display: 'flex', alignItems: 'baseline', gap: 8, cursor: 'pointer' }}>
-              <input type="checkbox" checked={coches.has(d.id)} onChange={() => basculer(d.id)} />
-              <span>
-                {d.titre} <span className="muted small">({Math.max(1, Math.round(d.texte.length / 1000))} k)</span>
-                {d.source && <span className="muted small"> — {d.source}</span>}
-              </span>
-            </label>
-          ))}
+        <div style={{ display: 'grid', gap: 8, marginBottom: 12 }}>
+          {groupes.map(([nom, docs]) => {
+            const nCoches = docs.filter((d) => coches.has(d.id)).length
+            const tout = nCoches === docs.length
+            const poidsGroupe = Math.round(docs.reduce((s, d) => s + d.texte.length, 0) / 1000)
+            const ouvert = ouverts.has(nom)
+            return (
+              <div key={nom}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', flex: 1, minWidth: 0 }}>
+                    <input
+                      type="checkbox"
+                      checked={tout}
+                      ref={(el) => {
+                        if (el) el.indeterminate = nCoches > 0 && !tout
+                      }}
+                      onChange={() => {
+                        setCoches((prev) => {
+                          const s = new Set(prev)
+                          if (tout) docs.forEach((d) => s.delete(d.id))
+                          else docs.forEach((d) => s.add(d.id))
+                          return s
+                        })
+                      }}
+                    />
+                    <span>
+                      <strong>{nom}</strong>{' '}
+                      <span className="muted small">
+                        {docs.length} document(s) · {poidsGroupe} k
+                        {nCoches > 0 && !tout ? ` · ${nCoches} coché(s)` : ''}
+                      </span>
+                    </span>
+                  </label>
+                  <Btn
+                    small
+                    kind="ghost"
+                    onClick={() =>
+                      setOuverts((prev) => {
+                        const s = new Set(prev)
+                        if (s.has(nom)) s.delete(nom)
+                        else s.add(nom)
+                        return s
+                      })
+                    }
+                  >
+                    {ouvert ? 'Replier' : 'Détail'}
+                  </Btn>
+                </div>
+                {ouvert && (
+                  <div style={{ display: 'grid', gap: 5, margin: '6px 0 2px 26px' }}>
+                    {docs.map((d) => (
+                      <label key={d.id} style={{ display: 'flex', alignItems: 'baseline', gap: 8, cursor: 'pointer' }}>
+                        <input type="checkbox" checked={coches.has(d.id)} onChange={() => basculer(d.id)} />
+                        <span className="small">
+                          {d.titre} <span className="muted">({Math.max(1, Math.round(d.texte.length / 1000))} k)</span>
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )
+          })}
         </div>
         {(() => {
           const poids = reglementaires.filter((d) => coches.has(d.id)).reduce((s, d) => s + d.texte.length, 0)
@@ -410,11 +507,143 @@ interface PackCatalogue {
 /** contenu d'un pack public/corpus/<id>.json */
 interface PackCorpus {
   id: string
+  /** thème de sélection (Sécurité incendie, Accessibilité PMR…) */
+  theme?: string
   docs: { id: string; titre: string; type: 'reglementaire' | 'modele'; source?: string; url?: string; texte: string }[]
 }
 
 /** au-delà de ce poids de corpus, la synchro et le stockage local ralentissent */
 const SEUIL_POIDS_CORPUS = 2_000_000
+
+// ---------- import privé : DTU / normes achetés par l'agence ----------
+
+/** taille max d'un document envoyé au serverless (au-delà : coupé en parties) */
+const MAX_CARACTERES_PARTIE = 110_000
+
+/** coupe un long texte en parties aux frontières de paragraphes */
+function decouperTexte(texte: string): string[] {
+  if (texte.length <= MAX_CARACTERES_PARTIE) return [texte]
+  const blocs = texte.split(/\n\n+/)
+  const parties: string[] = []
+  let courant = ''
+  for (const bloc of blocs) {
+    if (courant && courant.length + bloc.length + 2 > MAX_CARACTERES_PARTIE) {
+      parties.push(courant)
+      courant = bloc
+    } else {
+      courant = courant ? `${courant}\n\n${bloc}` : bloc
+    }
+  }
+  if (courant) parties.push(courant)
+  return parties
+}
+
+/** texte intégral d'un PDF, extrait dans le navigateur (le fichier ne quitte pas le poste) */
+async function textePdf(fichier: File): Promise<string> {
+  const pdfjs = await import('pdfjs-dist')
+  const worker = (await import('pdfjs-dist/build/pdf.worker.min.mjs?url')).default
+  pdfjs.GlobalWorkerOptions.workerSrc = worker
+  const pdf = await pdfjs.getDocument({ data: await fichier.arrayBuffer() }).promise
+  const pages: string[] = []
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i)
+    const contenu = await page.getTextContent()
+    pages.push(contenu.items.map((it) => ('str' in it ? it.str : '')).join(' '))
+  }
+  return pages
+    .join('\n\n')
+    .replace(/[ \t]+/g, ' ')
+    .trim()
+}
+
+/** import des documents ACHETÉS par l'agence (DTU, normes NF…) : ils restent
+ *  privés dans le Cockpit — jamais publiés, jamais dans les packs partagés */
+function CarteImportPrive() {
+  const { state, update, replace } = useStore()
+  const [groupe, setGroupe] = useState('DTU / normes (achetés)')
+  const [enCours, setEnCours] = useState(false)
+  const refFichier = useRef<HTMLInputElement>(null)
+
+  const importer = async (fichiers: FileList | null) => {
+    if (!fichiers || fichiers.length === 0) return
+    setEnCours(true)
+    const snap = state
+    let ajoutes = 0
+    const illisibles: string[] = []
+    try {
+      for (const fichier of Array.from(fichiers)) {
+        const nom = fichier.name.replace(/\.(pdf|txt)$/i, '')
+        let texte = ''
+        try {
+          texte = /\.pdf$/i.test(fichier.name) ? await textePdf(fichier) : (await fichier.text()).trim()
+        } catch {
+          illisibles.push(fichier.name)
+          continue
+        }
+        if (texte.length < 500) {
+          // PDF scanné (images) : rien d'exploitable sans OCR
+          illisibles.push(fichier.name)
+          continue
+        }
+        const parties = decouperTexte(texte)
+        update((d) => {
+          parties.forEach((part, i) => {
+            d.documents.push({
+              id: uid('doc'),
+              titre: parties.length === 1 ? nom : `${nom} — ${i + 1}/${parties.length}`,
+              type: 'reglementaire',
+              groupe: groupe.trim() || 'DTU / normes (achetés)',
+              prive: true,
+              source: `${fichier.name} — document acheté par l’agence, usage interne uniquement`,
+              texte: part,
+              ajouteLe: todayISO(),
+            })
+          })
+        })
+        ajoutes += parties.length
+      }
+      if (ajoutes > 0) {
+        toast(`${ajoutes} document(s) privé(s) ajouté(s) au corpus.`, { undo: () => replace(snap) })
+      }
+      if (illisibles.length > 0) {
+        toast(
+          `Illisible(s) : ${illisibles.join(', ')} — PDF scanné ou protégé ; copiez-collez le texte via « Ajouter un document ».`,
+          { tone: 'warn' },
+        )
+      }
+    } finally {
+      setEnCours(false)
+      if (refFichier.current) refFichier.current.value = ''
+    }
+  }
+
+  return (
+    <Card titre="Vos documents achetés (DTU, normes…)">
+      <p className="muted" style={{ marginTop: 0 }}>
+        L’agence a acheté ses DTU : importez les PDF ici. Le texte est extrait dans le
+        navigateur, découpé, stocké dans votre Cockpit et marqué <Badge tone="warn">privé</Badge>{' '}
+        — il ne sort jamais de l’agence (ni packs, ni partage), conformément à la licence
+        d’achat. Ne collez jamais un texte protégé que vous n’avez pas acquis.
+      </p>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+        <Field label="Thème (pour cocher par thème dans les questions)">
+          <TextInput value={groupe} onChange={setGroupe} placeholder="DTU / normes (achetés)" />
+        </Field>
+        <Btn kind="primary" onClick={() => refFichier.current?.click()} disabled={enCours}>
+          {enCours ? 'Extraction…' : 'Importer des PDF / TXT'}
+        </Btn>
+        <input
+          ref={refFichier}
+          type="file"
+          accept=".pdf,.txt"
+          multiple
+          style={{ display: 'none' }}
+          onChange={(e) => void importer(e.target.files)}
+        />
+      </div>
+    </Card>
+  )
+}
 
 /** packs Légifrance prêts à l'emploi, générés par scripts/recolte-corpus.py
  *  (données DILA / Licence Ouverte, version de consolidation affichée) */
@@ -442,7 +671,7 @@ function CarteBibliotheque() {
       const snap = state
       update((d) => {
         for (const doc of pack.docs) {
-          const nouveau = { ...doc, ajouteLe: todayISO() }
+          const nouveau = { ...doc, groupe: pack.theme || undefined, ajouteLe: todayISO() }
           const i = d.documents.findIndex((x) => x.id === doc.id)
           if (i >= 0) d.documents[i] = nouveau
           else d.documents.push(nouveau)
@@ -552,9 +781,10 @@ function OngletCorpus() {
       }
     >
       <div className="pill-note" style={{ marginBottom: 12, borderColor: 'var(--danger)' }}>
-        Ligne rouge : ne JAMAIS coller ici de DTU, norme NF, Eurocode ou document CSTB — ces textes
-        sont protégés (AFNOR/CSTB). Les textes Légifrance sont sous Licence Ouverte : notez toujours
-        la source exacte et la date de version dans le champ « Source ».
+        Textes Légifrance : Licence Ouverte — notez toujours la source exacte et la date de
+        version. Textes protégés (DTU, normes NF, Eurocodes, CSTB) : uniquement ceux que
+        l’agence a ACHETÉS, via la carte « Vos documents achetés » ci-dessous — ils restent
+        privés. Ne collez jamais un texte protégé que vous n’avez pas acquis.
       </div>
       {ajout && (
         <div style={{ display: 'grid', gap: 10, marginBottom: 16 }}>
@@ -606,11 +836,18 @@ function OngletCorpus() {
                 ) : (
                   d.titre
                 )}
+                {d.type === 'reglementaire' && <div className="muted small">{themeDoc(d)}</div>}
               </td>
-              <td>
+              <td style={{ whiteSpace: 'nowrap' }}>
                 <Badge tone={d.type === 'reglementaire' ? 'info' : 'muted'}>
                   {d.type === 'reglementaire' ? 'Réglementaire' : 'Modèle'}
                 </Badge>
+                {d.prive && (
+                  <>
+                    {' '}
+                    <Badge tone="warn">privé</Badge>
+                  </>
+                )}
               </td>
               <td className="muted">{d.source || '—'}</td>
               <td>{fmtDate(d.ajouteLe)}</td>
@@ -637,6 +874,7 @@ function OngletCorpus() {
         </p>
       )}
     </Card>
+    <CarteImportPrive />
     <CarteBibliotheque />
     </>
   )

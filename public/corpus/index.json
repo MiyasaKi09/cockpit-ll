@@ -2,6 +2,7 @@
  {
   "fichier": "marches-publics.json",
   "id": "marches-publics",
+  "theme": "Marchés publics",
   "titre": "Marchés publics — exécution & maîtrise d'œuvre",
   "description": "Code de la commande publique : délais de paiement, avances et acomptes, retenue de garantie, sous-traitance, et le livre MOA/MOE (loi MOP codifiée, concours, rémunération).",
   "version": "2026-05-28",
@@ -14,60 +15,9 @@
   ]
  },
  {
-  "fichier": "incendie-cch.json",
-  "id": "incendie-cch",
-  "titre": "Sécurité incendie — socle CCH (classement ERP)",
-  "description": "Code de la construction et de l'habitation : objectifs de sécurité, classement des ERP en types et catégories, autorisations de travaux, commissions de sécurité, ERP existants.",
-  "version": "2026-07-01",
-  "nbDocs": 2,
-  "taille": 78650,
-  "docIds": [
-   "lf-cch-incendie-l",
-   "lf-cch-incendie-r"
-  ]
- },
- {
-  "fichier": "accessibilite-cch.json",
-  "id": "accessibilite-cch",
-  "titre": "Accessibilité handicap — socle CCH",
-  "description": "Code de la construction et de l'habitation : obligations d'accessibilité des ERP et des logements, dérogations, attestations, agendas d'accessibilité programmée.",
-  "version": "2026-07-01",
-  "nbDocs": 2,
-  "taille": 89879,
-  "docIds": [
-   "lf-cch-access-l",
-   "lf-cch-access-r"
-  ]
- },
- {
-  "fichier": "garanties-construction.json",
-  "id": "garanties-construction",
-  "titre": "Garanties & assurances construction",
-  "description": "Code civil (contrat d'entreprise, réception, garanties biennale et décennale des constructeurs) et Code des assurances (obligations décennale et dommages-ouvrage).",
-  "version": "2026-06-27",
-  "nbDocs": 2,
-  "taille": 24903,
-  "docIds": [
-   "lf-cciv-louage",
-   "lf-cass-decennale"
-  ]
- },
- {
-  "fichier": "urbanisme-autorisations.json",
-  "id": "urbanisme-autorisations",
-  "titre": "Urbanisme — autorisations (PC / DP)",
-  "description": "Code de l'urbanisme : champ d'application des permis et déclarations préalables, composition du dossier de PC, délais d'instruction, recours obligatoire à l'architecte.",
-  "version": "2026-07-01",
-  "nbDocs": 2,
-  "taille": 150293,
-  "docIds": [
-   "lf-curb-champ",
-   "lf-curb-dossier"
-  ]
- },
- {
   "fichier": "incendie-erp-arretes.json",
   "id": "incendie-erp-arretes",
+  "theme": "Sécurité incendie",
   "titre": "Sécurité incendie ERP — règlement complet (volumineux)",
   "description": "Règlement de sécurité contre l'incendie dans les ERP, consolidé (arrêté du 25 juin 1980) : dispositions générales (GN, CO, AM, DF, MS…), 5e catégorie (PE) et établissements spéciaux (chapiteaux, gares, parcs de stationnement…). ~1,2 M de caractères : cochez la partie utile à la question.",
   "version": "2025-07-13",
@@ -89,8 +39,23 @@
   ]
  },
  {
+  "fichier": "incendie-cch.json",
+  "id": "incendie-cch",
+  "theme": "Sécurité incendie",
+  "titre": "Sécurité incendie — socle CCH (classement ERP)",
+  "description": "Code de la construction et de l'habitation : objectifs de sécurité, classement des ERP en types et catégories, autorisations de travaux, commissions de sécurité, ERP existants.",
+  "version": "2026-07-01",
+  "nbDocs": 2,
+  "taille": 78650,
+  "docIds": [
+   "lf-cch-incendie-l",
+   "lf-cch-incendie-r"
+  ]
+ },
+ {
   "fichier": "accessibilite-arretes.json",
   "id": "accessibilite-arretes",
+  "theme": "Accessibilité PMR",
   "titre": "Accessibilité handicap — arrêtés d'application",
   "description": "Arrêté du 20 avril 2017 (ERP neufs et installations ouvertes au public) et arrêté du 8 décembre 2014 (ERP situés dans un cadre bâti existant).",
   "version": "2025-07-13",
@@ -102,8 +67,147 @@
   ]
  },
  {
+  "fichier": "accessibilite-cch.json",
+  "id": "accessibilite-cch",
+  "theme": "Accessibilité PMR",
+  "titre": "Accessibilité handicap — socle CCH",
+  "description": "Code de la construction et de l'habitation : obligations d'accessibilité des ERP et des logements, dérogations, attestations, agendas d'accessibilité programmée.",
+  "version": "2026-07-01",
+  "nbDocs": 2,
+  "taille": 89879,
+  "docIds": [
+   "lf-cch-access-l",
+   "lf-cch-access-r"
+  ]
+ },
+ {
+  "fichier": "energie-re2020-arrete.json",
+  "id": "energie-re2020-arrete",
+  "theme": "Thermique / RE2020",
+  "titre": "RE2020 — arrêté « exigences » du 4 août 2021",
+  "description": "Arrêté du 4 août 2021 relatif aux exigences de performance énergétique et environnementale des constructions de bâtiments (RE2020) : indicateurs, seuils, méthode de calcul.",
+  "version": "2025-07-13",
+  "nbDocs": 1,
+  "taille": 61185,
+  "docIds": [
+   "lf-arrete-re2020-2021"
+  ]
+ },
+ {
+  "fichier": "thermique-re2020.json",
+  "id": "thermique-re2020",
+  "theme": "Thermique / RE2020",
+  "titre": "Thermique & RE2020 — socle CCH",
+  "description": "Code de la construction et de l'habitation, titre « Performance énergétique et environnementale » : exigences RE2020 des constructions neuves, rénovation énergétique, DPE et audit énergétique. (Les valeurs de calcul détaillées sont fixées par arrêtés — pack « Arrêtés énergie » à part.)",
+  "version": "2026-07-01",
+  "nbDocs": 3,
+  "taille": 154097,
+  "docIds": [
+   "lf-cch-thermique-l",
+   "lf-cch-thermique-r-1",
+   "lf-cch-thermique-r-2"
+  ]
+ },
+ {
+  "fichier": "acoustique-cch.json",
+  "id": "acoustique-cch",
+  "theme": "Acoustique",
+  "titre": "Acoustique du bâtiment — socle CCH",
+  "description": "Code de la construction et de l'habitation : exigences d'isolement acoustique, protection contre les bruits, attestation de prise en compte de la réglementation acoustique.",
+  "version": "2026-07-01",
+  "nbDocs": 1,
+  "taille": 6472,
+  "docIds": [
+   "lf-cch-acoustique"
+  ]
+ },
+ {
+  "fichier": "ascenseurs-cch.json",
+  "id": "ascenseurs-cch",
+  "theme": "Ascenseurs",
+  "titre": "Ascenseurs — socle CCH",
+  "description": "Code de la construction et de l'habitation : obligations de sécurité des ascenseurs, entretien, contrôle technique quinquennal, travaux de mise en sécurité.",
+  "version": "2026-07-01",
+  "nbDocs": 1,
+  "taille": 82601,
+  "docIds": [
+   "lf-cch-ascenseurs"
+  ]
+ },
+ {
+  "fichier": "gaz-arretes.json",
+  "id": "gaz-arretes",
+  "theme": "Gaz / plomberie",
+  "titre": "Sécurité gaz — arrêté du 23 février 2018",
+  "description": "Arrêté du 23 février 2018 (règles techniques et de sécurité applicables aux installations de gaz combustible des bâtiments d'habitation), qui a remplacé l'arrêté du 2 août 1977.",
+  "version": "2025-07-13",
+  "nbDocs": 2,
+  "taille": 126239,
+  "docIds": [
+   "lf-arrete-gaz-2018-1",
+   "lf-arrete-gaz-2018-2"
+  ]
+ },
+ {
+  "fichier": "amiante-plomb.json",
+  "id": "amiante-plomb",
+  "theme": "Amiante & plomb",
+  "titre": "Amiante & plomb — diagnostics du bâti existant",
+  "description": "Code du travail (repérage amiante avant travaux, obligations du maître d'ouvrage) et Code de la santé publique (constat de risque d'exposition au plomb, dossier technique amiante) — incontournables en réhabilitation.",
+  "version": "2026-07-08",
+  "nbDocs": 2,
+  "taille": 96700,
+  "docIds": [
+   "lf-trav-amiante",
+   "lf-sante-plomb-amiante"
+  ]
+ },
+ {
+  "fichier": "icpe.json",
+  "id": "icpe",
+  "theme": "ICPE",
+  "titre": "ICPE — régime des installations classées (législatif)",
+  "description": "Code de l'environnement, régime des installations classées pour la protection de l'environnement : définition, nomenclature, autorisation / enregistrement / déclaration — utile quand un projet relève d'une installation classée.",
+  "version": "2026-07-01",
+  "nbDocs": 2,
+  "taille": 121810,
+  "docIds": [
+   "lf-env-icpe-l-1",
+   "lf-env-icpe-l-2"
+  ]
+ },
+ {
+  "fichier": "garanties-construction.json",
+  "id": "garanties-construction",
+  "theme": "Garanties & assurances",
+  "titre": "Garanties & assurances construction",
+  "description": "Code civil (contrat d'entreprise, réception, garanties biennale et décennale des constructeurs) et Code des assurances (obligations décennale et dommages-ouvrage).",
+  "version": "2026-06-27",
+  "nbDocs": 2,
+  "taille": 24903,
+  "docIds": [
+   "lf-cciv-louage",
+   "lf-cass-decennale"
+  ]
+ },
+ {
+  "fichier": "urbanisme-autorisations.json",
+  "id": "urbanisme-autorisations",
+  "theme": "Urbanisme",
+  "titre": "Urbanisme — autorisations (PC / DP)",
+  "description": "Code de l'urbanisme : champ d'application des permis et déclarations préalables, composition du dossier de PC, délais d'instruction, recours obligatoire à l'architecte.",
+  "version": "2026-07-01",
+  "nbDocs": 2,
+  "taille": 150293,
+  "docIds": [
+   "lf-curb-champ",
+   "lf-curb-dossier"
+  ]
+ },
+ {
   "fichier": "profession-architecte.json",
   "id": "profession-architecte",
+  "theme": "Profession",
   "titre": "Profession — loi de 1977 & déontologie",
   "description": "Loi n°77-2 du 3 janvier 1977 sur l'architecture (recours obligatoire, seuils) et code de déontologie des architectes (décret n°80-217).",
   "version": "2025-07-13",

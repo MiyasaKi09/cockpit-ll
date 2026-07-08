@@ -576,6 +576,10 @@ export interface DocumentCorpus {
   url?: string
   texte: string
   ajouteLe: string // ISO
+  /** thème de sélection (Sécurité incendie, Accessibilité PMR…) — on coche par thème */
+  groupe?: string
+  /** document acheté (DTU, norme…) : reste dans le Cockpit, jamais publié ni partagé */
+  prive?: boolean
 }
 
 /** note d'une entreprise sur UN chantier — l'historique multi-chantiers

@@ -169,6 +169,57 @@ export interface MarcheTravaux {
   notes?: string
 }
 
+/** élément d'ouvrage prévu au CCTP d'un lot — un article numéroté du document */
+export interface ElementCCTP {
+  id: string
+  /** numéro d'article tel qu'écrit dans le CCTP (ex. '2.3.1') */
+  article?: string
+  designation: string
+  /** localisation dans l'ouvrage (ex. 'RDC — hall') */
+  localisation?: string
+}
+
+/** lot du DCE avec son CCTP structuré — la source du planning travaux détaillé.
+ *  Créé par l'analyse déterministe d'un CCTP (PDF/texte), par le retour JSON
+ *  d'un Projet Claude, ou à la main. Toujours traçable jusqu'au fichier. */
+export interface LotDCE {
+  id: string
+  projetId: string
+  /** numéro du lot dans l'allotissement (ex. '02') */
+  numero: string
+  intitule: string
+  /** marché de travaux rattaché quand le lot est attribué */
+  marcheId?: string | null
+  /** chemin du fichier CCTP dans le Drive (traçabilité de l'extraction) */
+  fichier?: string
+  /** provenance : 'analyse' (déterministe) · 'claude' (retour JSON) · 'manuel' */
+  source?: string
+  importeLe: string // ISO
+  /** éléments d'ouvrage prévus au CCTP */
+  elements: ElementCCTP[]
+}
+
+export type StatutTache = 'prevu' | 'en_cours' | 'fait'
+
+/** tâche datée du planning travaux — un élément du DCE posé sur le calendrier */
+export interface TacheChantier {
+  id: string
+  projetId: string
+  /** lot DCE d'origine (traçabilité) — null pour une tâche ajoutée à la main */
+  lotDceId?: string | null
+  /** élément CCTP d'origine (anti-doublon à la génération) */
+  elementId?: string | null
+  /** marché de travaux rattaché (hérité du lot) */
+  marcheId?: string | null
+  /** libellé du lot pour l'affichage et le groupement (ex. 'Lot 02 — Gros œuvre') */
+  lot: string
+  designation: string
+  debut: string | null // ISO 'AAAA-MM-JJ'
+  fin: string | null
+  statut: StatutTache
+  notes?: string
+}
+
 export type StatutSituation = 'a_verifier' | 'validee' | 'rejetee'
 
 /** Situation de travaux — écrite par la routine (import JSON) ou à la main */
@@ -562,6 +613,8 @@ export interface AppState {
   absences: Absence[]
   evaluations: EvaluationEntreprise[]
   documents: DocumentCorpus[]
+  lotsDce: LotDCE[]
+  tachesChantier: TacheChantier[]
 }
 
 /** document du corpus de l'assistant : texte réglementaire (Légifrance,

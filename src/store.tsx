@@ -22,6 +22,9 @@ function migrate(parsed: AppState): AppState {
   etat.evaluations = Array.isArray(parsed.evaluations) ? parsed.evaluations : []
   // v9 → v10 : corpus de l'assistant (textes réglementaires + modèles)
   etat.documents = Array.isArray(parsed.documents) ? parsed.documents : []
+  // v10 → v11 : DCE/CCTP structurés + planning travaux détaillé
+  etat.lotsDce = Array.isArray(parsed.lotsDce) ? parsed.lotsDce : []
+  etat.tachesChantier = Array.isArray(parsed.tachesChantier) ? parsed.tachesChantier : []
   // v5 → v6 : journal d'interactions CRM. On amorce depuis les
   // derniereInteraction existantes pour ne rien perdre de l'historique.
   if (Array.isArray(parsed.interactions)) {

@@ -53,6 +53,7 @@ import { assemble, contexteProjet } from '../prompts'
 import { facturesParDefaut } from '../echeancier'
 import ProjetNouveau from './ProjetNouveau'
 import ProjetChantier from './ProjetChantier'
+import ProjetDCE from './ProjetDCE'
 import ProjetPlanning from './ProjetPlanning'
 import ProjetRessources from './ProjetRessources'
 import ProjetJournal from './ProjetJournal'
@@ -206,6 +207,7 @@ function ListeProjets() {
 const ONGLETS = [
   { id: 'pilotage', label: 'Pilotage & honoraires' },
   { id: 'planning', label: 'Planning' },
+  { id: 'dce', label: 'DCE & CCTP' },
   { id: 'chantier', label: 'Chantier & CR' },
   { id: 'ressources', label: 'Ressources & liens' },
   { id: 'journal', label: 'Journal' },
@@ -257,6 +259,8 @@ function EspaceProjet({ projetId, onglet }: { projetId: string; onglet?: string 
       d.marches = d.marches.filter((m) => m.projetId !== p.id)
       d.temps = d.temps.filter((t) => t.projetId !== p.id)
       d.reunions = d.reunions.filter((r) => r.projetId !== p.id)
+      d.lotsDce = d.lotsDce.filter((l) => l.projetId !== p.id)
+      d.tachesChantier = d.tachesChantier.filter((t) => t.projetId !== p.id)
     })
     navigate('/projets')
     toast(`Projet ${p.id} supprimé.`, { undo: () => replace(snap) })
@@ -314,6 +318,7 @@ function EspaceProjet({ projetId, onglet }: { projetId: string; onglet?: string 
         </>
       )}
       {actif === 'planning' && <ProjetPlanning projet={p} />}
+      {actif === 'dce' && <ProjetDCE projet={p} />}
       {actif === 'chantier' && <ProjetChantier projet={p} />}
       {actif === 'ressources' && <ProjetRessources projet={p} />}
       {actif === 'journal' && <ProjetJournal projet={p} />}

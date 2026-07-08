@@ -52,6 +52,9 @@ export function CarteMarches({ projet: p }: { projet: Projet }) {
     update((d) => {
       d.marches = d.marches.filter((x) => x.id !== m.id)
       for (const s of d.situations) if (s.marcheId === m.id) s.marcheId = null
+      // les lots DCE et tâches du planning travaux se détachent aussi
+      for (const l of d.lotsDce) if (l.marcheId === m.id) l.marcheId = null
+      for (const t of d.tachesChantier) if (t.marcheId === m.id) t.marcheId = null
     })
     toast('Marché supprimé.', { undo: () => replace(snap) })
   }

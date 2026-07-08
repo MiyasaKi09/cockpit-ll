@@ -1,15 +1,45 @@
 // Onglet Planning de l'espace projet : LE projet, seul, sur une échelle
 // de temps — phases de conception en haut, lots de chantier en dessous,
-// réunions à venir en repères. Lecture d'un coup d'œil ; l'édition des
-// dates vit dans la fiche (phases) et l'onglet Chantier (lots).
+// puis le détail des travaux : chaque élément prévu au DCE (CCTP), daté.
+// Les dates de phases s'éditent dans la fiche (Pilotage), les dates de
+// lots dans l'onglet Chantier ; les tâches du DCE s'ajustent ICI.
 
-import type { Projet } from '../types'
+import { Fragment, useState } from 'react'
+import type { Projet, StatutTache, TacheChantier } from '../types'
 import { useStore } from '../store'
-import { Badge, Card, EmptyState, useToday } from '../ui'
-import { diffDays, fmtDate } from '../util'
+import {
+  Badge,
+  Btn,
+  Card,
+  DateInput,
+  EmptyState,
+  Field,
+  Modal,
+  Select,
+  Table,
+  TextInput,
+  confirmer,
+  toast,
+  useToday,
+} from '../ui'
+import { diffDays, fmtDate, fold, todayISO, uid } from '../util'
 import { couleurPhase } from './Planning'
 
 const NOMS_MOIS = ['janv.', 'févr.', 'mars', 'avr.', 'mai', 'juin', 'juil.', 'août', 'sept.', 'oct.', 'nov.', 'déc.']
+
+const LIBELLE_STATUT_TACHE: Record<StatutTache, string> = {
+  prevu: 'prévu',
+  en_cours: 'en cours',
+  fait: 'fait',
+}
+
+function couleurTache(t: TacheChantier, today: string): string {
+  if (t.statut === 'fait') return 'var(--ok)'
+  // le retard prime : une tâche dépassée non faite est rouge, même « en cours »
+  if (t.fin && t.fin < today) return 'var(--danger)'
+  if (t.statut === 'en_cours') return 'var(--warn)'
+  return 'var(--accent)'
+}
 
 /** position (%) d'une date dans la fenêtre [debut, fin] */
 function pos(debut: string, fin: string, d: string): number {
@@ -40,24 +70,34 @@ export default function ProjetPlanning({ projet: p }: { projet: Projet }) {
 
   const phases = p.phases.filter((ph) => ph.debut && ph.fin)
   const lots = state.marches.filter((m) => m.projetId === p.id && (m.dateDebut || m.dateFin))
+  const taches = state.tachesChantier.filter((t) => t.projetId === p.id)
+  const tachesDatees = taches.filter((t) => t.debut && t.fin)
   const reunionsAVenir = state.reunions
     .filter((r) => r.projetId === p.id && r.date >= today)
     .sort((a, b) => a.date.localeCompare(b.date))
     .slice(0, 3)
 
+  // groupes de tâches par lot (ordre alphabétique = ordre des numéros de lots)
+  const groupes = [...new Set(taches.map((t) => t.lot))].sort((a, b) => a.localeCompare(b))
+
   const dates = [
     ...phases.flatMap((ph) => [ph.debut!, ph.fin!]),
     ...lots.flatMap((m) => [m.dateDebut, m.dateFin, m.dateReception].filter((d): d is string => Boolean(d))),
+    ...tachesDatees.flatMap((t) => [t.debut!, t.fin!]),
   ].sort()
 
   if (dates.length === 0) {
     return (
-      <Card titre="Planning du projet">
-        <EmptyState>
-          Rien de daté pour l'instant — datez les phases (onglet Pilotage, « Modifier les phases »)
-          et les lots (onglet Chantier) pour voir le planning se dessiner.
-        </EmptyState>
-      </Card>
+      <>
+        <Card titre="Planning du projet">
+          <EmptyState>
+            Rien de daté pour l'instant — datez les phases (onglet Pilotage, « Modifier les phases »),
+            les lots (onglet Chantier), et importez les CCTP (onglet DCE & CCTP) pour voir chaque
+            élément prévu au DCE se poser sur le planning.
+          </EmptyState>
+        </Card>
+        <CarteTaches projet={p} taches={taches} groupes={groupes} />
+      </>
     )
   }
 
@@ -111,96 +151,332 @@ export default function ProjetPlanning({ projet: p }: { projet: Projet }) {
   )
 
   return (
-    <Card
-      titre="Planning du projet"
-      actions={<a href="#/planning" className="small">tous les projets →</a>}
-    >
-      <div style={{ overflowX: 'auto' }}>
-        <div style={{ display: 'grid', rowGap: 6 }}>
-          {/* graduations mois */}
-          <div style={{ display: 'grid', gridTemplateColumns: '150px 1fr', gap: 8, minWidth: 560 }}>
-            <div />
-            <div style={{ position: 'relative', height: 18 }}>
-              {mois.map((m) => (
-                <div
-                  key={m}
-                  className="muted small"
-                  style={{ position: 'absolute', left: `${pos(debut, fin, m)}%`, top: 0, bottom: 0, borderLeft: '1px solid var(--line)', paddingLeft: 3, fontSize: 10 }}
-                >
-                  {NOMS_MOIS[Number(m.slice(5, 7)) - 1]} {m.slice(2, 4)}
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* phases de conception */}
-          {phases.map((ph) =>
-            ligne(
-              `ph-${ph.code}`,
-              <strong>{ph.code}</strong>,
-              barre(ph.debut!, ph.fin!, couleurPhase(ph.code), ph.code, `${ph.code} · ${fmtDate(ph.debut)} → ${fmtDate(ph.fin)}`),
-            ),
-          )}
-
-          {/* lots de chantier */}
-          {lots.length > 0 && (
-            <div className="muted small" style={{ marginTop: 6, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', fontSize: 10 }}>
-              Lots de chantier
-            </div>
-          )}
-          {lots.map((m) => {
-            const bDebut = m.dateDebut || m.dateFin!
-            const bFin = m.dateFin || m.dateDebut!
-            const retard = Boolean(m.actif && m.dateFin && m.dateFin < today && !m.dateReception)
-            return ligne(
-              `lot-${m.id}`,
-              <span title={`${m.lot} — ${m.entreprise}`}>{m.lot.replace(/^Lot\s*/i, 'L')}</span>,
-              <>
-                {barre(
-                  bDebut,
-                  bFin,
-                  'var(--accent)',
-                  m.entreprise,
-                  `${m.lot} — ${m.entreprise} · ${fmtDate(bDebut)} → ${fmtDate(bFin)}${retard ? ' · EN RETARD (réception non prononcée)' : ''}`,
-                  retard,
-                )}
-                {m.dateReception && (
+    <>
+      <Card
+        titre="Planning du projet"
+        actions={<a href="#/planning" className="small">tous les projets →</a>}
+      >
+        <div style={{ overflowX: 'auto' }}>
+          <div style={{ display: 'grid', rowGap: 6 }}>
+            {/* graduations mois */}
+            <div style={{ display: 'grid', gridTemplateColumns: '150px 1fr', gap: 8, minWidth: 560 }}>
+              <div />
+              <div style={{ position: 'relative', height: 18 }}>
+                {mois.map((m) => (
                   <div
-                    title={`Réception le ${fmtDate(m.dateReception)}`}
-                    style={{
-                      position: 'absolute',
-                      left: `calc(${pos(debut, fin, m.dateReception)}% - 5px)`,
-                      top: 2,
-                      width: 0,
-                      height: 0,
-                      borderLeft: '6px solid transparent',
-                      borderRight: '6px solid transparent',
-                      borderTop: '10px solid var(--ok)',
-                    }}
-                  />
-                )}
-              </>,
-            )
-          })}
-        </div>
-      </div>
+                    key={m}
+                    className="muted small"
+                    style={{ position: 'absolute', left: `${pos(debut, fin, m)}%`, top: 0, bottom: 0, borderLeft: '1px solid var(--line)', paddingLeft: 3, fontSize: 10 }}
+                  >
+                    {NOMS_MOIS[Number(m.slice(5, 7)) - 1]} {m.slice(2, 4)}
+                  </div>
+                ))}
+              </div>
+            </div>
 
-      {/* repères réunions */}
-      {reunionsAVenir.length > 0 && (
-        <p className="small" style={{ marginTop: 12, display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-          <span className="muted">Prochaines réunions :</span>
-          {reunionsAVenir.map((r) => (
-            <Badge key={r.id} tone="info">
-              {fmtDate(r.date)}
-              {r.heure ? ` · ${r.heure}` : ''} — {r.titre}
-            </Badge>
-          ))}
+            {/* phases de conception */}
+            {phases.map((ph) =>
+              ligne(
+                `ph-${ph.code}`,
+                <strong>{ph.code}</strong>,
+                barre(ph.debut!, ph.fin!, couleurPhase(ph.code), ph.code, `${ph.code} · ${fmtDate(ph.debut)} → ${fmtDate(ph.fin)}`),
+              ),
+            )}
+
+            {/* lots de chantier */}
+            {lots.length > 0 && (
+              <div className="muted small" style={{ marginTop: 6, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', fontSize: 10 }}>
+                Lots de chantier
+              </div>
+            )}
+            {lots.map((m) => {
+              const bDebut = m.dateDebut || m.dateFin!
+              const bFin = m.dateFin || m.dateDebut!
+              const retard = Boolean(m.actif && m.dateFin && m.dateFin < today && !m.dateReception)
+              return ligne(
+                `lot-${m.id}`,
+                <span title={`${m.lot} — ${m.entreprise}`}>{m.lot.replace(/^Lot\s*/i, 'L')}</span>,
+                <>
+                  {barre(
+                    bDebut,
+                    bFin,
+                    'var(--accent)',
+                    m.entreprise,
+                    `${m.lot} — ${m.entreprise} · ${fmtDate(bDebut)} → ${fmtDate(bFin)}${retard ? ' · EN RETARD (réception non prononcée)' : ''}`,
+                    retard,
+                  )}
+                  {m.dateReception && (
+                    <div
+                      title={`Réception le ${fmtDate(m.dateReception)}`}
+                      style={{
+                        position: 'absolute',
+                        left: `calc(${pos(debut, fin, m.dateReception)}% - 5px)`,
+                        top: 2,
+                        width: 0,
+                        height: 0,
+                        borderLeft: '6px solid transparent',
+                        borderRight: '6px solid transparent',
+                        borderTop: '10px solid var(--ok)',
+                      }}
+                    />
+                  )}
+                </>,
+              )
+            })}
+
+            {/* travaux détaillés : chaque élément prévu au DCE, daté */}
+            {tachesDatees.length > 0 && (
+              <div className="muted small" style={{ marginTop: 6, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', fontSize: 10 }}>
+                Travaux détaillés (DCE / CCTP)
+              </div>
+            )}
+            {groupes.map((g) => {
+              const duGroupe = tachesDatees.filter((t) => t.lot === g)
+              if (duGroupe.length === 0) return null
+              return ligne(
+                `grp-${g}`,
+                <span title={g}>{g.replace(/^Lot\s*/i, 'L')}</span>,
+                <>
+                  {duGroupe.map((t) => {
+                    const gauche = pos(debut, fin, t.debut!)
+                    const largeur = Math.max(0.8, pos(debut, fin, t.fin!) - gauche)
+                    return (
+                      <div
+                        key={t.id}
+                        title={`${t.designation} · ${fmtDate(t.debut)} → ${fmtDate(t.fin)} (${LIBELLE_STATUT_TACHE[t.statut]})`}
+                        style={{
+                          position: 'absolute',
+                          left: `${gauche}%`,
+                          width: `${largeur}%`,
+                          top: 7,
+                          bottom: 7,
+                          background: couleurTache(t, today),
+                          borderRadius: 2,
+                          opacity: t.statut === 'fait' ? 0.55 : 0.9,
+                        }}
+                      />
+                    )
+                  })}
+                </>,
+              )
+            })}
+          </div>
+        </div>
+
+        {/* repères réunions */}
+        {reunionsAVenir.length > 0 && (
+          <p className="small" style={{ marginTop: 12, display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+            <span className="muted">Prochaines réunions :</span>
+            {reunionsAVenir.map((r) => (
+              <Badge key={r.id} tone="info">
+                {fmtDate(r.date)}
+                {r.heure ? ` · ${r.heure}` : ''} — {r.titre}
+              </Badge>
+            ))}
+          </p>
+        )}
+        <p className="muted small" style={{ marginTop: 8 }}>
+          Dates de phases : onglet Pilotage → « Modifier les phases ». Dates de lots : onglet Chantier.
+          Tâches du DCE : tableau ci-dessous. Trait rouge = aujourd'hui · triangle vert = réception ·
+          bord rouge = lot en retard · segment rouge = tâche dépassée non faite.
         </p>
-      )}
+      </Card>
+
+      <CarteTaches projet={p} taches={taches} groupes={groupes} />
+    </>
+  )
+}
+
+// ============================================================
+// Planning travaux détaillé — chaque élément du DCE, daté ici
+// ============================================================
+
+function CarteTaches({
+  projet: p,
+  taches,
+  groupes,
+}: {
+  projet: Projet
+  /** tâches et groupes calculés par le parent — mêmes données que la frise */
+  taches: TacheChantier[]
+  groupes: string[]
+}) {
+  const { state, update, replace } = useStore()
+  const today = useToday()
+  const [filtre, setFiltre] = useState('')
+  const [modalAjout, setModalAjout] = useState(false)
+
+  const aDater = taches.filter((t) => !t.debut || !t.fin).length
+  const enRetard = taches.filter((t) => t.statut !== 'fait' && t.fin && t.fin < today).length
+  const faites = taches.filter((t) => t.statut === 'fait').length
+
+  const maj = (id: string, fn: (t: TacheChantier) => void) =>
+    update((d) => {
+      const t = d.tachesChantier.find((x) => x.id === id)
+      if (t) fn(t)
+    })
+
+  const supprimer = async (t: TacheChantier) => {
+    const snap = state
+    if (!(await confirmer({ message: `Supprimer la tâche « ${t.designation} » ?`, danger: true, confirmerLabel: 'Supprimer' }))) return
+    update((d) => {
+      d.tachesChantier = d.tachesChantier.filter((x) => x.id !== t.id)
+    })
+    toast('Tâche supprimée.', { undo: () => replace(snap) })
+  }
+
+  if (taches.length === 0) {
+    return (
+      <Card titre="Planning travaux détaillé — les éléments prévus au DCE">
+        <EmptyState>
+          Aucune tâche — importez les CCTP dans l'onglet{' '}
+          <a href={`#/projets/${p.id}/dce`}>DCE & CCTP</a> : chaque élément prévu aux pièces écrites
+          arrive ici avec une date, prêt à être ajusté.
+        </EmptyState>
+      </Card>
+    )
+  }
+
+  return (
+    <Card
+      titre="Planning travaux détaillé — les éléments prévus au DCE"
+      actions={
+        <>
+          {enRetard > 0 && <Badge tone="danger">{enRetard} en retard</Badge>}
+          {aDater > 0 && <Badge tone="warn">{aDater} à dater</Badge>}
+          <Badge tone="ok">{faites}/{taches.length} faits</Badge>
+          <Btn small onClick={() => setModalAjout(true)}>Ajouter une tâche</Btn>
+        </>
+      }
+    >
+      <div className="toolbar">
+        <TextInput value={filtre} onChange={setFiltre} placeholder="Filtrer (désignation, lot)…" style={{ maxWidth: 280 }} />
+      </div>
+      <Table compact head={['Élément', 'Début', 'Fin', 'Statut', '']}>
+        {groupes.map((g) => {
+          const duGroupe = taches
+            .filter((t) => t.lot === g)
+            .filter((t) => !filtre.trim() || fold(t.designation + ' ' + t.lot).includes(fold(filtre)))
+            .sort((a, b) => (a.debut || '9999').localeCompare(b.debut || '9999') || a.designation.localeCompare(b.designation))
+          if (duGroupe.length === 0) return null
+          return (
+            <Fragment key={g}>
+              <tr>
+                <td colSpan={5} style={{ background: 'var(--bg-soft)', fontWeight: 700 }}>
+                  {g}
+                  <span className="muted small" style={{ fontWeight: 400 }}> — {duGroupe.length} élément(s)</span>
+                </td>
+              </tr>
+              {duGroupe.map((t) => {
+                const retard = t.statut !== 'fait' && t.fin && t.fin < today
+                return (
+                  <tr key={t.id}>
+                    <td style={{ maxWidth: 380 }}>
+                      {t.designation}
+                      {(!t.debut || !t.fin) && <> <Badge tone="warn">à dater</Badge></>}
+                      {retard && <> <Badge tone="danger">en retard</Badge></>}
+                    </td>
+                    <td style={{ width: 140 }}>
+                      <DateInput
+                        value={t.debut}
+                        onChange={(v) => maj(t.id, (x) => {
+                          x.debut = v
+                          if (v && x.fin && x.fin < v) x.fin = v
+                        })}
+                      />
+                    </td>
+                    <td style={{ width: 140 }}>
+                      <DateInput
+                        value={t.fin}
+                        onChange={(v) => maj(t.id, (x) => {
+                          x.fin = v
+                          if (v && x.debut && x.debut > v) x.debut = v
+                        })}
+                      />
+                    </td>
+                    <td style={{ width: 120 }}>
+                      <Select
+                        value={t.statut}
+                        onChange={(v) => maj(t.id, (x) => { x.statut = v as StatutTache })}
+                        options={Object.entries(LIBELLE_STATUT_TACHE).map(([value, label]) => ({ value, label }))}
+                      />
+                    </td>
+                    <td className="right" style={{ width: 70 }}>
+                      <Btn small kind="danger" onClick={() => void supprimer(t)}>Suppr.</Btn>
+                    </td>
+                  </tr>
+                )
+              })}
+            </Fragment>
+          )
+        })}
+      </Table>
       <p className="muted small" style={{ marginTop: 8 }}>
-        Dates de phases : onglet Pilotage → « Modifier les phases ». Dates de lots : onglet Chantier.
-        Trait rouge = aujourd'hui · triangle vert = réception · bord rouge = lot en retard.
+        Généré depuis les CCTP (onglet <a href={`#/projets/${p.id}/dce`}>DCE & CCTP</a>) — dates posées
+        sur la fenêtre du marché rattaché (sinon phase DET), à affiner ici au fil du chantier.
+        « Replanifier » (onglet DCE) recale tout un lot quand ses dates de marché changent.
       </p>
+
+      {modalAjout && <ModalAjoutTache projet={p} onClose={() => setModalAjout(false)} />}
     </Card>
+  )
+}
+
+function ModalAjoutTache({ projet: p, onClose }: { projet: Projet; onClose: () => void }) {
+  const { state, update } = useStore()
+  const lotsConnus = [
+    ...new Set([
+      ...state.tachesChantier.filter((t) => t.projetId === p.id).map((t) => t.lot),
+      ...state.marches.filter((m) => m.projetId === p.id).map((m) => m.lot),
+    ]),
+  ].sort()
+  const [lot, setLot] = useState(lotsConnus[0] || '')
+  const [designation, setDesignation] = useState('')
+  const [debut, setDebut] = useState<string | null>(todayISO())
+  const [fin, setFin] = useState<string | null>(null)
+
+  const ajouter = () => {
+    if (!designation.trim()) return
+    update((d) => {
+      d.tachesChantier.push({
+        id: uid('tache'),
+        projetId: p.id,
+        lotDceId: null,
+        elementId: null,
+        marcheId: null,
+        lot: lot.trim() || 'Hors lot',
+        designation: designation.trim(),
+        debut,
+        fin: fin && debut && fin < debut ? debut : fin,
+        statut: 'prevu',
+      })
+    })
+    toast('Tâche ajoutée au planning travaux.', { tone: 'ok' })
+    onClose()
+  }
+
+  return (
+    <Modal titre="Ajouter une tâche au planning travaux" onClose={onClose}>
+      <div className="form-row">
+        <Field label="Lot" hint="reprendre un libellé existant groupe les tâches ensemble">
+          <TextInput value={lot} onChange={setLot} placeholder="Lot 02 — Gros œuvre" />
+        </Field>
+        <Field label="Désignation">
+          <TextInput value={designation} onChange={setDesignation} placeholder="Ex. Dallage du hall" />
+        </Field>
+      </div>
+      <div className="form-row">
+        <Field label="Début">
+          <DateInput value={debut} onChange={setDebut} />
+        </Field>
+        <Field label="Fin">
+          <DateInput value={fin} onChange={setFin} />
+        </Field>
+      </div>
+      <div className="form-foot">
+        <Btn onClick={onClose}>Annuler</Btn>
+        <Btn kind="primary" onClick={ajouter} disabled={!designation.trim()}>Ajouter</Btn>
+      </div>
+    </Modal>
   )
 }

@@ -472,10 +472,10 @@ TNC = [
     {
         "pack": "gaz-arretes",
         "theme": "Gaz / plomberie",
-        "titre_pack": "Sécurité gaz — arrêté du 2 août 1977",
-        "description": "Arrêté du 2 août 1977 : règles techniques et de sécurité applicables aux installations de gaz combustible et d'hydrocarbures liquéfiés situées à l'intérieur des bâtiments et de leurs dépendances.",
+        "titre_pack": "Sécurité gaz — arrêté du 23 février 2018",
+        "description": "Arrêté du 23 février 2018 (règles techniques et de sécurité applicables aux installations de gaz combustible des bâtiments d'habitation), qui a remplacé l'arrêté du 2 août 1977.",
         "textes": [
-            (r"^Arrêté du 2 août 1977\b.*(gaz|hydrocarbures)", "arrete-gaz-1977", "Arrêté du 2 août 1977 — Sécurité des installations de gaz dans les bâtiments"),
+            (r"^Arrêté du 23 février 2018\b.*installations de gaz", "arrete-gaz-2018", "Arrêté du 23 février 2018 — Sécurité des installations de gaz des bâtiments d'habitation"),
         ],
     },
     {

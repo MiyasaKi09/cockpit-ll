@@ -81,6 +81,19 @@
   ]
  },
  {
+  "fichier": "energie-re2020-arrete.json",
+  "id": "energie-re2020-arrete",
+  "theme": "Thermique / RE2020",
+  "titre": "RE2020 — arrêté « exigences » du 4 août 2021",
+  "description": "Arrêté du 4 août 2021 relatif aux exigences de performance énergétique et environnementale des constructions de bâtiments (RE2020) : indicateurs, seuils, méthode de calcul.",
+  "version": "2025-07-13",
+  "nbDocs": 1,
+  "taille": 61185,
+  "docIds": [
+   "lf-arrete-re2020-2021"
+  ]
+ },
+ {
   "fichier": "thermique-re2020.json",
   "id": "thermique-re2020",
   "theme": "Thermique / RE2020",
@@ -119,6 +132,20 @@
   "taille": 82601,
   "docIds": [
    "lf-cch-ascenseurs"
+  ]
+ },
+ {
+  "fichier": "gaz-arretes.json",
+  "id": "gaz-arretes",
+  "theme": "Gaz / plomberie",
+  "titre": "Sécurité gaz — arrêté du 23 février 2018",
+  "description": "Arrêté du 23 février 2018 (règles techniques et de sécurité applicables aux installations de gaz combustible des bâtiments d'habitation), qui a remplacé l'arrêté du 2 août 1977.",
+  "version": "2025-07-13",
+  "nbDocs": 2,
+  "taille": 126239,
+  "docIds": [
+   "lf-arrete-gaz-2018-1",
+   "lf-arrete-gaz-2018-2"
   ]
  },
  {

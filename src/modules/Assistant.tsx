@@ -104,6 +104,14 @@ const PREFIXES_THEME: [string, string][] = [
   ['lf-curb-', 'Urbanisme'],
   ['lf-loi-1977', 'Profession'],
   ['lf-deonto', 'Profession'],
+  ['lf-cch-acoustique', 'Acoustique'],
+  ['lf-cch-ascenseurs', 'Ascenseurs'],
+  ['lf-cch-thermique', 'Thermique / RE2020'],
+  ['lf-arrete-re2020', 'Thermique / RE2020'],
+  ['lf-trav-amiante', 'Amiante & plomb'],
+  ['lf-sante-plomb-amiante', 'Amiante & plomb'],
+  ['lf-env-icpe', 'ICPE'],
+  ['lf-arrete-gaz', 'Gaz / plomberie'],
 ]
 
 function themeDoc(d: DocumentCorpus): string {

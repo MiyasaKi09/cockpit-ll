@@ -351,6 +351,84 @@ def construire_packs_codes(dossier):
         "docs": docs,
     })
 
+    CCH = "LEGITEXT000006074096"
+
+    # --- Acoustique (partie CCH) ---
+    docs, v = docs_code(dossier, "Code de la construction et de l'habitation", CCH, [
+        ("cch-acoustique", "CCH — Acoustique des bâtiments (isolement, bruits, attestation)",
+         r"Livre Ier .* > Titre V : (Qualité sanitaire|QUALITÉ SANITAIRE) > Chapitre IV : (Acou|AC)", None),
+    ])
+    packs.append({
+        "id": "acoustique-cch",
+        "theme": "Acoustique",
+        "titre": "Acoustique du bâtiment — socle CCH",
+        "description": "Code de la construction et de l'habitation : exigences d'isolement acoustique, protection contre les bruits, attestation de prise en compte de la réglementation acoustique.",
+        "version": v,
+        "docs": docs,
+    })
+
+    # --- Ascenseurs (partie CCH) ---
+    docs, v = docs_code(dossier, "Code de la construction et de l'habitation", CCH, [
+        ("cch-ascenseurs", "CCH — Ascenseurs : sécurité, entretien, contrôle technique",
+         r"Livre Ier .* > Titre III : (Règles générales de sécurité|RÈGLES GÉNÉRALES DE SÉCURITÉ) > Chapitre [IV]+ : .*scenseur", None),
+    ])
+    packs.append({
+        "id": "ascenseurs-cch",
+        "theme": "Ascenseurs",
+        "titre": "Ascenseurs — socle CCH",
+        "description": "Code de la construction et de l'habitation : obligations de sécurité des ascenseurs, entretien, contrôle technique quinquennal, travaux de mise en sécurité.",
+        "version": v,
+        "docs": docs,
+    })
+
+    # --- Thermique / RE2020 (partie CCH) ---
+    docs, v = docs_code(dossier, "Code de la construction et de l'habitation", CCH, [
+        ("cch-thermique-l", "CCH (législatif) — Performance énergétique et environnementale des bâtiments",
+         r"Partie législative > Livre Ier .* > Titre VII : Performance énergétique", None),
+        ("cch-thermique-r", "CCH (réglementaire) — RE2020 : exigences des constructions et rénovations",
+         r"Partie réglementaire > Livre Ier .* > Titre VII : PERFORMANCE ÉNERGÉTIQUE", r"Livre III|Aides diverses"),
+    ])
+    packs.append({
+        "id": "thermique-re2020",
+        "theme": "Thermique / RE2020",
+        "titre": "Thermique & RE2020 — socle CCH",
+        "description": "Code de la construction et de l'habitation, titre « Performance énergétique et environnementale » : exigences RE2020 des constructions neuves, rénovation énergétique, DPE et audit énergétique. (Les valeurs de calcul détaillées sont fixées par arrêtés — pack « Arrêtés énergie » à part.)",
+        "version": v,
+        "docs": docs,
+    })
+
+    # --- Amiante & plomb : diagnostics avant travaux sur le bâti existant ---
+    docs_trav, v_trav = docs_code(dossier, "Code du travail", "LEGITEXT000006072050", [
+        ("trav-amiante", "Code du travail — Risque amiante : repérage avant travaux, obligations du donneur d'ordre",
+         r"Section 3 : Risques d'exposition à l'amiante", None),
+    ])
+    docs_sante, v_sante = docs_code(dossier, "Code de la santé publique", "LEGITEXT000006072665", [
+        ("sante-plomb-amiante", "Code de la santé publique — Plomb (CREP) et amiante (DTA) dans les immeubles bâtis",
+         r"Livre III .* > Titre III .* > Chapitre IV : (Lutte contre la prése|LUTTE CONTRE LA PRÉSE)", None),
+    ])
+    packs.append({
+        "id": "amiante-plomb",
+        "theme": "Amiante & plomb",
+        "titre": "Amiante & plomb — diagnostics du bâti existant",
+        "description": "Code du travail (repérage amiante avant travaux, obligations du maître d'ouvrage) et Code de la santé publique (constat de risque d'exposition au plomb, dossier technique amiante) — incontournables en réhabilitation.",
+        "version": max(v_trav, v_sante),
+        "docs": docs_trav + docs_sante,
+    })
+
+    # --- ICPE : régime des installations classées (législatif) ---
+    docs, v = docs_code(dossier, "Code de l'environnement", "LEGITEXT000006074220", [
+        ("env-icpe-l", "Code de l'environnement — Installations classées (ICPE) : nomenclature, autorisation, enregistrement, déclaration",
+         r"Partie législative > Livre V .* > Titre Ier : Installations classées", None),
+    ])
+    packs.append({
+        "id": "icpe",
+        "theme": "ICPE",
+        "titre": "ICPE — régime des installations classées (législatif)",
+        "description": "Code de l'environnement, régime des installations classées pour la protection de l'environnement : définition, nomenclature, autorisation / enregistrement / déclaration — utile quand un projet relève d'une installation classée.",
+        "version": v,
+        "docs": docs,
+    })
+
     return packs
 
 
@@ -389,6 +467,24 @@ TNC = [
         "textes": [
             # le code de déontologie est ajouté par main() depuis sa version code consolidé
             (r"^Loi n° ?77-2 du 3 janvier 1977", "loi-1977", "Loi n°77-2 du 3 janvier 1977 sur l'architecture"),
+        ],
+    },
+    {
+        "pack": "gaz-arretes",
+        "theme": "Gaz / plomberie",
+        "titre_pack": "Sécurité gaz — arrêté du 2 août 1977",
+        "description": "Arrêté du 2 août 1977 : règles techniques et de sécurité applicables aux installations de gaz combustible et d'hydrocarbures liquéfiés situées à l'intérieur des bâtiments et de leurs dépendances.",
+        "textes": [
+            (r"^Arrêté du 2 août 1977\b.*(gaz|hydrocarbures)", "arrete-gaz-1977", "Arrêté du 2 août 1977 — Sécurité des installations de gaz dans les bâtiments"),
+        ],
+    },
+    {
+        "pack": "energie-re2020-arrete",
+        "theme": "Thermique / RE2020",
+        "titre_pack": "RE2020 — arrêté « exigences » du 4 août 2021",
+        "description": "Arrêté du 4 août 2021 relatif aux exigences de performance énergétique et environnementale des constructions de bâtiments (RE2020) : indicateurs, seuils, méthode de calcul.",
+        "textes": [
+            (r"^Arrêté du 4 août 2021\b.*(performance énergétique|exigences)", "arrete-re2020-2021", "Arrêté du 4 août 2021 — Exigences RE2020 des constructions neuves"),
         ],
     },
 ]

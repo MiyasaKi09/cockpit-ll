@@ -156,27 +156,7 @@ def texte_depuis_dump(dossier_texte):
             texte = re.sub(r"\n{3,}", "\n\n", texte).strip()
             articles[ident] = (num, etat, texte)
 
-    # structure ordonnée
-    lignes = []
-
-    def marche_struct(struct_el, prof):
-        for enfant in struct_el:
-            if enfant.tag == "LIEN_ART":
-                ident = enfant.get("id", "")
-                if ident in articles:
-                    num, etat, texte = articles[ident]
-                    if etat.startswith("VIGUEUR"):
-                        lignes.append(f"\nArticle {num}\n{texte}")
-            elif enfant.tag == "LIEN_SECTION_TA":
-                titre = (enfant.text or "").strip()
-                ident = enfant.get("id", "")
-                sous = section_ta.get(ident)
-                if titre:
-                    lignes.append("\n## " + titre)
-                if sous is not None:
-                    marche_struct(sous, prof + 1)
-
-    # sections (section_ta) indexées par id
+    # sections (section_ta) indexées par id : (titre TITRE_TA, corps STRUCTURE_TA)
     section_ta = {}
     for base, _dirs, fichiers in os.walk(dossier_texte):
         if os.sep + "section_ta" + os.sep not in base + os.sep:
@@ -187,10 +167,39 @@ def texte_depuis_dump(dossier_texte):
             r = lire_xml(os.path.join(base, f))
             if r is None:
                 continue
-            ident = r.findtext(".//ID", "")
+            ident = r.findtext("ID", "") or r.findtext(".//ID", "")
+            titre_ta = (r.findtext("TITRE_TA", "") or "").strip()
             corps = r.find(".//STRUCTURE_TA")
             if ident and corps is not None:
-                section_ta[ident] = corps
+                section_ta[ident] = (titre_ta, corps)
+
+    # structure ordonnée : seuls les liens à l'état VIGUEUR sont rendus
+    # (la structure liste TOUTES les versions de chaque article)
+    lignes = []
+    vus = set()
+
+    def marche_struct(struct_el, prof):
+        for enfant in struct_el:
+            if enfant.tag == "LIEN_ART":
+                ident = enfant.get("id", "")
+                if enfant.get("etat", "") != "VIGUEUR" or ident in vus:
+                    continue
+                if ident in articles:
+                    num, etat, texte = articles[ident]
+                    if etat.startswith("VIGUEUR"):
+                        vus.add(ident)
+                        lignes.append(f"\nArticle {num}\n{texte}" if num and num != "?" else f"\n{texte}")
+            elif enfant.tag == "LIEN_SECTION_TA":
+                if enfant.get("etat", "VIGUEUR") not in ("", "VIGUEUR"):
+                    continue
+                ident = enfant.get("id", "")
+                entree = section_ta.get(ident)
+                if entree is None:
+                    continue
+                titre_ta, corps = entree
+                if titre_ta:
+                    lignes.append("\n## " + titre_ta)
+                marche_struct(corps, prof + 1)
 
     dossier_struct = os.path.join(dossier_texte, "texte", "struct")
     if os.path.isdir(dossier_struct):
@@ -332,7 +341,9 @@ def construire_packs_codes(dossier):
 
 # ------------------------------------------------------------------
 # Textes non codifiés depuis le dump DILA (arrêtés, loi de 1977…)
-# LEGITEXT à extraire du dump : voir --dump. Chaque entrée décrit un pack.
+# Chaque texte est repéré par une regex sur son TITREFULL ; en cas de
+# textes homonymes (arrêtés modificatifs), on garde le plus riche en
+# articles : c'est la version consolidée du texte de base.
 # ------------------------------------------------------------------
 
 TNC = [
@@ -341,8 +352,8 @@ TNC = [
         "titre_pack": "Sécurité incendie ERP — règlement (arrêtés)",
         "description": "Arrêté du 25 juin 1980 (règlement de sécurité contre l'incendie dans les ERP, dispositions générales) et arrêté du 22 juin 1990 (5e catégorie — petits établissements).",
         "textes": [
-            ("LEGITEXT000020303557", "arrete-1980", "Arrêté du 25 juin 1980 — Règlement de sécurité incendie ERP (dispositions générales)"),
-            ("LEGITEXT000020303048", "arrete-1990", "Arrêté du 22 juin 1990 — ERP de 5e catégorie (petits établissements)"),
+            (r"^Arrêté du 25 juin 1980\b.*sécurité", "arrete-1980", "Arrêté du 25 juin 1980 — Règlement de sécurité incendie ERP (dispositions générales)"),
+            (r"^Arrêté du 22 juin 1990\b.*(sécurité|5e|cinquième)", "arrete-1990", "Arrêté du 22 juin 1990 — ERP de 5e catégorie (petits établissements)"),
         ],
     },
     {
@@ -350,44 +361,82 @@ TNC = [
         "titre_pack": "Accessibilité handicap — arrêtés d'application",
         "description": "Arrêté du 20 avril 2017 (ERP neufs et installations ouvertes au public) et arrêté du 8 décembre 2014 (ERP situés dans un cadre bâti existant).",
         "textes": [
-            ("LEGITEXT000034443624", "arrete-2017", "Arrêté du 20 avril 2017 — Accessibilité des ERP neufs"),
-            ("LEGITEXT000030037350", "arrete-2014", "Arrêté du 8 décembre 2014 — Accessibilité des ERP existants"),
+            (r"^Arrêté du 20 avril 2017\b.*accessibilité", "arrete-2017", "Arrêté du 20 avril 2017 — Accessibilité des ERP neufs"),
+            (r"^Arrêté du 8 décembre 2014\b.*(accessibilité|cadre bâti existant)", "arrete-2014", "Arrêté du 8 décembre 2014 — Accessibilité des ERP existants"),
         ],
     },
     {
         "pack": "profession-architecte",
         "titre_pack": "Profession — loi de 1977 & déontologie",
-        "description": "Loi n°77-2 du 3 janvier 1977 sur l'architecture (recours obligatoire, seuils) et décret n°80-217 du 20 mars 1980 portant code de déontologie des architectes.",
+        "description": "Loi n°77-2 du 3 janvier 1977 sur l'architecture (recours obligatoire, seuils) et décret n°80-217 du 20 mars 1980 portant code des devoirs professionnels (déontologie) des architectes.",
         "textes": [
-            ("LEGITEXT000006068655", "loi-1977", "Loi n°77-2 du 3 janvier 1977 sur l'architecture"),
-            ("LEGITEXT000006064740", "deonto-1980", "Décret n°80-217 — Code de déontologie des architectes"),
+            (r"77-2 du 3 janvier 1977 sur l'architecture", "loi-1977", "Loi n°77-2 du 3 janvier 1977 sur l'architecture"),
+            (r"80-217 du 20 mars 1980", "deonto-1980", "Décret n°80-217 — Code des devoirs professionnels des architectes (déontologie)"),
         ],
     },
 ]
 
 
-def trouver_dossier_legitext(dossier_dump, legitext):
-    for base, dirs, _f in os.walk(dossier_dump):
-        if legitext in dirs:
-            return os.path.join(base, legitext)
-    return None
+def indexer_tnc(dossier_dump):
+    """[(TITREFULL, dossier_JORFTEXT)] pour tous les textes en vigueur du dump"""
+    index = []
+    for base, dirs, fichiers in os.walk(dossier_dump):
+        if os.path.basename(base) != "version" or os.sep + "texte" + os.sep not in base:
+            continue
+        for f in fichiers:
+            if not f.endswith(".xml"):
+                continue
+            try:
+                with open(os.path.join(base, f), encoding="utf-8") as fh:
+                    contenu = fh.read(20000)
+            except OSError:
+                continue
+            m = re.search(r"<TITREFULL>(.*?)</TITREFULL>", contenu, re.S)
+            if m:
+                titre = html.unescape(m.group(1)).strip()
+                dossier_texte = os.path.dirname(os.path.dirname(base))  # …/JORFTEXT…/
+                index.append((titre, dossier_texte))
+    return index
+
+
+def compter_articles(dossier_texte):
+    n = 0
+    for base, _d, fichiers in os.walk(dossier_texte):
+        if os.sep + "article" + os.sep in base + os.sep:
+            n += sum(1 for f in fichiers if f.endswith(".xml"))
+    return n
 
 
 def construire_packs_tnc(dossier_dump, version_dump):
+    print("indexation des textes non codifiés…")
+    index = indexer_tnc(dossier_dump)
+    print(f"  {len(index)} textes en vigueur indexés")
     packs = []
     for entree in TNC:
         docs = []
-        for legitext, slug, titre in entree["textes"]:
-            dossier = trouver_dossier_legitext(dossier_dump, legitext)
-            if not dossier:
-                print(f"  ⚠ {legitext} introuvable dans le dump ({titre})", file=sys.stderr)
+        for motif, slug, titre in entree["textes"]:
+            candidats = [(t, d) for t, d in index if re.search(motif, t, re.I)]
+            if not candidats:
+                print(f"  ⚠ aucun texte ne matche « {motif} » ({titre})", file=sys.stderr)
                 continue
+            # le texte de base consolidé est celui qui porte le plus d'articles
+            candidats.sort(key=lambda c: compter_articles(c[1]), reverse=True)
+            titre_trouve, dossier = candidats[0]
+            print(f"  · {titre} ← « {titre_trouve[:90]} » ({len(candidats)} candidat(s))")
             titre_officiel, texte = texte_depuis_dump(dossier)
+            titre_officiel = titre_officiel or titre_trouve
             if not texte:
-                print(f"  ⚠ texte vide pour {legitext} ({titre})", file=sys.stderr)
+                print(f"  ⚠ texte vide pour « {titre_trouve[:60]} » ({titre})", file=sys.stderr)
                 continue
-            source = f"{titre_officiel or titre} — Légifrance (dump open-data DILA, Licence Ouverte), version consolidée au {version_dump}"
-            url = f"https://www.legifrance.gouv.fr/loda/id/{legitext}/"
+            source = f"{titre_officiel} — Légifrance (dump open-data DILA, Licence Ouverte), version consolidée au {version_dump}"
+            # lien de recherche Légifrance (le LEGITEXT est le nom du fichier version)
+            legitext = ""
+            dossier_version = os.path.join(dossier, "texte", "version")
+            if os.path.isdir(dossier_version):
+                noms = [f[:-4] for f in os.listdir(dossier_version) if f.endswith(".xml")]
+                if noms:
+                    legitext = noms[0]
+            url = f"https://www.legifrance.gouv.fr/loda/id/{legitext}/" if legitext else "https://www.legifrance.gouv.fr/"
             for t, part in decouper(titre, texte):
                 suffixe = "" if t == titre else "-" + t.rsplit("(", 1)[1].rstrip(")").replace("/", "sur")
                 docs.append({

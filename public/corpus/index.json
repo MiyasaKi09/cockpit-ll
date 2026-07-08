@@ -1,0 +1,68 @@
+[
+ {
+  "fichier": "marches-publics.json",
+  "id": "marches-publics",
+  "titre": "Marchés publics — exécution & maîtrise d'œuvre",
+  "description": "Code de la commande publique : délais de paiement, avances et acomptes, retenue de garantie, sous-traitance, et le livre MOA/MOE (loi MOP codifiée, concours, rémunération).",
+  "version": "2026-05-28",
+  "nbDocs": 3,
+  "taille": 147788,
+  "docIds": [
+   "lf-ccp-execution-l",
+   "lf-ccp-execution-r",
+   "lf-ccp-moe"
+  ]
+ },
+ {
+  "fichier": "incendie-cch.json",
+  "id": "incendie-cch",
+  "titre": "Sécurité incendie — socle CCH (classement ERP)",
+  "description": "Code de la construction et de l'habitation : objectifs de sécurité, classement des ERP en types et catégories, autorisations de travaux, commissions de sécurité, ERP existants.",
+  "version": "2026-07-01",
+  "nbDocs": 2,
+  "taille": 78650,
+  "docIds": [
+   "lf-cch-incendie-l",
+   "lf-cch-incendie-r"
+  ]
+ },
+ {
+  "fichier": "accessibilite-cch.json",
+  "id": "accessibilite-cch",
+  "titre": "Accessibilité handicap — socle CCH",
+  "description": "Code de la construction et de l'habitation : obligations d'accessibilité des ERP et des logements, dérogations, attestations, agendas d'accessibilité programmée.",
+  "version": "2026-07-01",
+  "nbDocs": 2,
+  "taille": 89879,
+  "docIds": [
+   "lf-cch-access-l",
+   "lf-cch-access-r"
+  ]
+ },
+ {
+  "fichier": "garanties-construction.json",
+  "id": "garanties-construction",
+  "titre": "Garanties & assurances construction",
+  "description": "Code civil (contrat d'entreprise, réception, garanties biennale et décennale des constructeurs) et Code des assurances (obligations décennale et dommages-ouvrage).",
+  "version": "2026-06-27",
+  "nbDocs": 2,
+  "taille": 24903,
+  "docIds": [
+   "lf-cciv-louage",
+   "lf-cass-decennale"
+  ]
+ },
+ {
+  "fichier": "urbanisme-autorisations.json",
+  "id": "urbanisme-autorisations",
+  "titre": "Urbanisme — autorisations (PC / DP)",
+  "description": "Code de l'urbanisme : champ d'application des permis et déclarations préalables, composition du dossier de PC, délais d'instruction, recours obligatoire à l'architecte.",
+  "version": "2026-07-01",
+  "nbDocs": 2,
+  "taille": 150293,
+  "docIds": [
+   "lf-curb-champ",
+   "lf-curb-dossier"
+  ]
+ }
+]

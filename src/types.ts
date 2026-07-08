@@ -303,6 +303,15 @@ export interface Obligation {
   periodiciteMois?: number | null
   rappelJours: number
   notes?: string
+  // --- champs contrat (optionnels — une obligation ordinaire les ignore) ---
+  /** true = contrat de l'agence (assurance, licences, bail…) — onglet Contrats */
+  contrat?: boolean
+  /** coût annuel du contrat — donne le total des frais fixes contractuels */
+  montantAnnuel?: number | null
+  /** date limite pour résilier / renégocier avant reconduction tacite */
+  dateRenouvellement?: string
+  /** lien vers le contrat signé (Drive…) */
+  documentUrl?: string
 }
 
 export type TypeContact = 'MOA' | 'Prospect' | 'Entreprise' | 'BET' | 'Autre'
@@ -419,6 +428,7 @@ export type TypeAlerte =
   | 'situation_manquante'
   | 'derive_heures'
   | 'obligation'
+  | 'contrat_renouvellement'
   | 'crm'
   | 'decennale'
   | 'cr_en_attente'

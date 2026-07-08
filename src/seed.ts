@@ -737,8 +737,12 @@ export function seedState(): AppState {
     ],
 
     obligations: [
-      { id: 'ob-maf', libelle: 'Assurance RC pro / décennale — cotisation MAF', organisme: 'MAF', echeance: '2026-10-15', periodiciteMois: 12, rappelJours: 30 },
-      { id: 'ob-multi', libelle: 'Assurance multirisque locaux', organisme: 'Assureur', echeance: '2026-09-15', periodiciteMois: 12, rappelJours: 21 },
+      // contrats de l'agence (onglet Contrats — coût annuel + fenêtre de résiliation)
+      { id: 'ob-maf', libelle: 'Assurance RC pro / décennale — cotisation MAF', organisme: 'MAF', echeance: '2026-10-15', periodiciteMois: 12, rappelJours: 30, contrat: true, montantAnnuel: 5800 },
+      { id: 'ob-multi', libelle: 'Assurance multirisque locaux', organisme: 'Assureur', echeance: '2026-09-15', periodiciteMois: 12, rappelJours: 21, contrat: true, montantAnnuel: 780, dateRenouvellement: '2026-08-15', notes: 'Préavis de résiliation : 1 mois avant échéance.' },
+      { id: 'ob-logiciels', libelle: 'Licences logiciels (BIM + bureautique)', organisme: 'Éditeurs', echeance: '2027-03-01', periodiciteMois: 12, rappelJours: 30, contrat: true, montantAnnuel: 3200, dateRenouvellement: '2027-01-30', notes: 'Abonnement annuel — résiliable jusqu’à 30 j avant échéance.' },
+      { id: 'ob-bail', libelle: 'Bail des locaux — loyer trimestriel', organisme: 'SCI Les Remparts', echeance: '2026-10-01', periodiciteMois: 3, rappelJours: 10, contrat: true, montantAnnuel: 8400, dateRenouvellement: '2028-03-31', notes: 'Bail 3-6-9 : congé 6 mois avant la fin de la triennale.' },
+      // obligations réglementaires
       { id: 'ob-ordre', libelle: 'Cotisation Ordre des architectes', organisme: 'CROA Hauts-de-France', echeance: '2027-01-15', periodiciteMois: 12, rappelJours: 30 },
       { id: 'ob-tva', libelle: 'Déclaration et reversement TVA', organisme: 'DGFiP', echeance: '2026-10-12', periodiciteMois: 1, rappelJours: 7, notes: 'Régime réel normal : mensuelle. Exigible à l’encaissement.' },
       { id: 'ob-urssaf', libelle: 'Cotisations sociales (DSN) — salaires SAS', organisme: 'URSSAF', echeance: '2026-11-15', periodiciteMois: 1, rappelJours: 5, notes: 'SAS : président·e assimilé salarié — DSN mensuelle comme pour un salarié.' },

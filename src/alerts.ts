@@ -165,6 +165,30 @@ export function computeAlertes(state: AppState, today: string): Alerte[] {
     })
   }
 
+  // --- Contrats de l'agence : fenêtre de renouvellement / résiliation.
+  // 45 j avant la date limite, il est encore temps de renégocier ou résilier.
+  for (const o of state.obligations) {
+    if (!o.contrat || !o.dateRenouvellement) continue
+    const declenche = addDays(o.dateRenouvellement, -45)
+    if (today < declenche) continue
+    const dj = diffDays(today, o.dateRenouvellement)
+    if (dj < -30) continue // fenêtre passée depuis plus d'un mois : le contrat est reconduit
+    alertes.push({
+      id: `contrat:${o.id}:${o.dateRenouvellement}`,
+      type: 'contrat_renouvellement',
+      gravite: dj < 0 ? 1 : dj <= 15 ? 3 : 2,
+      titre:
+        dj < 0
+          ? `Contrat reconduit tacitement : ${o.libelle}`
+          : `Contrat à revoir : ${o.libelle} — décider avant le ${fmtDate(o.dateRenouvellement)}`,
+      detail: [o.organisme, o.montantAnnuel ? `${fmtMoney(o.montantAnnuel)} / an` : null]
+        .filter(Boolean)
+        .join(' · '),
+      lien: '#/agenda',
+      date: o.dateRenouvellement,
+    })
+  }
+
   // --- CRM : prochaine action datée et dépassée.
   for (const c of state.contacts) {
     if (!c.dateProchaineAction || c.dateProchaineAction > today) continue

@@ -5,6 +5,9 @@ import { useStore } from './store'
 import { ConfirmHost, Icon, ToastHost, useRoute, useToday } from './ui'
 import { alertesActives } from './alerts'
 import { basculerTheme, themeCourant } from './theme'
+import { syncActif } from './sync'
+import { diffDays } from './util'
+import type { AppState } from './types'
 
 import Cockpit from './modules/Cockpit'
 import RechercheOverlay from './modules/RechercheOverlay'
@@ -56,6 +59,16 @@ const NAV: { groupe: string; sec?: boolean; items: { path: string; label: string
     items: [{ path: 'parametres', label: 'Paramètres' }],
   },
 ]
+
+/** statut réel des données — remplace l'ancien slogan « sans API » :
+ *  où vivent les données, et de quand date le dernier filet de sécurité */
+function statutDonnees(state: AppState, today: string): string {
+  if (syncActif()) return 'Synchronisé (espace partagé)'
+  const sauvegarde = state.settings.derniereSauvegarde
+  if (!sauvegarde) return 'Local · aucune sauvegarde JSON'
+  const jours = diffDays(sauvegarde.slice(0, 10), today)
+  return `Local · sauvegarde ${jours <= 0 ? "aujourd'hui" : jours === 1 ? 'hier' : `il y a ${jours} j`}`
+}
 
 export default function App() {
   const route = useRoute()
@@ -174,7 +187,7 @@ export default function App() {
       <aside className={`sidebar ${navOuverte ? 'ouverte' : ''}`}>
         <div className="brand">
           Cockpit L&L
-          <small>intranet v2 — sans API</small>
+          <small>{statutDonnees(state, today)}</small>
         </div>
         <button className="nav-search" onClick={() => setRechercheOuverte(true)} title="Recherche globale">
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>

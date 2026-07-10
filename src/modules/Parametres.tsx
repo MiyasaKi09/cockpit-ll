@@ -15,6 +15,7 @@ import {
   Money,
   navigate,
   NumInput,
+  PctInput,
   Page,
   Select,
   Table,
@@ -121,7 +122,7 @@ function CarteEquipe() {
             <td className="right"><NumInput value={p.remuMensuelle} onChange={(v) => majPersonne(p.id, 'remuMensuelle', v)} style={{ width: 84 }} /></td>
             <td className="right"><NumInput value={p.coefCharges} onChange={(v) => majPersonne(p.id, 'coefCharges', v)} style={{ width: 64 }} /></td>
             <td className="right"><NumInput value={p.heuresAnnuelles} onChange={(v) => majPersonne(p.id, 'heuresAnnuelles', v)} style={{ width: 72 }} /></td>
-            <td className="right"><NumInput value={p.facturablePct} onChange={(v) => majPersonne(p.id, 'facturablePct', v)} style={{ width: 60 }} /></td>
+            <td className="right"><PctInput value={p.facturablePct} onChange={(v) => majPersonne(p.id, 'facturablePct', v)} style={{ width: 80 }} ariaLabel={`Part facturable de ${p.nom} en pourcentage`} /></td>
             <td className="right num"><strong>{fmtMoney(coutHorairePersonne(p), true)}</strong></td>
             <td className="right num">{fmtMoney(coutAnnuelPersonne(p))}</td>
             <td className="right"><Btn small kind="danger" onClick={() => retirer(p.id)}>✕</Btn></td>
@@ -565,13 +566,14 @@ export default function Parametres({ ongletInitial = 'agence' }: { ongletInitial
             <div className="input input-ro">{s.personnes.join(', ') || '—'}</div>
           </Field>
           <Field
-            label="Marge nette visée (%)"
+            label="Marge nette visée"
             hint="bénéfice après s'être payés — laissez vide pour saisir le CA cible à la main"
           >
-            <NumInput
-              value={s.margeCiblePct != null ? Math.round(s.margeCiblePct * 1000) / 10 : null}
-              onChange={(v) => maj((d) => void (d.settings.margeCiblePct = v == null ? null : v / 100))}
+            <PctInput
+              value={s.margeCiblePct ?? null}
+              onChange={(v) => maj((d) => void (d.settings.margeCiblePct = v))}
               placeholder="ex. 20"
+              ariaLabel="Marge nette visée en pourcentage"
             />
           </Field>
         </div>
@@ -629,11 +631,12 @@ export default function Parametres({ ongletInitial = 'agence' }: { ongletInitial
                   )}
                 </Field>
                 {auto && (
-                  <Field label="Marge supplémentaire (%)" hint="coussin au-delà de la marge nette (négo, imprévus, non-facturable)">
-                    <NumInput
-                      value={s.margeSecuritePct != null ? Math.round(s.margeSecuritePct * 1000) / 10 : null}
-                      onChange={(v) => maj((d) => void (d.settings.margeSecuritePct = v == null ? null : v / 100))}
+                  <Field label="Marge supplémentaire" hint="coussin au-delà de la marge nette (négo, imprévus, non-facturable)">
+                    <PctInput
+                      value={s.margeSecuritePct ?? null}
+                      onChange={(v) => maj((d) => void (d.settings.margeSecuritePct = v))}
                       placeholder="ex. 10"
+                      ariaLabel="Marge supplémentaire en pourcentage"
                     />
                   </Field>
                 )}
@@ -664,8 +667,12 @@ export default function Parametres({ ongletInitial = 'agence' }: { ongletInitial
           <Field label="Heures / jour">
             <NumInput value={s.heuresParJour} onChange={(v) => maj((d) => void (d.settings.heuresParJour = v ?? 7.8))} />
           </Field>
-          <Field label="Seuil de dérive heures" hint="0,9 = alerte à 90 % du budget">
-            <NumInput value={s.seuilDeriveHeures} onChange={(v) => maj((d) => void (d.settings.seuilDeriveHeures = v ?? 0.9))} />
+          <Field label="Seuil de dérive heures" hint="90 % = alerte quand 90 % du budget d'heures est consommé">
+            <PctInput
+              value={s.seuilDeriveHeures}
+              onChange={(v) => maj((d) => void (d.settings.seuilDeriveHeures = v ?? 0.9))}
+              ariaLabel="Seuil de dérive heures en pourcentage"
+            />
           </Field>
         </div>
         <div className="form-row">

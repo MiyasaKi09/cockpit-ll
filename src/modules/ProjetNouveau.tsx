@@ -9,7 +9,7 @@ import { useStore } from '../store'
 import { OUVRAGES, calculHonoraires, phasesParDefaut, seuilPlancherActualise } from '../miqcp'
 import { tauxVente } from '../derive'
 import { daterPhases, facturesParDefaut } from '../echeancier'
-import { Badge, Btn, Field, Modal, NumInput, Select, TextInput, navigate } from '../ui'
+import { Badge, Btn, Field, Modal, NumInput, PctInput, Select, TextInput, navigate } from '../ui'
 import { addDays, fmtMoney, fmtPct, todayISO, uid } from '../util'
 
 const TYPES_MO: TypeMO[] = ['Public', 'Privé pro', 'Particulier']
@@ -175,8 +175,8 @@ export default function ProjetNouveau({ onClose }: { onClose: () => void }) {
             </div>
           )}
           <div className="form-row" style={{ marginTop: 12 }}>
-            <Field label="Taux négocié (optionnel)" hint="vide = taux calculé · 0,12 pour 12 %">
-              <NumInput value={tauxRetenu} onChange={setTauxRetenu} placeholder="auto" />
+            <Field label="Taux négocié (optionnel)" hint="vide = taux calculé — saisir 12 pour 12 %">
+              <PctInput value={tauxRetenu} onChange={setTauxRetenu} placeholder="auto" ariaLabel="Taux d'honoraires négocié en pourcentage" />
             </Field>
             <Field label="Missions complémentaires HT (€)" hint="DIAG, OPC, EXE… (optionnel)">
               <NumInput value={missionsCompl} onChange={setMissionsCompl} />

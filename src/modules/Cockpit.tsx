@@ -1,14 +1,18 @@
 // ============================================================
-// Cockpit — tableau de bord : météo financière, fil d'urgences
-// (alertes calculées, snoozables) et repères du jour.
+// Cockpit — tableau de bord : météo financière, CENTRE D'ACTIONS
+// (une seule file : à faire, à surveiller, information — courriers,
+// tâches et alertes classés ensemble) et repères du jour.
 // Tout est dérivé de l'état : aucune donnée propre au module.
+// Règle d'or : une action financière ou contractuelle s'OUVRE et
+// se vérifie d'abord ; le raccourci « marquer… » reste possible
+// mais demande une confirmation explicite.
 // ============================================================
 
 import { useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import type { Alerte } from '../types'
 import { useStore } from '../store'
-import { Btn, Card, DateF, EmptyState, Icon, Money, Page, Stat, toast, useToday } from '../ui'
+import { Btn, Card, DateF, EmptyState, Icon, Money, Page, RowMenu, Stat, confirmer, toast, useToday } from '../ui'
 import { alertesActives } from '../alerts'
 import { STATUTS_ACTIFS, caCible, caRealiseAnnee, meteoFinanciere } from '../derive'
 import { addDays, fmtDate, fmtMoney, fmtPct, ouvrirGmail } from '../util'
@@ -25,56 +29,8 @@ const STYLE_GROUPE: CSSProperties = {
   margin: '12px 2px 6px',
 }
 
-// types d'alertes déjà traitables dans la boîte « À traiter » : on ne les répète
-// pas dans le fil d'urgences pour éviter le doublon sur le même écran.
+// types d'alertes déjà présents comme tâches « à faire » : pas de doublon
 const TYPES_DANS_INBOX = new Set<Alerte['type']>(['situation_a_verifier', 'facture_a_emettre', 'cr_en_attente'])
-
-const GROUPES_ALERTES: { gravite: Alerte['gravite']; label: string }[] = [
-  { gravite: 3, label: 'Critique' },
-  { gravite: 2, label: 'À surveiller' },
-  { gravite: 1, label: 'Pour information' },
-]
-
-function AlerteLigne({
-  a,
-  onSnooze,
-  onAction,
-}: {
-  a: Alerte
-  onSnooze: (id: string, jours: number) => void
-  onAction: (action: NonNullable<Alerte['action']>) => void
-}) {
-  return (
-    <div className={`alert-item alert-${a.gravite}`}>
-      <span className="alert-dot" />
-      <div style={{ minWidth: 0 }}>
-        <div className="alert-titre">{a.titre}</div>
-        <div className="alert-detail">
-          {a.detail ? <>{a.detail} · </> : null}
-          <a href={a.lien}>ouvrir</a>
-        </div>
-      </div>
-      <div className="alert-actions">
-        {a.action && (
-          <Btn small kind="primary" onClick={() => onAction(a.action!)} title="Fait sur place, sans changer de page">
-            {a.action.label}
-          </Btn>
-        )}
-        <Btn small onClick={() => onSnooze(a.id, 7)} title="Mettre cette alerte en sommeil 7 jours">
-          Sommeil 7 j
-        </Btn>
-        <Btn
-          small
-          kind="ghost"
-          onClick={() => onSnooze(a.id, 30)}
-          title="Mettre cette alerte en sommeil 30 jours"
-        >
-          30 j
-        </Btn>
-      </div>
-    </div>
-  )
-}
 
 /** colonne des « Repères du jour » */
 function Repere({ titre, children }: { titre: string; children: ReactNode }) {
@@ -98,64 +54,90 @@ function RienASignaler({ children }: { children: ReactNode }) {
   return <div className="muted small">{children}</div>
 }
 
-// ---------- boîte « À traiter » ----------
+// ---------- centre d'actions : le modèle unifié ----------
 
-/** action rapide réalisable SUR PLACE, sans changer de page */
+/** raccourci « marquer… » : les actions financières/contractuelles portent
+ *  une confirmation explicite (sinon exécution directe, toujours annulable) */
 type ActionRapide =
-  | { kind: 'emettre_facture'; refId: string; label: string }
-  | { kind: 'valider_situation'; refId: string; label: string }
-  | { kind: 'note_faite'; refId: string; projetId: string; label: string }
+  | { kind: 'emettre_facture'; refId: string; label: string; confirme: string }
+  | { kind: 'valider_situation'; refId: string; label: string; confirme: string }
+  | { kind: 'note_faite'; refId: string; projetId: string; label: string; confirme?: undefined }
 
-interface ItemATraiter {
+interface ItemAFaire {
   id: string
-  action: string
-  detail: string
+  gravite: 1 | 2 | 3
+  titre: ReactNode
+  detail: ReactNode
   lien: string
-  date?: string
+  /** échéance (tri + filtre « cette semaine ») */
+  dateLimite?: string
+  /** arrivée (tri tertiaire) */
+  dateReception?: string
   pour?: string
   rapide?: ActionRapide
+  marqueur: 'triangle' | 'square' | 'circle'
+  /** actions spécifiques rendues telles quelles (courriers) */
+  actionsSpecifiques?: ReactNode
 }
 
-function itemsATraiter(state: ReturnType<typeof useStore>['state'], today: string): ItemATraiter[] {
-  const items: ItemATraiter[] = []
+function itemsAFaire(state: ReturnType<typeof useStore>['state'], today: string): ItemAFaire[] {
+  const items: ItemAFaire[] = []
   for (const s of state.situations.filter((x) => x.statut === 'a_verifier')) {
     items.push({
       id: `sit-${s.id}`,
-      action: `Vérifier la situation — ${s.entreprise} (${s.mois})`,
+      gravite: 3,
+      titre: `Vérifier la situation — ${s.entreprise} (${s.mois})`,
       detail: `${s.projetId || 'projet à rattacher'}${s.montantMoisHT != null ? ` · ${fmtMoney(s.montantMoisHT)} HT` : ''} · déposée par la routine situations@`,
       lien: '#/situations',
-      date: s.dateReception,
+      dateReception: s.dateReception,
       pour: s.pour,
-      rapide: { kind: 'valider_situation', refId: s.id, label: '✓ Valider' },
+      marqueur: 'triangle',
+      rapide: {
+        kind: 'valider_situation',
+        refId: s.id,
+        label: 'Marquer validée…',
+        confirme: `Marquer la situation de ${s.entreprise} (${s.mois}${s.montantMoisHT != null ? `, ${fmtMoney(s.montantMoisHT)} HT` : ''}) comme VALIDÉE sans l'ouvrir ?\nLe décompte part ensuite en proposition de paiement.`,
+      },
     })
   }
   for (const c of state.consultations.filter((x) => x.statut === 'a_etudier')) {
     items.push({
       id: `ao-${c.id}`,
-      action: `Étudier la consultation — ${c.intitule}`,
+      gravite: 2,
+      titre: `Étudier la consultation — ${c.intitule}`,
       detail: `${c.acheteur || 'acheteur ?'}${c.dateLimite ? ` · remise le ${fmtDate(c.dateLimite)}` : ''} · avis Go/No-Go à donner`,
       lien: '#/ao',
-      date: c.dateLimite || undefined,
+      dateLimite: c.dateLimite || undefined,
       pour: c.pour,
+      marqueur: 'square',
     })
   }
   for (const f of state.factures.filter((x) => x.statut === 'prevue' && x.emission <= today)) {
     items.push({
       id: `fac-${f.id}`,
-      action: `Émettre la facture ${f.id} — ${fmtMoney(f.montantHT)} HT`,
+      gravite: 3,
+      titre: `Émettre la facture ${f.id} — ${fmtMoney(f.montantHT)} HT`,
       detail: `${f.projetId} · ${f.libelle} · prévue le ${fmtDate(f.emission)}`,
       lien: '#/facturation',
-      date: f.emission,
-      rapide: { kind: 'emettre_facture', refId: f.id, label: '✓ Émettre' },
+      dateLimite: f.emission,
+      marqueur: 'circle',
+      rapide: {
+        kind: 'emettre_facture',
+        refId: f.id,
+        label: 'Marquer émise…',
+        confirme: `Marquer la facture ${f.id} (${fmtMoney(f.montantHT)} HT — ${f.libelle}) comme ÉMISE sans l'ouvrir ?\nElle entre au facturé et dans le suivi des retards à sa date d'émission.`,
+      },
     })
   }
   for (const r of state.reunions.filter((x) => x.statut !== 'diffuse' && x.date <= today)) {
     items.push({
       id: `cr-${r.id}`,
-      action: `Sortir le CR — ${r.titre}`,
+      gravite: 2,
+      titre: `Sortir le CR — ${r.titre}`,
       detail: `${r.projetId} · réunion du ${fmtDate(r.date)} · assistant CR dans l'onglet Chantier`,
       lien: `#/projets/${r.projetId}/chantier`,
-      date: r.date,
+      dateLimite: r.date,
+      marqueur: 'circle',
     })
   }
   // notes de journal « à faire » non réglées
@@ -164,17 +146,64 @@ function itemsATraiter(state: ReturnType<typeof useStore>['state'], today: strin
       if (!n.tags.includes('a-faire') || n.fait) continue
       items.push({
         id: `note-${n.id}`,
-        action: n.texte.length > 90 ? n.texte.slice(0, 90) + '…' : n.texte,
-        detail: `${p.id} · note du ${fmtDate(n.date)}${n.auteur ? ` (${n.auteur})` : ''} · à cocher dans le journal`,
+        gravite: 2,
+        titre: n.texte.length > 90 ? n.texte.slice(0, 90) + '…' : n.texte,
+        detail: `${p.id} · note du ${fmtDate(n.date)}${n.auteur ? ` (${n.auteur})` : ''}`,
         lien: `#/projets/${p.id}/journal`,
-        date: n.date,
+        dateReception: n.date,
         pour: n.auteur,
+        marqueur: 'circle',
         rapide: { kind: 'note_faite', refId: n.id, projetId: p.id, label: '✓ Fait' },
       })
     }
   }
-  items.sort((a, b) => (a.date || '9999').localeCompare(b.date || '9999'))
   return items
+}
+
+/** classement unique : gravité, puis date limite, puis date de réception */
+function trierAFaire(a: ItemAFaire, b: ItemAFaire): number {
+  return (
+    b.gravite - a.gravite ||
+    (a.dateLimite || '9999').localeCompare(b.dateLimite || '9999') ||
+    (a.dateReception || '9999').localeCompare(b.dateReception || '9999')
+  )
+}
+
+/** exécute un raccourci « marquer… » (mutation du store) */
+function executerRapide(update: ReturnType<typeof useStore>['update'], a: ActionRapide): void {
+  update((d) => {
+    if (a.kind === 'emettre_facture') {
+      const f = d.factures.find((x) => x.id === a.refId)
+      if (f && f.statut === 'prevue') f.statut = 'emise'
+    } else if (a.kind === 'valider_situation') {
+      const s = d.situations.find((x) => x.id === a.refId)
+      if (s) s.statut = 'validee'
+    } else if (a.kind === 'note_faite') {
+      const n = d.projets.find((x) => x.id === a.projetId)?.journal.find((x) => x.id === a.refId)
+      if (n) n.fait = true
+    }
+  })
+}
+
+/** menu « Reporter… » d'une alerte : 7 j, 30 j ou une date choisie */
+function MenuReporter({ onReporter }: { onReporter: (jours: number | string) => void }) {
+  return (
+    <RowMenu
+      label="Reporter"
+      items={[
+        { label: '7 jours', onClick: () => onReporter(7) },
+        { label: '30 jours', onClick: () => onReporter(30) },
+        {
+          label: 'Choisir la date…',
+          onClick: () => {
+            const d = window.prompt('Réveiller cette alerte le (AAAA-MM-JJ) :')
+            if (d && /^\d{4}-\d{2}-\d{2}$/.test(d)) onReporter(d)
+            else if (d) toast('Date attendue au format AAAA-MM-JJ.', { tone: 'warn' })
+          },
+        },
+      ]}
+    />
+  )
 }
 
 function LigneCourrier({ personne }: { personne: string }) {
@@ -268,120 +297,44 @@ function LigneCourrier({ personne }: { personne: string }) {
   )
 }
 
-/** exécute une action rapide sur place (mutation du store) */
-function executerRapide(update: ReturnType<typeof useStore>['update'], a: ActionRapide): void {
-  update((d) => {
-    if (a.kind === 'emettre_facture') {
-      const f = d.factures.find((x) => x.id === a.refId)
-      if (f && f.statut === 'prevue') f.statut = 'emise'
-    } else if (a.kind === 'valider_situation') {
-      const s = d.situations.find((x) => x.id === a.refId)
-      if (s) s.statut = 'validee'
-    } else if (a.kind === 'note_faite') {
-      const n = d.projets.find((x) => x.id === a.projetId)?.journal.find((x) => x.id === a.refId)
-      if (n) n.fait = true
-    }
-  })
-}
+// ---------- centre d'actions ----------
 
-function BoiteATraiter() {
+function CentreActions() {
   const { state, update, replace } = useStore()
   const today = useToday()
   const [personne, setPersonne] = useState('')
+  const [toutAfficher, setToutAfficher] = useState(false)
 
-  const faireRapide = (a: ActionRapide) => {
+  const horizon = addDays(today, 7)
+
+  const faireRapide = async (a: ActionRapide) => {
+    if (a.confirme && !(await confirmer({ message: a.confirme, confirmerLabel: a.label.replace('…', '') }))) return
     const snap = state
     executerRapide(update, a)
     const libelle =
-      a.kind === 'valider_situation'
-        ? 'Situation validée.'
-        : a.kind === 'emettre_facture'
-          ? 'Facture émise.'
-          : 'Note marquée faite.'
+      a.kind === 'valider_situation' ? 'Situation validée.' : a.kind === 'emettre_facture' ? 'Facture émise.' : 'Note marquée faite.'
     toast(libelle, { undo: () => replace(snap) })
   }
 
-  const tous = itemsATraiter(state, today)
-  const items = personne ? tous.filter((i) => !i.pour || i.pour === personne) : tous
-  const nbCourriers = state.courriers.filter(
-    (c) => c.statut === 'a_traiter' && (!personne || !c.pour || c.pour === personne),
-  ).length
-
-  return (
-    <Card
-      titre="À traiter"
-      actions={
-        <span style={{ display: 'inline-flex', gap: 4 }}>
-          {['', ...state.settings.personnes].map((p) => (
-            <button
-              key={p || 'tous'}
-              className={`btn btn-small ${personne === p ? 'btn-primary' : ''}`}
-              onClick={() => setPersonne(p)}
-            >
-              {p || 'Tout'}
-            </button>
-          ))}
-        </span>
-      }
-    >
-      <LigneCourrier personne={personne} />
-      {items.length === 0 && nbCourriers === 0 ? (
-        <EmptyState>Rien à traiter.</EmptyState>
-      ) : (
-        items.map((i) => (
-          <div key={i.id} className="alert-item">
-            <span
-              className={`gmk gmk-${i.id.startsWith('sit-') ? 'triangle' : i.id.startsWith('ao-') ? 'square' : 'circle'}`}
-              aria-hidden="true"
-            />
-            <div style={{ minWidth: 0 }}>
-              <div className="alert-titre">
-                {i.action}{' '}
-                {i.pour && <span className="badge badge-info">{i.pour}</span>}
-              </div>
-              <div className="alert-detail">{i.detail}</div>
-            </div>
-            <div className="alert-actions">
-              {i.rapide && (
-                <Btn small kind="primary" onClick={() => faireRapide(i.rapide!)} title="Fait sur place, sans changer de page">
-                  {i.rapide.label}
-                </Btn>
-              )}
-              <a className={`btn btn-small ${i.rapide ? 'btn-ghost' : 'btn-primary'}`} href={i.lien}>
-                {i.rapide ? 'ouvrir' : 'Traiter →'}
-              </a>
-            </div>
-          </div>
-        ))
-      )}
-    </Card>
-  )
-}
-
-// ---------- module ----------
-
-export default function Cockpit() {
-  const { state, update, replace } = useStore()
-  const today = useToday()
-  const { evenements } = useSurveillance(state, update)
-  const dateFR = today.split('-').reverse().join('.')
-
-  const meteo = meteoFinanciere(state, today)
-  const excel = state.settings.dernierImportExcel
-  const alertes = alertesActives(state, today)
-  // le fil ne répète pas ce qui est déjà actionnable dans la boîte « À traiter »
-  const alertesFil = alertes.filter((a) => !TYPES_DANS_INBOX.has(a.type))
-
-  const snooze = (id: string, jours: number) => {
+  const reporter = (id: string, quand: number | string) => {
     const snap = state
+    const date = typeof quand === 'number' ? addDays(today, quand) : quand
     update((d) => {
-      d.settings.snoozes[id] = addDays(today, jours)
+      d.settings.snoozes[id] = date
     })
-    toast(`Alerte en sommeil ${jours} jours.`, { undo: () => replace(snap) })
+    toast(`Alerte reportée au ${fmtDate(date)}.`, { undo: () => replace(snap) })
   }
 
-  // action rapide d'une alerte, exécutée sur place
-  const executerAlerte = (action: NonNullable<Alerte['action']>) => {
+  // action rapide d'une alerte : financière → confirmation explicite
+  const executerAlerte = async (a: Alerte) => {
+    const action = a.action!
+    if (action.kind === 'emettre_facture' || action.kind === 'valider_situation') {
+      const ok = await confirmer({
+        message: `${a.titre}\n\nMarquer comme ${action.kind === 'emettre_facture' ? 'ÉMISE' : 'VALIDÉE'} sans ouvrir la fiche ?`,
+        confirmerLabel: action.label,
+      })
+      if (!ok) return
+    }
     const snap = state
     update((d) => {
       if (action.kind === 'emettre_facture') {
@@ -406,13 +359,168 @@ export default function Cockpit() {
       }
     })
     const libelle =
-      action.kind === 'emettre_facture'
-        ? 'Facture émise.'
-        : action.kind === 'valider_situation'
-          ? 'Situation validée.'
-          : 'Obligation faite.'
+      action.kind === 'emettre_facture' ? 'Facture émise.' : action.kind === 'valider_situation' ? 'Situation validée.' : 'Obligation faite.'
     toast(libelle, { undo: () => replace(snap) })
   }
+
+  const alertes = alertesActives(state, today).filter((a) => !TYPES_DANS_INBOX.has(a.type))
+  const aSurveiller = alertes.filter((a) => a.gravite === 2)
+  const information = alertes.filter((a) => a.gravite === 1)
+
+  const tous = [...itemsAFaire(state, today), ...alertes.filter((a) => a.gravite === 3).map(alerteVersItem)].sort(trierAFaire)
+  const filtres = personne ? tous.filter((i) => !i.pour || i.pour === personne) : tous
+  // par défaut : les retards, aujourd'hui et cette semaine — le reste sur demande
+  const masquables = filtres.filter((i) => i.dateLimite && i.dateLimite > horizon).length
+  const visibles = toutAfficher ? filtres : filtres.filter((i) => !i.dateLimite || i.dateLimite <= horizon)
+
+  const nbCourriers = state.courriers.filter(
+    (c) => c.statut === 'a_traiter' && (!personne || !c.pour || c.pour === personne),
+  ).length
+
+  function alerteVersItem(a: Alerte): ItemAFaire {
+    return {
+      id: `al-${a.id}`,
+      gravite: 3,
+      titre: a.titre,
+      detail: a.detail || '',
+      lien: a.lien,
+      dateLimite: a.date,
+      marqueur: 'triangle',
+      actionsSpecifiques: (
+        <>
+          {a.action && (
+            <Btn small onClick={() => void executerAlerte(a)} title="Raccourci — confirmation demandée pour le financier">
+              {a.action.label}
+            </Btn>
+          )}
+          <MenuReporter onReporter={(quand) => reporter(a.id, quand)} />
+        </>
+      ),
+    }
+  }
+
+  const rendreItem = (i: ItemAFaire) => (
+    <div key={i.id} className={`alert-item ${i.gravite === 3 ? 'alert-3' : ''}`}>
+      <span className={`gmk gmk-${i.marqueur}`} aria-hidden="true" />
+      <div style={{ minWidth: 0 }}>
+        <div className="alert-titre">
+          {i.titre} {i.pour && <span className="badge badge-info">{i.pour}</span>}
+        </div>
+        <div className="alert-detail">
+          {i.detail}
+          {i.dateLimite && i.dateLimite < today && (
+            <>
+              {' '}
+              <span className="badge badge-danger">en retard</span>
+            </>
+          )}
+        </div>
+      </div>
+      <div className="alert-actions">
+        {i.actionsSpecifiques ?? (
+          <>
+            {/* l'action principale OUVRE — on vérifie avant d'agir */}
+            <a className="btn btn-small btn-primary" href={i.lien}>
+              Ouvrir et vérifier
+            </a>
+            {i.rapide && (
+              <Btn
+                small
+                onClick={() => void faireRapide(i.rapide!)}
+                title={i.rapide.confirme ? 'Raccourci — une confirmation explicite est demandée' : 'Fait sur place'}
+              >
+                {i.rapide.label}
+              </Btn>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  )
+
+  const rendreAlerte = (a: Alerte) => (
+    <div key={a.id} className={`alert-item alert-${a.gravite}`}>
+      <span className="alert-dot" />
+      <div style={{ minWidth: 0 }}>
+        <div className="alert-titre">{a.titre}</div>
+        <div className="alert-detail">
+          {a.detail ? <>{a.detail} · </> : null}
+          <a href={a.lien}>ouvrir</a>
+        </div>
+      </div>
+      <div className="alert-actions">
+        {a.action && (
+          <Btn small onClick={() => void executerAlerte(a)}>
+            {a.action.label}
+          </Btn>
+        )}
+        <MenuReporter onReporter={(quand) => reporter(a.id, quand)} />
+      </div>
+    </div>
+  )
+
+  return (
+    <Card
+      titre="Centre d'actions"
+      actions={
+        <span className="segmente" role="group" aria-label="Filtrer par personne">
+          {['', ...state.settings.personnes].map((p) => (
+            <button key={p || 'tous'} aria-pressed={personne === p} onClick={() => setPersonne(p)}>
+              {p || 'Tout'}
+            </button>
+          ))}
+        </span>
+      }
+    >
+      {/* ---------- à faire ---------- */}
+      <div style={{ ...STYLE_GROUPE, marginTop: 0 }}>À faire</div>
+      <LigneCourrier personne={personne} />
+      {visibles.length === 0 && nbCourriers === 0 ? (
+        <EmptyState>Rien à faire — le centre d'actions est calme.</EmptyState>
+      ) : (
+        visibles.map(rendreItem)
+      )}
+      {masquables > 0 && (
+        <p className="small" style={{ margin: '6px 2px' }}>
+          <Btn small kind="ghost" onClick={() => setToutAfficher(!toutAfficher)}>
+            {toutAfficher
+              ? 'Revenir à cette semaine'
+              : `Afficher aussi ${masquables} échéance${masquables > 1 ? 's' : ''} à plus de 7 jours`}
+          </Btn>
+        </p>
+      )}
+
+      {/* ---------- à surveiller ---------- */}
+      {aSurveiller.length > 0 && (
+        <>
+          <div style={STYLE_GROUPE}>À surveiller ({aSurveiller.length})</div>
+          {aSurveiller.map(rendreAlerte)}
+        </>
+      )}
+
+      {/* ---------- information (repliée par défaut) ---------- */}
+      {information.length > 0 && (
+        <details style={{ marginTop: 10 }}>
+          <summary style={{ ...STYLE_GROUPE, margin: '2px', cursor: 'pointer', display: 'list-item' }}>
+            Pour information ({information.length})
+          </summary>
+          {information.map(rendreAlerte)}
+        </details>
+      )}
+    </Card>
+  )
+}
+
+// ---------- module ----------
+
+export default function Cockpit() {
+  const { state, update } = useStore()
+  const today = useToday()
+  const { evenements } = useSurveillance(state, update)
+  const dateFR = today.split('-').reverse().join('.')
+
+  const meteo = meteoFinanciere(state, today)
+  const excel = state.settings.dernierImportExcel
 
   // phases en cours : projets actifs dont une phase encadre la date du jour
   const phasesEnCours = state.projets
@@ -448,10 +556,21 @@ export default function Cockpit() {
                 <Money v={meteo.tresorerie} />
               )
             }
+            sub={meteo.tresorerieMajLe ? `relevé du ${fmtDate(meteo.tresorerieMajLe)}` : 'solde disponible en banque'}
             tone={meteo.tresorerie !== null && meteo.tresorerie < 0 ? 'danger' : undefined}
           />
-          <Stat accent="blue" label="Facturable 90 j" value={<Money v={meteo.facturable90j} />} />
-          <Stat accent="red" label="Carnet" value={<Money v={meteo.carnetHT} />} />
+          <Stat
+            accent="blue"
+            label="Facturable 90 j"
+            value={<Money v={meteo.facturable90j} />}
+            sub="honoraires à facturer sous 90 jours"
+          />
+          <Stat
+            accent="red"
+            label="Carnet"
+            value={<Money v={meteo.carnetHT} />}
+            sub="honoraires signés restant au carnet"
+          />
         </div>
         {caCible(state) > 0 && (() => {
           const annee = Number(today.slice(0, 4))
@@ -482,115 +601,83 @@ export default function Cockpit() {
         )}
       </div>
 
-      {/* ---------- inbox principale + rail latéral ---------- */}
+      {/* ---------- centre d'actions + rail latéral ---------- */}
       <div className="cockpit-cols">
-      <div className="cockpit-main">
-      <BoiteATraiter />
-
-      {/* ---------- fil d'urgences ---------- */}
-      <Card
-        titre="Fil d'urgences"
-        actions={
-          alertesFil.length > 0 ? (
-            <span className="muted small">
-              {alertesFil.length} alerte{alertesFil.length > 1 ? 's' : ''} active
-              {alertesFil.length > 1 ? 's' : ''}
-            </span>
-          ) : undefined
-        }
-      >
-        {alertesFil.length === 0 ? (
-          <EmptyState>Rien d'urgent — tout est dans « À traiter » ci-dessus.</EmptyState>
-        ) : (
-          GROUPES_ALERTES.map((g) => {
-            const items = alertesFil.filter((a) => a.gravite === g.gravite)
-            if (items.length === 0) return null
-            return (
-              <div key={g.gravite}>
-                <div style={STYLE_GROUPE}>
-                  {g.label} ({items.length})
-                </div>
-                {items.map((a) => (
-                  <AlerteLigne key={a.id} a={a} onSnooze={snooze} onAction={executerAlerte} />
-                ))}
-              </div>
-            )
-          })
-        )}
-      </Card>
-      </div>
-
-      {/* ---------- repères du jour (rail latéral discret) ---------- */}
-      <aside className="cockpit-rail">
-      <Card titre={<>Repères — {fmtDate(today)}</>}>
-        <div className="cockpit-rail-stack">
-          <Repere titre="Phases en cours">
-            {phasesEnCours.length === 0 ? (
-              <RienASignaler>Aucune phase en cours aujourd'hui.</RienASignaler>
-            ) : (
-              phasesEnCours.map(({ projet, phase }) => (
-                <Ligne key={`${projet.id}-${phase.code}`}>
-                  <a href={`#/projets/${projet.id}`}>
-                    {projet.id} · {phase.code}
-                  </a>{' '}
-                  — {projet.nom}
-                  <div className="muted">
-                    fin prévue le <DateF d={phase.fin} />
-                  </div>
-                </Ligne>
-              ))
-            )}
-          </Repere>
-
-          <Repere titre="Prochaines factures à émettre">
-            {prochainesFactures.length === 0 ? (
-              <RienASignaler>Aucune facture prévue à venir.</RienASignaler>
-            ) : (
-              prochainesFactures.map((f) => (
-                <Ligne key={f.id}>
-                  <a href="#/facturation">{f.id}</a> ·{' '}
-                  <a href={`#/projets/${f.projetId}`}>{f.projetId}</a> — {f.libelle}
-                  <div className="muted">
-                    <Money v={f.montantHT} /> HT · à émettre le <DateF d={f.emission} />
-                  </div>
-                </Ligne>
-              ))
-            )}
-          </Repere>
-
-          {evenements.length > 0 && (
-            <Repere titre="Agenda (72 h, en direct)">
-              {evenements.slice(0, 4).map((e) => (
-                <Ligne key={e.id}>
-                  <strong>{e.titre}</strong>
-                  <div className="muted">
-                    {e.journee
-                      ? `journée du ${fmtDate(e.debut)}`
-                      : new Date(e.debut).toLocaleString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
-                    {e.lieu ? ` · ${e.lieu}` : ''}
-                  </div>
-                </Ligne>
-              ))}
-            </Repere>
-          )}
-          <Repere titre="Prochaines obligations">
-            {prochainesObligations.length === 0 ? (
-              <RienASignaler>Aucune obligation à venir.</RienASignaler>
-            ) : (
-              prochainesObligations.map((o) => (
-                <Ligne key={o.id}>
-                  <a href="#/agenda">{o.libelle}</a>
-                  {o.organisme ? <span className="muted"> — {o.organisme}</span> : null}
-                  <div className="muted">
-                    échéance le <DateF d={o.echeance} />
-                  </div>
-                </Ligne>
-              ))
-            )}
-          </Repere>
+        <div className="cockpit-main">
+          <CentreActions />
         </div>
-      </Card>
-      </aside>
+
+        {/* ---------- repères du jour (rail latéral discret) ---------- */}
+        <aside className="cockpit-rail">
+          <Card titre={<>Repères — {fmtDate(today)}</>}>
+            <div className="cockpit-rail-stack">
+              <Repere titre="Phases en cours">
+                {phasesEnCours.length === 0 ? (
+                  <RienASignaler>Aucune phase en cours aujourd'hui.</RienASignaler>
+                ) : (
+                  phasesEnCours.map(({ projet, phase }) => (
+                    <Ligne key={`${projet.id}-${phase.code}`}>
+                      <a href={`#/projets/${projet.id}`}>
+                        {projet.id} · {phase.code}
+                      </a>{' '}
+                      — {projet.nom}
+                      <div className="muted">
+                        fin prévue le <DateF d={phase.fin} />
+                      </div>
+                    </Ligne>
+                  ))
+                )}
+              </Repere>
+
+              <Repere titre="Prochaines factures à émettre">
+                {prochainesFactures.length === 0 ? (
+                  <RienASignaler>Aucune facture prévue à venir.</RienASignaler>
+                ) : (
+                  prochainesFactures.map((f) => (
+                    <Ligne key={f.id}>
+                      <a href="#/facturation">{f.id}</a> ·{' '}
+                      <a href={`#/projets/${f.projetId}`}>{f.projetId}</a> — {f.libelle}
+                      <div className="muted">
+                        <Money v={f.montantHT} /> HT · à émettre le <DateF d={f.emission} />
+                      </div>
+                    </Ligne>
+                  ))
+                )}
+              </Repere>
+
+              {evenements.length > 0 && (
+                <Repere titre="Agenda (72 h, en direct)">
+                  {evenements.slice(0, 4).map((e) => (
+                    <Ligne key={e.id}>
+                      <strong>{e.titre}</strong>
+                      <div className="muted">
+                        {e.journee
+                          ? `journée du ${fmtDate(e.debut)}`
+                          : new Date(e.debut).toLocaleString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                        {e.lieu ? ` · ${e.lieu}` : ''}
+                      </div>
+                    </Ligne>
+                  ))}
+                </Repere>
+              )}
+              <Repere titre="Prochaines obligations">
+                {prochainesObligations.length === 0 ? (
+                  <RienASignaler>Aucune obligation à venir.</RienASignaler>
+                ) : (
+                  prochainesObligations.map((o) => (
+                    <Ligne key={o.id}>
+                      <a href="#/agenda">{o.libelle}</a>
+                      {o.organisme ? <span className="muted"> — {o.organisme}</span> : null}
+                      <div className="muted">
+                        échéance le <DateF d={o.echeance} />
+                      </div>
+                    </Ligne>
+                  ))
+                )}
+              </Repere>
+            </div>
+          </Card>
+        </aside>
       </div>
     </Page>
   )

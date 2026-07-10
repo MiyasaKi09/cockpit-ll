@@ -8,7 +8,7 @@ import { useMemo, useState } from 'react'
 import type { Artisan, Materiau } from '../types'
 import { useStore } from '../store'
 import { assemble } from '../prompts'
-import {
+import { ligneActivable,
   Badge,
   Btn,
   Card,
@@ -398,7 +398,7 @@ function OngletArtisans() {
         ) : (
           <Table head={['Entreprise', 'Lots', 'Projets', 'Zone', 'Fourchette', 'Décennale', 'Contact', 'Notes', '']}>
             {artisans.map((a) => (
-              <tr key={a.id} className="clickable" onClick={() => navigate(`/ressources/artisan/${a.id}`)}>
+              <tr key={a.id} className="clickable" {...ligneActivable(() => navigate(`/ressources/artisan/${a.id}`))}>
                 <td>
                   <strong>{a.nom}</strong>
                 </td>
@@ -625,7 +625,7 @@ function OngletMateriaux() {
         ) : (
           <Table head={['Matériau', 'Fournisseur', 'Projets', 'Coût €/m²', 'FDES', 'Tags', 'Notes', '']}>
             {materiaux.map((m) => (
-              <tr key={m.id} className="clickable" onClick={() => navigate(`/ressources/materiau/${m.id}`)}>
+              <tr key={m.id} className="clickable" {...ligneActivable(() => navigate(`/ressources/materiau/${m.id}`))}>
                 <td>
                   <strong>{m.nom}</strong>
                 </td>

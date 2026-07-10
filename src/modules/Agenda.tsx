@@ -6,7 +6,7 @@
 import { useMemo, useState } from 'react'
 import type { AppState, CanalInteraction, Contact, Obligation, TypeContact } from '../types'
 import { useStore } from '../store'
-import {
+import { ligneActivable,
   Badge,
   Btn,
   Card,
@@ -170,7 +170,7 @@ function OngletObligations({ today }: { today: string }) {
               const dj = diffDays(today, o.echeance)
               const enRappel = today >= addDays(o.echeance, -o.rappelJours)
               return (
-                <tr key={o.id} className="clickable" onClick={() => setEdition(structuredClone(o))}>
+                <tr key={o.id} className="clickable" {...ligneActivable(() => setEdition(structuredClone(o)))}>
                   <td>
                     <strong>{o.libelle}</strong>
                   </td>
@@ -297,7 +297,7 @@ function OngletContrats({ today }: { today: string }) {
                 const dj = diffDays(today, o.echeance)
                 const enRappel = today >= addDays(o.echeance, -o.rappelJours)
                 return (
-                  <tr key={o.id} className="clickable" onClick={() => setEdition(structuredClone(o))}>
+                  <tr key={o.id} className="clickable" {...ligneActivable(() => setEdition(structuredClone(o)))}>
                     <td>
                       <strong>{o.libelle}</strong>
                       {o.notes && <div className="muted small">{o.notes}</div>}
@@ -563,7 +563,7 @@ function OngletContacts({ today }: { today: string }) {
             {contacts.map((c) => {
               const enRetard = c.dateProchaineAction && c.dateProchaineAction < today
               return (
-                <tr key={c.id} className="clickable" onClick={() => setEdition(structuredClone(c))}>
+                <tr key={c.id} className="clickable" {...ligneActivable(() => setEdition(structuredClone(c)))}>
                   <td>
                     <strong>{c.nom}</strong>
                     <div className="muted small">

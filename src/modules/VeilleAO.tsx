@@ -10,7 +10,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { AppState, Consultation, StatutConsultation } from '../types'
 import { useStore } from '../store'
-import {
+import { ligneActivable,
   Badge,
   Btn,
   Card,
@@ -1061,7 +1061,7 @@ function ConsultationsContenu() {
             ]}
           >
             {visibles.map((c) => (
-              <tr key={c.id} className="clickable" onClick={() => ouvrir(c)}>
+              <tr key={c.id} className="clickable" {...ligneActivable(() => ouvrir(c))}>
                 <td>
                   <strong>{c.intitule}</strong>
                 </td>

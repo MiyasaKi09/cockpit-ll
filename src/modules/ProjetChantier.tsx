@@ -17,6 +17,7 @@ import {
   Modal,
   Money,
   NumInput,
+  PctInput,
   Select,
   Table,
   TextArea,
@@ -209,8 +210,8 @@ function ModalMarche({
         </Field>
       </div>
       <div className="form-row">
-        <Field label="Retenue de garantie" hint="0,05 = 5 %">
-          <NumInput value={tauxRG} onChange={setTauxRG} />
+        <Field label="Retenue de garantie" hint="5 % par défaut sur les marchés publics">
+          <PctInput value={tauxRG} onChange={setTauxRG} ariaLabel="Taux de retenue de garantie en pourcentage" />
         </Field>
         <Field label="Révision de prix">
           <Select

@@ -13,7 +13,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../store'
-import { Badge, Btn, Card, CopyBtn, EmptyState, Field, Page, Select, Table, Tabs, TextArea, TextInput, toast, useToday } from '../ui'
+import { Badge, Btn, Card, CopyBtn, EmptyState, Field, Page, Select, Table, Tabs, TextArea, TextInput, navigate, toast, useRoute, useToday } from '../ui'
 import { assistantDisponible, interrogerAssistant } from '../assistant'
 import type { DocPourAssistant } from '../assistant'
 import { texteVersDocx } from '../crdocx'
@@ -39,7 +39,10 @@ function telechargerBlob(blob: Blob, nomFichier: string): void {
 }
 
 export function AssistantPage() {
-  const [actif, setActif] = useState('qa')
+  // onglet piloté par l'URL : retour navigateur et liens partagés fonctionnent
+  const route = useRoute()
+  const segment = route[0] === 'assistant' ? route[1] : undefined
+  const actif = ONGLETS.some((o) => o.id === segment) ? segment! : 'qa'
   const [dispo, setDispo] = useState<boolean | null>(null)
   useEffect(() => {
     void assistantDisponible().then(setDispo)
@@ -57,7 +60,7 @@ export function AssistantPage() {
           par le navigateur. Vous pouvez déjà préparer le corpus dans l’onglet dédié.
         </div>
       )}
-      <Tabs tabs={ONGLETS} actif={actif} onSelect={setActif} />
+      <Tabs tabs={ONGLETS} actif={actif} onSelect={(id) => navigate(`/assistant/${id}`)} />
       {actif === 'qa' && <OngletQuestion dispo={dispo === true} />}
       {actif === 'cr' && <OngletCR dispo={dispo === true} />}
       {actif === 'doc' && <OngletDocument dispo={dispo === true} />}
@@ -181,9 +184,11 @@ function OngletQuestion({ dispo }: { dispo: boolean }) {
     return (
       <Card titre="Question réglementaire">
         <EmptyState>
-          Le corpus ne contient encore aucun texte réglementaire. Ajoutez d’abord un texte (onglet
-          « Corpus ») — par exemple les articles utiles du Code de la commande publique depuis
-          Légifrance, avec leur source et leur version.
+          <p style={{ margin: '0 0 10px' }}>
+            Le corpus ne contient encore aucun texte réglementaire — la bibliothèque officielle
+            (Légifrance) s'installe en un clic.
+          </p>
+          <Btn kind="primary" onClick={() => navigate('/assistant/corpus')}>Ajouter le corpus</Btn>
         </EmptyState>
       </Card>
     )

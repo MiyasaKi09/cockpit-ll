@@ -22,7 +22,7 @@
   --panel: #fbf7ec;
   --ink: #17150f;
   --ink-2: #5c5747;
-  --ink-3: #8b8674;
+  --ink-3: #6b6655; /* AA : 4,5:1 sur fond et cartes */
   --line: rgba(23, 21, 15, 0.14);
   --border: #17150f;            /* trait franc (cartes, boutons, champs) */
   --accent: #1e5aa8;            /* bleu bauhaus — action, liens, actif */
@@ -30,7 +30,7 @@
   --accent-ink: #ffffff;        /* texte sur aplat d'accent */
   --ok: #1f7a4d;
   --ok-soft: #dcecdf;
-  --warn: #a86b12;
+  --warn: #985f0f;
   --warn-soft: #f6e7c6;
   --danger: #d1301f;
   --danger-soft: #f7dbd5;
@@ -60,6 +60,12 @@
   /* — espacement (échelle 4/8) — */
   --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 24px; --sp-6: 32px;
 
+  /* — graphiques (séries : émis / encaissé / prévu) — palettes validées
+     (bande de luminance, CVD, contraste) via le validateur dataviz — */
+  --graph-1: #1e5aa8;
+  --graph-2: #1f7a4d;
+  --graph-3: #985f0f;
+
   /* — typographie — */
   --font-body: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   --font-geo: 'Jost', 'Futura', 'Century Gothic', 'Trebuchet MS', var(--font-body);
@@ -74,7 +80,7 @@
     --panel: #1e1e24;
     --ink: #f0ede4;
     --ink-2: #a6a29a;
-    --ink-3: #74716a;
+    --ink-3: #8f8b82; /* AA : 4,5:1 sur fond et cartes */
     --line: rgba(240, 237, 228, 0.14);
     --border: #494a53;
     --accent: #4c8df0;
@@ -98,6 +104,9 @@
     --sidebar-line: #2c2c34;
     --shadow-hard: 3px 3px 0 rgba(0, 0, 0, 0.55);
     --shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.35), 0 10px 30px rgba(0, 0, 0, 0.4);
+    --graph-1: #4c8df0;
+    --graph-2: #37956a;
+    --graph-3: #bd8a37;
   }
 }
 
@@ -105,10 +114,10 @@
 :root[data-theme='light'] {
   color-scheme: light;
   --bg: #ede4cb; --bg-soft: #f4edd9; --panel: #fbf7ec;
-  --ink: #17150f; --ink-2: #5c5747; --ink-3: #8b8674;
+  --ink: #17150f; --ink-2: #5c5747; --ink-3: #6b6655; /* AA : 4,5:1 sur fond et cartes */
   --line: rgba(23, 21, 15, 0.14); --border: #17150f;
   --accent: #1e5aa8; --accent-soft: #dde7f3; --accent-ink: #ffffff;
-  --ok: #1f7a4d; --ok-soft: #dcecdf; --warn: #a86b12; --warn-soft: #f6e7c6;
+  --ok: #1f7a4d; --ok-soft: #dcecdf; --warn: #985f0f; --warn-soft: #f6e7c6;
   --danger: #d1301f; --danger-soft: #f7dbd5; --field-bg: #fffdf6;
   --sidebar: #f3ead0; --sidebar-ink: #4a4636; --sidebar-line: #17150f;
   --shadow-hard: 3px 3px 0 var(--border);
@@ -117,7 +126,7 @@
 :root[data-theme='dark'] {
   color-scheme: dark;
   --bg: #16161a; --bg-soft: #1c1c22; --panel: #1e1e24;
-  --ink: #f0ede4; --ink-2: #a6a29a; --ink-3: #74716a;
+  --ink: #f0ede4; --ink-2: #a6a29a; --ink-3: #8f8b82; /* AA : 4,5:1 sur fond et cartes */
   --line: rgba(240, 237, 228, 0.14); --border: #494a53;
   --accent: #4c8df0; --accent-soft: #17273c; --accent-ink: #0b1017;
   --ok: #46b47c; --ok-soft: #16281f; --warn: #d6a54a; --warn-soft: #2a2110;
@@ -129,6 +138,9 @@
   --sidebar: #121216; --sidebar-ink: #a6a29a; --sidebar-line: #2c2c34;
   --shadow-hard: 3px 3px 0 rgba(0, 0, 0, 0.55);
   --shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.35), 0 10px 30px rgba(0, 0, 0, 0.4);
+  --graph-1: #4c8df0;
+  --graph-2: #37956a;
+  --graph-3: #bd8a37;
 }
 
 * { box-sizing: border-box; }
@@ -360,11 +372,13 @@ pre {
 
 /* ---------- cartes & grilles ---------- */
 
+/* hiérarchie à 3 niveaux : les KPI (.stat) gardent bordure épaisse + ombre
+   dure ; la carte ORDINAIRE s'assagit (bordure fine, pas d'ombre) pour que
+   tout ne crie pas aussi fort — l'identité vit sur les points forts */
 .card {
   background: var(--panel);
-  border: 2px solid var(--border);
+  border: 1.5px solid var(--border);
   border-radius: var(--radius);
-  box-shadow: var(--shadow-hard);
   padding: 16px 18px;
   margin-bottom: 18px;
 }
@@ -589,6 +603,7 @@ textarea.input { resize: vertical; }
 .table tr:last-child td { border-bottom: none; }
 .table tr.clickable { cursor: pointer; }
 .table tr.clickable:hover td { background: var(--bg-soft); }
+.table tr.clickable:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .table td.right, .table th.right { text-align: right; }
 .table-compact td, .table-compact th { padding: 4px 8px; font-size: 13px; }
 /* champs à l'intérieur d'un tableau : trait léger pour ne pas alourdir */
@@ -624,6 +639,38 @@ textarea.input { resize: vertical; }
 .alert-titre { font-weight: 650; }
 .alert-detail { font-size: 12.5px; color: var(--ink-2); margin-top: 2px; }
 .alert-actions { margin-left: auto; display: flex; gap: 6px; flex-shrink: 0; }
+
+/* ---------- histogramme mensuel (Analyse) ---------- */
+
+.graphe-mois {
+  display: grid;
+  grid-template-columns: repeat(12, 1fr);
+  gap: 6px;
+  align-items: end;
+  height: 150px;
+  border-bottom: 2px solid var(--border);
+  padding-bottom: 0;
+}
+.graphe-col { display: flex; flex-direction: column; justify-content: flex-end; height: 100%; min-width: 0; }
+.graphe-barres { display: flex; gap: 2px; align-items: flex-end; height: calc(100% - 16px); }
+.graphe-barre { flex: 1; min-height: 1px; border-radius: 2px 2px 0 0; }
+.graphe-label { font-family: var(--font-mono); font-size: 9.5px; color: var(--ink-2); text-align: center; padding-top: 3px; }
+
+/* ---------- contrôle segmenté (Tout / Julien / Zoé) ---------- */
+
+.segmente { display: inline-flex; border: 2px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.segmente button {
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 650;
+  border: none;
+  background: var(--panel);
+  color: var(--ink-2);
+  padding: 5px 12px;
+  cursor: pointer;
+}
+.segmente button + button { border-left: 1.5px solid var(--border); }
+.segmente button[aria-pressed='true'] { background: var(--accent); color: var(--accent-ink); }
 
 /* ---------- onglets ---------- */
 
@@ -854,6 +901,20 @@ textarea.input { resize: vertical; }
   padding: 4px 2px;
   outline: none;
 }
+.cmdk-fermer {
+  border: 2px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  width: 32px;
+  height: 32px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.cmdk-fermer:hover { background: var(--danger-soft); color: var(--danger); }
+.cmdk-item { text-decoration: none; color: inherit; }
 .cmdk-count {
   font-family: var(--font-mono, ui-monospace, monospace);
   font-size: 11px;
@@ -997,6 +1058,9 @@ button.etoile:hover { color: var(--warn); }
   .form-row > .field { min-width: 100%; }
 }
 
+/* Temps : la grille 6 semaines au bureau, la liste simple au téléphone */
+.temps-mobile { display: none; }
+
 /* ---------- téléphone (≤ 700 px) : reflow structurel ----------
    Placé APRÈS le bloc 880 px pour gagner la cascade. Entre 701 et
    880 px, les tableaux gardent le filet « display:block + scroll »
@@ -1108,6 +1172,10 @@ button.etoile:hover { color: var(--warn); }
   .cal-evt-plus { display: none; } /* tout est affiché : le compteur « +N » n'a plus d'objet */
   .cal-evt-court { display: none; }
   .cal-evt-long { display: inline; }
+
+  /* --- temps : saisie mobile à la place de la grille --- */
+  .temps-mobile { display: block; }
+  .temps-desktop { display: none; }
 }
 
 /* ---------- tactile (indépendant de la largeur) ----------

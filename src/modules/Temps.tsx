@@ -23,6 +23,7 @@ import {
   useToday,
 } from '../ui'
 import { addDays, fmtDate, fmtHeures, mondayOf, todayISO, uid } from '../util'
+import { syncActif } from '../sync'
 import { LIBELLES_PHASES, PHASES_ORDRE } from '../miqcp'
 import { STATUTS_ACTIFS, heuresPrevues, heuresReelles } from '../derive'
 
@@ -272,7 +273,12 @@ function TableauPersonne({
                   </td>
                   {semaines.map((s) => (
                     <td key={s} className="right">
-                      <NumInput value={heuresDe(s, c)} onChange={(v) => poser(s, c, v)} style={{ width: 58 }} />
+                      <NumInput
+                        value={heuresDe(s, c)}
+                        onChange={(v) => poser(s, c, v)}
+                        style={{ width: 58 }}
+                        ariaLabel={`Heures de ${personne} — ${c.projetId} ${c.phase} — semaine du ${fmtDate(s)}`}
+                      />
                     </td>
                   ))}
                   <td className="right num">
@@ -291,7 +297,12 @@ function TableauPersonne({
                 <td className="small col-figee">{cat}</td>
                 {semaines.map((s) => (
                   <td key={s} className="right">
-                    <NumInput value={hpDe(s, cat)} onChange={(v) => poserHP(s, cat, v)} style={{ width: 58 }} />
+                    <NumInput
+                      value={hpDe(s, cat)}
+                      onChange={(v) => poserHP(s, cat, v)}
+                      style={{ width: 58 }}
+                      ariaLabel={`Heures de ${personne} — ${cat} (hors projet) — semaine du ${fmtDate(s)}`}
+                    />
                   </td>
                 ))}
                 <td className="right num">{fmtHeures(totalLigneHP(cat))}</td>
@@ -425,6 +436,170 @@ function RecapDerives() {
   )
 }
 
+// ---------- saisie mobile : UNE personne, UNE semaine, une liste ----------
+
+/** au téléphone, la grille 6 semaines est pénible : on saisit la tâche
+ *  réelle — mes heures de la semaine, projet par projet */
+function SaisieMobile({ today }: { today: string }) {
+  const { state, update } = useStore()
+  const personnes = state.settings.personnes
+  const [personne, setPersonne] = useState(personnes[0] || '')
+  const [semaine, setSemaine] = useState(() => mondayOf(today))
+  const semaineCourante = mondayOf(today)
+
+  const actifs = state.projets.filter((p) => STATUTS_ACTIFS.includes(p.statut))
+  const affectes = actifs.filter(
+    (p) => p.equipeProjet?.includes(personne) || p.responsable === personne || p.coResponsable === personne,
+  )
+
+  const couples: Couple[] = []
+  const vu = new Set<string>()
+  const pousser = (c: Couple) => {
+    const cle = `${c.projetId}|${c.phase}`
+    if (!vu.has(cle)) {
+      vu.add(cle)
+      couples.push(c)
+    }
+  }
+  for (const p of affectes) {
+    for (const phase of phasesFenetre(p, semaine, addDays(semaine, 6))) pousser({ projetId: p.id, phase })
+  }
+  for (const t of state.temps) {
+    if (t.personne === personne && t.semaine === semaine) pousser({ projetId: t.projetId, phase: t.phase })
+  }
+  couples.sort(triCouples)
+
+  const heuresDe = (c: Couple): number | null => {
+    const e = state.temps.find(
+      (t) => t.semaine === semaine && t.personne === personne && t.projetId === c.projetId && t.phase === c.phase,
+    )
+    return e ? e.heures : null
+  }
+  const poser = (c: Couple, v: number | null) =>
+    update((d) => {
+      const i = d.temps.findIndex(
+        (t) => t.semaine === semaine && t.personne === personne && t.projetId === c.projetId && t.phase === c.phase,
+      )
+      if (v === null || v <= 0) {
+        if (i >= 0) d.temps.splice(i, 1)
+        return
+      }
+      if (i >= 0) d.temps[i].heures = v
+      else d.temps.push({ id: uid('tps'), semaine, personne, projetId: c.projetId, phase: c.phase, heures: v })
+    })
+
+  const hpDe = (cat: string): number | null => {
+    const e = state.tempsHorsProjet.find((t) => t.semaine === semaine && t.personne === personne && t.categorie === cat)
+    return e ? e.heures : null
+  }
+  const poserHP = (cat: string, v: number | null) =>
+    update((d) => {
+      const i = d.tempsHorsProjet.findIndex(
+        (t) => t.semaine === semaine && t.personne === personne && t.categorie === cat,
+      )
+      if (v === null || v <= 0) {
+        if (i >= 0) d.tempsHorsProjet.splice(i, 1)
+        return
+      }
+      if (i >= 0) d.tempsHorsProjet[i].heures = v
+      else d.tempsHorsProjet.push({ id: uid('thp'), semaine, personne, categorie: cat, heures: v })
+    })
+
+  const total =
+    state.temps.filter((t) => t.semaine === semaine && t.personne === personne).reduce((s, t) => s + t.heures, 0) +
+    state.tempsHorsProjet.filter((t) => t.semaine === semaine && t.personne === personne).reduce((s, t) => s + t.heures, 0)
+  const theorique = state.settings.heuresParJour * 5
+
+  const ligneStyle: React.CSSProperties = {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 10,
+    padding: '8px 0',
+    borderBottom: '1px solid var(--line)',
+  }
+
+  return (
+    <Card titre="Mes heures de la semaine">
+      <div className="toolbar">
+        <span className="segmente" role="group" aria-label="Personne">
+          {personnes.map((p) => (
+            <button key={p} aria-pressed={personne === p} onClick={() => setPersonne(p)}>
+              {p}
+            </button>
+          ))}
+        </span>
+      </div>
+      <div className="toolbar">
+        <Btn small onClick={() => setSemaine(addDays(semaine, -7))} title="Semaine précédente">‹</Btn>
+        <Btn small onClick={() => setSemaine(addDays(semaine, 7))} title="Semaine suivante">›</Btn>
+        <strong className="small">semaine du {fmtDate(semaine)}</strong>
+        {semaine === semaineCourante ? (
+          <Badge tone="info">en cours</Badge>
+        ) : (
+          <Btn small kind="ghost" onClick={() => setSemaine(semaineCourante)}>aujourd'hui</Btn>
+        )}
+      </div>
+
+      {couples.length === 0 ? (
+        <EmptyState>
+          Aucun projet affecté à {personne || '—'} — l'affectation se fait sur la version bureau ou
+          dans la fiche projet.
+        </EmptyState>
+      ) : (
+        couples.map((c) => {
+          const p = state.projets.find((x) => x.id === c.projetId)
+          return (
+            <div key={`${c.projetId}|${c.phase}`} style={ligneStyle}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <a href={`#/projets/${c.projetId}`}>{c.projetId}</a> · {c.phase}
+                <div className="muted small">{p?.nom || 'projet inconnu'}</div>
+              </div>
+              <NumInput
+                value={heuresDe(c)}
+                onChange={(v) => poser(c, v)}
+                style={{ width: 76 }}
+                ariaLabel={`Heures de ${personne} — ${c.projetId} ${c.phase} — semaine du ${fmtDate(semaine)}`}
+              />
+            </div>
+          )
+        })
+      )}
+
+      <details style={{ marginTop: 10 }}>
+        <summary className="small" style={{ cursor: 'pointer' }}>Hors projet (non facturable)</summary>
+        {CATEGORIES_HORS_PROJET.map((cat) => (
+          <div key={cat} style={ligneStyle}>
+            <div className="small" style={{ flex: 1 }}>{cat}</div>
+            <NumInput
+              value={hpDe(cat)}
+              onChange={(v) => poserHP(cat, v)}
+              style={{ width: 76 }}
+              ariaLabel={`Heures de ${personne} — ${cat} (hors projet) — semaine du ${fmtDate(semaine)}`}
+            />
+          </div>
+        ))}
+      </details>
+
+      <p className="small" style={{ marginTop: 10, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <strong>Total : {fmtHeures(total)}</strong>
+        <Badge tone={total === 0 ? 'muted' : Math.abs(total - theorique) < 0.5 ? 'ok' : 'warn'}>
+          théorique {fmtHeures(theorique)}
+        </Badge>
+        <IndicateurEnregistrement />
+      </p>
+    </Card>
+  )
+}
+
+/** où vont les données : local (navigateur) ou espace partagé Supabase */
+function IndicateurEnregistrement() {
+  return syncActif() ? (
+    <Badge tone="ok">Synchronisé</Badge>
+  ) : (
+    <Badge tone="muted">Enregistré localement</Badge>
+  )
+}
+
 // ---------- module ----------
 
 export default function Temps() {
@@ -441,32 +616,48 @@ export default function Temps() {
       titre="Temps passé"
       sousTitre="Une colonne par semaine, saisie enregistrée en direct. Ces heures calibrent marge et devis."
     >
-      <div className="toolbar">
-        <Btn onClick={() => setFin(addDays(fin, -7))} title="Reculer d'une semaine">
-          ‹
-        </Btn>
-        <Btn onClick={() => setFin(addDays(fin, 7))} title="Avancer d'une semaine">
-          ›
-        </Btn>
-        <Btn onClick={() => setFin(finCourante)} disabled={fin === finCourante}>
-          Cette semaine
-        </Btn>
-        <span>
-          Semaines du <strong>{fmtDate(semaines[0])}</strong> au{' '}
-          <strong>{fmtDate(addDays(fin, 6))}</strong>
-        </span>
-        {fin === finCourante && <Badge tone="info">• = semaine en cours</Badge>}
+      {/* téléphone : la tâche réelle — une personne, une semaine, une liste */}
+      <div className="temps-mobile">
+        {personnes.length === 0 ? (
+          <Card>
+            <EmptyState>
+              Aucune personne définie — renseignez l’équipe dans <a href="#/parametres">Paramètres</a>.
+            </EmptyState>
+          </Card>
+        ) : (
+          <SaisieMobile today={today} />
+        )}
       </div>
 
-      {personnes.length === 0 ? (
-        <Card>
-          <EmptyState>
-            Aucune personne définie — renseignez l’équipe dans <a href="#/parametres">Paramètres</a>.
-          </EmptyState>
-        </Card>
-      ) : (
-        personnes.map((p) => <TableauPersonne key={p} personne={p} semaines={semaines} today={today} />)
-      )}
+      <div className="temps-desktop">
+        <div className="toolbar">
+          <Btn onClick={() => setFin(addDays(fin, -7))} title="Reculer d'une semaine">
+            ‹
+          </Btn>
+          <Btn onClick={() => setFin(addDays(fin, 7))} title="Avancer d'une semaine">
+            ›
+          </Btn>
+          <Btn onClick={() => setFin(finCourante)} disabled={fin === finCourante}>
+            Cette semaine
+          </Btn>
+          <span>
+            Semaines du <strong>{fmtDate(semaines[0])}</strong> au{' '}
+            <strong>{fmtDate(addDays(fin, 6))}</strong>
+          </span>
+          {fin === finCourante && <Badge tone="info">• = semaine en cours</Badge>}
+          <IndicateurEnregistrement />
+        </div>
+
+        {personnes.length === 0 ? (
+          <Card>
+            <EmptyState>
+              Aucune personne définie — renseignez l’équipe dans <a href="#/parametres">Paramètres</a>.
+            </EmptyState>
+          </Card>
+        ) : (
+          personnes.map((p) => <TableauPersonne key={p} personne={p} semaines={semaines} today={today} />)
+        )}
+      </div>
 
       <RecapDerives />
     </Page>

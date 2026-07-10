@@ -1,10 +1,11 @@
-import { useState } from 'react'
-import { Page, Tabs } from '../ui'
+import { Page, Tabs, navigate, useRoute } from '../ui'
 import { PromptsContenu } from './Prompts'
 import { RoutinesContenu } from './Routines'
 
 export default function Claude({ ongletInitial = 'prompts' }: { ongletInitial?: 'prompts' | 'routines' }) {
-  const [tab, setTab] = useState<'prompts' | 'routines'>(ongletInitial)
+  // deux vraies routes (#/prompts et #/routines) : le retour navigateur suit
+  const route = useRoute()
+  const tab = route[0] === 'routines' ? 'routines' : route[0] === 'prompts' ? 'prompts' : ongletInitial
   return (
     <Page titre="Claude" sousTitre="Gabarits de prompts et routines d'import.">
       <Tabs
@@ -13,7 +14,7 @@ export default function Claude({ ongletInitial = 'prompts' }: { ongletInitial?: 
           { id: 'routines', label: 'Routines & imports' },
         ]}
         actif={tab}
-        onSelect={(id) => setTab(id as 'prompts' | 'routines')}
+        onSelect={(id) => navigate(`/${id}`)}
       />
       {tab === 'prompts' ? <PromptsContenu /> : <RoutinesContenu />}
     </Page>

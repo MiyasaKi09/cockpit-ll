@@ -18,11 +18,13 @@ import {
   Page,
   Select,
   Table,
+  Tabs,
   confirmer,
   toast,
   useToday,
 } from '../ui'
 import { addDays, fmtDate, fmtHeures, mondayOf, todayISO, uid } from '../util'
+import { syncActif } from '../sync'
 import { LIBELLES_PHASES, PHASES_ORDRE } from '../miqcp'
 import { STATUTS_ACTIFS, heuresPrevues, heuresReelles } from '../derive'
 
@@ -272,7 +274,12 @@ function TableauPersonne({
                   </td>
                   {semaines.map((s) => (
                     <td key={s} className="right">
-                      <NumInput value={heuresDe(s, c)} onChange={(v) => poser(s, c, v)} style={{ width: 58 }} />
+                      <NumInput
+                        value={heuresDe(s, c)}
+                        onChange={(v) => poser(s, c, v)}
+                        style={{ width: 58 }}
+                        ariaLabel={`Heures de ${personne} — ${c.projetId} ${c.phase} — semaine du ${fmtDate(s)}`}
+                      />
                     </td>
                   ))}
                   <td className="right num">
@@ -291,7 +298,12 @@ function TableauPersonne({
                 <td className="small col-figee">{cat}</td>
                 {semaines.map((s) => (
                   <td key={s} className="right">
-                    <NumInput value={hpDe(s, cat)} onChange={(v) => poserHP(s, cat, v)} style={{ width: 58 }} />
+                    <NumInput
+                      value={hpDe(s, cat)}
+                      onChange={(v) => poserHP(s, cat, v)}
+                      style={{ width: 58 }}
+                      ariaLabel={`Heures de ${personne} — ${cat} (hors projet) — semaine du ${fmtDate(s)}`}
+                    />
                   </td>
                 ))}
                 <td className="right num">{fmtHeures(totalLigneHP(cat))}</td>
@@ -364,7 +376,7 @@ function BarreConso({ ratio }: { ratio: number }) {
 
 // ---------- récap dérives par projet (cumul toutes semaines) ----------
 
-function RecapDerives() {
+export function RecapDerives() {
   const { state } = useStore()
   const actifs = state.projets.filter((p) => STATUTS_ACTIFS.includes(p.statut))
 
@@ -425,22 +437,260 @@ function RecapDerives() {
   )
 }
 
-// ---------- module ----------
+// ---------- saisie principale : UNE personne, UNE semaine, une liste ----------
 
-export default function Temps() {
+/** la tâche réelle — mes heures de la semaine, projet par projet.
+ *  Vue principale sur tous les écrans (audit simplification) ; la grille
+ *  6 semaines vit dans l'onglet Historique. */
+function SaisieSemaine({ today }: { today: string }) {
+  const { state, update, replace } = useStore()
+  const personnes = state.settings.personnes
+  const [personne, setPersonne] = useState(personnes[0] || '')
+  const [semaine, setSemaine] = useState(() => mondayOf(today))
+  const [ajoutes, setAjoutes] = useState<Couple[]>([])
+  const [activitesVisibles, setActivitesVisibles] = useState<string[]>([])
+  const semaineCourante = mondayOf(today)
+
+  const actifs = state.projets.filter((p) => STATUTS_ACTIFS.includes(p.statut))
+  const affectes = actifs.filter(
+    (p) => p.equipeProjet?.includes(personne) || p.responsable === personne || p.coResponsable === personne,
+  )
+
+  const couples: Couple[] = []
+  const vu = new Set<string>()
+  const pousser = (c: Couple) => {
+    const cle = `${c.projetId}|${c.phase}`
+    if (!vu.has(cle)) {
+      vu.add(cle)
+      couples.push(c)
+    }
+  }
+  for (const p of affectes) {
+    for (const phase of phasesFenetre(p, semaine, addDays(semaine, 6))) pousser({ projetId: p.id, phase })
+  }
+  for (const t of state.temps) {
+    if (t.personne === personne && t.semaine === semaine) pousser({ projetId: t.projetId, phase: t.phase })
+  }
+  ajoutes.forEach(pousser)
+  // les lignes déjà pointées cette semaine passent devant : c'est le
+  // travail réellement actif, le reste attend en dessous
+  const aDesHeures = (c: Couple) =>
+    state.temps.some(
+      (t) => t.semaine === semaine && t.personne === personne && t.projetId === c.projetId && t.phase === c.phase,
+    )
+  couples.sort((a, b) => Number(aDesHeures(b)) - Number(aDesHeures(a)) || triCouples(a, b))
+
+  const heuresDe = (c: Couple): number | null => {
+    const e = state.temps.find(
+      (t) => t.semaine === semaine && t.personne === personne && t.projetId === c.projetId && t.phase === c.phase,
+    )
+    return e ? e.heures : null
+  }
+  const poser = (c: Couple, v: number | null) =>
+    update((d) => {
+      const i = d.temps.findIndex(
+        (t) => t.semaine === semaine && t.personne === personne && t.projetId === c.projetId && t.phase === c.phase,
+      )
+      if (v === null || v <= 0) {
+        if (i >= 0) d.temps.splice(i, 1)
+        return
+      }
+      if (i >= 0) d.temps[i].heures = v
+      else d.temps.push({ id: uid('tps'), semaine, personne, projetId: c.projetId, phase: c.phase, heures: v })
+    })
+
+  const hpDe = (cat: string): number | null => {
+    const e = state.tempsHorsProjet.find((t) => t.semaine === semaine && t.personne === personne && t.categorie === cat)
+    return e ? e.heures : null
+  }
+  const poserHP = (cat: string, v: number | null) =>
+    update((d) => {
+      const i = d.tempsHorsProjet.findIndex(
+        (t) => t.semaine === semaine && t.personne === personne && t.categorie === cat,
+      )
+      if (v === null || v <= 0) {
+        if (i >= 0) d.tempsHorsProjet.splice(i, 1)
+        return
+      }
+      if (i >= 0) d.tempsHorsProjet[i].heures = v
+      else d.tempsHorsProjet.push({ id: uid('thp'), semaine, personne, categorie: cat, heures: v })
+    })
+
+  /** reprend la semaine précédente SANS écraser : seules les cases vides
+   *  de la semaine courante sont remplies (préparé avant la mutation) */
+  const copierSemainePrecedente = () => {
+    const avant = addDays(semaine, -7)
+    const temps = state.temps.filter((t) => t.personne === personne && t.semaine === avant)
+    const hp = state.tempsHorsProjet.filter((t) => t.personne === personne && t.semaine === avant)
+    if (temps.length === 0 && hp.length === 0) {
+      toast('Rien à copier : la semaine précédente est vide.', { tone: 'warn' })
+      return
+    }
+    const snap = state
+    const nouveaux = temps
+      .filter(
+        (t) =>
+          !state.temps.some(
+            (x) => x.semaine === semaine && x.personne === personne && x.projetId === t.projetId && x.phase === t.phase,
+          ),
+      )
+      .map((t) => ({ id: uid('tps'), semaine, personne, projetId: t.projetId, phase: t.phase, heures: t.heures }))
+    const nouveauxHP = hp
+      .filter(
+        (t) =>
+          !state.tempsHorsProjet.some(
+            (x) => x.semaine === semaine && x.personne === personne && x.categorie === t.categorie,
+          ),
+      )
+      .map((t) => ({ id: uid('thp'), semaine, personne, categorie: t.categorie, heures: t.heures }))
+    update((d) => {
+      d.temps.push(...nouveaux)
+      d.tempsHorsProjet.push(...nouveauxHP)
+    })
+    toast(
+      `${nouveaux.length + nouveauxHP.length} ligne(s) reprise(s) de la semaine précédente — les cases déjà remplies sont conservées.`,
+      { tone: 'ok', undo: () => replace(snap) },
+    )
+  }
+
+  const total =
+    state.temps.filter((t) => t.semaine === semaine && t.personne === personne).reduce((s, t) => s + t.heures, 0) +
+    state.tempsHorsProjet.filter((t) => t.semaine === semaine && t.personne === personne).reduce((s, t) => s + t.heures, 0)
+  const theorique = state.settings.heuresParJour * 5
+  const projetsHorsListe = actifs.filter((p) => !couples.some((c) => c.projetId === p.id))
+
+  const ligneStyle: React.CSSProperties = {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 10,
+    padding: '8px 0',
+    borderBottom: '1px solid var(--line)',
+  }
+
+  return (
+    <Card titre="Mes heures de la semaine">
+      <div className="toolbar">
+        <span className="segmente" role="group" aria-label="Personne">
+          {personnes.map((p) => (
+            <button key={p} aria-pressed={personne === p} onClick={() => setPersonne(p)}>
+              {p}
+            </button>
+          ))}
+        </span>
+      </div>
+      <div className="toolbar">
+        <Btn small onClick={() => setSemaine(addDays(semaine, -7))} title="Semaine précédente">‹</Btn>
+        <Btn small onClick={() => setSemaine(addDays(semaine, 7))} title="Semaine suivante">›</Btn>
+        <strong className="small">semaine du {fmtDate(semaine)}</strong>
+        {semaine === semaineCourante ? (
+          <Badge tone="info">en cours</Badge>
+        ) : (
+          <Btn small kind="ghost" onClick={() => setSemaine(semaineCourante)}>aujourd'hui</Btn>
+        )}
+      </div>
+
+      <p className="small" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', margin: '4px 0 8px' }}>
+        <strong>{fmtHeures(total)} saisies</strong>
+        <span className="muted">sur {fmtHeures(theorique)} théoriques</span>
+        <Badge tone={total === 0 ? 'muted' : Math.abs(total - theorique) < 0.5 ? 'ok' : 'warn'}>
+          {total === 0 ? 'à saisir' : total < theorique ? 'incomplète' : total > theorique + 0.5 ? 'surcharge' : 'complète'}
+        </Badge>
+        <IndicateurEnregistrement />
+        <span className="spacer" />
+        <Btn small onClick={copierSemainePrecedente}>Copier la semaine précédente</Btn>
+      </p>
+
+      {couples.length === 0 ? (
+        <EmptyState>
+          Aucun projet affecté à {personne || '—'} — l'affectation se fait sur la version bureau ou
+          dans la fiche projet.
+        </EmptyState>
+      ) : (
+        couples.map((c) => {
+          const p = state.projets.find((x) => x.id === c.projetId)
+          return (
+            <div key={`${c.projetId}|${c.phase}`} style={ligneStyle}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <a href={`#/projets/${c.projetId}`}>{c.projetId}</a> · {c.phase}
+                <div className="muted small">{p?.nom || 'projet inconnu'}</div>
+              </div>
+              <NumInput
+                value={heuresDe(c)}
+                onChange={(v) => poser(c, v)}
+                style={{ width: 76 }}
+                ariaLabel={`Heures de ${personne} — ${c.projetId} ${c.phase} — semaine du ${fmtDate(semaine)}`}
+              />
+            </div>
+          )
+        })
+      )}
+
+      {/* hors projet : seules les activités réellement utilisées s'affichent,
+          le reste attend derrière « Ajouter une activité » */}
+      {CATEGORIES_HORS_PROJET.filter((cat) => (hpDe(cat) ?? 0) > 0 || activitesVisibles.includes(cat)).map((cat) => (
+        <div key={cat} style={ligneStyle}>
+          <div className="small" style={{ flex: 1 }}>{cat} <span className="muted">· hors projet</span></div>
+          <NumInput
+            value={hpDe(cat)}
+            onChange={(v) => poserHP(cat, v)}
+            style={{ width: 76 }}
+            ariaLabel={`Heures de ${personne} — ${cat} (hors projet) — semaine du ${fmtDate(semaine)}`}
+          />
+        </div>
+      ))}
+
+      <div className="toolbar" style={{ marginTop: 10, marginBottom: 0, flexWrap: 'wrap' }}>
+        <Select
+          value=""
+          onChange={(v) => v && setActivitesVisibles((l) => [...new Set([...l, v])])}
+          options={[
+            { value: '', label: '+ Ajouter une activité (hors projet)' },
+            ...CATEGORIES_HORS_PROJET.filter((cat) => (hpDe(cat) ?? 0) <= 0 && !activitesVisibles.includes(cat)).map(
+              (cat) => ({ value: cat, label: cat }),
+            ),
+          ]}
+          style={{ maxWidth: 260 }}
+        />
+        {projetsHorsListe.length > 0 && (
+          <Select
+            value=""
+            onChange={(v) => {
+              if (!v) return
+              const p = actifs.find((x) => x.id === v)
+              setAjoutes((l) => [...l, { projetId: v, phase: phaseParDefaut(p, semaine) }])
+            }}
+            options={[
+              { value: '', label: '+ Ajouter un projet' },
+              ...projetsHorsListe.map((p) => ({ value: p.id, label: `${p.id} — ${p.nom}` })),
+            ]}
+            style={{ maxWidth: 260 }}
+          />
+        )}
+      </div>
+    </Card>
+  )
+}
+
+/** où vont les données : local (navigateur) ou espace partagé Supabase */
+function IndicateurEnregistrement() {
+  return syncActif() ? (
+    <Badge tone="ok">Synchronisé</Badge>
+  ) : (
+    <Badge tone="muted">Enregistré localement</Badge>
+  )
+}
+
+// ---------- historique : la grille 6 semaines (vue secondaire) ----------
+
+function Historique({ today }: { today: string }) {
   const { state } = useStore()
-  const today = useToday()
   const [fin, setFin] = useState(() => mondayOf(todayISO()))
   const personnes = state.settings.personnes
   const finCourante = mondayOf(today)
-
   const semaines = Array.from({ length: NB_SEMAINES }, (_, i) => addDays(fin, -7 * (NB_SEMAINES - 1 - i)))
 
   return (
-    <Page
-      titre="Temps passé"
-      sousTitre="Une colonne par semaine, saisie enregistrée en direct. Ces heures calibrent marge et devis."
-    >
+    <>
       <div className="toolbar">
         <Btn onClick={() => setFin(addDays(fin, -7))} title="Reculer d'une semaine">
           ‹
@@ -456,8 +706,31 @@ export default function Temps() {
           <strong>{fmtDate(addDays(fin, 6))}</strong>
         </span>
         {fin === finCourante && <Badge tone="info">• = semaine en cours</Badge>}
+        <IndicateurEnregistrement />
       </div>
+      {personnes.map((p) => (
+        <TableauPersonne key={p} personne={p} semaines={semaines} today={today} />
+      ))}
+      <p className="muted small">
+        Les dérives heures par projet ont déménagé dans <a href="#/pilotage/missions">Pilotage → Missions</a>.
+      </p>
+    </>
+  )
+}
 
+// ---------- module ----------
+
+export default function Temps() {
+  const { state } = useStore()
+  const today = useToday()
+  const [vue, setVue] = useState<'semaine' | 'historique'>('semaine')
+  const personnes = state.settings.personnes
+
+  return (
+    <Page
+      titre="Temps passé"
+      sousTitre="Ma semaine, projet par projet — l'historique et la grille complète à côté."
+    >
       {personnes.length === 0 ? (
         <Card>
           <EmptyState>
@@ -465,10 +738,19 @@ export default function Temps() {
           </EmptyState>
         </Card>
       ) : (
-        personnes.map((p) => <TableauPersonne key={p} personne={p} semaines={semaines} today={today} />)
+        <>
+          <Tabs
+            tabs={[
+              { id: 'semaine', label: 'Ma semaine' },
+              { id: 'historique', label: 'Historique (6 semaines)' },
+            ]}
+            actif={vue}
+            onSelect={(id) => setVue(id as 'semaine' | 'historique')}
+          />
+          {vue === 'semaine' && <SaisieSemaine today={today} />}
+          {vue === 'historique' && <Historique today={today} />}
+        </>
       )}
-
-      <RecapDerives />
     </Page>
   )
 }

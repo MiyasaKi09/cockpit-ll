@@ -17,18 +17,19 @@ import {
   Modal,
   Money,
   NumInput,
+  PctInput,
   Select,
   Table,
   TextArea,
   TextInput,
   confirmer,
-  toast,
-} from '../ui'
+  toast, RowMenu } from '../ui'
 import type { Tone } from '../ui'
 import { fmtDate, fmtMoney, fmtPct, todayISO, uid } from '../util'
 import { MODELES_WHISPER, transcrireFichier, type ProgresTranscription } from '../transcription'
 import { CONTRAT_CR, genererDocxCR, parseRetourCR, retourVersTexte } from '../crdocx'
-import { lireRacine, nomConforme, rangerFichier, supporteFS } from '../fsdrive'
+import { lireRacine, nomConforme, rangerFichier, supporteFS, type ResultatRangement } from '../fsdrive'
+import { creerDocument, empreinteSha256, enregistrerDocument, remplacerDocument } from '../registre'
 import { copier } from '../prompts'
 
 // ============================================================
@@ -121,7 +122,7 @@ export function CarteMarches({ projet: p }: { projet: Projet }) {
               <td className="right">
                 <span style={{ display: 'inline-flex', gap: 6 }}>
                   <Btn small onClick={() => setModal({ marche: m })}>Modifier</Btn>
-                  <Btn small kind="danger" onClick={() => supprimer(m)}>Supprimer</Btn>
+                  <RowMenu items={[{ label: 'Supprimer le marché', onClick: () => supprimer(m), danger: true }]} />
                 </span>
               </td>
             </tr>
@@ -209,8 +210,8 @@ function ModalMarche({
         </Field>
       </div>
       <div className="form-row">
-        <Field label="Retenue de garantie" hint="0,05 = 5 %">
-          <NumInput value={tauxRG} onChange={setTauxRG} />
+        <Field label="Retenue de garantie" hint="5 % par défaut sur les marchés publics">
+          <PctInput value={tauxRG} onChange={setTauxRG} ariaLabel="Taux de retenue de garantie en pourcentage" />
         </Field>
         <Field label="Révision de prix">
           <Select
@@ -568,11 +569,12 @@ function AssistantCR({
       const blob = await genererDocxCR(state.settings, p, reunion, retour)
       const nom = nomConforme(p, 'CR', reunion.titre, 'cr.docx')
       const file = new File([blob], nom, { type: blob.type })
-      let chemin = ''
+      let rangement: ResultatRangement | null = null
       if (supporteFS) {
         const racine = await lireRacine()
-        if (racine) chemin = await rangerFichier(racine, p, '07_CHANTIER', file, nom)
+        if (racine) rangement = await rangerFichier(racine, p, '07_CHANTIER', file, nom)
       }
+      const chemin = rangement?.chemin || ''
       if (!chemin) {
         const url = URL.createObjectURL(blob)
         const a = document.createElement('a')
@@ -581,10 +583,35 @@ function AssistantCR({
         a.click()
         URL.revokeObjectURL(url)
       }
-      maj((r) => {
-        r.statut = 'cr_a_relire'
-        // le texte du CR reste sur la réunion : relisible et cherchable plus tard
-        r.cr = retourVersTexte(retour)
+      // registre documentaire : le CR généré devient traçable (calculé
+      // AVANT la mutation — le producteur clone pour rester rejouable)
+      const docPret = creerDocument({
+        titre: rangement?.nomFinal || nom,
+        nomOriginal: nom,
+        source: 'genere',
+        categorie: 'CR',
+        typeMime: file.type || undefined,
+        taille: file.size,
+        empreinteSha256: rangement?.empreinte || (await empreinteSha256(file)) || undefined,
+        cheminDrive: chemin || undefined,
+        projetId: p.id,
+        reunionId: reunion.id,
+        dateDocument: reunion.date,
+        statut: 'classe',
+      })
+      const texteCR = retourVersTexte(retour)
+      update((d) => {
+        const { doc, doublon } = enregistrerDocument(d, structuredClone(docPret))
+        const r = d.reunions.find((x) => x.id === reunion.id)
+        if (r) {
+          // un CR régénéré REMPLACE le précédent (versions sûres, rien d'écrasé)
+          const ancien = r.crDocumentId ? d.registreDocuments.find((x) => x.id === r.crDocumentId) : undefined
+          if (ancien && ancien.id !== doc.id && !doublon) remplacerDocument(ancien, doc)
+          r.statut = 'cr_a_relire'
+          // le texte du CR reste sur la réunion : relisible et cherchable plus tard
+          r.cr = texteCR
+          r.crDocumentId = doc.id
+        }
       })
       setRetourClaude('')
       setMessageDocx(

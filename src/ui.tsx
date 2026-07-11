@@ -378,7 +378,7 @@ export interface MenuAction {
 }
 
 /** bouton « ··· » ouvrant un menu déroulant — pour désencombrer les tableaux */
-export function RowMenu({ items }: { items: MenuAction[] }) {
+export function RowMenu({ items, label }: { items: MenuAction[]; label?: string }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -399,13 +399,13 @@ export function RowMenu({ items }: { items: MenuAction[] }) {
   return (
     <div className="rowmenu" ref={ref}>
       <button
-        className="btn btn-small btn-ghost rowmenu-trigger"
+        className={`btn btn-small ${label ? '' : 'btn-ghost'} rowmenu-trigger`}
         onClick={() => setOpen((o) => !o)}
         aria-haspopup="menu"
         aria-expanded={open}
-        title="Plus d'actions"
+        title={label || "Plus d'actions"}
       >
-        ⋯
+        {label ? `${label} ▾` : '⋯'}
       </button>
       {open && (
         <div className="rowmenu-pop" role="menu">
@@ -630,15 +630,19 @@ export function TextInput({
   onChange,
   placeholder,
   style,
+  type,
 }: {
   value: string
   onChange: (v: string) => void
   placeholder?: string
   style?: CSSProperties
+  /** 'password' pour les champs secrets (défaut : texte) */
+  type?: string
 }) {
   return (
     <input
       className="input"
+      type={type || 'text'}
       value={value}
       onChange={(e) => onChange(e.target.value)}
       placeholder={placeholder}
@@ -677,11 +681,14 @@ export function NumInput({
   onChange,
   placeholder,
   style,
+  ariaLabel,
 }: {
   value: number | null
   onChange: (v: number | null) => void
   placeholder?: string
   style?: CSSProperties
+  /** nom accessible explicite (ex. « Heures de Julien — P03 DET — semaine du 6 juil. ») */
+  ariaLabel?: string
 }) {
   const [texte, setTexte] = useState(value === null ? '' : String(value))
   useEffect(() => {
@@ -697,11 +704,57 @@ export function NumInput({
       value={texte}
       placeholder={placeholder}
       style={style}
+      aria-label={ariaLabel}
       onChange={(e) => {
         setTexte(e.target.value)
         onChange(parseNum(e.target.value))
       }}
     />
+  )
+}
+
+/** saisie de POURCENTAGE : affiche « 60 % », stocke 0,6 — plus jamais de
+ *  0.115 à l'écran quand l'en-tête annonce un pourcentage */
+export function PctInput({
+  value,
+  onChange,
+  placeholder,
+  style,
+  ariaLabel,
+}: {
+  /** fraction stockée (0,6 = 60 %) ; null = vide */
+  value: number | null
+  onChange: (v: number | null) => void
+  placeholder?: string
+  style?: CSSProperties
+  ariaLabel?: string
+}) {
+  const versAffichage = (v: number | null) => (v === null ? '' : String(Math.round(v * 10000) / 100).replace('.', ','))
+  const [texte, setTexte] = useState(versAffichage(value))
+  useEffect(() => {
+    const actuel = parseNum(texte)
+    if ((actuel === null ? null : actuel / 100) !== value) setTexte(versAffichage(value))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value])
+  return (
+    <span style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', width: '100%' }}>
+      <input
+        className="input num"
+        inputMode="decimal"
+        value={texte}
+        placeholder={placeholder}
+        style={{ paddingRight: 28, ...style }}
+        aria-label={ariaLabel}
+        onChange={(e) => {
+          setTexte(e.target.value)
+          const n = parseNum(e.target.value)
+          onChange(n === null ? null : n / 100)
+        }}
+      />
+      <span className="muted small" aria-hidden style={{ position: 'absolute', right: 10, pointerEvents: 'none' }}>
+        %
+      </span>
+    </span>
   )
 }
 
@@ -749,6 +802,11 @@ export function Select({
 
 // ---------- modal & onglets ----------
 
+const FOCUSABLES =
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+
+/** dialogue WAI : focus piégé dans la modale, Échap ferme, et le focus
+ *  revient à l'élément déclencheur à la fermeture */
 export function Modal({
   titre,
   onClose,
@@ -760,17 +818,55 @@ export function Modal({
   children: ReactNode
   large?: boolean
 }) {
+  const refPanneau = useRef<HTMLDivElement>(null)
+  // focus initial + retour au déclencheur — AU MONTAGE seulement (onClose
+  // change d'identité à chaque rendu parent : ne pas re-voler le focus)
   useEffect(() => {
-    const on = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
+    const declencheur = document.activeElement as HTMLElement | null
+    const panneau = refPanneau.current
+    const premiers = panneau ? Array.from(panneau.querySelectorAll<HTMLElement>(FOCUSABLES)) : []
+    ;(premiers.find((el) => !el.closest('.modal-h')) || premiers[0] || panneau)?.focus()
+    return () => declencheur?.focus?.()
+  }, [])
+  // clavier : Échap ferme, Tab reste piégé dans la modale
+  useEffect(() => {
+    const on = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose()
+        return
+      }
+      if (e.key !== 'Tab') return
+      const panneau = refPanneau.current
+      const liste = panneau ? Array.from(panneau.querySelectorAll<HTMLElement>(FOCUSABLES)) : []
+      if (liste.length === 0) return
+      const premier = liste[0]
+      const dernier = liste[liste.length - 1]
+      const actif = document.activeElement
+      if (e.shiftKey && (actif === premier || actif === panneau)) {
+        e.preventDefault()
+        dernier.focus()
+      } else if (!e.shiftKey && actif === dernier) {
+        e.preventDefault()
+        premier.focus()
+      }
+    }
     window.addEventListener('keydown', on)
     return () => window.removeEventListener('keydown', on)
   }, [onClose])
   return (
     <div className="modal-back" onClick={onClose}>
-      <div className={`modal ${large ? 'modal-large' : ''}`} onClick={(e) => e.stopPropagation()}>
+      <div
+        ref={refPanneau}
+        tabIndex={-1}
+        role="dialog"
+        aria-modal="true"
+        aria-label={titre}
+        className={`modal ${large ? 'modal-large' : ''}`}
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="modal-h">
           <h2>{titre}</h2>
-          <button className="btn btn-ghost btn-small" onClick={onClose}>
+          <button className="btn btn-ghost btn-small" onClick={onClose} aria-label="Fermer">
             ✕
           </button>
         </div>
@@ -808,6 +904,28 @@ export function Tabs({
       ))}
     </div>
   )
+}
+
+/** rend une rangée cliquable utilisable au clavier (Tab + Entrée/Espace)
+ *  sans casser la sémantique de tableau — à étaler sur le <tr> */
+export function ligneActivable(activer: () => void): {
+  tabIndex: number
+  onClick: () => void
+  onKeyDown: (e: { key: string; preventDefault: () => void; target: EventTarget }) => void
+} {
+  return {
+    tabIndex: 0,
+    onClick: activer,
+    onKeyDown: (e) => {
+      // ne pas voler Entrée/Espace aux contrôles internes (boutons, champs)
+      const cible = e.target as HTMLElement
+      if (cible.closest('button, a, input, select, textarea')) return
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault()
+        activer()
+      }
+    },
+  }
 }
 
 // ---------- tableau simple ----------

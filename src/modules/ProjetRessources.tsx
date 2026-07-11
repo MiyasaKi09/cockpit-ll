@@ -5,7 +5,7 @@
 import { useState } from 'react'
 import type { Projet } from '../types'
 import { useStore } from '../store'
-import { Badge, Btn, Card, EmptyState, Etoiles, Field, Modal, Select, Table, TextInput, toast } from '../ui'
+import { Badge, Btn, Card, EmptyState, Etoiles, Field, Modal, Select, Table, TextInput, toast, RowMenu } from '../ui'
 import { fmtDate, fold, todayISO, uid } from '../util'
 
 export default function ProjetRessources({ projet: p }: { projet: Projet }) {
@@ -137,13 +137,15 @@ function CarteLiens({ projet: p, maj }: { projet: Projet; maj: Maj }) {
                 </a>
               </td>
               <td className="right">
-                <Btn
-                  small
-                  kind="danger"
-                  onClick={() => maj((pr) => { pr.liens = pr.liens.filter((x) => x.id !== l.id) })}
-                >
-                  Retirer
-                </Btn>
+                <RowMenu
+                  items={[
+                    {
+                      label: 'Retirer le lien',
+                      danger: true,
+                      onClick: () => maj((pr) => { pr.liens = pr.liens.filter((x) => x.id !== l.id) }),
+                    },
+                  ]}
+                />
               </td>
             </tr>
           ))}

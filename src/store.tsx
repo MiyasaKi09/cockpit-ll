@@ -3,7 +3,8 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { AppState, Personne } from './types'
+import type { AppState, DocumentCorpus, Entreprise, Personne } from './types'
+import { fold, uid } from './util'
 import { seedState, STATE_VERSION } from './seed'
 import { DEPARTEMENTS_DEFAUT } from './boamp'
 import { connecterSync, demarrerRealtime, pousserEtat, syncActif } from './sync'
@@ -20,11 +21,21 @@ function migrate(parsed: AppState): AppState {
   etat.absences = Array.isArray(parsed.absences) ? parsed.absences : []
   // v8 → v9 : notation des entreprises par chantier
   etat.evaluations = Array.isArray(parsed.evaluations) ? parsed.evaluations : []
-  // v9 → v10 : corpus de l'assistant (textes réglementaires + modèles)
-  etat.documents = Array.isArray(parsed.documents) ? parsed.documents : []
+  // v9 → v10 : corpus de l'assistant — repris par le bloc v11 → v12 ci-dessous
+  // (l'ancien champ « documents » est migré vers corpusDocuments)
   // v10 → v11 : DCE/CCTP structurés + planning travaux détaillé
   etat.lotsDce = Array.isArray(parsed.lotsDce) ? parsed.lotsDce : []
   etat.tachesChantier = Array.isArray(parsed.tachesChantier) ? parsed.tachesChantier : []
+  // v11 → v12 : registre documentaire + entreprises canoniques ;
+  // l'ancien « documents » (corpus de l'assistant) devient corpusDocuments
+  etat.corpusDocuments = Array.isArray(parsed.corpusDocuments)
+    ? parsed.corpusDocuments
+    : Array.isArray((parsed as AppState & { documents?: DocumentCorpus[] }).documents)
+      ? (parsed as AppState & { documents?: DocumentCorpus[] }).documents!
+      : []
+  etat.registreDocuments = Array.isArray(parsed.registreDocuments) ? parsed.registreDocuments : []
+  etat.entreprises = Array.isArray(parsed.entreprises) ? parsed.entreprises : []
+  amorcerEntreprises(etat)
   // v5 → v6 : journal d'interactions CRM. On amorce depuis les
   // derniereInteraction existantes pour ne rien perdre de l'historique.
   if (Array.isArray(parsed.interactions)) {
@@ -88,6 +99,47 @@ function migrate(parsed: AppState): AppState {
   return etat
 }
 
+/** amorce les entreprises CANONIQUES depuis les artisans et les marchés
+ *  (idempotent) : une identité par nom normalisé, et les objets existants
+ *  reçoivent leur entrepriseId — le nom libre reste pour l'affichage */
+function amorcerEntreprises(etat: AppState): void {
+  const parNom = new Map<string, Entreprise>()
+  for (const e of etat.entreprises) parNom.set(fold(e.raisonSociale), e)
+  const obtenir = (nom: string): Entreprise => {
+    const cle = fold(nom)
+    let e = parNom.get(cle)
+    if (!e) {
+      e = { id: uid('ent'), raisonSociale: nom, domaines: [], lots: [] }
+      parNom.set(cle, e)
+      etat.entreprises.push(e)
+    }
+    return e
+  }
+  for (const a of etat.artisans) {
+    if (!a.nom.trim()) continue
+    const e = obtenir(a.nom)
+    a.entrepriseId = a.entrepriseId || e.id
+    e.lots = [...new Set([...e.lots, ...a.lots])]
+    e.zone = e.zone || a.zone
+    e.contactNom = e.contactNom || a.contactNom
+    e.contactEmail = e.contactEmail || a.contactEmail
+    e.tel = e.tel || a.tel
+    e.decennaleFin = e.decennaleFin ?? a.decennaleFin ?? null
+    const domaine = a.contactEmail?.split('@')[1]
+    if (domaine && !e.domaines.includes(domaine)) e.domaines.push(domaine)
+  }
+  for (const m of etat.marches) {
+    if (!m.entreprise.trim()) continue
+    const e = obtenir(m.entreprise)
+    m.entrepriseId = m.entrepriseId || e.id
+    if (m.lot && !e.lots.includes(m.lot)) e.lots.push(m.lot)
+    const domaine = m.contactEmail?.split('@')[1]
+    if (domaine && !e.domaines.includes(domaine)) e.domaines.push(domaine)
+    e.contactNom = e.contactNom || m.contactNom
+    e.contactEmail = e.contactEmail || m.contactEmail
+  }
+}
+
 function load(): AppState {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
@@ -101,7 +153,9 @@ function load(): AppState {
   } catch {
     // stockage corrompu → seed
   }
-  return seedState()
+  const frais = seedState()
+  amorcerEntreprises(frais)
+  return frais
 }
 
 function persist(state: AppState) {
@@ -166,6 +220,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           const local = refEtat.current
           if (!Array.isArray(distant.lotsDce)) distant.lotsDce = local.lotsDce
           if (!Array.isArray(distant.tachesChantier)) distant.tachesChantier = local.tachesChantier
+          // v11 → v12 : registre documentaire, entreprises, corpus renommé
+          if (!Array.isArray(distant.corpusDocuments)) distant.corpusDocuments = local.corpusDocuments
+          if (!Array.isArray(distant.registreDocuments)) distant.registreDocuments = local.registreDocuments
+          if (!Array.isArray(distant.entreprises)) distant.entreprises = local.entreprises
           // re-fusionne la config machine-locale (jamais synchronisée)
           replace({ ...distant, settings: { ...distant.settings, sync } })
         })

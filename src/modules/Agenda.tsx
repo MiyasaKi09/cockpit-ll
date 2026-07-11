@@ -6,7 +6,7 @@
 import { useMemo, useState } from 'react'
 import type { AppState, CanalInteraction, Contact, Obligation, TypeContact } from '../types'
 import { useStore } from '../store'
-import {
+import { ligneActivable,
   Badge,
   Btn,
   Card,
@@ -25,8 +25,7 @@ import {
   TextInput,
   confirmer,
   toast,
-  useToday,
-} from '../ui'
+  useToday, RowMenu } from '../ui'
 import { addDays, addMonths, diffDays, download, fmtDate, fold, ouvrirGmail, todayISO, uid } from '../util'
 import { STATUTS_ACTIFS } from '../derive'
 
@@ -170,7 +169,7 @@ function OngletObligations({ today }: { today: string }) {
               const dj = diffDays(today, o.echeance)
               const enRappel = today >= addDays(o.echeance, -o.rappelJours)
               return (
-                <tr key={o.id} className="clickable" onClick={() => setEdition(structuredClone(o))}>
+                <tr key={o.id} className="clickable" {...ligneActivable(() => setEdition(structuredClone(o)))}>
                   <td>
                     <strong>{o.libelle}</strong>
                   </td>
@@ -190,21 +189,23 @@ function OngletObligations({ today }: { today: string }) {
                     <Btn small kind="primary" onClick={() => marquerFaite(o)} title={o.periodiciteMois ? 'Reconduit à la prochaine échéance' : 'Supprime (ponctuelle)'}>
                       ✓ Fait
                     </Btn>{' '}
-                    <Btn
-                      small
-                      kind="danger"
-                      onClick={async () => {
-                        const snap = state
-                        if (await confirmer({ message: `Supprimer « ${o.libelle} » ?`, danger: true, confirmerLabel: 'Supprimer' })) {
-                          update((d) => {
-                            d.obligations = d.obligations.filter((x) => x.id !== o.id)
-                          })
-                          toast('Obligation supprimée.', { undo: () => replace(snap) })
-                        }
-                      }}
-                    >
-                      Suppr.
-                    </Btn>
+                    <RowMenu
+                      items={[
+                        {
+                          label: "Supprimer l'obligation",
+                          danger: true,
+                          onClick: async () => {
+                            const snap = state
+                            if (await confirmer({ message: `Supprimer « ${o.libelle} » ?`, danger: true, confirmerLabel: 'Supprimer' })) {
+                              update((d) => {
+                                d.obligations = d.obligations.filter((x) => x.id !== o.id)
+                              })
+                              toast('Obligation supprimée.', { undo: () => replace(snap) })
+                            }
+                          },
+                        },
+                      ]}
+                    />
                   </td>
                 </tr>
               )
@@ -297,7 +298,7 @@ function OngletContrats({ today }: { today: string }) {
                 const dj = diffDays(today, o.echeance)
                 const enRappel = today >= addDays(o.echeance, -o.rappelJours)
                 return (
-                  <tr key={o.id} className="clickable" onClick={() => setEdition(structuredClone(o))}>
+                  <tr key={o.id} className="clickable" {...ligneActivable(() => setEdition(structuredClone(o)))}>
                     <td>
                       <strong>{o.libelle}</strong>
                       {o.notes && <div className="muted small">{o.notes}</div>}
@@ -342,21 +343,23 @@ function OngletContrats({ today }: { today: string }) {
                       >
                         ✓ Payé
                       </Btn>{' '}
-                      <Btn
-                        small
-                        kind="danger"
-                        onClick={async () => {
-                          const snap = state
-                          if (await confirmer({ message: `Supprimer le contrat « ${o.libelle} » ?`, danger: true, confirmerLabel: 'Supprimer' })) {
-                            update((d) => {
-                              d.obligations = d.obligations.filter((x) => x.id !== o.id)
-                            })
-                            toast('Contrat supprimé.', { undo: () => replace(snap) })
-                          }
-                        }}
-                      >
-                        Suppr.
-                      </Btn>
+                      <RowMenu
+                        items={[
+                          {
+                            label: 'Supprimer le contrat',
+                            danger: true,
+                            onClick: async () => {
+                              const snap = state
+                              if (await confirmer({ message: `Supprimer le contrat « ${o.libelle} » ?`, danger: true, confirmerLabel: 'Supprimer' })) {
+                                update((d) => {
+                                  d.obligations = d.obligations.filter((x) => x.id !== o.id)
+                                })
+                                toast('Contrat supprimé.', { undo: () => replace(snap) })
+                              }
+                            },
+                          },
+                        ]}
+                      />
                     </td>
                   </tr>
                 )
@@ -563,7 +566,7 @@ function OngletContacts({ today }: { today: string }) {
             {contacts.map((c) => {
               const enRetard = c.dateProchaineAction && c.dateProchaineAction < today
               return (
-                <tr key={c.id} className="clickable" onClick={() => setEdition(structuredClone(c))}>
+                <tr key={c.id} className="clickable" {...ligneActivable(() => setEdition(structuredClone(c)))}>
                   <td>
                     <strong>{c.nom}</strong>
                     <div className="muted small">
@@ -610,21 +613,23 @@ function OngletContacts({ today }: { today: string }) {
                         ✓ Relance
                       </Btn>
                     )}{' '}
-                    <Btn
-                      small
-                      kind="danger"
-                      onClick={async () => {
-                        const snap = state
-                        if (await confirmer({ message: `Supprimer ${c.nom} ?`, danger: true, confirmerLabel: 'Supprimer' })) {
-                          update((d) => {
-                            d.contacts = d.contacts.filter((x) => x.id !== c.id)
-                          })
-                          toast('Contact supprimé.', { undo: () => replace(snap) })
-                        }
-                      }}
-                    >
-                      Suppr.
-                    </Btn>
+                    <RowMenu
+                      items={[
+                        {
+                          label: 'Supprimer le contact',
+                          danger: true,
+                          onClick: async () => {
+                            const snap = state
+                            if (await confirmer({ message: `Supprimer ${c.nom} ?`, danger: true, confirmerLabel: 'Supprimer' })) {
+                              update((d) => {
+                                d.contacts = d.contacts.filter((x) => x.id !== c.id)
+                              })
+                              toast('Contact supprimé.', { undo: () => replace(snap) })
+                            }
+                          },
+                        },
+                      ]}
+                    />
                   </td>
                 </tr>
               )

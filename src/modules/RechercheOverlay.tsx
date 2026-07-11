@@ -2,12 +2,15 @@
 // Un matériau, une entreprise, un contact, un mot du journal… →
 // tout ce qui y touche, avec le chemin vers chaque fiche et les
 // projets reliés. Clavier : ↑ ↓ pour naviguer, Entrée pour ouvrir,
-// Échap pour fermer.
+// Échap pour fermer. Les résultats sont de VRAIS liens (clavier,
+// lecteur d'écran, clic molette) et les derniers éléments ouverts
+// s'affichent avant la saisie.
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../store'
 import type { AppState } from '../types'
 import { navigate } from '../ui'
+import { LIBELLES_STATUT } from '../registre'
 import { fmtDate, fmtMoney, fold } from '../util'
 
 interface Resultat {
@@ -17,6 +20,29 @@ interface Resultat {
   lien: string
   /** projets reliés (les liens inverses) */
   projets?: string[]
+}
+
+// ---------- récents (localStorage, jamais synchronisé) ----------
+
+const CLE_RECENTS = 'cockpit-ll-recherche-recents'
+
+function lireRecents(): Resultat[] {
+  try {
+    const brut = localStorage.getItem(CLE_RECENTS)
+    const liste = brut ? (JSON.parse(brut) as Resultat[]) : []
+    return Array.isArray(liste) ? liste.filter((r) => r && typeof r.lien === 'string' && typeof r.titre === 'string') : []
+  } catch {
+    return []
+  }
+}
+
+function pousserRecent(r: Resultat): void {
+  try {
+    const liste = [{ ...r, groupe: 'Récents' }, ...lireRecents().filter((x) => x.lien !== r.lien || x.titre !== r.titre)]
+    localStorage.setItem(CLE_RECENTS, JSON.stringify(liste.slice(0, 8)))
+  } catch {
+    // stockage plein : les récents sont un confort, jamais bloquants
+  }
 }
 
 function projetsUtilisantMateriau(state: AppState, id: string): string[] {
@@ -42,6 +68,18 @@ function chercher(state: AppState, q: string): Resultat[] {
         titre: `${p.id} — ${p.nom}`,
         detail: [p.moa, p.statut].filter(Boolean).join(' · '),
         lien: `#/projets/${p.id}`,
+      })
+  }
+
+  for (const d of state.registreDocuments) {
+    if (d.statut === 'rejete') continue
+    if (hit(d.titre, d.nomOriginal, d.cheminDrive, d.categorie))
+      res.push({
+        groupe: 'Documents',
+        titre: d.titre,
+        detail: [d.categorie, `v${d.version}`, LIBELLES_STATUT[d.statut]].join(' · '),
+        lien: '#/documents/tous',
+        projets: d.projetId ? [d.projetId] : undefined,
       })
   }
 
@@ -163,17 +201,20 @@ export default function RechercheOverlay({ onClose }: { onClose: () => void }) {
   const [sel, setSel] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
+  const [recents] = useState<Resultat[]>(lireRecents)
 
   useEffect(() => {
     inputRef.current?.focus()
   }, [])
 
-  const resultats = useMemo(() => (q.trim().length >= 2 ? chercher(state, q) : []), [state, q])
+  const enSaisie = q.trim().length >= 2
+  const resultats = useMemo(() => (enSaisie ? chercher(state, q) : []), [state, q, enSaisie])
   const groupes = useMemo(() => {
+    if (!enSaisie) return recents.length > 0 ? ([['Récents', recents]] as [string, Resultat[]][]) : []
     const map = new Map<string, Resultat[]>()
     for (const r of resultats) map.set(r.groupe, [...(map.get(r.groupe) || []), r])
     return [...map.entries()]
-  }, [resultats])
+  }, [resultats, enSaisie, recents])
   // liste à plat, dans l'ordre d'affichage, pour la navigation clavier
   const plat = useMemo(() => groupes.flatMap(([, items]) => items), [groupes])
 
@@ -182,6 +223,7 @@ export default function RechercheOverlay({ onClose }: { onClose: () => void }) {
   }, [q])
 
   const ouvrir = (r: Resultat) => {
+    pousserRecent(r)
     navigate(r.lien)
     onClose()
   }
@@ -228,19 +270,28 @@ export default function RechercheOverlay({ onClose }: { onClose: () => void }) {
             onKeyDown={onKeyDown}
             placeholder="Rechercher — « chanvre », « Martin BTP », « acrotère »…"
             aria-label="Terme de recherche"
+            role="combobox"
+            aria-expanded={plat.length > 0}
+            aria-controls="cmdk-liste"
+            aria-activedescendant={plat[sel] ? `cmdk-opt-${sel}` : undefined}
           />
-          {q.trim().length >= 2 && (
+          {enSaisie && (
             <span className="cmdk-count">
               {resultats.length} résultat{resultats.length > 1 ? 's' : ''}
             </span>
           )}
+          <button className="cmdk-fermer" onClick={onClose} aria-label="Fermer la recherche">
+            ✕
+          </button>
         </div>
 
-        <div className="cmdk-results" ref={listRef}>
-          {q.trim().length < 2 ? (
-            <div className="cmdk-empty">Tapez au moins 2 caractères. ↑ ↓ pour naviguer, Entrée pour ouvrir, Échap pour fermer.</div>
-          ) : resultats.length === 0 ? (
-            <div className="cmdk-empty">Aucun résultat pour « {q} ».</div>
+        <div className="cmdk-results" ref={listRef} id="cmdk-liste" role="listbox" aria-label="Résultats">
+          {groupes.length === 0 ? (
+            <div className="cmdk-empty">
+              {enSaisie
+                ? `Aucun résultat pour « ${q} ».`
+                : 'Tapez au moins 2 caractères. ↑ ↓ pour naviguer, Entrée pour ouvrir, Échap pour fermer.'}
+            </div>
           ) : (
             groupes.map(([groupe, items]) => (
               <div key={groupe} className="cmdk-group">
@@ -251,11 +302,15 @@ export default function RechercheOverlay({ onClose }: { onClose: () => void }) {
                   index += 1
                   const i = index
                   return (
-                    <div
+                    <a
                       key={i}
+                      id={`cmdk-opt-${i}`}
+                      href={r.lien}
+                      role="option"
+                      aria-selected={i === sel}
                       className={`cmdk-item ${i === sel ? 'sel' : ''}`}
                       onMouseEnter={() => setSel(i)}
-                      onMouseDown={(e) => {
+                      onClick={(e) => {
                         e.preventDefault()
                         ouvrir(r)
                       }}
@@ -273,7 +328,7 @@ export default function RechercheOverlay({ onClose }: { onClose: () => void }) {
                           ))}
                         </div>
                       )}
-                    </div>
+                    </a>
                   )
                 })}
               </div>

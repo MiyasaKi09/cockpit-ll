@@ -42,6 +42,8 @@ export interface NoteJournal {
   fait?: boolean
   /** chemin du fichier rangé dans le Drive (photos importées) */
   fichier?: string
+  /** documents du registre rattachés à la note */
+  documentIds?: string[]
 }
 
 export interface Projet {
@@ -137,6 +139,8 @@ export interface ReunionChantier {
   statut: StatutReunion
   /** texte du compte-rendu, conservé sur la réunion (généré par l'assistant ou collé) */
   cr?: string
+  /** DOCX du CR dans le registre documentaire */
+  crDocumentId?: string | null
   notes?: string
 }
 
@@ -145,6 +149,8 @@ export interface MarcheTravaux {
   id: string
   projetId: string
   entreprise: string
+  /** entreprise canonique (registre) — le nom reste pour l'affichage */
+  entrepriseId?: string | null
   lot: string
   montantInitialHT: number
   avenantsHT: number
@@ -195,6 +201,8 @@ export interface LigneDPGF {
 export interface DpgfLot {
   /** chemin du fichier source dans le Drive (ou nom du fichier déposé) */
   fichier?: string
+  /** document source dans le registre documentaire */
+  documentId?: string | null
   importeLe: string // ISO
   /** total HT lu sur le document (contrôle de cohérence avec la somme des lignes) */
   totalHT?: number | null
@@ -214,6 +222,8 @@ export interface LotDCE {
   marcheId?: string | null
   /** chemin du fichier CCTP dans le Drive (traçabilité de l'extraction) */
   fichier?: string
+  /** document source dans le registre documentaire */
+  cctpDocumentId?: string | null
   /** provenance : 'analyse' (déterministe) · 'claude' (retour JSON) · 'manuel' */
   source?: string
   importeLe: string // ISO
@@ -429,6 +439,8 @@ export interface Contact {
 export interface Artisan {
   id: string
   nom: string
+  /** entreprise canonique (registre) */
+  entrepriseId?: string | null
   lots: string[]
   zone?: string
   fourchette?: string
@@ -615,6 +627,95 @@ export interface Settings {
   }
 }
 
+// ============================================================
+// REGISTRE DOCUMENTAIRE — le document devient une entité métier :
+// identité stable, empreinte, source, version, statut, liens vers
+// les objets qu'il alimente, et journal d'événements. Les chemins
+// Drive restent utiles à l'affichage mais ne sont plus l'identité.
+// ============================================================
+
+export type StatutDocument =
+  | 'recu'
+  | 'a_classer'
+  | 'classe'
+  | 'a_valider'
+  | 'valide'
+  | 'exploite'
+  | 'remplace'
+  | 'rejete'
+
+export type SourceDocument = 'gmail' | 'drive' | 'depot' | 'genere' | 'plateforme'
+
+/** trace d'un événement de la vie du document (import, classement,
+ *  validation, remplacement, action métier déclenchée…) */
+export interface EvenementDocument {
+  date: string // ISO
+  type: string // 'recu' | 'classe' | 'valide' | 'remplace' | 'action' | …
+  detail?: string
+  auteur?: string
+}
+
+/** un document du registre — TOUT fichier métier qui compte */
+export interface DocumentRecord {
+  id: string
+  titre: string
+  nomOriginal: string
+  typeMime?: string
+  taille?: number
+  /** empreinte SHA-256 du contenu — dédoublonnage et versions sûres */
+  empreinteSha256?: string
+  source: SourceDocument
+  /** identifiant côté source (id Gmail de pièce jointe, id Drive…) */
+  sourceId?: string
+  sourceUrl?: string
+  /** chemin dans le Drive local (affichage / ouverture) */
+  cheminDrive?: string
+  projetId?: string | null
+  entrepriseId?: string | null
+  marcheId?: string | null
+  lotDceId?: string | null
+  reunionId?: string | null
+  /** catégorie contrôlée (CCTP, DPGF, CR, SITU, PLAN, ADM, PHOTO…) */
+  categorie: string
+  sousType?: string
+  /** date portée par le document (quand elle est fiable) */
+  dateDocument?: string | null
+  recuLe: string // ISO
+  version: number
+  /** version précédente que ce document remplace */
+  remplaceDocumentId?: string | null
+  statut: StatutDocument
+  /** confiance de la classification automatique (0..1) — null si manuel */
+  confiance?: number | null
+  /** raisons lisibles de la proposition (« Voir pourquoi ») */
+  raisons?: string[]
+  /** données extraites rattachées (ex. résumé CCTP/DPGF) */
+  donneesExtraites?: Record<string, unknown>
+  validePar?: string
+  valideLe?: string
+  evenements: EvenementDocument[]
+}
+
+/** entreprise CANONIQUE — l'identité unique derrière les artisans,
+ *  les marchés et les documents administratifs mutualisés */
+export interface Entreprise {
+  id: string
+  raisonSociale: string
+  nomCommercial?: string
+  siret?: string
+  /** domaines e-mail connus (rattachement des mails/documents) */
+  domaines: string[]
+  contactNom?: string
+  contactEmail?: string
+  tel?: string
+  lots: string[]
+  zone?: string
+  /** date de fin de validité de la décennale (vue simple — le document
+   *  complet vit dans le registre, rattaché par entrepriseId) */
+  decennaleFin?: string | null
+  notes?: string
+}
+
 export interface AppState {
   version: number
   settings: Settings
@@ -636,9 +737,14 @@ export interface AppState {
   tempsHorsProjet: TempsHorsProjet[]
   absences: Absence[]
   evaluations: EvaluationEntreprise[]
-  documents: DocumentCorpus[]
+  /** corpus de l'assistant (textes réglementaires + modèles) — ex-« documents » */
+  corpusDocuments: DocumentCorpus[]
   lotsDce: LotDCE[]
   tachesChantier: TacheChantier[]
+  /** registre documentaire central — chaque fichier métier, traçable */
+  registreDocuments: DocumentRecord[]
+  /** entreprises canoniques (identité unique artisans/marchés/documents) */
+  entreprises: Entreprise[]
 }
 
 /** document du corpus de l'assistant : texte réglementaire (Légifrance,

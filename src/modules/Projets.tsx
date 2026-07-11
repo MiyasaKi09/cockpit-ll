@@ -9,11 +9,10 @@ import { useState } from 'react'
 import type { ReactNode } from 'react'
 import type { Phase, PhaseCode, Projet, StatutProjet, TypeMO } from '../types'
 import { useStore } from '../store'
-import {
+import { ligneActivable,
   Badge,
   Btn,
   Card,
-  CopyBtn,
   DateF,
   DateInput,
   EmptyState,
@@ -21,6 +20,7 @@ import {
   Modal,
   Money,
   NumInput,
+  PctInput,
   Page,
   RowMenu,
   Select,
@@ -49,7 +49,7 @@ import {
   totalPointsComplexite,
 } from '../miqcp'
 import { coutHoraireMoyen, coutJourObjectif, coutReelTemps, coutsExternes, encaissementPrevu, enJours, factureHT, heuresPrevues, heuresReelles, retardFacture, tauxVente, ttc } from '../derive'
-import { assemble, contexteProjet } from '../prompts'
+import { assemble, contexteProjet, copier } from '../prompts'
 import { facturesParDefaut } from '../echeancier'
 import ProjetNouveau from './ProjetNouveau'
 import ProjetChantier from './ProjetChantier'
@@ -173,10 +173,12 @@ function ListeProjets() {
               const fact = factureHT(state, p.id)
               const reste = Math.max(0, h.honorairesTotauxHT - fact)
               return (
-                <tr key={p.id} className="clickable" onClick={() => navigate(`/projets/${p.id}`)}>
+                <tr key={p.id} className="clickable" {...ligneActivable(() => navigate(`/projets/${p.id}`))}>
                   <td className="mono">{p.id}</td>
                   <td>
-                    <strong>{p.nom}</strong>
+                    <a href={`#/projets/${p.id}`} onClick={(e) => e.stopPropagation()}>
+                      <strong>{p.nom}</strong>
+                    </a>
                     {p.moa && <div className="muted small">{p.moa}</div>}
                   </td>
                   <td>{p.typeMO}</td>
@@ -204,22 +206,33 @@ function ListeProjets() {
 // Espace projet — bandeau + onglets
 // ============================================================
 
-const ONGLETS = [
+/** onglets de premier niveau — le quotidien du projet.
+ *  Documents réunit le Drive, le registre ET le DCE structuré : un seul
+ *  endroit pour les fichiers du projet (audit simplification). */
+const ONGLETS_PRINCIPAUX = [
   { id: 'pilotage', label: 'Pilotage & honoraires' },
+  { id: 'documents', label: 'Documents' },
   { id: 'planning', label: 'Planning' },
-  { id: 'dce', label: 'DCE & CCTP' },
   { id: 'chantier', label: 'Chantier & CR' },
-  { id: 'ressources', label: 'Ressources & liens' },
-  { id: 'journal', label: 'Journal' },
-  { id: 'documents', label: 'Documents (Drive)' },
-  { id: 'finances', label: 'Factures & temps' },
+  { id: 'finances', label: 'Finance' },
 ]
+
+/** le reste vit derrière « Plus » */
+const ONGLETS_PLUS = [
+  { id: 'ressources', label: 'Équipe & ressources' },
+  { id: 'journal', label: 'Journal' },
+]
+
+/** 'dce' reste une route valide : elle ouvre Documents → DCE structuré */
+const ONGLETS = [...ONGLETS_PRINCIPAUX, ...ONGLETS_PLUS, { id: 'dce', label: 'Documents' }]
 
 function EspaceProjet({ projetId, onglet }: { projetId: string; onglet?: string }) {
   const { state, update, replace } = useStore()
+  const today = useToday()
   const [modalEdition, setModalEdition] = useState(false)
   const p = state.projets.find((x) => x.id === projetId)
   const actif = ONGLETS.some((o) => o.id === onglet) ? onglet! : 'pilotage'
+  const ongletSurligne = actif === 'dce' ? 'documents' : actif
 
   if (!p) {
     return (
@@ -266,6 +279,17 @@ function EspaceProjet({ projetId, onglet }: { projetId: string; onglet?: string 
     toast(`Projet ${p.id} supprimé.`, { undo: () => replace(snap) })
   }
 
+  // action principale contextuelle : pendant le chantier, c'est le CR qui compte
+  const enChantier =
+    state.marches.some((m) => m.projetId === p.id && m.actif) ||
+    p.phases.some((ph) => ph.code === 'DET' && ph.debut && ph.fin && ph.debut <= today && today <= ph.fin)
+
+  // onglets visibles : les principaux + l'onglet « Plus » actif le cas échéant
+  const ongletsVisibles = [
+    ...ONGLETS_PRINCIPAUX,
+    ...ONGLETS_PLUS.filter((o) => o.id === ongletSurligne),
+  ]
+
   return (
     <Page
       titre={`${p.id} — ${p.nom}`}
@@ -279,34 +303,63 @@ function EspaceProjet({ projetId, onglet }: { projetId: string; onglet?: string 
           {p.numeroEngagement && <span className="muted small"> · engagement {p.numeroEngagement}</span>}
         </>
       }
-      actions={
-        <>
-          {promptsProjet.map((t) => (
-            <CopyBtn
-              key={t.id}
-              kind="default"
-              text={() => assemble(t.corps, contexteProjet(state, p))}
-              label={`${t.titre} → « ${t.projetClaude} »`}
-            />
-          ))}
-          <Btn kind="primary" onClick={() => setModalEdition(true)}>Modifier</Btn>
-          <RowMenu items={[{ label: 'Supprimer le projet', onClick: supprimer, danger: true }]} />
-        </>
-      }
     >
-      <p className="small" style={{ marginTop: -10, marginBottom: 14 }}>
-        <a href="#/projets">← Tous les projets</a>
-        {p.notes && <span className="muted"> — {p.notes}</span>}
-      </p>
+      {/* le titre garde toute la première ligne — les actions vivent ici */}
+      <div className="toolbar" style={{ marginTop: -6, marginBottom: 12 }}>
+        <a href="#/projets" className="small">← Tous les projets</a>
+        <span className="spacer" />
+        {actif === 'pilotage' &&
+          (enChantier ? (
+            <Btn kind="primary" onClick={() => navigate(`/projets/${p.id}/chantier`)}>Nouveau CR</Btn>
+          ) : (
+            <Btn kind="primary" onClick={() => setModalEdition(true)}>Modifier</Btn>
+          ))}
+        {promptsProjet.length > 0 && (
+          <RowMenu
+            label="Assistant"
+            items={promptsProjet.map((t) => ({
+              label: `${t.titre} → « ${t.projetClaude} »`,
+              onClick: () => {
+                void copier(assemble(t.corps, contexteProjet(state, p))).then((ok) =>
+                  toast(ok ? 'Prompt copié — collez-le dans le Projet Claude.' : 'Copie impossible.', {
+                    tone: ok ? 'ok' : 'danger',
+                  }),
+                )
+              },
+            }))}
+          />
+        )}
+        <RowMenu
+          items={[
+            ...(enChantier || actif !== 'pilotage' ? [{ label: 'Modifier la fiche', onClick: () => setModalEdition(true) }] : []),
+            { label: 'Supprimer le projet', onClick: supprimer, danger: true },
+          ]}
+        />
+      </div>
+      {p.notes && <p className="muted small" style={{ marginTop: -6, marginBottom: 12 }}>{p.notes}</p>}
 
-      <BandeauProjet projet={p} />
-      <LigneIdentite projet={p} />
+      {actif === 'pilotage' ? (
+        <>
+          <BandeauProjet projet={p} />
+          <LigneIdentite projet={p} />
+        </>
+      ) : (
+        <BarreProjetCompacte projet={p} />
+      )}
 
-      <Tabs
-        tabs={ONGLETS.map((o) => ({ id: o.id, label: o.label }))}
-        actif={actif}
-        onSelect={(id) => navigate(`/projets/${p.id}/${id}`)}
-      />
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <Tabs
+            tabs={ongletsVisibles.map((o) => ({ id: o.id, label: o.label }))}
+            actif={ongletSurligne}
+            onSelect={(id) => navigate(`/projets/${p.id}/${id}`)}
+          />
+        </div>
+        <RowMenu
+          label="Plus"
+          items={ONGLETS_PLUS.map((o) => ({ label: o.label, onClick: () => navigate(`/projets/${p.id}/${o.id}`) }))}
+        />
+      </div>
 
       {actif === 'pilotage' && (
         <>
@@ -318,11 +371,12 @@ function EspaceProjet({ projetId, onglet }: { projetId: string; onglet?: string 
         </>
       )}
       {actif === 'planning' && <ProjetPlanning projet={p} />}
-      {actif === 'dce' && <ProjetDCE projet={p} />}
       {actif === 'chantier' && <ProjetChantier projet={p} />}
       {actif === 'ressources' && <ProjetRessources projet={p} />}
       {actif === 'journal' && <ProjetJournal projet={p} />}
-      {actif === 'documents' && <ProjetDocuments projet={p} />}
+      {(actif === 'documents' || actif === 'dce') && (
+        <OngletDocumentsProjet projet={p} vueInitiale={actif === 'dce' ? 'dce' : 'tous'} />
+      )}
       {actif === 'finances' && <OngletFinances projet={p} />}
 
       {modalEdition && <ModalEditionProjet projet={p} onClose={() => setModalEdition(false)} />}
@@ -330,7 +384,69 @@ function EspaceProjet({ projetId, onglet }: { projetId: string; onglet?: string 
   )
 }
 
-/** bandeau : les 4 chiffres qui résument le projet, toujours visibles */
+/** onglet Documents fusionné : le Drive + registre du projet ET le DCE
+ *  structuré (CCTP/DPGF) — plus deux systèmes qui se ressemblent */
+function OngletDocumentsProjet({ projet: p, vueInitiale }: { projet: Projet; vueInitiale: 'tous' | 'dce' }) {
+  const [vue, setVue] = useState<'tous' | 'dce'>(vueInitiale)
+  return (
+    <>
+      <Tabs
+        tabs={[
+          { id: 'tous', label: 'Tous les documents' },
+          { id: 'dce', label: 'DCE structuré (CCTP · DPGF)' },
+        ]}
+        actif={vue}
+        onSelect={(id) => setVue(id as 'tous' | 'dce')}
+      />
+      {vue === 'tous' ? <ProjetDocuments projet={p} /> : <ProjetDCE projet={p} />}
+    </>
+  )
+}
+
+/** barre compacte des sous-pages : phase, prochaine échéance, alerte
+ *  principale — les 4 grandes cartes ne vivent que sur la vue d'ensemble */
+function BarreProjetCompacte({ projet: p }: { projet: Projet }) {
+  const { state } = useStore()
+  const today = useToday()
+  const phaseCourante = p.phases.find((ph) => ph.debut && ph.fin && ph.debut <= today && today <= ph.fin)
+  const prochainePhase = p.phases
+    .filter((ph) => ph.fin && ph.fin >= today && ph.montantHT > 0)
+    .sort((a, b) => (a.fin || '').localeCompare(b.fin || ''))[0]
+  const prochaineFacture = state.factures
+    .filter((f) => f.projetId === p.id && f.statut === 'prevue' && f.emission >= today)
+    .sort((a, b) => a.emission.localeCompare(b.emission))[0]
+  const enRetard = state.factures.filter((f) => f.projetId === p.id && retardFacture(f, today) > 0)
+  return (
+    <p
+      className="small"
+      style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center', margin: '0 2px 12px' }}
+    >
+      {phaseCourante && <Badge tone="info">phase {phaseCourante.code}</Badge>}
+      {prochaineFacture ? (
+        <span>
+          Prochaine échéance : <strong>facture {prochaineFacture.id}</strong> le{' '}
+          <DateF d={prochaineFacture.emission} />
+        </span>
+      ) : prochainePhase ? (
+        <span>
+          Prochaine échéance : <strong>rendu {prochainePhase.code}</strong> le <DateF d={prochainePhase.fin!} />
+        </span>
+      ) : (
+        <span className="muted">aucune échéance datée à venir</span>
+      )}
+      {enRetard.length > 0 && (
+        <span className="danger-text">
+          {enRetard.length} facture(s) en retard — <a href="#/facturation">relancer</a>
+        </span>
+      )}
+      <a href={`#/projets/${p.id}`} className="muted">
+        vue d'ensemble →
+      </a>
+    </p>
+  )
+}
+
+/** bandeau : les 4 chiffres qui résument le projet — vue d'ensemble uniquement */
 function BandeauProjet({ projet: p }: { projet: Projet }) {
   const { state } = useStore()
   const today = useToday()
@@ -343,6 +459,16 @@ function BandeauProjet({ projet: p }: { projet: Projet }) {
   const prochainePhase = p.phases
     .filter((ph) => ph.fin && ph.fin >= today && ph.montantHT > 0)
     .sort((a, b) => (a.fin || '').localeCompare(b.fin || ''))[0]
+  const prochaineFacture = state.factures
+    .filter((f) => f.projetId === p.id && f.statut === 'prevue' && f.emission >= today)
+    .sort((a, b) => a.emission.localeCompare(b.emission))[0]
+  // l'échéance CONCRÈTE la plus proche : une facture datée bat un code de phase
+  const echeance =
+    prochaineFacture && (!prochainePhase?.fin || prochaineFacture.emission <= prochainePhase.fin)
+      ? { valeur: `Facture ${prochaineFacture.id}`, date: prochaineFacture.emission, complement: `${fmtMoney(prochaineFacture.montantHT)} HT — ${prochaineFacture.libelle}` }
+      : prochainePhase
+        ? { valeur: prochainePhase.code, date: prochainePhase.fin!, complement: `rendu de phase (${LIBELLES_PHASES[prochainePhase.code]})` }
+        : null
   const enRetard = state.factures.filter((f) => f.projetId === p.id && retardFacture(f, today) > 0)
 
   return (
@@ -362,14 +488,14 @@ function BandeauProjet({ projet: p }: { projet: Projet }) {
       />
       <Stat
         label="Prochaine échéance"
-        value={prochainePhase ? prochainePhase.code : '—'}
+        value={echeance ? echeance.valeur : '—'}
         sub={
           enRetard.length > 0 ? (
             <span className="danger-text">{enRetard.length} facture(s) en retard — <a href="#/facturation">relancer</a></span>
-          ) : prochainePhase ? (
-            <>rendu le <DateF d={prochainePhase.fin} /></>
+          ) : echeance ? (
+            <><DateF d={echeance.date} /> · {echeance.complement}</>
           ) : (
-            'aucune phase datée à venir'
+            'aucune échéance datée à venir'
           )
         }
       />
@@ -468,7 +594,7 @@ function OngletFinances({ projet: p }: { projet: Projet }) {
           label="€ / jour réel"
           value={joursPointes > 0.05 ? fmtMoney(factTotal / joursPointes) : '—'}
           tone={joursPointes > 0.05 ? (factTotal / joursPointes >= objectifJour ? 'ok' : 'warn') : undefined}
-          sub={<>objectif {fmtMoney(objectifJour)} · <a href="#/analyse">Analyse →</a></>}
+          sub={<>objectif {fmtMoney(objectifJour)} · <a href="#/pilotage/missions">Pilotage →</a></>}
         />
       </div>
 
@@ -591,16 +717,17 @@ function CarteHonoraires({ projet: p }: { projet: Projet }) {
         <dt>Taux retenu</dt>
         <dd>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-            <NumInput
+            <PctInput
               value={p.tauxRetenu ?? null}
               onChange={(v) => maj((pr) => { pr.tauxRetenu = v })}
               placeholder="auto"
               style={{ width: 110 }}
+              ariaLabel="Taux d'honoraires retenu en pourcentage"
             />
             <span className="muted small">
               {p.tauxRetenu !== null && p.tauxRetenu !== undefined
-                ? `soit ${fmtPct(h.tauxFinal, 2)} (négocié)`
-                : `vide = taux ajusté (${fmtPct(h.tauxFinal, 2)}) — ex. 0,12 pour 12 %`}
+                ? 'taux négocié'
+                : `vide = taux ajusté (${fmtPct(h.tauxFinal, 2)}) — ex. 12 pour 12 %`}
             </span>
           </span>
         </dd>

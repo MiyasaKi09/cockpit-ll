@@ -10,7 +10,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { AppState, Consultation, StatutConsultation } from '../types'
 import { useStore } from '../store'
-import {
+import { ligneActivable,
   Badge,
   Btn,
   Card,
@@ -542,12 +542,17 @@ function BlocReponse({ c }: { c: Consultation }) {
       const racine = await lireRacine()
       if (racine) {
         try {
-          const chemin = await ecrireFichierRacine(
+          const { chemin, dejaPresent } = await ecrireFichierRacine(
             racine,
             '0_CANDIDATURES',
             new File([blob], nom, { type: blob.type }),
           )
-          setMessage({ ok: true, texte: `Dossier écrit dans le Drive : ${chemin} — à relire et compléter.` })
+          setMessage({
+            ok: true,
+            texte: dejaPresent
+              ? `Déjà dans le Drive à l'identique : ${chemin} — rien n'a été réécrit.`
+              : `Dossier écrit dans le Drive : ${chemin} — à relire et compléter.`,
+          })
           setEnCours(false)
           return
         } catch {
@@ -1061,7 +1066,7 @@ function ConsultationsContenu() {
             ]}
           >
             {visibles.map((c) => (
-              <tr key={c.id} className="clickable" onClick={() => ouvrir(c)}>
+              <tr key={c.id} className="clickable" {...ligneActivable(() => ouvrir(c))}>
                 <td>
                   <strong>{c.intitule}</strong>
                 </td>

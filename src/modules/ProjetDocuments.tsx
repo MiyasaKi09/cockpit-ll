@@ -9,8 +9,10 @@ import { useCallback, useEffect, useState } from 'react'
 import type { Projet } from '../types'
 import { useStore } from '../store'
 import { Badge, Btn, Card, EmptyState, Field, Select, Table, TextInput } from '../ui'
-import { todayISO } from '../util'
+import { LIBELLES_STATUT, chercherDoublon, creerDocument, enregistrerDocument } from '../registre'
+import { fmtDate, todayISO } from '../util'
 import {
+  ARBORESCENCE,
   choisirRacine as choisirRacineFS,
   lireRacine,
   nomConforme as nomConformeFS,
@@ -20,22 +22,6 @@ import {
   verifierPermission,
   type FSDirHandle,
 } from '../fsdrive'
-
-// ---------- arborescence normalisée de l'agence ----------
-
-const ARBORESCENCE: { dossier: string; description: string; phases?: string[] }[] = [
-  { dossier: '00_ADMIN', description: 'contrat, assurances, courriers officiels' },
-  { dossier: '01_DIAG', description: 'diagnostics, relevés, existant', phases: ['DIAG'] },
-  { dossier: '02_ESQ', description: 'esquisse', phases: ['ESQ'] },
-  { dossier: '03_APS-APD_PC', description: 'avant-projets, dossier PC', phases: ['APS', 'APD'] },
-  { dossier: '04_PRO-DCE', description: 'projet, CCTP, DCE', phases: ['PRO', 'ACT-DCE'] },
-  { dossier: '05_ACT_MARCHES', description: 'offres, analyses, marchés signés', phases: ['ACT-DCE'] },
-  { dossier: '06_EXE-VISA', description: 'plans EXE, visas', phases: ['VISA'] },
-  { dossier: '07_CHANTIER', description: 'CR de chantier, situations, OS', phases: ['DET'] },
-  { dossier: '08_AOR', description: 'réception, réserves, DOE', phases: ['AOR'] },
-  { dossier: '09_FACTURES', description: 'factures émises et justificatifs' },
-  { dossier: '10_PHOTOS', description: 'photos chantier et références' },
-]
 
 const TYPES_DOC = ['ADM', 'PC', 'CR', 'DCE', 'PLAN', 'FACT', 'DEVIS', 'PHOTO', 'MAIL', 'NOTE', 'CCTP', 'SITU']
 
@@ -48,7 +34,7 @@ interface EtatDossier {
 }
 
 export default function ProjetDocuments({ projet: p }: { projet: Projet }) {
-  const { state } = useStore()
+  const { state, update } = useStore()
   const [racine, setRacine] = useState<FSDirHandle | null>(null)
   const [etat, setEtat] = useState<EtatDossier[] | null>(null)
   const [message, setMessage] = useState('')
@@ -129,8 +115,31 @@ export default function ProjetDocuments({ projet: p }: { projet: Projet }) {
   const deposer = async () => {
     if (!racine || !fichier) return
     try {
-      const chemin = await rangerFichier(racine, p, dossierCible, fichier, nomConforme(fichier))
-      setMessage(`Rangé : ${chemin}`)
+      const r = await rangerFichier(racine, p, dossierCible, fichier, nomConforme(fichier))
+      // registre documentaire : dédoublonnage calculé AVANT la mutation
+      const dejaConnu = Boolean(chercherDoublon(state, r.empreinte))
+      const doc = creerDocument({
+        titre: r.nomFinal,
+        nomOriginal: fichier.name,
+        source: 'depot',
+        categorie: type,
+        typeMime: fichier.type || undefined,
+        taille: fichier.size,
+        empreinteSha256: r.empreinte || undefined,
+        cheminDrive: r.chemin,
+        projetId: p.id,
+        statut: 'classe', // type + dossier choisis à la main → classement confirmé
+      })
+      update((d) => {
+        enregistrerDocument(d, doc)
+      })
+      setMessage(
+        r.dejaPresent
+          ? `Déjà dans le Drive à l'identique : ${r.chemin} — rien n'a été réécrit.`
+          : r.version > 1
+            ? `Rangé en nouvelle version : ${r.chemin} (un fichier du même nom au contenu différent existait déjà).`
+            : `Rangé : ${r.chemin}${dejaConnu ? ' — document déjà connu du registre, pas de doublon créé.' : ' — ajouté au registre des documents.'}`,
+      )
       setFichier(null)
       setObjet('')
       await scanner(racine)
@@ -149,8 +158,8 @@ export default function ProjetDocuments({ projet: p }: { projet: Projet }) {
       <Card titre="Documents du projet">
         <div className="pill-note">
           Le rangement automatique nécessite Chrome ou Edge (API File System Access). En attendant :
-          utilisez le générateur de noms du module <a href="#/classement">Classement</a> et le dossier
-          Drive du projet (onglet Ressources).
+          déposez les fichiers dans la <a href="#/documents">boîte d'arrivée</a> (le nom conforme est
+          proposé) et rangez-les via le dossier Drive du projet (onglet Ressources).
         </div>
       </Card>
     )
@@ -274,6 +283,42 @@ export default function ProjetDocuments({ projet: p }: { projet: Projet }) {
           </p>
         </Card>
       )}
+
+      <CarteRegistreProjet projetId={p.id} />
     </>
+  )
+}
+
+/** les documents du registre rattachés à CE projet — chaque import (CCTP,
+ *  DPGF, CR, photo, dépôt) laisse une entrée traçable ici */
+function CarteRegistreProjet({ projetId }: { projetId: string }) {
+  const { state } = useStore()
+  const docs = state.registreDocuments
+    .filter((d) => d.projetId === projetId && d.statut !== 'rejete')
+    .slice()
+    .sort((a, b) => b.recuLe.localeCompare(a.recuLe) || b.id.localeCompare(a.id))
+  if (docs.length === 0) return null
+  return (
+    <Card
+      titre={`Registre — ${docs.length} document(s) du projet`}
+      actions={<a className="small" href="#/documents/tous">Tout le registre →</a>}
+    >
+      <Table compact head={['Document', 'Catégorie', 'Statut', 'Reçu le']}>
+        {docs.map((d) => (
+          <tr key={d.id}>
+            <td>
+              {d.titre}
+              {d.cheminDrive && <div className="small muted mono">{d.cheminDrive}</div>}
+            </td>
+            <td>{d.categorie}</td>
+            <td>
+              <Badge tone={d.statut === 'remplace' ? 'muted' : 'ok'}>{LIBELLES_STATUT[d.statut]}</Badge>
+              {d.version > 1 && <> <Badge tone="info">v{d.version}</Badge></>}
+            </td>
+            <td className="small muted">{fmtDate(d.recuLe)}</td>
+          </tr>
+        ))}
+      </Table>
+    </Card>
   )
 }

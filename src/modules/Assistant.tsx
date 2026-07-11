@@ -13,7 +13,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../store'
-import { Badge, Btn, Card, CopyBtn, EmptyState, Field, Page, Select, Table, Tabs, TextArea, TextInput, toast, useToday } from '../ui'
+import { Badge, Btn, Card, CopyBtn, EmptyState, Field, Page, Select, Table, Tabs, TextArea, TextInput, navigate, toast, useRoute, useToday } from '../ui'
 import { assistantDisponible, interrogerAssistant } from '../assistant'
 import type { DocPourAssistant } from '../assistant'
 import { texteVersDocx } from '../crdocx'
@@ -39,7 +39,10 @@ function telechargerBlob(blob: Blob, nomFichier: string): void {
 }
 
 export function AssistantPage() {
-  const [actif, setActif] = useState('qa')
+  // onglet piloté par l'URL : retour navigateur et liens partagés fonctionnent
+  const route = useRoute()
+  const segment = route[0] === 'assistant' ? route[1] : undefined
+  const actif = ONGLETS.some((o) => o.id === segment) ? segment! : 'qa'
   const [dispo, setDispo] = useState<boolean | null>(null)
   useEffect(() => {
     void assistantDisponible().then(setDispo)
@@ -57,7 +60,7 @@ export function AssistantPage() {
           par le navigateur. Vous pouvez déjà préparer le corpus dans l’onglet dédié.
         </div>
       )}
-      <Tabs tabs={ONGLETS} actif={actif} onSelect={setActif} />
+      <Tabs tabs={ONGLETS} actif={actif} onSelect={(id) => navigate(`/assistant/${id}`)} />
       {actif === 'qa' && <OngletQuestion dispo={dispo === true} />}
       {actif === 'cr' && <OngletCR dispo={dispo === true} />}
       {actif === 'doc' && <OngletDocument dispo={dispo === true} />}
@@ -122,7 +125,7 @@ function themeDoc(d: DocumentCorpus): string {
 
 function OngletQuestion({ dispo }: { dispo: boolean }) {
   const { state } = useStore()
-  const reglementaires = state.documents.filter((d) => d.type === 'reglementaire')
+  const reglementaires = state.corpusDocuments.filter((d) => d.type === 'reglementaire')
   // rien de coché par défaut : on ne paie (et n'envoie) que les textes utiles à la question
   const [coches, setCoches] = useState<Set<string>>(() => new Set())
   /** thèmes dépliés (le détail document par document reste accessible) */
@@ -181,9 +184,11 @@ function OngletQuestion({ dispo }: { dispo: boolean }) {
     return (
       <Card titre="Question réglementaire">
         <EmptyState>
-          Le corpus ne contient encore aucun texte réglementaire. Ajoutez d’abord un texte (onglet
-          « Corpus ») — par exemple les articles utiles du Code de la commande publique depuis
-          Légifrance, avec leur source et leur version.
+          <p style={{ margin: '0 0 10px' }}>
+            Le corpus ne contient encore aucun texte réglementaire — la bibliothèque officielle
+            (Légifrance) s'installe en un clic.
+          </p>
+          <Btn kind="primary" onClick={() => navigate('/assistant/corpus')}>Ajouter le corpus</Btn>
         </EmptyState>
       </Card>
     )
@@ -385,7 +390,7 @@ function OngletCR({ dispo }: { dispo: boolean }) {
 function OngletDocument({ dispo }: { dispo: boolean }) {
   const { state } = useStore()
   const today = useToday()
-  const modeles = state.documents.filter((d) => d.type === 'modele')
+  const modeles = state.corpusDocuments.filter((d) => d.type === 'modele')
   const [modeleId, setModeleId] = useState('')
   const [projetId, setProjetId] = useState('')
   const [instructions, setInstructions] = useState('')
@@ -588,7 +593,7 @@ function CarteImportPrive() {
         const parties = decouperTexte(texte)
         update((d) => {
           parties.forEach((part, i) => {
-            d.documents.push({
+            d.corpusDocuments.push({
               id: uid('doc'),
               titre: parties.length === 1 ? nom : `${nom} — ${i + 1}/${parties.length}`,
               type: 'reglementaire',
@@ -660,7 +665,7 @@ function CarteBibliotheque() {
       .catch(() => setErreur(true))
   }, [])
 
-  const idsPresents = useMemo(() => new Set(state.documents.map((d) => d.id)), [state.documents])
+  const idsPresents = useMemo(() => new Set(state.corpusDocuments.map((d) => d.id)), [state.corpusDocuments])
 
   const ajouter = async (entree: PackCatalogue) => {
     setChargement(entree.id)
@@ -672,9 +677,9 @@ function CarteBibliotheque() {
       update((d) => {
         for (const doc of pack.docs) {
           const nouveau = { ...doc, groupe: pack.theme || undefined, ajouteLe: todayISO() }
-          const i = d.documents.findIndex((x) => x.id === doc.id)
-          if (i >= 0) d.documents[i] = nouveau
-          else d.documents.push(nouveau)
+          const i = d.corpusDocuments.findIndex((x) => x.id === doc.id)
+          if (i >= 0) d.corpusDocuments[i] = nouveau
+          else d.corpusDocuments.push(nouveau)
         }
       })
       toast(`Pack « ${entree.titre} » ajouté au corpus (${pack.docs.length} document(s)).`, {
@@ -743,7 +748,7 @@ function OngletCorpus() {
       ajouteLe: todayISO(),
     }
     update((d) => {
-      d.documents.push(doc)
+      d.corpusDocuments.push(doc)
     })
     setAjout(false)
     setTitre('')
@@ -755,18 +760,18 @@ function OngletCorpus() {
 
   const supprimer = (doc: DocumentCorpus) => {
     update((d) => {
-      d.documents = d.documents.filter((x) => x.id !== doc.id)
+      d.corpusDocuments = d.corpusDocuments.filter((x) => x.id !== doc.id)
     })
     toast(`« ${doc.titre} » retiré du corpus.`, {
       undo: () => {
         update((d) => {
-          d.documents.push(doc)
+          d.corpusDocuments.push(doc)
         })
       },
     })
   }
 
-  const poidsCorpus = state.documents.reduce((somme, d) => somme + d.texte.length, 0)
+  const poidsCorpus = state.corpusDocuments.reduce((somme, d) => somme + d.texte.length, 0)
 
   return (
     <>
@@ -817,7 +822,7 @@ function OngletCorpus() {
           </div>
         </div>
       )}
-      {state.documents.length === 0 ? (
+      {state.corpusDocuments.length === 0 ? (
         !ajout && (
           <EmptyState>
             Corpus vide. Deux usages : les textes réglementaires (l’assistant y répond avec
@@ -826,7 +831,7 @@ function OngletCorpus() {
         )
       ) : (
         <Table head={['Titre', 'Type', 'Source', 'Ajouté le', 'Taille', '']}>
-          {state.documents.map((d) => (
+          {state.corpusDocuments.map((d) => (
             <tr key={d.id}>
               <td>
                 {d.url ? (
@@ -861,7 +866,7 @@ function OngletCorpus() {
           ))}
         </Table>
       )}
-      {state.documents.length > 0 && (
+      {state.corpusDocuments.length > 0 && (
         <p className="small" style={{ marginTop: 10, marginBottom: 0 }}>
           Poids total du corpus : <strong>{Math.round(poidsCorpus / 1000)} k caractères</strong>
           {poidsCorpus > SEUIL_POIDS_CORPUS && (

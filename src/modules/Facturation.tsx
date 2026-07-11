@@ -104,11 +104,36 @@ function FactureModal({
 }) {
   const [v, setV] = useState(initial)
   const set = (patch: Partial<ValeursFacture>) => setV((prev) => ({ ...prev, ...patch }))
+  /** création guidée : la facture part d'une phase (pré-remplie) ou reste libre */
+  const [source, setSource] = useState<'phase' | 'libre'>('phase')
 
   // au changement de projet, le délai de paiement se pré-remplit selon le type de MO
   const changerProjet = (projetId: string) => {
     const p = projetById(state, projetId)
     set({ projetId, delaiJours: p ? state.settings.delaisPaiement[p.typeMO] : v.delaiJours })
+  }
+
+  const projetSel = projetById(state, v.projetId)
+  /** reste à facturer d'une phase = honoraires de la phase − factures déjà posées dessus */
+  const resteDePhase = (code: PhaseCode): number => {
+    const ph = projetSel?.phases.find((x) => x.code === code)
+    if (!ph) return 0
+    const deja = state.factures
+      .filter((f) => f.projetId === v.projetId && f.phase === code)
+      .reduce((sum, f) => sum + f.montantHT, 0)
+    return Math.max(0, ph.montantHT - deja)
+  }
+  const choisirPhase = (code: PhaseCode) => {
+    if (creation && source === 'phase') {
+      const reste = resteDePhase(code)
+      set({
+        phase: code,
+        montantHT: reste > 0 ? Math.round(reste * 100) / 100 : v.montantHT,
+        libelle: v.libelle.trim() ? v.libelle : `${code} — ${LIBELLES_PHASES[code]}`,
+      })
+    } else {
+      set({ phase: code })
+    }
   }
 
   const valider = () => {
@@ -127,29 +152,65 @@ function FactureModal({
 
   return (
     <Modal titre={titre} onClose={onClose}>
-      <div className="form-row">
-        {creation && (
-          <Field label="Numéro" hint="proposé automatiquement, modifiable">
-            <TextInput value={v.numero} onChange={(numero) => set({ numero })} />
+      {creation && (
+        <div className="form-row">
+          <Field label="Source" hint="une phase pré-remplit montant et libellé">
+            <Select
+              value={source}
+              onChange={(x) => setSource(x as 'phase' | 'libre')}
+              options={[
+                { value: 'phase', label: 'Depuis une phase du projet' },
+                { value: 'libre', label: 'Facture libre' },
+              ]}
+            />
           </Field>
-        )}
-        <Field label="Projet">
-          <Select
-            value={v.projetId}
-            onChange={changerProjet}
-            options={[
-              { value: '', label: '— choisir —' },
-              ...state.projets.map((p) => ({ value: p.id, label: `${p.id} — ${p.nom}` })),
-            ]}
-          />
-        </Field>
-      </div>
+          <Field label="Projet">
+            <Select
+              value={v.projetId}
+              onChange={changerProjet}
+              options={[
+                { value: '', label: '— choisir —' },
+                ...state.projets.map((p) => ({ value: p.id, label: `${p.id} — ${p.nom}` })),
+              ]}
+            />
+          </Field>
+        </div>
+      )}
+      {creation && source === 'phase' && (
+        <p className="muted small" style={{ margin: '6px 0 0' }}>
+          Les situations de travaux validées se facturent depuis <a href="#/situations">Situations</a>{' '}
+          (« Facturer les honoraires DET ») — ici, on facture une phase de mission.
+        </p>
+      )}
+      {!creation && (
+        <div className="form-row">
+          <Field label="Projet">
+            <Select
+              value={v.projetId}
+              onChange={changerProjet}
+              options={[
+                { value: '', label: '— choisir —' },
+                ...state.projets.map((p) => ({ value: p.id, label: `${p.id} — ${p.nom}` })),
+              ]}
+            />
+          </Field>
+        </div>
+      )}
       <div className="form-row" style={{ marginTop: 10 }}>
-        <Field label="Phase">
+        <Field label="Phase" hint={creation && source === 'phase' ? 'choisir la phase remplit le reste' : undefined}>
           <Select
             value={v.phase}
-            onChange={(phase) => set({ phase: phase as PhaseCode })}
-            options={PHASES_ORDRE.map((c) => ({ value: c, label: `${c} — ${LIBELLES_PHASES[c]}` }))}
+            onChange={(phase) => choisirPhase(phase as PhaseCode)}
+            options={(creation && source === 'phase' && projetSel
+              ? projetSel.phases.map((ph) => ph.code)
+              : PHASES_ORDRE
+            ).map((c) => ({
+              value: c,
+              label:
+                creation && source === 'phase' && projetSel
+                  ? `${c} — reste à facturer ${fmtMoney(resteDePhase(c))}`
+                  : `${c} — ${LIBELLES_PHASES[c]}`,
+            }))}
           />
         </Field>
         <Field label="Libellé">
@@ -160,18 +221,37 @@ function FactureModal({
         <Field label="Montant HT (€)">
           <NumInput value={v.montantHT} onChange={(montantHT) => set({ montantHT })} />
         </Field>
-        <Field label="TVA (%)">
-          <NumInput value={v.tvaPct} onChange={(tvaPct) => set({ tvaPct })} placeholder="20" />
-        </Field>
-      </div>
-      <div className="form-row" style={{ marginTop: 10 }}>
         <Field label="Émission" hint="prévisionnelle tant que la facture n'est pas émise">
           <DateInput value={v.emission} onChange={(emission) => set({ emission })} />
         </Field>
-        <Field label="Délai de paiement (jours)" hint="pré-rempli selon le type de MO du projet">
-          <NumInput value={v.delaiJours} onChange={(delaiJours) => set({ delaiJours })} />
-        </Field>
       </div>
+      {creation ? (
+        <details style={{ marginTop: 10 }}>
+          <summary className="small" style={{ cursor: 'pointer', color: 'var(--accent)' }}>
+            Options avancées — numéro, TVA, délai de paiement (pré-remplis)
+          </summary>
+          <div className="form-row" style={{ marginTop: 8 }}>
+            <Field label="Numéro" hint="proposé automatiquement">
+              <TextInput value={v.numero} onChange={(numero) => set({ numero })} />
+            </Field>
+            <Field label="TVA (%)">
+              <NumInput value={v.tvaPct} onChange={(tvaPct) => set({ tvaPct })} placeholder="20" />
+            </Field>
+            <Field label="Délai de paiement (jours)" hint="selon le type de MO">
+              <NumInput value={v.delaiJours} onChange={(delaiJours) => set({ delaiJours })} />
+            </Field>
+          </div>
+        </details>
+      ) : (
+        <div className="form-row" style={{ marginTop: 10 }}>
+          <Field label="TVA (%)">
+            <NumInput value={v.tvaPct} onChange={(tvaPct) => set({ tvaPct })} placeholder="20" />
+          </Field>
+          <Field label="Délai de paiement (jours)" hint="pré-rempli selon le type de MO du projet">
+            <NumInput value={v.delaiJours} onChange={(delaiJours) => set({ delaiJours })} />
+          </Field>
+        </div>
+      )}
       {!creation && v.encaissementReel !== null && (
         <div className="form-row" style={{ marginTop: 10 }}>
           <Field label="Encaissement réel">

@@ -471,6 +471,32 @@ function ModalCR({ reunion, onClose }: { reunion: ReunionChantier; onClose: () =
 }
 
 /** Assistant CR — 4 étapes guidées, de l'audio au CR diffusé */
+
+/** le circuit CR en 4 étapes lisibles — dérivé du statut persistant de la
+ *  réunion : fermer et rouvrir la modale reprend exactement où on en était */
+function EtapesCR({ statut }: { statut: StatutReunion }) {
+  const etapes: { id: StatutReunion; label: string }[] = [
+    { id: 'a_preparer', label: '1 · Réunion & convocation' },
+    { id: 'cr_a_generer', label: '2 · Audio → CR' },
+    { id: 'cr_a_relire', label: '3 · Relecture du DOCX' },
+    { id: 'diffuse', label: '4 · Diffusion' },
+  ]
+  const courant = etapes.findIndex((e) => e.id === statut)
+  return (
+    <p className="small" style={{ display: 'flex', gap: 6, flexWrap: 'wrap', margin: '0 0 10px' }}>
+      {etapes.map((e, i) => (
+        <span
+          key={e.id}
+          className={`badge ${i < courant ? 'badge-ok' : i === courant ? 'badge-info' : 'badge-muted'}`}
+          aria-current={i === courant ? 'step' : undefined}
+        >
+          {i < courant ? '✓ ' : ''}{e.label}
+        </span>
+      ))}
+    </p>
+  )
+}
+
 function AssistantCR({
   projet: p,
   reunion,
@@ -626,6 +652,9 @@ function AssistantCR({
 
   return (
     <Modal titre={`Assistant CR — ${reunion.titre} (${p.id})`} onClose={onClose} large>
+      {/* le circuit en étapes : l'avancement vit sur la RÉUNION (statut),
+          donc fermer la modale ne perd rien — on reprend où on s'était arrêté */}
+      <EtapesCR statut={reunion.statut} />
       <div className="form-row">
         <Field label="Titre">
           <TextInput value={reunion.titre} onChange={(v) => maj((r) => { r.titre = v })} />

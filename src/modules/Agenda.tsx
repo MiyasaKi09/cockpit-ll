@@ -81,8 +81,8 @@ export default function Agenda() {
 
   return (
     <Page
-      titre="Réglementaire & CRM"
-      sousTitre="Obligations et contacts à relancer — les deux alimentent le fil d'urgences."
+      titre="Échéances agence"
+      sousTitre="Obligations réglementaires et contrats — tout alimente le fil d'urgences."
       actions={
         <Btn onClick={exporterICS} title="Fichier .ics : obligations, rendus de phases et actions CRM — à importer dans Google Agenda (sans API)">
           Exporter vers l'agenda (.ics)
@@ -93,14 +93,15 @@ export default function Agenda() {
         tabs={[
           { id: 'obligations', label: 'Obligations réglementaires' },
           { id: 'contrats', label: 'Contrats de l’agence' },
-          { id: 'contacts', label: 'Contacts (CRM)' },
         ]}
         actif={onglet}
         onSelect={setOnglet}
       />
+      <p className="muted small" style={{ margin: '0 0 8px' }}>
+        Les contacts (CRM) ont déménagé dans l'<a href="#/ressources/contacts">Annuaire</a>.
+      </p>
       {onglet === 'obligations' && <OngletObligations today={today} />}
       {onglet === 'contrats' && <OngletContrats today={today} />}
-      {onglet === 'contacts' && <OngletContacts today={today} />}
     </Page>
   )
 }
@@ -525,7 +526,7 @@ function marquerRelanceFaite(state: AppState, update: (fn: (d: AppState) => void
   })
 }
 
-function OngletContacts({ today }: { today: string }) {
+export function OngletContacts({ today }: { today: string }) {
   const { state, update, replace } = useStore()
   const [recherche, setRecherche] = useState('')
   const [filtreType, setFiltreType] = useState('')

@@ -740,6 +740,8 @@ function FicheModal({
         </>
       )}
 
+      {/* création RAPIDE : 4 champs suffisent — budget, typologie, scores
+          et avis se complètent pendant la qualification (fiche) */}
       <Field label="Intitulé">
         <TextInput value={c.intitule} onChange={(v) => maj({ intitule: v })} placeholder="Restructuration du groupe scolaire…" />
       </Field>
@@ -747,41 +749,51 @@ function FicheModal({
         <Field label="Acheteur">
           <TextInput value={c.acheteur || ''} onChange={(v) => maj({ acheteur: v })} />
         </Field>
-        <Field label="Lieu">
-          <TextInput value={c.lieu || ''} onChange={(v) => maj({ lieu: v })} />
-        </Field>
-      </div>
-      <div className="form-row" style={{ marginTop: 10 }}>
-        <Field label="Typologie">
-          <TextInput value={c.typologie || ''} onChange={(v) => maj({ typologie: v })} placeholder="Enseignement, logement, réhabilitation…" />
-        </Field>
-        <Field label="Budget travaux HT">
-          <NumInput value={c.budgetTravaux ?? null} onChange={(v) => maj({ budgetTravaux: v })} />
-        </Field>
         <Field label="Date limite de remise">
           <DateInput value={c.dateLimite ?? null} onChange={(v) => maj({ dateLimite: v })} />
         </Field>
-      </div>
-      <div className="form-row" style={{ marginTop: 10 }}>
-        <Field label="Statut">
-          <Select
-            value={c.statut}
-            onChange={(v) => maj({ statut: v as StatutConsultation })}
-            options={STATUTS.map((s) => ({ value: s.value, label: s.label }))}
-          />
-        </Field>
-        <Field label="Source" hint="Traçabilité : BOAMP, TED, alerte, routine du…">
+        <Field label="Source" hint="BOAMP, TED, alerte, bouche à oreille…">
           <TextInput value={c.source || ''} onChange={(v) => maj({ source: v })} />
         </Field>
       </div>
-      <div style={{ marginTop: 12 }}>
-        <GrilleGoNoGo c={c} maj={maj} />
-      </div>
-      <div style={{ marginTop: 10 }}>
-        <Field label="Avis Go / No-Go" hint="Avis préparé avec Claude puis relu et collé ici — la décision reste humaine.">
-          <TextArea rows={4} value={c.avisGoNoGo || ''} onChange={(v) => maj({ avisGoNoGo: v })} />
-        </Field>
-      </div>
+      {nouveau && (
+        <p className="muted small" style={{ marginTop: 8 }}>
+          C'est tout pour créer — lieu, typologie, budget, grille Go/No-Go et avis se remplissent
+          ensuite, pendant la qualification, en rouvrant la fiche.
+        </p>
+      )}
+      {!nouveau && (
+        <>
+          <div className="form-row" style={{ marginTop: 10 }}>
+            <Field label="Lieu">
+              <TextInput value={c.lieu || ''} onChange={(v) => maj({ lieu: v })} />
+            </Field>
+            <Field label="Typologie">
+              <TextInput value={c.typologie || ''} onChange={(v) => maj({ typologie: v })} placeholder="Enseignement, logement, réhabilitation…" />
+            </Field>
+            <Field label="Budget travaux HT">
+              <NumInput value={c.budgetTravaux ?? null} onChange={(v) => maj({ budgetTravaux: v })} />
+            </Field>
+          </div>
+          <div className="form-row" style={{ marginTop: 10 }}>
+            <Field label="Statut">
+              <Select
+                value={c.statut}
+                onChange={(v) => maj({ statut: v as StatutConsultation })}
+                options={STATUTS.map((s) => ({ value: s.value, label: s.label }))}
+              />
+            </Field>
+          </div>
+          <div style={{ marginTop: 12 }}>
+            <GrilleGoNoGo c={c} maj={maj} />
+          </div>
+          <div style={{ marginTop: 10 }}>
+            <Field label="Avis Go / No-Go" hint="Avis préparé avec Claude puis relu et collé ici — la décision reste humaine.">
+              <TextArea rows={4} value={c.avisGoNoGo || ''} onChange={(v) => maj({ avisGoNoGo: v })} />
+            </Field>
+          </div>
+        </>
+      )}
       {resultatConnu && (
         <>
           {c.statut === 'gagnee' && (
@@ -811,11 +823,13 @@ function FicheModal({
           </div>
         </>
       )}
-      <div style={{ marginTop: 10 }}>
-        <Field label="Notes">
-          <TextArea rows={2} value={c.notes || ''} onChange={(v) => maj({ notes: v })} />
-        </Field>
-      </div>
+      {!nouveau && (
+        <div style={{ marginTop: 10 }}>
+          <Field label="Notes">
+            <TextArea rows={2} value={c.notes || ''} onChange={(v) => maj({ notes: v })} />
+          </Field>
+        </div>
+      )}
 
       <div className="form-foot">
         {!nouveau && (

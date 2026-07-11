@@ -338,6 +338,8 @@ function CarteEntrants() {
   const [entrants, setEntrants] = useState<Entrant[]>([])
   const [message, setMessage] = useState('')
   const [scanEnCours, setScanEnCours] = useState(false)
+  /** revue séquentielle au clavier : index dans `entrants` (null = fermée) */
+  const [revue, setRevue] = useState<number | null>(null)
   const projetsActifs = state.projets.filter((p) => !['Livré', 'Perdu'].includes(p.statut))
 
   useEffect(() => {
@@ -471,6 +473,14 @@ function CarteEntrants() {
         />
       </Field>
       {message && <p className="small warn-text">{message}</p>}
+      {entrants.length > 1 && (
+        <p className="small" style={{ margin: '0 0 10px' }}>
+          <Btn small kind="primary" onClick={() => setRevue(0)}>
+            Passer en revue — un fichier à la fois
+          </Btn>{' '}
+          <span className="muted">Entrée = classer · → suivant · ← précédent · E = écarter</span>
+        </p>
+      )}
       {entrants.length === 0 ? (
         <EmptyState>Aucun fichier en attente — déposez-en ci-dessus ou scannez le Drive.</EmptyState>
       ) : (
@@ -534,7 +544,135 @@ function CarteEntrants() {
           )
         })
       )}
+
+      {revue !== null && (
+        <ModalRevueEntrants
+          entrants={entrants}
+          index={revue}
+          setIndex={setRevue}
+          projetsActifs={projetsActifs}
+          majEntrant={majEntrant}
+          classer={classer}
+          ecarter={ecarter}
+          occupe={false}
+        />
+      )}
     </Card>
+  )
+}
+
+/** revue séquentielle au clavier : un fichier à la fois — Entrée classe
+ *  avec la proposition affichée, E écarte, ← → naviguent. Quand un fichier
+ *  est traité, la liste se raccourcit : l'index pointe sur le suivant. */
+function ModalRevueEntrants({
+  entrants,
+  index,
+  setIndex,
+  projetsActifs,
+  majEntrant,
+  classer,
+  ecarter,
+}: {
+  entrants: Entrant[]
+  index: number
+  setIndex: (i: number | null) => void
+  projetsActifs: Projet[]
+  majEntrant: (cle: string, champs: Partial<Entrant>) => void
+  classer: (e: Entrant) => Promise<void>
+  ecarter: (e: Entrant) => void
+  occupe: boolean
+}) {
+  const { state } = useStore()
+  const idx = Math.min(index, entrants.length - 1)
+  const e = entrants[idx]
+  const projet = state.projets.find((p) => p.id === e?.projetId)
+
+  useEffect(() => {
+    const onKey = (ev: KeyboardEvent) => {
+      const cible = ev.target as HTMLElement | null
+      const dansChamp = cible && ['INPUT', 'TEXTAREA'].includes(cible.tagName)
+      if (!e || dansChamp) return
+      if (ev.key === 'Enter' && cible?.tagName !== 'SELECT' && projet) {
+        ev.preventDefault()
+        void classer(e)
+      } else if (ev.key === 'ArrowRight') {
+        setIndex(Math.min(idx + 1, entrants.length - 1))
+      } else if (ev.key === 'ArrowLeft') {
+        setIndex(Math.max(0, idx - 1))
+      } else if (ev.key === 'e' || ev.key === 'E') {
+        ecarter(e)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [e, projet, idx, entrants.length, classer, ecarter, setIndex])
+
+  if (!e) {
+    return (
+      <Modal titre="Revue terminée" onClose={() => setIndex(null)}>
+        <p>Tous les fichiers en attente ont été traités.</p>
+        <div className="form-foot">
+          <Btn kind="primary" onClick={() => setIndex(null)}>Fermer</Btn>
+        </div>
+      </Modal>
+    )
+  }
+
+  return (
+    <Modal titre={`Revue — fichier ${idx + 1} / ${entrants.length}`} onClose={() => setIndex(null)}>
+      <p className="small" style={{ margin: '0 0 2px' }}>
+        <strong className="mono">{e.file.name}</strong> <BadgeConfiance confiance={e.proposition.confiance} />
+      </p>
+      {e.proposition.raisons.length > 0 && (
+        <ul className="small muted" style={{ margin: '4px 0 8px 18px' }}>
+          {e.proposition.raisons.map((r, i) => (
+            <li key={i}>{r}</li>
+          ))}
+        </ul>
+      )}
+      <div className="form-row" style={{ alignItems: 'flex-end' }}>
+        <Field label="Projet">
+          <Select
+            value={e.projetId}
+            onChange={(v) => majEntrant(e.cle, { projetId: v })}
+            options={[
+              { value: '', label: '— choisir un projet —' },
+              ...projetsActifs.map((p) => ({ value: p.id, label: `${p.id} — ${p.nom}` })),
+            ]}
+          />
+        </Field>
+        <Field label="Catégorie">
+          <Select
+            value={e.categorie}
+            onChange={(v) => majEntrant(e.cle, { categorie: v })}
+            options={CATEGORIES_DOC.map((c) => ({ value: c, label: c }))}
+          />
+        </Field>
+        <Field label="Sous-dossier">
+          <Select
+            value={e.dossier}
+            onChange={(v) => majEntrant(e.cle, { dossier: v })}
+            options={ARBORESCENCE.map((a) => ({ value: a.dossier, label: a.dossier }))}
+          />
+        </Field>
+      </div>
+      {projet && (
+        <p className="small muted" style={{ margin: '4px 0 0' }}>
+          Conséquence : copié dans <code>{projet.id} › {e.dossier}</code> sous{' '}
+          <code>{nomConforme(projet, e.categorie, '', e.file.name)}</code> + entrée au registre. Rien
+          n'est écrasé (versions _v02 si besoin).
+        </p>
+      )}
+      <div className="form-foot" style={{ flexWrap: 'wrap' }}>
+        <Btn onClick={() => setIndex(Math.max(0, idx - 1))} disabled={idx === 0}>‹</Btn>
+        <Btn onClick={() => setIndex(Math.min(idx + 1, entrants.length - 1))} disabled={idx >= entrants.length - 1}>›</Btn>
+        <span className="spacer" />
+        <Btn kind="ghost" onClick={() => ecarter(e)}>Écarter (E)</Btn>
+        <Btn kind="primary" disabled={!projet} onClick={() => void classer(e)}>
+          {projet ? `Classer dans ${projet.id} › ${e.dossier} (Entrée)` : 'Classer (choisir un projet)'}
+        </Btn>
+      </div>
+    </Modal>
   )
 }
 

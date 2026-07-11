@@ -31,6 +31,7 @@ import { ligneActivable,
   useToday, RowMenu } from '../ui'
 import { diffDays, fmtDate, fold, todayISO, uid } from '../util'
 import { navigate, useRoute } from '../ui'
+import { OngletContacts } from './Agenda'
 
 /** liens inverses : projets où l'artisan intervient (rattachement ou marché) */
 function projetsArtisan(state: ReturnType<typeof useStore>['state'], id: string, nom: string): string[] {
@@ -61,25 +62,33 @@ export default function Ressources() {
   const route = useRoute()
   if (route[1] === 'materiau' && route[2]) return <FicheMateriauPage id={route[2]} />
   if (route[1] === 'artisan' && route[2]) return <FicheArtisanPage id={route[2]} />
-  return <ListeRessources ongletInitial={route[1] === 'materiaux' ? 'materiaux' : 'artisans'} />
+  return (
+    <ListeRessources
+      ongletInitial={route[1] === 'materiaux' ? 'materiaux' : route[1] === 'contacts' ? 'contacts' : 'artisans'}
+    />
+  )
 }
 
 function ListeRessources({ ongletInitial }: { ongletInitial: string }) {
   const [onglet, setOnglet] = useState(ongletInitial)
+  const today = useToday()
   return (
     <Page
       titre="Annuaire"
-      sousTitre="Entreprises et matériaux : notes de chantier, décennales surveillées, FDES."
+      sousTitre="Entreprises, contacts et matériaux — l'identité unique derrière projets et marchés."
     >
       <Tabs
         tabs={[
-          { id: 'artisans', label: 'Artisans' },
+          { id: 'artisans', label: 'Entreprises' },
+          { id: 'contacts', label: 'Contacts' },
           { id: 'materiaux', label: 'Matériaux' },
         ]}
         actif={onglet}
         onSelect={setOnglet}
       />
-      {onglet === 'artisans' ? <OngletArtisans /> : <OngletMateriaux />}
+      {onglet === 'artisans' && <OngletArtisans />}
+      {onglet === 'contacts' && <OngletContacts today={today} />}
+      {onglet === 'materiaux' && <OngletMateriaux />}
     </Page>
   )
 }

@@ -162,9 +162,12 @@ function TableauPersonne({
       else d.temps.push({ id: uid('tps'), semaine, personne, projetId: c.projetId, phase: c.phase, heures: v })
     })
 
+  // les pointages RATTACHÉS À UN DOSSIER (consultationId) ne passent pas par
+  // ces cellules : ils se saisissent depuis le dossier et s'affichent en
+  // lecture seule plus bas — sinon la cellule les écraserait
   const hpDe = (semaine: string, categorie: string): number | null => {
     const e = state.tempsHorsProjet.find(
-      (t) => t.semaine === semaine && t.personne === personne && t.categorie === categorie,
+      (t) => t.semaine === semaine && t.personne === personne && t.categorie === categorie && !t.consultationId,
     )
     return e ? e.heures : null
   }
@@ -172,7 +175,7 @@ function TableauPersonne({
   const poserHP = (semaine: string, categorie: string, v: number | null) =>
     update((d) => {
       const i = d.tempsHorsProjet.findIndex(
-        (t) => t.semaine === semaine && t.personne === personne && t.categorie === categorie,
+        (t) => t.semaine === semaine && t.personne === personne && t.categorie === categorie && !t.consultationId,
       )
       if (v === null || v <= 0) {
         if (i >= 0) d.tempsHorsProjet.splice(i, 1)
@@ -309,6 +312,29 @@ function TableauPersonne({
                 <td className="right num">{fmtHeures(totalLigneHP(cat))}</td>
               </tr>
             ))}
+            {(() => {
+              const lies = state.tempsHorsProjet.filter((t) => t.personne === personne && t.consultationId)
+              if (!semaines.some((sem) => lies.some((t) => t.semaine === sem))) return null
+              return (
+                <tr>
+                  <td className="small col-figee">
+                    Prospection / AO — dossiers
+                    <div className="muted small">pointé depuis les dossiers</div>
+                  </td>
+                  {semaines.map((sem) => {
+                    const h = lies.filter((t) => t.semaine === sem).reduce((x, t) => x + t.heures, 0)
+                    return (
+                      <td key={sem} className="right num muted">
+                        {h > 0 ? fmtHeures(h) : '·'}
+                      </td>
+                    )
+                  })}
+                  <td className="right num muted">
+                    {fmtHeures(lies.filter((t) => semaines.includes(t.semaine)).reduce((x, t) => x + t.heures, 0))}
+                  </td>
+                </tr>
+              )
+            })()}
             <tr style={{ fontWeight: 650 }}>
               <td className="col-figee">Total semaine</td>
               {semaines.map((s) => {
@@ -499,14 +525,18 @@ function SaisieSemaine({ today }: { today: string }) {
       else d.temps.push({ id: uid('tps'), semaine, personne, projetId: c.projetId, phase: c.phase, heures: v })
     })
 
+  // idem grille : les pointages rattachés à un dossier restent hors de la
+  // cellule éditable (lecture seule plus bas)
   const hpDe = (cat: string): number | null => {
-    const e = state.tempsHorsProjet.find((t) => t.semaine === semaine && t.personne === personne && t.categorie === cat)
+    const e = state.tempsHorsProjet.find(
+      (t) => t.semaine === semaine && t.personne === personne && t.categorie === cat && !t.consultationId,
+    )
     return e ? e.heures : null
   }
   const poserHP = (cat: string, v: number | null) =>
     update((d) => {
       const i = d.tempsHorsProjet.findIndex(
-        (t) => t.semaine === semaine && t.personne === personne && t.categorie === cat,
+        (t) => t.semaine === semaine && t.personne === personne && t.categorie === cat && !t.consultationId,
       )
       if (v === null || v <= 0) {
         if (i >= 0) d.tempsHorsProjet.splice(i, 1)
@@ -521,7 +551,9 @@ function SaisieSemaine({ today }: { today: string }) {
   const copierSemainePrecedente = () => {
     const avant = addDays(semaine, -7)
     const temps = state.temps.filter((t) => t.personne === personne && t.semaine === avant)
-    const hp = state.tempsHorsProjet.filter((t) => t.personne === personne && t.semaine === avant)
+    // les heures pointées depuis un dossier appartiennent à LEUR semaine :
+    // la copie ne reprend que la saisie libre
+    const hp = state.tempsHorsProjet.filter((t) => t.personne === personne && t.semaine === avant && !t.consultationId)
     if (temps.length === 0 && hp.length === 0) {
       toast('Rien à copier : la semaine précédente est vide.', { tone: 'warn' })
       return
@@ -638,6 +670,25 @@ function SaisieSemaine({ today }: { today: string }) {
           />
         </div>
       ))}
+
+      {(() => {
+        const dossiers = state.tempsHorsProjet.filter(
+          (t) => t.semaine === semaine && t.personne === personne && t.consultationId,
+        )
+        if (dossiers.length === 0) return null
+        const h = dossiers.reduce((x, t) => x + t.heures, 0)
+        return (
+          <div style={ligneStyle}>
+            <div className="small" style={{ flex: 1 }}>
+              Prospection / AO — dossiers{' '}
+              <span className="muted">
+                · pointé depuis <a href="#/ao/dossiers">les dossiers</a>
+              </span>
+            </div>
+            <span className="num small" style={{ width: 76, textAlign: 'right' }}>{fmtHeures(h)}</span>
+          </div>
+        )
+      })()}
 
       <div className="toolbar" style={{ marginTop: 10, marginBottom: 0, flexWrap: 'wrap' }}>
         <Select

@@ -6,7 +6,7 @@
 
 import type { AppState, Facture, PromptTemplate } from './types'
 
-export const STATE_VERSION = 12
+export const STATE_VERSION = 13
 
 const P = (v: number) => Math.round(v * 100) / 100
 
@@ -869,6 +869,21 @@ export function seedState(): AppState {
         statut: 'a_etudier',
         source: 'EXEMPLE — veille AO du 29/06/2026 (BOAMP)',
         notes: 'Visite obligatoire. Mission base + EXE probable.',
+        organisationId: 'org-exemple-1',
+      },
+    ],
+
+    organisations: [
+      {
+        id: 'org-exemple-1',
+        nom: 'Commune de Grandvilliers (60)',
+        type: 'Commune',
+        territoire: 'Oise',
+        relation: 'identifie',
+        interet: 2,
+        prochaineAction: 'Regarder les attributions passées (DECP) avant le Go/No-Go.',
+        notes: 'EXEMPLE.',
+        creeLe: '2026-06-29',
       },
     ],
 

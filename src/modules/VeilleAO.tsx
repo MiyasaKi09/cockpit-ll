@@ -37,6 +37,8 @@ import { ligneActivable,
 } from '../ui'
 import type { Tone } from '../ui'
 import { PipelineContenu } from './Developpement'
+import { DossiersContenu } from './Dossiers'
+import { OrganisationsContenu } from './Organisations'
 import { ReferencesContenu } from './References'
 import { diffDays, fmtPct, fold, todayISO, uid, fmtDate } from '../util'
 import { CRITERES_GO_NOGO, evaluerGoNoGo } from '../derive'
@@ -293,10 +295,21 @@ function CarteBoamp() {
     update((d) => {
       if (dejaSuivie(d, a)) return
       const radar = scorerAnnonce(d, a, todayISO())
+      // Lot 5 : l'organisation acheteuse se crée / se rapproche toute seule
+      let organisationId: string | null = null
+      if (a.acheteur.trim()) {
+        let org = d.organisations.find((o) => fold(o.nom) === fold(a.acheteur))
+        if (!org) {
+          org = { id: uid('org'), nom: a.acheteur.trim(), relation: 'identifie', creeLe: todayISO() }
+          d.organisations.push(org)
+        }
+        organisationId = org.id
+      }
       d.consultations.push({
         id: uid('ao'),
         intitule: a.objet,
         acheteur: a.acheteur,
+        organisationId,
         lieu: a.departements.join(', '),
         typologie: a.typeMarche,
         budgetTravaux: null,
@@ -919,6 +932,17 @@ function FicheModal({
             <PromptConsultation tplId="tpl-analyse-rc" consultation={c} />
             <PromptConsultation tplId="tpl-go-nogo" consultation={c} />
             <PromptConsultation tplId="tpl-references-candidature" consultation={c} />
+            {(c.statut === 'go' || c.statut === 'deposee') && (
+              <Btn
+                small
+                onClick={() => {
+                  onClose()
+                  navigate(`/ao/dossiers/${c.id}`)
+                }}
+              >
+                Ouvrir le dossier de poursuite →
+              </Btn>
+            )}
           </div>
           <BlocReponse c={c} />
         </>
@@ -1325,7 +1349,9 @@ function ConsultationsContenu() {
 const ONGLETS_AO: { id: string; label: string }[] = [
   { id: 'veille', label: 'Radar' },
   { id: 'pipeline', label: 'Pipeline' },
+  { id: 'dossiers', label: 'Dossiers' },
   { id: 'consultations', label: 'Consultations' },
+  { id: 'acheteurs', label: 'Acheteurs' },
   { id: 'references', label: 'Références' },
 ]
 
@@ -1337,7 +1363,7 @@ export default function VeilleAO({ ongletInitial = 'veille' }: { ongletInitial?:
   return (
     <Page
       titre="Développement"
-      sousTitre="Le Radar des opportunités, le pipeline, les candidatures et les références."
+      sousTitre="Le Radar, le pipeline, les dossiers de poursuite, les acheteurs et les références."
     >
       <Tabs tabs={ONGLETS_AO} actif={onglet} onSelect={(id) => navigate(`/ao/${id}`)} />
 
@@ -1348,7 +1374,9 @@ export default function VeilleAO({ ongletInitial = 'veille' }: { ongletInitial?:
         </>
       )}
       {onglet === 'pipeline' && <PipelineContenu />}
+      {onglet === 'dossiers' && <DossiersContenu />}
       {onglet === 'consultations' && <ConsultationsContenu />}
+      {onglet === 'acheteurs' && <OrganisationsContenu />}
       {onglet === 'references' && <ReferencesContenu />}
     </Page>
   )

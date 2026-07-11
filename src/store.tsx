@@ -35,6 +35,8 @@ function migrate(parsed: AppState): AppState {
       : []
   etat.registreDocuments = Array.isArray(parsed.registreDocuments) ? parsed.registreDocuments : []
   etat.entreprises = Array.isArray(parsed.entreprises) ? parsed.entreprises : []
+  // v12 → v13 : CRM organisations (clients & acheteurs, audit V3 Lot 5)
+  etat.organisations = Array.isArray(parsed.organisations) ? parsed.organisations : []
   amorcerEntreprises(etat)
   // v5 → v6 : journal d'interactions CRM. On amorce depuis les
   // derniereInteraction existantes pour ne rien perdre de l'historique.
@@ -224,6 +226,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           if (!Array.isArray(distant.corpusDocuments)) distant.corpusDocuments = local.corpusDocuments
           if (!Array.isArray(distant.registreDocuments)) distant.registreDocuments = local.registreDocuments
           if (!Array.isArray(distant.entreprises)) distant.entreprises = local.entreprises
+          // v12 → v13 : organisations (CRM acheteurs)
+          if (!Array.isArray(distant.organisations)) distant.organisations = local.organisations
           // re-fusionne la config machine-locale (jamais synchronisée)
           replace({ ...distant, settings: { ...distant.settings, sync } })
         })

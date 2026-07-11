@@ -151,6 +151,31 @@ export async function dernieresCollectes(): Promise<CollecteVeille[]> {
   return [...parSource.values()]
 }
 
+/** signaux récents mentionnant un acheteur — la fiche organisation
+ *  montre ce que la veille a vu passer (null = espace non connecté) */
+export async function signauxPourAcheteur(
+  nomAcheteur: string,
+): Promise<{ objet: string; source: string; dateParution: string | null; dateLimite: string | null; url: string | null }[] | null> {
+  const sb = clientSupabase()
+  if (!sb) return null
+  const nom = nomAcheteur.replace(/[%_(),]/g, ' ').trim()
+  if (!nom) return []
+  const { data, error } = await sb
+    .from('veille_signaux')
+    .select('source,objet,acheteur,date_parution,date_limite,url')
+    .ilike('acheteur', `%${nom}%`)
+    .order('date_parution', { ascending: false })
+    .limit(8)
+  if (error) throw new Error(`Signaux illisibles : ${error.message}`)
+  return (data || []).map((l) => ({
+    objet: l.objet as string,
+    source: labelSource(l.source as string),
+    dateParution: (l.date_parution as string | null) || null,
+    dateLimite: (l.date_limite as string | null) || null,
+    url: (l.url as string | null) || null,
+  }))
+}
+
 /** déclenche une collecte immédiate côté serveur (jeton agence) */
 export async function collecterMaintenant(): Promise<{ statut: string } | null> {
   const sb = clientSupabase()

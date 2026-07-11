@@ -53,6 +53,10 @@ interface NoticeTed {
   'buyer-name'?: Record<string, string | string[]>
   'publication-date'?: string
   'deadline-receipt-tender-date-lot'?: string[]
+  'notice-type'?: string
+  'procedure-type'?: string
+  'contract-nature'?: string[] | string
+  'classification-cpv'?: string[] | string
 }
 
 function premierTexte(v: Record<string, string | string[]> | undefined): string {
@@ -85,7 +89,17 @@ export async function rechercherTed(
     method: 'POST',
     body: JSON.stringify({
       query,
-      fields: ['publication-number', 'notice-title', 'buyer-name', 'publication-date', 'deadline-receipt-tender-date-lot'],
+      fields: [
+        'publication-number',
+        'notice-title',
+        'buyer-name',
+        'publication-date',
+        'deadline-receipt-tender-date-lot',
+        'notice-type',
+        'procedure-type',
+        'contract-nature',
+        'classification-cpv',
+      ],
       limit: limite,
     }),
   })
@@ -101,6 +115,13 @@ export async function rechercherTed(
     .map((n) => {
       const num = n['publication-number']!
       const lim = n['deadline-receipt-tender-date-lot']?.[0]
+      const natureContrat = Array.isArray(n['contract-nature'])
+        ? n['contract-nature'].join(', ')
+        : n['contract-nature'] || ''
+      // les concours de maîtrise d'œuvre TED : notice-type « cn-desg » / « pin-cfc » design
+      const typeAvis = /desg|design/i.test(`${n['notice-type'] || ''} ${n['procedure-type'] || ''}`)
+        ? ('concours' as const)
+        : ('marche' as const)
       return {
         idweb: num,
         objet: premierTexte(n['notice-title']) || '(sans titre)',
@@ -108,10 +129,17 @@ export async function rechercherTed(
         dateParution: (n['publication-date'] || '').slice(0, 10),
         dateLimite: lim ? lim.slice(0, 10) : null,
         departements: [],
-        typeMarche: '',
+        typeMarche: natureContrat,
         nature: 'Avis TED',
         url: `https://ted.europa.eu/fr/notice/-/detail/${num}`,
         plateforme: 'TED' as const,
+        typeAvis,
+        procedure: n['procedure-type'] || undefined,
+        descripteurs: Array.isArray(n['classification-cpv'])
+          ? n['classification-cpv']
+          : n['classification-cpv']
+            ? [n['classification-cpv']]
+            : [],
       }
     })
     .filter((a) => !a.dateLimite || a.dateLimite >= aujourdhui)

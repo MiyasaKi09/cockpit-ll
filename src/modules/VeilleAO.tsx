@@ -43,9 +43,10 @@ import { CRITERES_GO_NOGO, evaluerGoNoGo } from '../derive'
 import { assemble, contexteConsultation } from '../prompts'
 import { importerConsultations, parseRetourRoutine } from '../importRoutines'
 import type { RetourConsultation } from '../importRoutines'
-import { CRITERES_DEFAUT, rechercherBoamp } from '../boamp'
+import { CRITERES_DEFAUT, rechercherBoamp, rechercherEvenementsBoamp, type EvenementBoamp } from '../boamp'
 import type { AnnonceExterne, CriteresBoamp } from '../boamp'
 import { rechercherTed } from '../ted'
+import { scorerAnnonce, toneScore } from '../radar'
 import { relaisDisponible } from '../relais'
 import { creerProjetDepuisConsultation } from '../consultations'
 import { genererDocxCandidature, nomFichierCandidature, referencesPertinentes } from '../candidature'
@@ -161,8 +162,52 @@ function CarteBoamp() {
   const [annonces, setAnnonces] = useState<AnnonceExterne[] | null>(null)
   const [erreur, setErreur] = useState('')
   const [noteTed, setNoteTed] = useState('')
+  const [noteEvenements, setNoteEvenements] = useState('')
   const [enCours, setEnCours] = useState(false)
   const lanceAuto = useRef(false)
+  /** décisions du Radar (écartée / surveillée) — partagées entre les 2 postes */
+  const decisions = state.settings.veilleDecisions || {}
+  const decider = (idweb: string, decision: 'ignoree' | 'surveillee' | null) =>
+    update((d) => {
+      const suivantes = { ...(d.settings.veilleDecisions || {}) }
+      if (decision) suivantes[idweb] = decision
+      else delete suivantes[idweb]
+      d.settings.veilleDecisions = suivantes
+    })
+
+  /** rattache rectificatifs / annulations / résultats aux consultations
+   *  suivies : un événement, JAMAIS un doublon (calculé avant mutation) */
+  const appliquerEvenements = (evts: EvenementBoamp[]): number => {
+    const prepares: { consultationId: string; ev: { date: string; type: string; detail: string }; nouvelleDateLimite: string | null }[] = []
+    for (const e of evts) {
+      const cible = state.consultations.find(
+        (c) =>
+          (c.sourceId && e.annoncesLiees.includes(c.sourceId)) ||
+          cleConsultation(c.intitule, c.acheteur) === cleConsultation(e.objet, e.acheteur),
+      )
+      if (!cible) continue
+      if (cible.evenements?.some((x) => x.detail?.includes(e.idweb))) continue // déjà rattaché
+      prepares.push({
+        consultationId: cible.id,
+        ev: {
+          date: e.dateParution || todayISO(),
+          type: e.type,
+          detail: `${e.objet.slice(0, 80)} — avis ${e.idweb} (${e.url})`,
+        },
+        nouvelleDateLimite: e.type === 'rectificatif' || e.type === 'modification' ? e.nouvelleDateLimite : null,
+      })
+    }
+    if (prepares.length === 0) return 0
+    update((d) => {
+      for (const pmaj of prepares) {
+        const c = d.consultations.find((x) => x.id === pmaj.consultationId)
+        if (!c) continue
+        c.evenements = [...(c.evenements || []), pmaj.ev]
+        if (pmaj.nouvelleDateLimite) c.dateLimite = pmaj.nouvelleDateLimite
+      }
+    })
+    return prepares.length
+  }
 
   const majCriteres = (patch: Partial<CriteresBoamp>) =>
     update((d) => {
@@ -173,19 +218,35 @@ function CarteBoamp() {
     setEnCours(true)
     setErreur('')
     setNoteTed('')
-    const [boamp, ted] = await Promise.allSettled([
+    const [boamp, ted, evenements] = await Promise.allSettled([
       rechercherBoamp(c, todayISO()),
       relaisDisponible().then((d) =>
         d ? rechercherTed(c, todayISO()) : Promise.reject(new Error('relais indisponible (site déployé uniquement)')),
       ),
+      rechercherEvenementsBoamp(c, todayISO()),
     ])
     const liste: AnnonceExterne[] = []
     if (boamp.status === 'fulfilled') liste.push(...boamp.value)
     else setErreur(boamp.reason instanceof Error ? boamp.reason.message : 'Recherche BOAMP impossible.')
     if (ted.status === 'fulfilled') liste.push(...ted.value)
     else setNoteTed(`TED non interrogé — ${ted.reason instanceof Error ? ted.reason.message : 'erreur inconnue'}.`)
-    liste.sort((a, b) => b.dateParution.localeCompare(a.dateParution))
-    setAnnonces(boamp.status === 'fulfilled' || ted.status === 'fulfilled' ? liste : null)
+    // dédoublonnage par identifiant de source (un avis présent 2 fois = 1 carte)
+    const vues = new Set<string>()
+    const dedoublonnee = liste.filter((x) => {
+      const cle = `${x.plateforme}:${x.idweb}`
+      if (vues.has(cle)) return false
+      vues.add(cle)
+      return true
+    })
+    dedoublonnee.sort((a, b) => b.dateParution.localeCompare(a.dateParution))
+    setAnnonces(boamp.status === 'fulfilled' || ted.status === 'fulfilled' ? dedoublonnee : null)
+    if (evenements.status === 'fulfilled' && evenements.value.length > 0) {
+      const nb = appliquerEvenements(evenements.value)
+      if (nb > 0)
+        setNoteEvenements(
+          `${nb} rectificatif(s)/résultat(s) rattaché(s) aux consultations suivies — dates limites mises à jour.`,
+        )
+    }
     setEnCours(false)
   }
 
@@ -199,6 +260,7 @@ function CarteBoamp() {
   const suivre = (a: AnnonceExterne) =>
     update((d) => {
       if (dejaSuivie(d, a)) return
+      const radar = scorerAnnonce(d, a, todayISO())
       d.consultations.push({
         id: uid('ao'),
         intitule: a.objet,
@@ -209,15 +271,19 @@ function CarteBoamp() {
         dateLimite: a.dateLimite,
         statut: 'a_etudier',
         source: `${a.plateforme} ${a.idweb}`,
-        notes: `Avis officiel : ${a.url}`,
+        sourceId: a.idweb,
+        sourceUrl: a.url,
+        typeAvis: a.typeAvis,
+        notes: `Avis officiel : ${a.url}\nRadar ${radar.score}/100 — ${radar.raisons.slice(0, 3).join(' · ') || 'sans raison notée'}${radar.inconnues.length ? `\nÀ vérifier : ${radar.inconnues.join(' · ')}` : ''}`,
       })
     })
 
   return (
-    <Card titre="Veille automatique BOAMP + TED">
+    <Card titre="Radar — BOAMP + TED, trié par pertinence pour l’agence">
       <p className="small muted" style={{ marginBottom: 10 }}>
-        Sur <strong>vos départements</strong>, uniquement les <strong>marchés en cours</strong>.
-        Un clic : « À étudier ».
+        Marchés <strong>et concours</strong> en cours sur vos départements, notés par des règles
+        lisibles (références, mission, délai, zone) — chaque carte dit pourquoi. Les rectificatifs et
+        résultats se rattachent tout seuls aux consultations suivies, jamais en doublon.
       </p>
       <div className="toolbar" style={{ flexWrap: 'wrap' }}>
         <Field label="Mots-clés (OU entre chaque, virgules)">
@@ -267,6 +333,7 @@ function CarteBoamp() {
       </div>
       {erreur && <p className="small danger-text">{erreur}</p>}
       {noteTed && <p className="small muted">{noteTed}</p>}
+      {noteEvenements && <p className="small ok-text">{noteEvenements}</p>}
       {annonces && annonces.length === 0 && (
         <EmptyState>Aucune annonce récente pour ces critères — élargissez les mots-clés ou la période.</EmptyState>
       )}
@@ -278,49 +345,113 @@ function CarteBoamp() {
         (pas de flux exploitable — lien direct ou routine Claude hebdo). TED ne s'affiche que sur le site
         déployé : c'est le relais du site qui l'interroge.
       </p>
-      {annonces && annonces.length > 0 && (
-        <Table compact head={['Parution', 'Objet', 'Acheteur', 'Dép.', 'Date limite', '']}>
-          {annonces.map((a) => {
+      {annonces &&
+        annonces.length > 0 &&
+        (() => {
+          // le Radar : cartes notées et triées, décisions mémorisées entre les 2 postes
+          const notees = annonces
+            .map((x) => ({ a: x, s: scorerAnnonce(state, x, today) }))
+            .sort((x, y) => y.s.score - x.s.score)
+          const actives = notees.filter(({ a }) => !decisions[a.idweb])
+          const surveillees = notees.filter(({ a }) => decisions[a.idweb] === 'surveillee')
+          const ignorees = notees.filter(({ a }) => decisions[a.idweb] === 'ignoree')
+
+          const rendreCarte = ({ a, s: sc }: (typeof notees)[number], enSurveillance = false) => {
             const suivie = dejaSuivie(state, a)
             const dj = a.dateLimite ? diffDays(today, a.dateLimite) : null
             return (
-              <tr key={a.idweb}>
-                <td className="small">
-                  <DateF d={a.dateParution} />
-                </td>
-                <td>
-                  <Badge tone={a.plateforme === 'TED' ? 'info' : 'muted'}>{a.plateforme}</Badge>{' '}
+              <div
+                key={`${a.plateforme}:${a.idweb}`}
+                style={{ border: '1px solid var(--line)', borderRadius: 6, padding: 10, marginBottom: 10 }}
+              >
+                <p className="small" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', margin: 0 }}>
+                  <Badge tone={toneScore(sc.score)}>score {sc.score}</Badge>
+                  <span className="muted">confiance {sc.confiance}</span>
+                  {a.typeAvis === 'concours' && <Badge tone="warn">CONCOURS</Badge>}
+                  <Badge tone={a.plateforme === 'TED' ? 'info' : 'muted'}>{a.plateforme}</Badge>
+                  {dj !== null && <Badge tone={dj < 10 ? 'danger' : 'muted'}>J−{dj}</Badge>}
+                  <span className="spacer" />
+                  <span className="muted"><DateF d={a.dateParution} /></span>
+                </p>
+                <p style={{ margin: '6px 0 2px' }}>
                   <a href={a.url} target="_blank" rel="noreferrer" title="Ouvrir l'avis officiel">
-                    {a.objet.length > 110 ? a.objet.slice(0, 110) + '…' : a.objet}
+                    <strong>{a.objet.length > 140 ? a.objet.slice(0, 140) + '…' : a.objet}</strong>
                   </a>
-                </td>
-                <td className="small">{a.acheteur || '—'}</td>
-                <td className="small">{a.departements.join(', ') || '—'}</td>
-                <td className="small">
-                  {a.dateLimite ? (
-                    <>
-                      <DateF d={a.dateLimite} />{' '}
-                      {dj !== null && dj >= 0 && dj < 10 && <Badge tone="danger">J−{dj}</Badge>}
-                      {dj !== null && dj < 0 && <Badge tone="muted">close</Badge>}
-                    </>
-                  ) : (
-                    '—'
-                  )}
-                </td>
-                <td className="right">
+                </p>
+                <p className="small muted" style={{ margin: '0 0 6px' }}>
+                  {a.acheteur || 'acheteur non identifié'}
+                  {a.departements.length > 0 && <> · dép. {a.departements.join(', ')}</>}
+                  {a.dateLimite && <> · limite <DateF d={a.dateLimite} /></>}
+                  {a.procedure && <> · {a.procedure}</>}
+                </p>
+                {sc.raisons.length > 0 && (
+                  <p className="small" style={{ margin: '0 0 2px' }}>
+                    {sc.raisons.slice(0, 3).map((r, i) => (
+                      <span key={i} style={{ display: 'block' }}>✓ {r}</span>
+                    ))}
+                  </p>
+                )}
+                {sc.risque && <p className="small warn-text" style={{ margin: '0 0 2px' }}>! {sc.risque}</p>}
+                {sc.inconnues.length > 0 && (
+                  <p className="small muted" style={{ margin: '0 0 6px' }}>? {sc.inconnues.join(' · ')}</p>
+                )}
+                <div className="toolbar" style={{ marginBottom: 0 }}>
                   {suivie ? (
                     <Badge tone="ok">déjà suivie</Badge>
                   ) : (
-                    <Btn small kind="primary" onClick={() => suivre(a)} title="Ajouter au pipeline en « À étudier »">
-                      + À étudier
+                    <Btn small kind="primary" onClick={() => suivre(a)} title="Crée la consultation préremplie (source, score, raisons) en « À étudier »">
+                      Valider — à étudier
                     </Btn>
                   )}
-                </td>
-              </tr>
+                  {!suivie &&
+                    (enSurveillance ? (
+                      <Btn small kind="ghost" onClick={() => decider(a.idweb, null)}>Ne plus surveiller</Btn>
+                    ) : (
+                      <Btn small kind="ghost" onClick={() => decider(a.idweb, 'surveillee')}>Surveiller</Btn>
+                    ))}
+                  {!suivie && (
+                    <Btn small kind="ghost" onClick={() => decider(a.idweb, 'ignoree')}>Ignorer</Btn>
+                  )}
+                </div>
+              </div>
             )
-          })}
-        </Table>
-      )}
+          }
+
+          return (
+            <>
+              {actives.map((x) => rendreCarte(x))}
+              {actives.length === 0 && (
+                <EmptyState>Tout le Radar est traité — les éléments écartés ou surveillés sont ci-dessous.</EmptyState>
+              )}
+              {surveillees.length > 0 && (
+                <details style={{ marginTop: 8 }}>
+                  <summary className="small" style={{ cursor: 'pointer', color: 'var(--accent)' }}>
+                    Sous surveillance ({surveillees.length})
+                  </summary>
+                  <div style={{ marginTop: 8 }}>{surveillees.map((x) => rendreCarte(x, true))}</div>
+                </details>
+              )}
+              {ignorees.length > 0 && (
+                <details style={{ marginTop: 8 }}>
+                  <summary className="small" style={{ cursor: 'pointer', color: 'var(--accent)' }}>
+                    Écartées ({ignorees.length}) — chaque exclusion reste réversible
+                  </summary>
+                  <div style={{ marginTop: 8 }}>
+                    {ignorees.map(({ a, s: sc }) => (
+                      <p key={`${a.plateforme}:${a.idweb}`} className="small" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                        <Badge tone="muted">score {sc.score}</Badge>
+                        <a href={a.url} target="_blank" rel="noreferrer">
+                          {a.objet.length > 90 ? a.objet.slice(0, 90) + '…' : a.objet}
+                        </a>
+                        <Btn small kind="ghost" onClick={() => decider(a.idweb, null)}>Restaurer</Btn>
+                      </p>
+                    ))}
+                  </div>
+                </details>
+              )}
+            </>
+          )
+        })()}
     </Card>
   )
 }
@@ -1139,7 +1270,7 @@ function ConsultationsContenu() {
 // ---------- module ----------
 
 const ONGLETS_AO: { id: string; label: string }[] = [
-  { id: 'veille', label: 'Veille' },
+  { id: 'veille', label: 'Radar' },
   { id: 'pipeline', label: 'Pipeline' },
   { id: 'consultations', label: 'Consultations' },
   { id: 'references', label: 'Références' },
@@ -1152,8 +1283,8 @@ export default function VeilleAO({ ongletInitial = 'veille' }: { ongletInitial?:
 
   return (
     <Page
-      titre="Développement & AO"
-      sousTitre="Veille officielle, pipeline commercial, candidatures et références."
+      titre="Développement"
+      sousTitre="Le Radar des opportunités, le pipeline, les candidatures et les références."
     >
       <Tabs tabs={ONGLETS_AO} actif={onglet} onSelect={(id) => navigate(`/ao/${id}`)} />
 

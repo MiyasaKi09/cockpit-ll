@@ -489,6 +489,15 @@ export interface Consultation {
   /** date ISO du dernier changement d'étape — pour le vieillissement des cartes */
   dernierMouvement?: string
   notes?: string
+  // --- V3 développement : source structurée + cycle de vie de l'avis ---
+  /** identifiant côté source (idweb BOAMP, numéro TED…) */
+  sourceId?: string
+  /** lien officiel de l'avis */
+  sourceUrl?: string
+  /** appel d'offres classique ou concours (parcours différents) */
+  typeAvis?: 'marche' | 'concours'
+  /** rectificatifs, reports, annulations, résultats — JAMAIS des doublons */
+  evenements?: { date: string; type: string; detail?: string }[]
 }
 
 export type ContextePrompt = 'projet' | 'marche' | 'facture' | 'consultation' | 'libre'
@@ -604,6 +613,9 @@ export interface Settings {
     /** identifiant OAuth « Web » créé sur console.cloud.google.com (gratuit) */
     clientId: string
   }
+  /** décisions du Radar par identifiant d'avis : écartée ou surveillée
+   *  (partagées entre les 2 postes — l'un écarte, l'autre ne revoit pas) */
+  veilleDecisions?: Record<string, 'ignoree' | 'surveillee'>
   /** critères de la veille BOAMP intégrée (API DILA gratuite) */
   veilleBoamp?: {
     motsCles: string

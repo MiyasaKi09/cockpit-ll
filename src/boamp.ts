@@ -21,7 +21,10 @@ export interface AnnonceExterne {
   typeMarche: string
   nature: string
   url: string
-  plateforme: 'BOAMP' | 'TED'
+  /** plateforme d'origine (BOAMP, TED, AWS, PLACE… — pivot si fusionnée) */
+  plateforme: string
+  /** toutes les plateformes où l'avis a été vu (rapprochement par clé canonique) */
+  plateformes?: string[]
   /** appel d'offres classique ou concours (procédure/sous-nature) */
   typeAvis: 'marche' | 'concours'
   /** libellé de procédure (ouverte, adaptée, concours restreint…) */

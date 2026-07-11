@@ -71,6 +71,17 @@ async function sha256Hex(texte: string): Promise<string> {
   return Array.from(new Uint8Array(h), (b) => b.toString(16).padStart(2, '0')).join('')
 }
 
+/** clé de rapprochement multi-source : l'objet normalisé (fold) */
+function cleCanonique(objet: string): string {
+  return objet
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .slice(0, 120)
+}
+
 /** empreinte du contenu utile — si elle change, le signal a été mis à jour */
 function contenuUtile(s: Signal): string {
   return JSON.stringify([s.objet, s.date_limite, s.acheteur, s.type, s.url])
@@ -274,12 +285,12 @@ async function enregistrer(sb: SupabaseClient, source: 'boamp' | 'ted', signaux:
       const empreinte = await sha256Hex(contenuUtile(s))
       const connue = parId.get(s.source_id)
       if (connue === undefined) {
-        const { error } = await sb.from('veille_signaux').insert({ ...s, empreinte, collecte_id: collecte?.id })
+        const { error } = await sb.from('veille_signaux').insert({ ...s, empreinte, cle_canonique: cleCanonique(s.objet), collecte_id: collecte?.id })
         if (!error) nouveaux++
       } else if (connue !== empreinte) {
         const { error } = await sb
           .from('veille_signaux')
-          .update({ ...s, empreinte, maj_le: new Date().toISOString() })
+          .update({ ...s, empreinte, cle_canonique: cleCanonique(s.objet), maj_le: new Date().toISOString() })
           .eq('source', source)
           .eq('source_id', s.source_id)
         if (!error) maj++

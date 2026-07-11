@@ -419,7 +419,9 @@ function CarteBoamp() {
                   <Badge tone={toneScore(sc.score)}>score {sc.score}</Badge>
                   <span className="muted">confiance {sc.confiance}</span>
                   {a.typeAvis === 'concours' && <Badge tone="warn">CONCOURS</Badge>}
-                  <Badge tone={a.plateforme === 'TED' ? 'info' : 'muted'}>{a.plateforme}</Badge>
+                  {(a.plateformes || [a.plateforme]).map((pl) => (
+                    <Badge key={pl} tone={pl === 'BOAMP' ? 'muted' : 'info'}>{pl}</Badge>
+                  ))}
                   {dj !== null && <Badge tone={dj < 10 ? 'danger' : 'muted'}>J−{dj}</Badge>}
                   <span className="spacer" />
                   <span className="muted"><DateF d={a.dateParution} /></span>

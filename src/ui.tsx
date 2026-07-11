@@ -630,15 +630,19 @@ export function TextInput({
   onChange,
   placeholder,
   style,
+  type,
 }: {
   value: string
   onChange: (v: string) => void
   placeholder?: string
   style?: CSSProperties
+  /** 'password' pour les champs secrets (défaut : texte) */
+  type?: string
 }) {
   return (
     <input
       className="input"
+      type={type || 'text'}
       value={value}
       onChange={(e) => onChange(e.target.value)}
       placeholder={placeholder}

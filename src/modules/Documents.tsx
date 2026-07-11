@@ -25,7 +25,7 @@ import {
   toast,
   useRoute,
 } from '../ui'
-import { fmtDate, fold } from '../util'
+import { fmtDate, fold, todayISO } from '../util'
 import {
   CATEGORIES_DOC,
   DOSSIER_PAR_CATEGORIE,
@@ -51,6 +51,258 @@ import {
   supporteFS,
   type FSDirHandle,
 } from '../fsdrive'
+import { syncActif } from '../sync'
+import {
+  listerEntrantsDistants,
+  marquerEntrant,
+  scannerMaintenant,
+  telechargerEntrant,
+  type EntrantDistant,
+} from '../entrants'
+
+// ============================================================
+// Arrivées automatiques — les pièces captées côté serveur (Gmail)
+// et proposées ici : l'index partagé « entrants » du Supabase de
+// l'agence. Validation humaine obligatoire, comme pour le dépôt.
+// ============================================================
+
+function CarteArriveesServeur() {
+  const { state, update } = useStore()
+  const [liste, setListe] = useState<EntrantDistant[] | null>(null)
+  const [choix, setChoix] = useState<Record<string, { projetId: string; categorie: string; dossier: string }>>({})
+  const [message, setMessage] = useState('')
+  const [occupe, setOccupe] = useState('')
+  const [racine, setRacine] = useState<FSDirHandle | null>(null)
+  const projetsActifs = state.projets.filter((p) => !['Livré', 'Perdu'].includes(p.statut))
+
+  const charger = useCallback(async () => {
+    if (!syncActif()) {
+      setListe(null)
+      return
+    }
+    try {
+      const l = await listerEntrantsDistants()
+      setListe(l)
+      setChoix((prev) => {
+        const c = { ...prev }
+        for (const e of l) {
+          if (!c[e.id]) {
+            const categorie = e.categorieProposee || 'AUTRE'
+            c[e.id] = {
+              projetId: e.projetIdPropose || '',
+              categorie,
+              dossier: DOSSIER_PAR_CATEGORIE[categorie] || '00_ADMIN',
+            }
+          }
+        }
+        return c
+      })
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : String(err))
+    }
+  }, [])
+
+  useEffect(() => {
+    if (supporteFS) void lireRacine().then(setRacine)
+    void charger()
+    // la session du lien magique s'ouvre en asynchrone au démarrage :
+    // on retente une fois, puis le bouton « Actualiser » prend le relais
+    const t = setTimeout(() => void charger(), 2500)
+    return () => clearTimeout(t)
+  }, [charger])
+
+  const majChoix = (id: string, champs: Partial<{ projetId: string; categorie: string; dossier: string }>) =>
+    setChoix((prev) => {
+      const courant = prev[id]
+      const suivant = { ...courant, ...champs }
+      if (champs.categorie) suivant.dossier = DOSSIER_PAR_CATEGORIE[champs.categorie] || courant.dossier
+      return { ...prev, [id]: suivant }
+    })
+
+  const classer = async (e: EntrantDistant) => {
+    const c = choix[e.id]
+    const projet = state.projets.find((p) => p.id === c?.projetId)
+    if (!c || !projet) return
+    setOccupe(e.id)
+    setMessage('')
+    try {
+      const file = await telechargerEntrant(e)
+      let chemin: string | undefined
+      let nomFinal = e.nomFichier
+      if (racine) {
+        const r = await rangerFichier(racine, projet, c.dossier, file, nomConforme(projet, c.categorie, '', file.name))
+        chemin = r.chemin
+        nomFinal = r.nomFinal
+      }
+      const docPret = creerDocument({
+        titre: nomFinal,
+        nomOriginal: e.nomFichier,
+        source: 'gmail',
+        sourceId: e.id,
+        categorie: c.categorie,
+        typeMime: e.typeMime || undefined,
+        taille: e.taille || undefined,
+        empreinteSha256: e.empreinte || undefined,
+        cheminDrive: chemin,
+        projetId: projet.id,
+        confiance: e.confiance,
+        raisons: e.raisons,
+        statut: 'classe',
+      })
+      update((d) => {
+        const { doc } = enregistrerDocument(d, structuredClone(docPret))
+        ajouterEvenementMail(doc, e)
+      })
+      await marquerEntrant(e.id, 'classe', state.settings.personnes[0])
+      setListe((prev) => (prev || []).filter((x) => x.id !== e.id))
+      toast(
+        chemin
+          ? `Classé dans ${chemin} — ajouté au registre.`
+          : `Ajouté au registre (${projet.id} · ${c.categorie}) — Drive non configuré, fichier non copié.`,
+        { tone: 'ok' },
+      )
+    } catch (err) {
+      setMessage(`Classement impossible : ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      setOccupe('')
+    }
+  }
+
+  const rejeter = async (e: EntrantDistant) => {
+    if (!(await confirmer(`Rejeter « ${e.nomFichier} » ? La pièce reste tracée côté serveur mais ne sera plus proposée.`)))
+      return
+    try {
+      await marquerEntrant(e.id, 'rejete', state.settings.personnes[0])
+      setListe((prev) => (prev || []).filter((x) => x.id !== e.id))
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  const scanner = async () => {
+    setOccupe('scan')
+    setMessage('')
+    try {
+      const r = await scannerMaintenant()
+      if (r.statut === 'ok') {
+        setMessage(
+          r.nouvelles
+            ? `${r.nouvelles} nouvelle(s) pièce(s) — ${r.messages} message(s) examiné(s).`
+            : `Rien de nouveau (${r.messages ?? 0} message(s) examiné(s)).`,
+        )
+        await charger()
+      } else if (r.statut === 'non-connecte') {
+        setMessage('Gmail n’est pas connecté — Paramètres → Branchements → Ingestion serveur.')
+      } else {
+        setMessage(`Scan : ${r.statut}.`)
+      }
+    } catch (err) {
+      setMessage(`Scan impossible : ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      setOccupe('')
+    }
+  }
+
+  return (
+    <Card
+      titre="Arrivées automatiques — pièces jointes Gmail"
+      actions={
+        liste !== null ? (
+          <>
+            <Btn small disabled={occupe === 'scan'} onClick={() => void scanner()}>
+              {occupe === 'scan' ? 'Scan en cours…' : 'Scanner maintenant'}
+            </Btn>
+            <Btn small kind="ghost" onClick={() => void charger()}>Actualiser</Btn>
+          </>
+        ) : undefined
+      }
+    >
+      {liste === null ? (
+        <p className="small muted" style={{ margin: 0 }}>
+          Le serveur de l'agence lit les pièces jointes Gmail toutes les 10 minutes et les propose ici,
+          déjà classées avec leurs raisons. Pour l'activer : connectez l'espace partagé puis l'ingestion
+          Gmail dans <a href="#/sante">Paramètres → Branchements</a>.
+        </p>
+      ) : liste.length === 0 ? (
+        <EmptyState>Rien en attente côté serveur — le scan tourne toutes les 10 minutes.</EmptyState>
+      ) : (
+        liste.map((e) => {
+          const c = choix[e.id] || { projetId: '', categorie: 'AUTRE', dossier: '00_ADMIN' }
+          const projet = state.projets.find((p) => p.id === c.projetId)
+          return (
+            <div key={e.id} style={{ border: '1px solid var(--line)', borderRadius: 6, padding: 10, marginBottom: 10 }}>
+              <p className="small" style={{ margin: '0 0 2px' }}>
+                <strong className="mono">{e.nomFichier}</strong>{' '}
+                {e.confiance != null && <BadgeConfiance confiance={e.confiance} />}
+              </p>
+              <p className="small muted" style={{ margin: '0 0 6px' }}>
+                {e.expediteur} · « {e.objet} » · {fmtDate(e.recuLe.slice(0, 10))}
+              </p>
+              {e.raisons.length > 0 && (
+                <details className="small" style={{ marginBottom: 6 }}>
+                  <summary>Voir pourquoi cette proposition</summary>
+                  <ul style={{ margin: '4px 0 0 18px' }}>
+                    {e.raisons.map((r, i) => (
+                      <li key={i}>{r}</li>
+                    ))}
+                  </ul>
+                </details>
+              )}
+              <div className="form-row" style={{ alignItems: 'flex-end' }}>
+                <Field label="Projet">
+                  <Select
+                    value={c.projetId}
+                    onChange={(v) => majChoix(e.id, { projetId: v })}
+                    options={[
+                      { value: '', label: '— choisir un projet —' },
+                      ...projetsActifs.map((p) => ({ value: p.id, label: `${p.id} — ${p.nom}` })),
+                    ]}
+                  />
+                </Field>
+                <Field label="Catégorie">
+                  <Select
+                    value={c.categorie}
+                    onChange={(v) => majChoix(e.id, { categorie: v })}
+                    options={CATEGORIES_DOC.map((x) => ({ value: x, label: x }))}
+                  />
+                </Field>
+                <Field label="Sous-dossier">
+                  <Select
+                    value={c.dossier}
+                    onChange={(v) => majChoix(e.id, { dossier: v })}
+                    options={ARBORESCENCE.map((a) => ({ value: a.dossier, label: a.dossier }))}
+                  />
+                </Field>
+              </div>
+              <div className="toolbar" style={{ marginTop: 6, marginBottom: 0 }}>
+                <Btn small kind="primary" disabled={!projet || occupe === e.id} onClick={() => void classer(e)}>
+                  {occupe === e.id
+                    ? 'Classement…'
+                    : projet
+                      ? `Classer dans ${projet.id} › ${c.dossier}`
+                      : 'Classer (choisir un projet)'}
+                </Btn>
+                <Btn small kind="ghost" onClick={() => void rejeter(e)}>
+                  Rejeter
+                </Btn>
+              </div>
+            </div>
+          )
+        })
+      )}
+      {message && <p className="small" style={{ marginTop: 8 }}>{message}</p>}
+    </Card>
+  )
+}
+
+/** journalise la provenance mail sur le document (dans le producteur) */
+function ajouterEvenementMail(doc: DocumentRecord, e: EntrantDistant): void {
+  doc.evenements.push({
+    date: todayISO(),
+    type: 'source',
+    detail: `Pièce jointe Gmail — de ${e.expediteur}, objet « ${e.objet} ».`,
+  })
+}
 
 // ============================================================
 // Boîte d'arrivée — fichiers à classer (dépôt ou _A_CLASSER)
@@ -556,7 +808,12 @@ export default function Documents() {
         actif={tab}
         onSelect={(id) => navigate(`/documents/${id}`)}
       />
-      {tab === 'entrants' && <CarteEntrants />}
+      {tab === 'entrants' && (
+        <>
+          <CarteArriveesServeur />
+          <CarteEntrants />
+        </>
+      )}
       {tab === 'verifier' && <CarteAVerifier />}
       {tab === 'tous' && <CarteTous />}
     </Page>

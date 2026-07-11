@@ -70,6 +70,13 @@ export function syncActif(): boolean {
   return client !== null && session !== null
 }
 
+/** client Supabase courant (null tant que la session n'est pas ouverte) —
+ *  pour les modules qui portent leurs propres tables (boîte d'arrivée
+ *  partagée, fonctions d'ingestion). L'accès reste verrouillé par RLS. */
+export function clientSupabase(): SupabaseClient | null {
+  return syncActif() ? client : null
+}
+
 export function syncEtat(): {
   connecte: boolean
   email: string | null

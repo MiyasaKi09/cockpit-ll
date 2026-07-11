@@ -2,7 +2,7 @@
 // import mensuel des totaux de l'Excel maître (source de vérité
 // financière la première année), sauvegarde/restauration JSON.
 
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { AppState, ModeRemu, StatutRemu, TypeMO } from '../types'
 import { useStore } from '../store'
 import { seedState } from '../seed'
@@ -29,7 +29,8 @@ import {
 import { download, fmtDate, fmtMoney, fmtPct, fold, todayISO, uid } from '../util'
 import { coefSuggere, coutAgenceAnnuel, coutAnnuelPersonne, coutHorairePersonne, coutHoraireMoyen, coutJourObjectif, objectifCA, tauxVente, tauxVenteObjectif } from '../derive'
 import { connecterGoogle, deconnecter, estConnecte } from '../google'
-import { connecterSync, deconnecterSync, envoyerLienMagique, pousserEtat, syncEtat, tirerEtat } from '../sync'
+import { connecterSync, deconnecterSync, envoyerLienMagique, pousserEtat, syncActif, syncEtat, tirerEtat } from '../sync'
+import { deconnecterIngestion, lireStatutIngestion, majConfigIngestion, type StatutIngestion } from '../entrants'
 import { SanteContenu } from './Sante'
 import { BienDemarrerContenu } from './BienDemarrer'
 
@@ -225,6 +226,138 @@ function CarteSurveillance() {
           <li>Copiez l’ID client ci-dessus, « Connecter Google », choisissez le compte : c’est fini.</li>
         </ol>
       </details>
+    </Card>
+  )
+}
+
+/** Ingestion Gmail côté serveur — l'agence reçoit ses pièces jointes
+ *  dans la boîte d'arrivée même onglet fermé (Edge Functions Supabase).
+ *  Les identifiants OAuth vivent dans une table privée côté serveur :
+ *  ils ne passent ici qu'au moment de l'enregistrement, jamais relus. */
+function CarteIngestionServeur() {
+  const [statut, setStatut] = useState<StatutIngestion | null>(null)
+  const [message, setMessage] = useState('')
+  const [clientId, setClientId] = useState('')
+  const [clientSecret, setClientSecret] = useState('')
+  const [compteEmail, setCompteEmail] = useState('')
+  const [occupe, setOccupe] = useState(false)
+
+  const charger = async () => {
+    if (!syncActif()) {
+      setStatut(null)
+      return
+    }
+    try {
+      const s = await lireStatutIngestion()
+      setStatut(s)
+      if (s) setCompteEmail((prev) => prev || s.compteEmail)
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  useEffect(() => {
+    void charger()
+    const t = setTimeout(() => void charger(), 2500) // la session s'ouvre en asynchrone
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const enregistrer = async () => {
+    setOccupe(true)
+    setMessage('')
+    try {
+      await majConfigIngestion({ clientId: clientId.trim(), clientSecret: clientSecret.trim(), compteEmail: compteEmail.trim() })
+      setClientSecret('')
+      setMessage('Identifiants enregistrés côté serveur — cliquez « Connecter Gmail ».')
+      await charger()
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : String(e))
+    } finally {
+      setOccupe(false)
+    }
+  }
+
+  const deconnecterGmail = async () => {
+    if (!(await confirmer('Déconnecter Gmail ? Le scan serveur s’arrête (les pièces déjà proposées restent).'))) return
+    try {
+      await deconnecterIngestion()
+      await charger()
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  return (
+    <Card titre="Ingestion serveur — pièces jointes Gmail → boîte d'arrivée">
+      <p className="small muted" style={{ marginBottom: 10 }}>
+        Contrairement à la surveillance ci-dessus (onglet ouvert), l'ingestion tourne <strong>côté
+        serveur toutes les 10 minutes</strong> : chaque pièce jointe reçue est proposée dans{' '}
+        <a href="#/documents">Documents → Boîte d'arrivée</a>, pré-classée avec ses raisons. Lecture
+        seule, rien n'est classé sans validation, et les identifiants restent côté serveur (jamais
+        dans les données partagées).
+      </p>
+      {!syncActif() ? (
+        <p className="small">
+          <Badge tone="warn">espace partagé non connecté</Badge> — connectez d'abord la synchronisation
+          ci-dessus (l'ingestion s'appuie sur le même projet Supabase).
+        </p>
+      ) : statut === null ? (
+        <p className="small muted">Lecture du statut…</p>
+      ) : (
+        <>
+          <p className="small" style={{ marginBottom: 8 }}>
+            {statut.connecte ? (
+              <Badge tone="ok">Gmail connecté — {statut.compteEmail}</Badge>
+            ) : statut.configure ? (
+              <Badge tone="warn">identifiants en place — Gmail pas encore connecté</Badge>
+            ) : (
+              <Badge tone="muted">pas encore configuré</Badge>
+            )}
+            {statut.dernierScan && (
+              <span className="muted"> · dernier scan {fmtDate(statut.dernierScan.slice(0, 10))}</span>
+            )}
+            {statut.dernierResultat && <span className="muted"> · {statut.dernierResultat}</span>}
+          </p>
+          <div className="form-row">
+            <Field label="Compte Gmail à lire" hint="seul ce compte pourra se connecter">
+              <TextInput value={compteEmail} onChange={setCompteEmail} placeholder="agence.ll@gmail.com" />
+            </Field>
+            <Field label="Client ID Google (OAuth)" hint="le même que la surveillance ci-dessus">
+              <TextInput value={clientId} onChange={setClientId} placeholder="1234…apps.googleusercontent.com" />
+            </Field>
+            <Field label="Secret client" hint="enregistré côté serveur, jamais relu ici">
+              <TextInput value={clientSecret} onChange={setClientSecret} type="password" placeholder="GOCSPX-…" />
+            </Field>
+          </div>
+          <div className="toolbar" style={{ marginTop: 8, marginBottom: 0, flexWrap: 'wrap' }}>
+            <Btn small kind="primary" disabled={occupe || !compteEmail.trim() || (!statut.configure && (!clientId.trim() || !clientSecret.trim()))} onClick={() => void enregistrer()}>
+              Enregistrer côté serveur
+            </Btn>
+            {statut.configure && (
+              <a className="btn btn-small" href={statut.urlOauth} target="_blank" rel="noreferrer">
+                {statut.connecte ? 'Reconnecter Gmail' : 'Connecter Gmail'}
+              </a>
+            )}
+            {statut.connecte && (
+              <Btn small onClick={() => void deconnecterGmail()}>Déconnecter Gmail</Btn>
+            )}
+            <Btn small kind="ghost" onClick={() => void charger()}>Actualiser</Btn>
+          </div>
+          <details style={{ marginTop: 10 }}>
+            <summary className="small" style={{ cursor: 'pointer', color: 'var(--accent)' }}>
+              Guide : compléter le Client ID Google pour l'ingestion (une fois)
+            </summary>
+            <ol className="small" style={{ margin: '8px 0 0', paddingLeft: 18, lineHeight: 1.8 }}>
+              <li>console.cloud.google.com → « Identifiants » → ouvrez l'ID client OAuth déjà créé pour la surveillance (ou créez-en un, type « Application Web »).</li>
+              <li>Dans <strong>« URI de redirection autorisés »</strong>, ajoutez : <code style={{ userSelect: 'all' }}>{statut.urlOauth}</code></li>
+              <li>Copiez l'<strong>ID client</strong> et le <strong>secret client</strong> (bouton « Afficher le secret ») dans les champs ci-dessus, « Enregistrer côté serveur ».</li>
+              <li>« Connecter Gmail » : choisissez le compte à lire ({compteEmail || 'celui renseigné ci-dessus'}) et acceptez la lecture seule. C'est fini — premier scan sous 10 minutes.</li>
+            </ol>
+          </details>
+        </>
+      )}
+      {message && <p className="small" style={{ marginTop: 8 }}>{message}</p>}
     </Card>
   )
 }
@@ -806,6 +939,7 @@ export default function Parametres({ ongletInitial = 'agence' }: { ongletInitial
         <>
       <CarteSurveillance />
       <CarteSync />
+      <CarteIngestionServeur />
       <SanteContenu />
         </>
       )}

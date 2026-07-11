@@ -59,9 +59,39 @@ import {
   type FSDirHandle,
   type FSFileHandle,
 } from '../fsdrive'
+import { ajouterEvenement, creerDocument, empreinteSha256, enregistrerDocument } from '../registre'
 
 /** sous-dossier normalisé du DCE dans l'arborescence projet */
 const DOSSIER_DCE = '04_PRO-DCE'
+
+/** descripteur du fichier analysé — de quoi créer l'entrée du registre
+ *  documentaire au moment de l'import (validation humaine) */
+interface FichierSource {
+  nomOriginal: string
+  /** chemin dans le Drive quand le fichier y est (ou vient d'y être rangé) */
+  chemin?: string
+  empreinte: string
+  taille: number
+  typeMime?: string
+  source: 'drive' | 'depot'
+}
+
+/** entrée de registre prête à pousser pour le fichier analysé (calculée
+ *  AVANT la mutation — le producteur clonera pour rester rejouable) */
+function documentDepuisSource(p: Projet, f: FichierSource, categorie: string) {
+  return creerDocument({
+    titre: f.chemin?.split('/').pop() || f.nomOriginal,
+    nomOriginal: f.nomOriginal,
+    source: f.source,
+    categorie,
+    typeMime: f.typeMime,
+    taille: f.taille,
+    empreinteSha256: f.empreinte || undefined,
+    cheminDrive: f.chemin,
+    projetId: p.id,
+    statut: 'exploite', // les données extraites entrent au DCE/planning
+  })
+}
 
 /** numéro de lot normalisé : « 2 » et « 02 » désignent le même lot */
 function numeroNormalise(n: string): string {
@@ -85,11 +115,13 @@ function ModalApercu({
   projet: p,
   lots,
   source,
+  fichierSource,
   onClose,
 }: {
   projet: Projet
   lots: LotApercu[]
   source: 'analyse' | 'claude'
+  fichierSource?: FichierSource
   onClose: () => void
 }) {
   const { state, update, replace } = useStore()
@@ -128,8 +160,20 @@ function ModalApercu({
       dejaAuPlanning.push(...res.taches)
       if (res.sansDate) sansDate = true
     }
+    const docPret = fichierSource ? documentDepuisSource(p, fichierSource, 'CCTP') : null
     update((d) => {
-      d.lotsDce.push(...nouveauxLots)
+      // registre : le clone garde le producteur rejouable (docPret intact),
+      // et enregistrerDocument dédoublonne par empreinte dans le brouillon
+      let docId: string | null = null
+      if (docPret) {
+        const res = enregistrerDocument(d, structuredClone(docPret))
+        if (res.doublon) {
+          res.doc.statut = 'exploite'
+          ajouterEvenement(res.doc, 'action', `Ré-analysé : ${nouveauxLots.length} lot(s) importé(s) au DCE.`)
+        }
+        docId = res.doc.id
+      }
+      d.lotsDce.push(...nouveauxLots.map((l) => ({ ...l, cctpDocumentId: docId })))
       d.tachesChantier.push(...nouvellesTaches)
     })
     toast(
@@ -220,7 +264,11 @@ function CarteImportCCTP({ projet: p }: { projet: Projet }) {
   const [message, setMessage] = useState('')
   const [rangerAuDrive, setRangerAuDrive] = useState(true)
   const [retourClaude, setRetourClaude] = useState('')
-  const [apercu, setApercu] = useState<{ lots: LotApercu[]; source: 'analyse' | 'claude' } | null>(null)
+  const [apercu, setApercu] = useState<{
+    lots: LotApercu[]
+    source: 'analyse' | 'claude'
+    fichierSource?: FichierSource
+  } | null>(null)
 
   useEffect(() => {
     if (supporteFS) void lireRacine().then(setRacine)
@@ -258,10 +306,16 @@ function CarteImportCCTP({ projet: p }: { projet: Projet }) {
         fold(x.intitule) === fold(l.intitule),
     )
 
-  const ouvrirApercu = (lots: LotAnalyse[], source: 'analyse' | 'claude', fichier?: string) => {
+  const ouvrirApercu = (
+    lots: LotAnalyse[],
+    source: 'analyse' | 'claude',
+    fichier?: string,
+    fichierSource?: FichierSource,
+  ) => {
     const marches = state.marches.filter((m) => m.projetId === p.id)
     setApercu({
       source,
+      fichierSource,
       lots: lots.map((l) => {
         const deja = dejaImporte(l)
         return {
@@ -296,13 +350,20 @@ function CarteImportCCTP({ projet: p }: { projet: Projet }) {
       let chemin = cheminDrive
       if (!chemin && rangerAuDrive && racine) {
         try {
-          chemin = await rangerFichier(racine, p, DOSSIER_DCE, file, nomConforme(p, 'CCTP', '', file.name))
+          chemin = (await rangerFichier(racine, p, DOSSIER_DCE, file, nomConforme(p, 'CCTP', '', file.name))).chemin
           await scanner()
         } catch {
           // rangement impossible (permission) : l'analyse reste valable
         }
       }
-      ouvrirApercu(lots, 'analyse', chemin || file.name)
+      ouvrirApercu(lots, 'analyse', chemin || file.name, {
+        nomOriginal: file.name,
+        chemin,
+        empreinte: await empreinteSha256(file),
+        taille: file.size,
+        typeMime: file.type || undefined,
+        source: cheminDrive ? 'drive' : 'depot',
+      })
     } catch (e) {
       setMessage(`Analyse impossible : ${e instanceof Error ? e.message : String(e)}`)
     } finally {
@@ -448,6 +509,7 @@ function CarteImportCCTP({ projet: p }: { projet: Projet }) {
           projet={p}
           lots={apercu.lots}
           source={apercu.source}
+          fichierSource={apercu.fichierSource}
           onClose={() => setApercu(null)}
         />
       )}
@@ -469,10 +531,12 @@ interface DpgfApercu extends DpgfAnalyse {
 function ModalApercuDpgf({
   projet: p,
   lots,
+  fichierSource,
   onClose,
 }: {
   projet: Projet
   lots: DpgfApercu[]
+  fichierSource?: FichierSource
   onClose: () => void
 }) {
   const { state, update, replace } = useStore()
@@ -525,12 +589,25 @@ function ModalApercuDpgf({
         if (res.sansDate) sansDate = true
       }
     }
+    const docPret = fichierSource ? documentDepuisSource(p, fichierSource, 'DPGF') : null
     update((d) => {
+      // registre : clone → producteur rejouable ; dédoublonnage par empreinte
+      let docId: string | null = null
+      if (docPret) {
+        const res = enregistrerDocument(d, structuredClone(docPret))
+        if (res.doublon) {
+          res.doc.statut = 'exploite'
+          ajouterEvenement(res.doc, 'action', 'Ré-analysé : chiffrage DPGF ré-importé.')
+        }
+        docId = res.doc.id
+      }
       for (const c of chiffrages) {
         const lot = d.lotsDce.find((x) => x.id === c.lotId)
-        if (lot) lot.dpgf = c.dpgf
+        if (lot) lot.dpgf = { ...c.dpgf, documentId: docId }
       }
-      d.lotsDce.push(...nouveauxLots)
+      d.lotsDce.push(
+        ...nouveauxLots.map((l) => ({ ...l, dpgf: l.dpgf ? { ...l.dpgf, documentId: docId } : l.dpgf })),
+      )
       d.tachesChantier.push(...nouvellesTaches)
     })
     const morceaux = [
@@ -706,7 +783,7 @@ function CarteDpgf({ projet: p }: { projet: Projet }) {
   const [message, setMessage] = useState('')
   const [rangerAuDrive, setRangerAuDrive] = useState(true)
   const [retourClaude, setRetourClaude] = useState('')
-  const [apercu, setApercu] = useState<DpgfApercu[] | null>(null)
+  const [apercu, setApercu] = useState<{ lots: DpgfApercu[]; fichierSource?: FichierSource } | null>(null)
 
   useEffect(() => {
     if (supporteFS) void lireRacine().then(setRacine)
@@ -732,17 +809,18 @@ function CarteDpgf({ projet: p }: { projet: Projet }) {
     void scanner()
   }, [scanner])
 
-  const ouvrirApercu = (lots: DpgfAnalyse[], fichier?: string) => {
+  const ouvrirApercu = (lots: DpgfAnalyse[], fichier?: string, fichierSource?: FichierSource) => {
     const lotsProjet = state.lotsDce.filter((l) => l.projetId === p.id)
-    setApercu(
-      lots.map((l) => {
+    setApercu({
+      fichierSource,
+      lots: lots.map((l) => {
         // rattachement automatique au lot DCE de même numéro / intitulé
         const cible =
           lotsProjet.find((x) => l.numero && numeroNormalise(x.numero) === numeroNormalise(l.numero)) ||
           lotsProjet.find((x) => fold(x.intitule) === fold(l.intitule))
         return { ...l, inclus: true, lotId: cible?.id || '', fichier }
       }),
-    )
+    })
   }
 
   const analyserFichier = async (file: File, cheminDrive?: string) => {
@@ -765,13 +843,20 @@ function CarteDpgf({ projet: p }: { projet: Projet }) {
       let chemin = cheminDrive
       if (!chemin && rangerAuDrive && racine) {
         try {
-          chemin = await rangerFichier(racine, p, DOSSIER_DCE, file, nomConforme(p, 'DPGF', '', file.name))
+          chemin = (await rangerFichier(racine, p, DOSSIER_DCE, file, nomConforme(p, 'DPGF', '', file.name))).chemin
           await scanner()
         } catch {
           // rangement impossible (permission) : l'analyse reste valable
         }
       }
-      ouvrirApercu(lots, chemin || file.name)
+      ouvrirApercu(lots, chemin || file.name, {
+        nomOriginal: file.name,
+        chemin,
+        empreinte: await empreinteSha256(file),
+        taille: file.size,
+        typeMime: file.type || undefined,
+        source: cheminDrive ? 'drive' : 'depot',
+      })
     } catch (e) {
       setMessage(`Analyse impossible : ${e instanceof Error ? e.message : String(e)}`)
     } finally {
@@ -906,7 +991,14 @@ function CarteDpgf({ projet: p }: { projet: Projet }) {
         </div>
       </details>
 
-      {apercu && <ModalApercuDpgf projet={p} lots={apercu} onClose={() => setApercu(null)} />}
+      {apercu && (
+        <ModalApercuDpgf
+          projet={p}
+          lots={apercu.lots}
+          fichierSource={apercu.fichierSource}
+          onClose={() => setApercu(null)}
+        />
+      )}
     </Card>
   )
 }

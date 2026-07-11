@@ -6,7 +6,7 @@
 // pourquoi — pour qu'on puisse VOIR que ça marche.
 // ============================================================
 
-import { useEffect, useState } from 'react'
+import { createContext, useContext, useEffect, useState } from 'react'
 import type { AppState } from './types'
 import { estConnecte, listerEvenements, listerMailsRecents, mailsDejaVus, marquerVus } from './google'
 import type { EvenementAgenda } from './google'
@@ -148,4 +148,19 @@ export function useSurveillance(state: AppState, update: (fn: (draft: AppState) 
   }, [sv?.email, sv?.clientId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return { evenements, direct }
+}
+
+// ---------- contexte applicatif : la surveillance vit à la RACINE ----------
+// (elle tourne quel que soit l'écran affiché, pas seulement sur le Cockpit ;
+//  App.tsx monte useSurveillance une fois et publie le résultat ici)
+
+export interface EtatSurveillance {
+  evenements: EvenementAgenda[]
+  direct: boolean
+}
+
+export const SurveillanceCtx = createContext<EtatSurveillance>({ evenements: [], direct: false })
+
+export function useSurveillanceCtx(): EtatSurveillance {
+  return useContext(SurveillanceCtx)
 }

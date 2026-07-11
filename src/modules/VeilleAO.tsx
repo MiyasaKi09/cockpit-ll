@@ -542,12 +542,17 @@ function BlocReponse({ c }: { c: Consultation }) {
       const racine = await lireRacine()
       if (racine) {
         try {
-          const chemin = await ecrireFichierRacine(
+          const { chemin, dejaPresent } = await ecrireFichierRacine(
             racine,
             '0_CANDIDATURES',
             new File([blob], nom, { type: blob.type }),
           )
-          setMessage({ ok: true, texte: `Dossier écrit dans le Drive : ${chemin} — à relire et compléter.` })
+          setMessage({
+            ok: true,
+            texte: dejaPresent
+              ? `Déjà dans le Drive à l'identique : ${chemin} — rien n'a été réécrit.`
+              : `Dossier écrit dans le Drive : ${chemin} — à relire et compléter.`,
+          })
           setEnCours(false)
           return
         } catch {

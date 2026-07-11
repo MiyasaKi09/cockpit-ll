@@ -16,7 +16,7 @@ import { Btn, Card, DateF, EmptyState, Icon, Money, Page, RowMenu, Stat, confirm
 import { alertesActives } from '../alerts'
 import { STATUTS_ACTIFS, caCible, caRealiseAnnee, meteoFinanciere } from '../derive'
 import { addDays, fmtDate, fmtMoney, fmtPct, ouvrirGmail } from '../util'
-import { useSurveillance } from '../surveillance'
+import { useSurveillanceCtx } from '../surveillance'
 
 // ---------- petits composants locaux ----------
 
@@ -516,7 +516,8 @@ function CentreActions() {
 export default function Cockpit() {
   const { state, update } = useStore()
   const today = useToday()
-  const { evenements } = useSurveillance(state, update)
+  // la surveillance tourne à la racine de l'app (INT-02) — ici on ne fait que lire
+  const { evenements } = useSurveillanceCtx()
   const dateFR = today.split('-').reverse().join('.')
 
   const meteo = meteoFinanciere(state, today)

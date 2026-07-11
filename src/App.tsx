@@ -6,6 +6,7 @@ import { ConfirmHost, Icon, ToastHost, useRoute, useToday } from './ui'
 import { alertesActives } from './alerts'
 import { basculerTheme, themeCourant } from './theme'
 import { syncActif } from './sync'
+import { SurveillanceCtx, useSurveillance } from './surveillance'
 import { diffDays } from './util'
 import type { AppState } from './types'
 
@@ -24,6 +25,7 @@ import Ressources from './modules/Ressources'
 import Agenda from './modules/Agenda'
 import Parametres from './modules/Parametres'
 import Planning from './modules/Planning'
+import Documents from './modules/Documents'
 import { AssistantPage } from './modules/Assistant'
 
 // Le moteur temps → marge → facturation est l'interface : six écrans
@@ -34,6 +36,7 @@ const NAV: { groupe: string; sec?: boolean; items: { path: string; label: string
     items: [
       { path: '', label: 'Cockpit' },
       { path: 'projets', label: 'Projets' },
+      { path: 'documents', label: 'Documents' },
       { path: 'temps', label: 'Temps' },
       { path: 'facturation', label: 'Factures' },
       { path: 'analyse', label: 'Analyse €/jour' },
@@ -72,8 +75,11 @@ function statutDonnees(state: AppState, today: string): string {
 
 export default function App() {
   const route = useRoute()
-  const { state } = useStore()
+  const { state, update } = useStore()
   const today = useToday()
+  // INT-02 : la surveillance Gmail/Agenda tourne à la racine — elle continue
+  // de capter les mails quel que soit l'écran affiché (le Cockpit ne fait que lire)
+  const surveillance = useSurveillance(state, update)
   const nbAlertes = alertesActives(state, today).filter((a) => a.gravite >= 2).length
   const [theme, setTheme] = useState(themeCourant())
   const [rechercheOuverte, setRechercheOuverte] = useState(false)
@@ -166,12 +172,15 @@ export default function App() {
     case 'assistant':
       page = <AssistantPage />
       break
+    case 'documents':
+      page = <Documents />
+      break
     default:
       page = <Cockpit />
   }
 
   return (
-    <>
+    <SurveillanceCtx.Provider value={surveillance}>
     <header className="topbar">
       <button className="topbar-burger" onClick={() => setNavOuverte(true)} title="Ouvrir le menu" aria-label="Ouvrir le menu">
         <Icon name="menu" size={19} />
@@ -228,6 +237,6 @@ export default function App() {
     {rechercheOuverte && <RechercheOverlay onClose={() => setRechercheOuverte(false)} />}
     <ToastHost />
     <ConfirmHost />
-    </>
+    </SurveillanceCtx.Provider>
   )
 }

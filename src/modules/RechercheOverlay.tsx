@@ -10,6 +10,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../store'
 import type { AppState } from '../types'
 import { navigate } from '../ui'
+import { LIBELLES_STATUT } from '../registre'
 import { fmtDate, fmtMoney, fold } from '../util'
 
 interface Resultat {
@@ -67,6 +68,18 @@ function chercher(state: AppState, q: string): Resultat[] {
         titre: `${p.id} — ${p.nom}`,
         detail: [p.moa, p.statut].filter(Boolean).join(' · '),
         lien: `#/projets/${p.id}`,
+      })
+  }
+
+  for (const d of state.registreDocuments) {
+    if (d.statut === 'rejete') continue
+    if (hit(d.titre, d.nomOriginal, d.cheminDrive, d.categorie))
+      res.push({
+        groupe: 'Documents',
+        titre: d.titre,
+        detail: [d.categorie, `v${d.version}`, LIBELLES_STATUT[d.statut]].join(' · '),
+        lien: '#/documents/tous',
+        projets: d.projetId ? [d.projetId] : undefined,
       })
   }
 

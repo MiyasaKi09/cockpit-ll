@@ -9,7 +9,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { NoteJournal, Projet } from '../types'
 import { useStore } from '../store'
 import { suggererTags, taggerImage } from '../tagging'
-import { lireRacine, nomConforme, rangerFichier, supporteFS } from '../fsdrive'
+import { lireRacine, nomConforme, rangerFichier, supporteFS, type ResultatRangement } from '../fsdrive'
+import { creerDocument, empreinteSha256, enregistrerDocument } from '../registre'
 import { Badge, Btn, Card, CopyBtn, EmptyState, Select, TextArea, TextInput, confirmer, toast } from '../ui'
 import { fmtDate, fold, todayISO, uid } from '../util'
 
@@ -92,26 +93,45 @@ export default function ProjetJournal({ projet: p }: { projet: Projet }) {
     setEtatImage('Analyse de la photo…')
     try {
       const { tags, via } = await taggerImage(file, setEtatImage)
-      let chemin: string | undefined
+      let rangement: ResultatRangement | null = null
       if (supporteFS) {
         const racine = await lireRacine()
         if (racine) {
           setEtatImage('Rangement dans le Drive (10_PHOTOS)…')
           try {
-            chemin = await rangerFichier(racine, p, '10_PHOTOS', file, nomConforme(p, 'PHOTO', '', file.name))
+            rangement = await rangerFichier(racine, p, '10_PHOTOS', file, nomConforme(p, 'PHOTO', '', file.name))
           } catch {
-            chemin = undefined
+            rangement = null
           }
         }
       }
-      maj((pr) => {
-        pr.journal.push({
-          id: uid('note'),
+      const chemin = rangement?.chemin
+      // registre documentaire : la photo devient traçable (calculée AVANT
+      // la mutation — le producteur clone pour rester rejouable)
+      const docPret = creerDocument({
+        titre: rangement?.nomFinal || file.name,
+        nomOriginal: file.name,
+        source: 'depot',
+        categorie: 'PHOTO',
+        typeMime: file.type || undefined,
+        taille: file.size,
+        empreinteSha256: rangement?.empreinte || (await empreinteSha256(file)) || undefined,
+        cheminDrive: chemin,
+        projetId: p.id,
+        statut: 'classe',
+      })
+      const noteId = uid('note')
+      update((d) => {
+        const { doc } = enregistrerDocument(d, structuredClone(docPret))
+        const pr = d.projets.find((x) => x.id === p.id)
+        pr?.journal.push({
+          id: noteId,
           date: todayISO(),
           auteur: auteur || undefined,
           texte: `Photo — ${file.name}${chemin ? `\nRangée : ${chemin}` : '\n(non rangée : configurez le Drive dans l’onglet Documents pour le rangement automatique)'}`,
           tags,
           fichier: chemin,
+          documentIds: [doc.id],
         })
       })
       setEtatImage(

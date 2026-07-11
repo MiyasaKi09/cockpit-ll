@@ -336,6 +336,9 @@ export interface TempsHorsProjet {
   personne: string
   categorie: string
   heures: number
+  /** dossier de poursuite rattaché (catégorie « Prospection / AO ») —
+   *  donne le coût réel de chaque réponse (audit V3, Lot 4) */
+  consultationId?: string | null
 }
 
 /** le montant saisi est-il le brut ou le net versé ? */
@@ -419,6 +422,8 @@ export interface Contact {
   id: string
   nom: string
   organisme?: string
+  /** organisation canonique (CRM acheteurs) — l'organisme libre reste pour l'affichage */
+  organisationId?: string | null
   role?: string
   type: TypeContact
   email?: string
@@ -489,6 +494,82 @@ export interface Consultation {
   /** date ISO du dernier changement d'étape — pour le vieillissement des cartes */
   dernierMouvement?: string
   notes?: string
+  // --- V3 développement : source structurée + cycle de vie de l'avis ---
+  /** identifiant côté source (idweb BOAMP, numéro TED…) */
+  sourceId?: string
+  /** lien officiel de l'avis */
+  sourceUrl?: string
+  /** appel d'offres classique ou concours (parcours différents) */
+  typeAvis?: 'marche' | 'concours'
+  /** rectificatifs, reports, annulations, résultats — JAMAIS des doublons */
+  evenements?: { date: string; type: string; detail?: string }[]
+  // --- V3 Lots 3/4/5 : dossier de poursuite, concours, CRM ---
+  /** checklist dynamique du dossier — chaque exigence garde sa source */
+  exigences?: ExigenceDossier[]
+  /** partenaires de groupement (BET, paysagiste…) pressentis ou confirmés */
+  partenaires?: PartenaireDossier[]
+  /** volet concours (typeAvis = 'concours') : étapes, prime, jury, livrables */
+  concours?: VoletConcours
+  /** honoraires ou prime attendus si l'affaire est gagnée (valeur attendue) */
+  honorairesEstimes?: number | null
+  /** organisation acheteuse canonique (CRM) */
+  organisationId?: string | null
+}
+
+// --- V3 Lot 3 : dossier de poursuite ---
+
+export type CategorieExigence =
+  | 'admin' | 'capacites' | 'equipe' | 'technique' | 'financiere' | 'depot' | 'controle'
+
+export type StatutExigence = 'a_faire' | 'en_cours' | 'fait' | 'sans_objet'
+
+/** un élément de la checklist dynamique du dossier — jamais générique :
+ *  chaque exigence dit d'où elle vient (base agence, RC collé, manuel) */
+export interface ExigenceDossier {
+  id: string
+  categorie: CategorieExigence
+  texte: string
+  /** provenance : 'base agence' · 'RC : « extrait »' · 'manuel' */
+  source: string
+  /** une exigence obligatoire non faite bloque « prêt à déposer » */
+  obligatoire: boolean
+  statut: StatutExigence
+  responsable?: string
+  echeance?: string | null
+  /** document du registre qui satisfait l'exigence */
+  documentId?: string | null
+}
+
+/** partenaire du groupement (BET structure, fluides, paysagiste, économiste…) */
+export interface PartenaireDossier {
+  id: string
+  nom: string
+  role: string
+  statut: 'pressenti' | 'confirme'
+}
+
+// --- V3 Lot 4 : parcours concours (distinct de l'AO classique) ---
+
+export type EtapeConcours =
+  | 'candidature'          // dossier de candidature en préparation
+  | 'candidature_deposee'  // en attente de la sélection
+  | 'selectionne'          // admis à concourir → production du projet
+  | 'non_selectionne'      // arrêt (résultat de la phase 1)
+  | 'rendu'                // projet rendu, en attente du jury
+  | 'jury'                 // jury passé, en attente du classement
+
+export interface VoletConcours {
+  etape: EtapeConcours
+  /** nombre de candidats admis à concourir (souvent 3 ou 4) */
+  nbCandidats?: number | null
+  /** prime versée aux concurrents non lauréats (indemnité de concours) */
+  prime?: number | null
+  anonymat?: boolean
+  /** livrables demandés (planches, notice, maquette…) — du règlement */
+  livrables?: string
+  dateJury?: string | null
+  /** remise des candidatures (phase 1) — dateLimite porte l'échéance courante */
+  dateCandidature?: string | null
 }
 
 export type ContextePrompt = 'projet' | 'marche' | 'facture' | 'consultation' | 'libre'
@@ -604,6 +685,9 @@ export interface Settings {
     /** identifiant OAuth « Web » créé sur console.cloud.google.com (gratuit) */
     clientId: string
   }
+  /** décisions du Radar par identifiant d'avis : écartée ou surveillée
+   *  (partagées entre les 2 postes — l'un écarte, l'autre ne revoit pas) */
+  veilleDecisions?: Record<string, 'ignoree' | 'surveillee'>
   /** critères de la veille BOAMP intégrée (API DILA gratuite) */
   veilleBoamp?: {
     motsCles: string
@@ -675,6 +759,10 @@ export interface DocumentRecord {
   marcheId?: string | null
   lotDceId?: string | null
   reunionId?: string | null
+  /** dossier de poursuite (consultation) alimenté par ce document */
+  consultationId?: string | null
+  /** organisation acheteuse (CRM) */
+  organisationId?: string | null
   /** catégorie contrôlée (CCTP, DPGF, CR, SITU, PLAN, ADM, PHOTO…) */
   categorie: string
   sousType?: string
@@ -716,6 +804,41 @@ export interface Entreprise {
   notes?: string
 }
 
+// --- V3 Lot 5 : CRM organisations (clients & acheteurs) ---
+
+/** étape du pipeline RELATIONNEL — décrit la relation, pas une procédure
+ *  (il ne double pas le pipeline des consultations) */
+export type EtapeRelation =
+  | 'identifie'
+  | 'a_comprendre'
+  | 'relation_a_creer'
+  | 'relation_active'
+  | 'projet_potentiel'
+  | 'consultation_attendue'
+  | 'client'
+
+/** organisation CLIENTE ou ACHETEUSE (commune, EPCI, bailleur, promoteur…) —
+ *  le CRM passe du carnet de contacts au radar de relations (audit V3 §6.5).
+ *  Distincte d'`Entreprise` (les entreprises de travaux des chantiers). */
+export interface Organisation {
+  id: string
+  nom: string
+  /** Commune, EPCI, Bailleur social, État / établissement public, Privé… */
+  type?: string
+  siren?: string
+  /** territoire d'action (ville, département, région) */
+  territoire?: string
+  /** profil acheteur habituel (URL de la plateforme de dépôt) */
+  profilAcheteur?: string
+  relation: EtapeRelation
+  /** intérêt stratégique pour l'agence : 1 (faible) → 3 (prioritaire) */
+  interet?: 1 | 2 | 3
+  prochaineAction?: string
+  dateProchaineAction?: string | null
+  notes?: string
+  creeLe: string // ISO
+}
+
 export interface AppState {
   version: number
   settings: Settings
@@ -745,6 +868,8 @@ export interface AppState {
   registreDocuments: DocumentRecord[]
   /** entreprises canoniques (identité unique artisans/marchés/documents) */
   entreprises: Entreprise[]
+  /** organisations clientes / acheteuses — le CRM par client (audit V3) */
+  organisations: Organisation[]
 }
 
 /** document du corpus de l'assistant : texte réglementaire (Légifrance,

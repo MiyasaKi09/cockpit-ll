@@ -12,7 +12,7 @@ import { useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import type { Alerte } from '../types'
 import { useStore } from '../store'
-import { Btn, Card, DateF, EmptyState, Icon, Money, Page, RowMenu, Stat, confirmer, toast, useToday } from '../ui'
+import { Btn, Card, DateF, EmptyState, Icon, Modal, Money, Page, RowMenu, Stat, confirmer, toast, useToday } from '../ui'
 import { alertesActives } from '../alerts'
 import { STATUTS_ACTIFS, caCible, caRealiseAnnee, meteoFinanciere } from '../derive'
 import { addDays, fmtDate, fmtMoney, fmtPct, ouvrirGmail } from '../util'
@@ -304,6 +304,8 @@ function CentreActions() {
   const today = useToday()
   const [personne, setPersonne] = useState('')
   const [toutAfficher, setToutAfficher] = useState(false)
+  /** revue séquentielle : index dans `visibles` (null = fermée) */
+  const [revue, setRevue] = useState<number | null>(null)
 
   const horizon = addDays(today, 7)
 
@@ -472,6 +474,23 @@ function CentreActions() {
         </span>
       }
     >
+      {/* ---------- synthèse du jour + revue séquentielle ---------- */}
+      {(visibles.length > 0 || nbCourriers > 0) && (
+        <p className="small" style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', margin: '0 0 10px' }}>
+          <strong>
+            {visibles.length + nbCourriers} décision{visibles.length + nbCourriers > 1 ? 's' : ''} aujourd'hui
+          </strong>
+          <span className="muted">
+            · environ {visibles.reduce((s, i) => s + (i.gravite === 3 ? 4 : 2), 0) + nbCourriers * 2} min
+          </span>
+          {visibles.length > 0 && (
+            <Btn small kind="primary" onClick={() => setRevue(0)}>
+              Commencer — une décision à la fois
+            </Btn>
+          )}
+        </p>
+      )}
+
       {/* ---------- à faire ---------- */}
       <div style={{ ...STYLE_GROUPE, marginTop: 0 }}>À faire</div>
       <LigneCourrier personne={personne} />
@@ -507,6 +526,49 @@ function CentreActions() {
           {information.map(rendreAlerte)}
         </details>
       )}
+
+      {/* ---------- revue séquentielle : une décision à la fois ----------
+          quand un élément est traité, la liste se raccourcit : l'index
+          courant pointe alors tout seul sur la décision suivante */}
+      {revue !== null &&
+        (visibles.length === 0 ? (
+          <Modal titre="Revue terminée" onClose={() => setRevue(null)}>
+            <p>Tout est passé en revue — le centre d'actions est vide. 👏</p>
+            <div className="form-foot">
+              <Btn kind="primary" onClick={() => setRevue(null)}>Fermer</Btn>
+            </div>
+          </Modal>
+        ) : (
+          (() => {
+            const idx = Math.min(revue, visibles.length - 1)
+            return (
+              <Modal titre={`Décision ${idx + 1} / ${visibles.length}`} onClose={() => setRevue(null)}>
+                {rendreItem(visibles[idx])}
+                <p className="muted small" style={{ margin: '8px 0 0' }}>
+                  « Ouvrir et vérifier » ouvre la fiche dans cet onglet — la revue reprendra ici au retour.
+                  Les raccourcis retirent la décision de la file.
+                </p>
+                <div className="form-foot">
+                  <Btn onClick={() => setRevue(Math.max(0, idx - 1))} disabled={idx === 0}>
+                    ‹ Précédente
+                  </Btn>
+                  <Btn
+                    kind="primary"
+                    onClick={() => {
+                      if (idx + 1 < visibles.length) setRevue(idx + 1)
+                      else {
+                        setRevue(null)
+                        toast('Revue terminée — toutes les décisions ont été vues.', { tone: 'ok' })
+                      }
+                    }}
+                  >
+                    {idx + 1 < visibles.length ? 'Suivante ›' : 'Terminer'}
+                  </Btn>
+                </div>
+              </Modal>
+            )
+          })()
+        ))}
     </Card>
   )
 }

@@ -37,15 +37,19 @@ import { ligneActivable,
 } from '../ui'
 import type { Tone } from '../ui'
 import { PipelineContenu } from './Developpement'
+import { DossiersContenu } from './Dossiers'
+import { OrganisationsContenu } from './Organisations'
 import { ReferencesContenu } from './References'
-import { diffDays, fmtPct, fold, todayISO, uid } from '../util'
+import { diffDays, fmtPct, fold, todayISO, uid, fmtDate } from '../util'
 import { CRITERES_GO_NOGO, evaluerGoNoGo } from '../derive'
 import { assemble, contexteConsultation } from '../prompts'
 import { importerConsultations, parseRetourRoutine } from '../importRoutines'
 import type { RetourConsultation } from '../importRoutines'
-import { CRITERES_DEFAUT, rechercherBoamp } from '../boamp'
+import { CRITERES_DEFAUT, rechercherBoamp, rechercherEvenementsBoamp, type EvenementBoamp } from '../boamp'
 import type { AnnonceExterne, CriteresBoamp } from '../boamp'
 import { rechercherTed } from '../ted'
+import { scorerAnnonce, toneScore } from '../radar'
+import { collecterMaintenant, dernieresCollectes, listerSignauxVeille, type CollecteVeille } from '../veille'
 import { relaisDisponible } from '../relais'
 import { creerProjetDepuisConsultation } from '../consultations'
 import { genererDocxCandidature, nomFichierCandidature, referencesPertinentes } from '../candidature'
@@ -161,8 +165,53 @@ function CarteBoamp() {
   const [annonces, setAnnonces] = useState<AnnonceExterne[] | null>(null)
   const [erreur, setErreur] = useState('')
   const [noteTed, setNoteTed] = useState('')
+  const [noteEvenements, setNoteEvenements] = useState('')
+  const [collectes, setCollectes] = useState<CollecteVeille[]>([])
   const [enCours, setEnCours] = useState(false)
   const lanceAuto = useRef(false)
+  /** décisions du Radar (écartée / surveillée) — partagées entre les 2 postes */
+  const decisions = state.settings.veilleDecisions || {}
+  const decider = (idweb: string, decision: 'ignoree' | 'surveillee' | null) =>
+    update((d) => {
+      const suivantes = { ...(d.settings.veilleDecisions || {}) }
+      if (decision) suivantes[idweb] = decision
+      else delete suivantes[idweb]
+      d.settings.veilleDecisions = suivantes
+    })
+
+  /** rattache rectificatifs / annulations / résultats aux consultations
+   *  suivies : un événement, JAMAIS un doublon (calculé avant mutation) */
+  const appliquerEvenements = (evts: EvenementBoamp[]): number => {
+    const prepares: { consultationId: string; ev: { date: string; type: string; detail: string }; nouvelleDateLimite: string | null }[] = []
+    for (const e of evts) {
+      const cible = state.consultations.find(
+        (c) =>
+          (c.sourceId && e.annoncesLiees.includes(c.sourceId)) ||
+          cleConsultation(c.intitule, c.acheteur) === cleConsultation(e.objet, e.acheteur),
+      )
+      if (!cible) continue
+      if (cible.evenements?.some((x) => x.detail?.includes(e.idweb))) continue // déjà rattaché
+      prepares.push({
+        consultationId: cible.id,
+        ev: {
+          date: e.dateParution || todayISO(),
+          type: e.type,
+          detail: `${e.objet.slice(0, 80)} — avis ${e.idweb} (${e.url})`,
+        },
+        nouvelleDateLimite: e.type === 'rectificatif' || e.type === 'modification' ? e.nouvelleDateLimite : null,
+      })
+    }
+    if (prepares.length === 0) return 0
+    update((d) => {
+      for (const pmaj of prepares) {
+        const c = d.consultations.find((x) => x.id === pmaj.consultationId)
+        if (!c) continue
+        c.evenements = [...(c.evenements || []), pmaj.ev]
+        if (pmaj.nouvelleDateLimite) c.dateLimite = pmaj.nouvelleDateLimite
+      }
+    })
+    return prepares.length
+  }
 
   const majCriteres = (patch: Partial<CriteresBoamp>) =>
     update((d) => {
@@ -173,51 +222,113 @@ function CarteBoamp() {
     setEnCours(true)
     setErreur('')
     setNoteTed('')
-    const [boamp, ted] = await Promise.allSettled([
+    const [boamp, ted, evenements] = await Promise.allSettled([
       rechercherBoamp(c, todayISO()),
       relaisDisponible().then((d) =>
         d ? rechercherTed(c, todayISO()) : Promise.reject(new Error('relais indisponible (site déployé uniquement)')),
       ),
+      rechercherEvenementsBoamp(c, todayISO()),
     ])
     const liste: AnnonceExterne[] = []
     if (boamp.status === 'fulfilled') liste.push(...boamp.value)
     else setErreur(boamp.reason instanceof Error ? boamp.reason.message : 'Recherche BOAMP impossible.')
     if (ted.status === 'fulfilled') liste.push(...ted.value)
     else setNoteTed(`TED non interrogé — ${ted.reason instanceof Error ? ted.reason.message : 'erreur inconnue'}.`)
-    liste.sort((a, b) => b.dateParution.localeCompare(a.dateParution))
-    setAnnonces(boamp.status === 'fulfilled' || ted.status === 'fulfilled' ? liste : null)
+    // dédoublonnage par identifiant de source (un avis présent 2 fois = 1 carte)
+    const vues = new Set<string>()
+    const dedoublonnee = liste.filter((x) => {
+      const cle = `${x.plateforme}:${x.idweb}`
+      if (vues.has(cle)) return false
+      vues.add(cle)
+      return true
+    })
+    dedoublonnee.sort((a, b) => b.dateParution.localeCompare(a.dateParution))
+    setAnnonces(boamp.status === 'fulfilled' || ted.status === 'fulfilled' ? dedoublonnee : null)
+    if (evenements.status === 'fulfilled' && evenements.value.length > 0) {
+      const nb = appliquerEvenements(evenements.value)
+      if (nb > 0)
+        setNoteEvenements(
+          `${nb} rectificatif(s)/résultat(s) rattaché(s) aux consultations suivies — dates limites mises à jour.`,
+        )
+    }
     setEnCours(false)
   }
 
-  // critères déjà réglés → la veille se lance toute seule à l'ouverture de la page
+  /** signaux du service de fond (collecte serveur toutes les 4 h) —
+   *  le Radar se remplit même si personne n'a lancé de recherche */
+  const chargerServeur = async (): Promise<boolean> => {
+    try {
+      const serveur = await listerSignauxVeille(todayISO())
+      if (!serveur) return false
+      if (serveur.evenements.length > 0) {
+        const nb = appliquerEvenements(serveur.evenements)
+        if (nb > 0)
+          setNoteEvenements(`${nb} rectificatif(s)/résultat(s) rattaché(s) aux consultations suivies — dates limites mises à jour.`)
+      }
+      setCollectes(await dernieresCollectes())
+      if (serveur.annonces.length > 0) {
+        setAnnonces(serveur.annonces)
+        return true
+      }
+      return false
+    } catch {
+      return false // pas bloquant : la recherche directe reste disponible
+    }
+  }
+
+  // à l'ouverture : signaux serveur d'abord (session asynchrone → une
+  // relance), sinon l'ancienne recherche directe si les critères sont réglés
   useEffect(() => {
-    if (lanceAuto.current || !state.settings.veilleBoamp) return
+    if (lanceAuto.current) return
     lanceAuto.current = true
-    void rechercher(criteres)
+    void (async () => {
+      if (await chargerServeur()) return
+      setTimeout(() => {
+        void chargerServeur().then((ok) => {
+          if (!ok && state.settings.veilleBoamp) void rechercher(criteres)
+        })
+      }, 2500)
+    })()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const suivre = (a: AnnonceExterne) =>
     update((d) => {
       if (dejaSuivie(d, a)) return
+      const radar = scorerAnnonce(d, a, todayISO())
+      // Lot 5 : l'organisation acheteuse se crée / se rapproche toute seule
+      let organisationId: string | null = null
+      if (a.acheteur.trim()) {
+        let org = d.organisations.find((o) => fold(o.nom) === fold(a.acheteur))
+        if (!org) {
+          org = { id: uid('org'), nom: a.acheteur.trim(), relation: 'identifie', creeLe: todayISO() }
+          d.organisations.push(org)
+        }
+        organisationId = org.id
+      }
       d.consultations.push({
         id: uid('ao'),
         intitule: a.objet,
         acheteur: a.acheteur,
+        organisationId,
         lieu: a.departements.join(', '),
         typologie: a.typeMarche,
         budgetTravaux: null,
         dateLimite: a.dateLimite,
         statut: 'a_etudier',
         source: `${a.plateforme} ${a.idweb}`,
-        notes: `Avis officiel : ${a.url}`,
+        sourceId: a.idweb,
+        sourceUrl: a.url,
+        typeAvis: a.typeAvis,
+        notes: `Avis officiel : ${a.url}\nRadar ${radar.score}/100 — ${radar.raisons.slice(0, 3).join(' · ') || 'sans raison notée'}${radar.inconnues.length ? `\nÀ vérifier : ${radar.inconnues.join(' · ')}` : ''}`,
       })
     })
 
   return (
-    <Card titre="Veille automatique BOAMP + TED">
+    <Card titre="Radar — BOAMP + TED, trié par pertinence pour l’agence">
       <p className="small muted" style={{ marginBottom: 10 }}>
-        Sur <strong>vos départements</strong>, uniquement les <strong>marchés en cours</strong>.
-        Un clic : « À étudier ».
+        Marchés <strong>et concours</strong> en cours sur vos départements, notés par des règles
+        lisibles (références, mission, délai, zone) — chaque carte dit pourquoi. Les rectificatifs et
+        résultats se rattachent tout seuls aux consultations suivies, jamais en doublon.
       </p>
       <div className="toolbar" style={{ flexWrap: 'wrap' }}>
         <Field label="Mots-clés (OU entre chaque, virgules)">
@@ -265,8 +376,28 @@ function CarteBoamp() {
           </Btn>
         </Field>
       </div>
+      {collectes.length > 0 && (
+        <p className="small muted" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          Service de fond (toutes les 4 h, même Cockpit fermé) :{' '}
+          {collectes
+            .map((co) => `${co.source.toUpperCase()} ${co.statut === 'ok' ? '✓' : '⚠'} ${co.termineLe ? fmtDate(co.termineLe.slice(0, 10)) : '…'} (+${co.nbNouveaux})`)
+            .join(' · ')}
+          <Btn
+            small
+            kind="ghost"
+            onClick={() => {
+              void collecterMaintenant()
+                .then(() => chargerServeur())
+                .catch((e) => setErreur(e instanceof Error ? e.message : String(e)))
+            }}
+          >
+            Collecter maintenant
+          </Btn>
+        </p>
+      )}
       {erreur && <p className="small danger-text">{erreur}</p>}
       {noteTed && <p className="small muted">{noteTed}</p>}
+      {noteEvenements && <p className="small ok-text">{noteEvenements}</p>}
       {annonces && annonces.length === 0 && (
         <EmptyState>Aucune annonce récente pour ces critères — élargissez les mots-clés ou la période.</EmptyState>
       )}
@@ -278,49 +409,115 @@ function CarteBoamp() {
         (pas de flux exploitable — lien direct ou routine Claude hebdo). TED ne s'affiche que sur le site
         déployé : c'est le relais du site qui l'interroge.
       </p>
-      {annonces && annonces.length > 0 && (
-        <Table compact head={['Parution', 'Objet', 'Acheteur', 'Dép.', 'Date limite', '']}>
-          {annonces.map((a) => {
+      {annonces &&
+        annonces.length > 0 &&
+        (() => {
+          // le Radar : cartes notées et triées, décisions mémorisées entre les 2 postes
+          const notees = annonces
+            .map((x) => ({ a: x, s: scorerAnnonce(state, x, today) }))
+            .sort((x, y) => y.s.score - x.s.score)
+          const actives = notees.filter(({ a }) => !decisions[a.idweb])
+          const surveillees = notees.filter(({ a }) => decisions[a.idweb] === 'surveillee')
+          const ignorees = notees.filter(({ a }) => decisions[a.idweb] === 'ignoree')
+
+          const rendreCarte = ({ a, s: sc }: (typeof notees)[number], enSurveillance = false) => {
             const suivie = dejaSuivie(state, a)
             const dj = a.dateLimite ? diffDays(today, a.dateLimite) : null
             return (
-              <tr key={a.idweb}>
-                <td className="small">
-                  <DateF d={a.dateParution} />
-                </td>
-                <td>
-                  <Badge tone={a.plateforme === 'TED' ? 'info' : 'muted'}>{a.plateforme}</Badge>{' '}
+              <div
+                key={`${a.plateforme}:${a.idweb}`}
+                style={{ border: '1px solid var(--line)', borderRadius: 6, padding: 10, marginBottom: 10 }}
+              >
+                <p className="small" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', margin: 0 }}>
+                  <Badge tone={toneScore(sc.score)}>score {sc.score}</Badge>
+                  <span className="muted">confiance {sc.confiance}</span>
+                  {a.typeAvis === 'concours' && <Badge tone="warn">CONCOURS</Badge>}
+                  {(a.plateformes || [a.plateforme]).map((pl) => (
+                    <Badge key={pl} tone={pl === 'BOAMP' ? 'muted' : 'info'}>{pl}</Badge>
+                  ))}
+                  {dj !== null && <Badge tone={dj < 10 ? 'danger' : 'muted'}>J−{dj}</Badge>}
+                  <span className="spacer" />
+                  <span className="muted"><DateF d={a.dateParution} /></span>
+                </p>
+                <p style={{ margin: '6px 0 2px' }}>
                   <a href={a.url} target="_blank" rel="noreferrer" title="Ouvrir l'avis officiel">
-                    {a.objet.length > 110 ? a.objet.slice(0, 110) + '…' : a.objet}
+                    <strong>{a.objet.length > 140 ? a.objet.slice(0, 140) + '…' : a.objet}</strong>
                   </a>
-                </td>
-                <td className="small">{a.acheteur || '—'}</td>
-                <td className="small">{a.departements.join(', ') || '—'}</td>
-                <td className="small">
-                  {a.dateLimite ? (
-                    <>
-                      <DateF d={a.dateLimite} />{' '}
-                      {dj !== null && dj >= 0 && dj < 10 && <Badge tone="danger">J−{dj}</Badge>}
-                      {dj !== null && dj < 0 && <Badge tone="muted">close</Badge>}
-                    </>
-                  ) : (
-                    '—'
-                  )}
-                </td>
-                <td className="right">
+                </p>
+                <p className="small muted" style={{ margin: '0 0 6px' }}>
+                  {a.acheteur || 'acheteur non identifié'}
+                  {a.departements.length > 0 && <> · dép. {a.departements.join(', ')}</>}
+                  {a.dateLimite && <> · limite <DateF d={a.dateLimite} /></>}
+                  {a.procedure && <> · {a.procedure}</>}
+                </p>
+                {sc.raisons.length > 0 && (
+                  <p className="small" style={{ margin: '0 0 2px' }}>
+                    {sc.raisons.slice(0, 3).map((r, i) => (
+                      <span key={i} style={{ display: 'block' }}>✓ {r}</span>
+                    ))}
+                  </p>
+                )}
+                {sc.risque && <p className="small warn-text" style={{ margin: '0 0 2px' }}>! {sc.risque}</p>}
+                {sc.inconnues.length > 0 && (
+                  <p className="small muted" style={{ margin: '0 0 6px' }}>? {sc.inconnues.join(' · ')}</p>
+                )}
+                <div className="toolbar" style={{ marginBottom: 0 }}>
                   {suivie ? (
                     <Badge tone="ok">déjà suivie</Badge>
                   ) : (
-                    <Btn small kind="primary" onClick={() => suivre(a)} title="Ajouter au pipeline en « À étudier »">
-                      + À étudier
+                    <Btn small kind="primary" onClick={() => suivre(a)} title="Crée la consultation préremplie (source, score, raisons) en « À étudier »">
+                      Valider — à étudier
                     </Btn>
                   )}
-                </td>
-              </tr>
+                  {!suivie &&
+                    (enSurveillance ? (
+                      <Btn small kind="ghost" onClick={() => decider(a.idweb, null)}>Ne plus surveiller</Btn>
+                    ) : (
+                      <Btn small kind="ghost" onClick={() => decider(a.idweb, 'surveillee')}>Surveiller</Btn>
+                    ))}
+                  {!suivie && (
+                    <Btn small kind="ghost" onClick={() => decider(a.idweb, 'ignoree')}>Ignorer</Btn>
+                  )}
+                </div>
+              </div>
             )
-          })}
-        </Table>
-      )}
+          }
+
+          return (
+            <>
+              {actives.map((x) => rendreCarte(x))}
+              {actives.length === 0 && (
+                <EmptyState>Tout le Radar est traité — les éléments écartés ou surveillés sont ci-dessous.</EmptyState>
+              )}
+              {surveillees.length > 0 && (
+                <details style={{ marginTop: 8 }}>
+                  <summary className="small" style={{ cursor: 'pointer', color: 'var(--accent)' }}>
+                    Sous surveillance ({surveillees.length})
+                  </summary>
+                  <div style={{ marginTop: 8 }}>{surveillees.map((x) => rendreCarte(x, true))}</div>
+                </details>
+              )}
+              {ignorees.length > 0 && (
+                <details style={{ marginTop: 8 }}>
+                  <summary className="small" style={{ cursor: 'pointer', color: 'var(--accent)' }}>
+                    Écartées ({ignorees.length}) — chaque exclusion reste réversible
+                  </summary>
+                  <div style={{ marginTop: 8 }}>
+                    {ignorees.map(({ a, s: sc }) => (
+                      <p key={`${a.plateforme}:${a.idweb}`} className="small" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                        <Badge tone="muted">score {sc.score}</Badge>
+                        <a href={a.url} target="_blank" rel="noreferrer">
+                          {a.objet.length > 90 ? a.objet.slice(0, 90) + '…' : a.objet}
+                        </a>
+                        <Btn small kind="ghost" onClick={() => decider(a.idweb, null)}>Restaurer</Btn>
+                      </p>
+                    ))}
+                  </div>
+                </details>
+              )}
+            </>
+          )
+        })()}
     </Card>
   )
 }
@@ -735,11 +932,24 @@ function FicheModal({
             <PromptConsultation tplId="tpl-analyse-rc" consultation={c} />
             <PromptConsultation tplId="tpl-go-nogo" consultation={c} />
             <PromptConsultation tplId="tpl-references-candidature" consultation={c} />
+            {(c.statut === 'go' || c.statut === 'deposee') && (
+              <Btn
+                small
+                onClick={() => {
+                  onClose()
+                  navigate(`/ao/dossiers/${c.id}`)
+                }}
+              >
+                Ouvrir le dossier de poursuite →
+              </Btn>
+            )}
           </div>
           <BlocReponse c={c} />
         </>
       )}
 
+      {/* création RAPIDE : 4 champs suffisent — budget, typologie, scores
+          et avis se complètent pendant la qualification (fiche) */}
       <Field label="Intitulé">
         <TextInput value={c.intitule} onChange={(v) => maj({ intitule: v })} placeholder="Restructuration du groupe scolaire…" />
       </Field>
@@ -747,41 +957,51 @@ function FicheModal({
         <Field label="Acheteur">
           <TextInput value={c.acheteur || ''} onChange={(v) => maj({ acheteur: v })} />
         </Field>
-        <Field label="Lieu">
-          <TextInput value={c.lieu || ''} onChange={(v) => maj({ lieu: v })} />
-        </Field>
-      </div>
-      <div className="form-row" style={{ marginTop: 10 }}>
-        <Field label="Typologie">
-          <TextInput value={c.typologie || ''} onChange={(v) => maj({ typologie: v })} placeholder="Enseignement, logement, réhabilitation…" />
-        </Field>
-        <Field label="Budget travaux HT">
-          <NumInput value={c.budgetTravaux ?? null} onChange={(v) => maj({ budgetTravaux: v })} />
-        </Field>
         <Field label="Date limite de remise">
           <DateInput value={c.dateLimite ?? null} onChange={(v) => maj({ dateLimite: v })} />
         </Field>
-      </div>
-      <div className="form-row" style={{ marginTop: 10 }}>
-        <Field label="Statut">
-          <Select
-            value={c.statut}
-            onChange={(v) => maj({ statut: v as StatutConsultation })}
-            options={STATUTS.map((s) => ({ value: s.value, label: s.label }))}
-          />
-        </Field>
-        <Field label="Source" hint="Traçabilité : BOAMP, TED, alerte, routine du…">
+        <Field label="Source" hint="BOAMP, TED, alerte, bouche à oreille…">
           <TextInput value={c.source || ''} onChange={(v) => maj({ source: v })} />
         </Field>
       </div>
-      <div style={{ marginTop: 12 }}>
-        <GrilleGoNoGo c={c} maj={maj} />
-      </div>
-      <div style={{ marginTop: 10 }}>
-        <Field label="Avis Go / No-Go" hint="Avis préparé avec Claude puis relu et collé ici — la décision reste humaine.">
-          <TextArea rows={4} value={c.avisGoNoGo || ''} onChange={(v) => maj({ avisGoNoGo: v })} />
-        </Field>
-      </div>
+      {nouveau && (
+        <p className="muted small" style={{ marginTop: 8 }}>
+          C'est tout pour créer — lieu, typologie, budget, grille Go/No-Go et avis se remplissent
+          ensuite, pendant la qualification, en rouvrant la fiche.
+        </p>
+      )}
+      {!nouveau && (
+        <>
+          <div className="form-row" style={{ marginTop: 10 }}>
+            <Field label="Lieu">
+              <TextInput value={c.lieu || ''} onChange={(v) => maj({ lieu: v })} />
+            </Field>
+            <Field label="Typologie">
+              <TextInput value={c.typologie || ''} onChange={(v) => maj({ typologie: v })} placeholder="Enseignement, logement, réhabilitation…" />
+            </Field>
+            <Field label="Budget travaux HT">
+              <NumInput value={c.budgetTravaux ?? null} onChange={(v) => maj({ budgetTravaux: v })} />
+            </Field>
+          </div>
+          <div className="form-row" style={{ marginTop: 10 }}>
+            <Field label="Statut">
+              <Select
+                value={c.statut}
+                onChange={(v) => maj({ statut: v as StatutConsultation })}
+                options={STATUTS.map((s) => ({ value: s.value, label: s.label }))}
+              />
+            </Field>
+          </div>
+          <div style={{ marginTop: 12 }}>
+            <GrilleGoNoGo c={c} maj={maj} />
+          </div>
+          <div style={{ marginTop: 10 }}>
+            <Field label="Avis Go / No-Go" hint="Avis préparé avec Claude puis relu et collé ici — la décision reste humaine.">
+              <TextArea rows={4} value={c.avisGoNoGo || ''} onChange={(v) => maj({ avisGoNoGo: v })} />
+            </Field>
+          </div>
+        </>
+      )}
       {resultatConnu && (
         <>
           {c.statut === 'gagnee' && (
@@ -811,11 +1031,13 @@ function FicheModal({
           </div>
         </>
       )}
-      <div style={{ marginTop: 10 }}>
-        <Field label="Notes">
-          <TextArea rows={2} value={c.notes || ''} onChange={(v) => maj({ notes: v })} />
-        </Field>
-      </div>
+      {!nouveau && (
+        <div style={{ marginTop: 10 }}>
+          <Field label="Notes">
+            <TextArea rows={2} value={c.notes || ''} onChange={(v) => maj({ notes: v })} />
+          </Field>
+        </div>
+      )}
 
       <div className="form-foot">
         {!nouveau && (
@@ -1125,9 +1347,11 @@ function ConsultationsContenu() {
 // ---------- module ----------
 
 const ONGLETS_AO: { id: string; label: string }[] = [
-  { id: 'veille', label: 'Veille' },
+  { id: 'veille', label: 'Radar' },
   { id: 'pipeline', label: 'Pipeline' },
+  { id: 'dossiers', label: 'Dossiers' },
   { id: 'consultations', label: 'Consultations' },
+  { id: 'acheteurs', label: 'Acheteurs' },
   { id: 'references', label: 'Références' },
 ]
 
@@ -1138,8 +1362,8 @@ export default function VeilleAO({ ongletInitial = 'veille' }: { ongletInitial?:
 
   return (
     <Page
-      titre="Développement & AO"
-      sousTitre="Veille officielle, pipeline commercial, candidatures et références."
+      titre="Développement"
+      sousTitre="Le Radar, le pipeline, les dossiers de poursuite, les acheteurs et les références."
     >
       <Tabs tabs={ONGLETS_AO} actif={onglet} onSelect={(id) => navigate(`/ao/${id}`)} />
 
@@ -1150,7 +1374,9 @@ export default function VeilleAO({ ongletInitial = 'veille' }: { ongletInitial?:
         </>
       )}
       {onglet === 'pipeline' && <PipelineContenu />}
+      {onglet === 'dossiers' && <DossiersContenu />}
       {onglet === 'consultations' && <ConsultationsContenu />}
+      {onglet === 'acheteurs' && <OrganisationsContenu />}
       {onglet === 'references' && <ReferencesContenu />}
     </Page>
   )

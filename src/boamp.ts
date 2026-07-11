@@ -21,7 +21,16 @@ export interface AnnonceExterne {
   typeMarche: string
   nature: string
   url: string
-  plateforme: 'BOAMP' | 'TED'
+  /** plateforme d'origine (BOAMP, TED, AWS, PLACE… — pivot si fusionnée) */
+  plateforme: string
+  /** toutes les plateformes où l'avis a été vu (rapprochement par clé canonique) */
+  plateformes?: string[]
+  /** appel d'offres classique ou concours (procédure/sous-nature) */
+  typeAvis: 'marche' | 'concours'
+  /** libellé de procédure (ouverte, adaptée, concours restreint…) */
+  procedure?: string
+  /** descripteurs officiels (ex. « Maîtrise d'oeuvre ») — signal de pertinence */
+  descripteurs?: string[]
 }
 
 export type AnnonceBoamp = AnnonceExterne
@@ -54,9 +63,9 @@ function q(v: string): string {
 }
 
 function clauseWhere(c: CriteresBoamp, aujourdhui: string): string {
-  // uniquement les vrais avis de marché : les « résultats », rectificatifs
-  // et annulations sont du bruit pour la prospection
-  const clauses: string[] = ['nature_libelle = "Avis de marché"']
+  // avis initiaux uniquement (marchés ET concours) — les rectificatifs,
+  // annulations et résultats sont ingérés à part comme ÉVÉNEMENTS liés
+  const clauses: string[] = ['(nature_libelle = "Avis de marché" OR sousnature_libelle = "Concours")']
 
   // mots-clés cherchés dans l'OBJET seulement — le plein-texte global
   // remontait n'importe quoi (un cahier des charges qui cite « architecte »…)
@@ -88,6 +97,14 @@ interface RecordBoamp {
   type_marche_facette?: string[] | string
   nature_libelle?: string
   url_avis?: string
+  procedure_libelle?: string
+  sousnature_libelle?: string[] | string
+  descripteur_libelle?: string[] | string
+  annonce_lie?: string[] | string
+}
+
+function enListe(v: string[] | string | undefined): string[] {
+  return Array.isArray(v) ? v : v ? [v] : []
 }
 
 const CLE_DERNIERE = 'cockpit-ll-boamp-derniere'
@@ -125,7 +142,7 @@ export async function rechercherBoamp(
     order_by: 'dateparution desc',
     limit: String(limite),
     select:
-      'idweb,objet,nomacheteur,dateparution,datelimitereponse,code_departement,type_marche_facette,nature_libelle,url_avis',
+      'idweb,objet,nomacheteur,dateparution,datelimitereponse,code_departement,type_marche_facette,nature_libelle,url_avis,procedure_libelle,sousnature_libelle,descripteur_libelle',
   })
   let r: Response
   try {
@@ -167,7 +184,79 @@ export async function rechercherBoamp(
       nature: x.nature_libelle || '',
       url: x.url_avis || `https://www.boamp.fr/pages/avis/?q=idweb:${x.idweb}`,
       plateforme: 'BOAMP' as const,
+      typeAvis: /concours/i.test(`${x.procedure_libelle || ''} ${enListe(x.sousnature_libelle).join(' ')}`)
+        ? ('concours' as const)
+        : ('marche' as const),
+      procedure: x.procedure_libelle || undefined,
+      descripteurs: enListe(x.descripteur_libelle),
     }))
   memoriser({ date: new Date().toISOString(), nb: annonces.length })
   return annonces
+}
+
+// ------------------------------------------------------------
+// Cycle de vie : rectificatifs, annulations, résultats — des
+// ÉVÉNEMENTS à rattacher aux consultations suivies, jamais des
+// nouvelles opportunités (le champ annonce_lie relie à l'origine)
+// ------------------------------------------------------------
+
+export interface EvenementBoamp {
+  idweb: string
+  /** rectificatif · modification · annulation · resultat */
+  type: 'rectificatif' | 'modification' | 'annulation' | 'resultat'
+  objet: string
+  acheteur: string
+  dateParution: string
+  /** nouvelle date limite si le rectificatif en publie une */
+  nouvelleDateLimite: string | null
+  /** idweb des avis d'origine (annonce_lie) */
+  annoncesLiees: string[]
+  url: string
+}
+
+const NATURES_EVENEMENT: Record<string, EvenementBoamp['type']> = {
+  Rectificatif: 'rectificatif',
+  Modification: 'modification',
+  "Avis d'annulation": 'annulation',
+  'Résultat de marché': 'resultat',
+}
+
+/** cherche les avis de cycle de vie récents sur les mêmes critères */
+export async function rechercherEvenementsBoamp(
+  criteres: CriteresBoamp,
+  aujourdhui: string,
+  limite = 30,
+): Promise<EvenementBoamp[]> {
+  const mots = criteres.motsCles.split(',').map((m) => m.trim()).filter(Boolean)
+  const clauses: string[] = [
+    `nature_libelle IN (${Object.keys(NATURES_EVENEMENT).map(q).join(',')})`,
+  ]
+  if (mots.length > 0) clauses.push(`(${mots.map((m) => `search(objet,${q(m)})`).join(' OR ')})`)
+  const deps = criteres.departements.split(',').map((d) => d.trim().replace(/^0?(\d)$/, '0$1')).filter(Boolean)
+  if (deps.length > 0) clauses.push(`code_departement IN (${deps.map(q).join(',')})`)
+  const d = new Date(`${aujourdhui}T00:00:00Z`)
+  d.setUTCDate(d.getUTCDate() - Math.max(1, criteres.depuisJours || 30))
+  clauses.push(`dateparution >= date'${d.toISOString().slice(0, 10)}'`)
+
+  const params = new URLSearchParams({
+    where: clauses.join(' AND '),
+    order_by: 'dateparution desc',
+    limit: String(limite),
+    select: 'idweb,objet,nomacheteur,dateparution,datelimitereponse,nature_libelle,url_avis,annonce_lie',
+  })
+  const r = await fetch(`${BASE}?${params}`)
+  if (!r.ok) throw new Error(`BOAMP (événements) a répondu ${r.status}.`)
+  const data = (await r.json()) as { results?: RecordBoamp[] }
+  return (data.results || [])
+    .filter((x) => x.idweb && x.objet && x.nature_libelle && NATURES_EVENEMENT[x.nature_libelle])
+    .map((x) => ({
+      idweb: x.idweb!,
+      type: NATURES_EVENEMENT[x.nature_libelle!],
+      objet: x.objet!,
+      acheteur: x.nomacheteur || '',
+      dateParution: x.dateparution || '',
+      nouvelleDateLimite: x.datelimitereponse ? x.datelimitereponse.slice(0, 10) : null,
+      annoncesLiees: enListe(x.annonce_lie),
+      url: x.url_avis || `https://www.boamp.fr/pages/avis/?q=idweb:${x.idweb}`,
+    }))
 }

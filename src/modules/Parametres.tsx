@@ -186,13 +186,22 @@ function CarteSurveillance() {
   }
 
   return (
-    <Card titre="Surveillance en direct — Gmail & Agenda (API Google gratuites)">
-      <p className="small muted" style={{ marginBottom: 10 }}>
-        Onglet ouvert, le Cockpit interroge Gmail et Google Agenda toutes les ~60 secondes en lecture
-        seule : chaque nouveau mail vers l’adresse surveillée arrive dans « À traiter », les prochains
-        événements s’affichent sur le Cockpit. Complète la routine du matin (qui, elle, trie et résume).
-        Le jeton reste dans le navigateur — rien ne transite ailleurs, et les quotas gratuits de Google
-        sont sans commune mesure avec l’usage d’une agence de deux personnes.
+    <Card titre="Surveillance en direct — Gmail & Agenda (onglet ouvert)">
+      <p className="small" style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', margin: '0 0 8px' }}>
+        {estConnecte() ? <Badge tone="ok">connecté</Badge> : <Badge tone="muted">non connecté</Badge>}
+        <span className="muted">Mails → « À traiter » et agenda sur Aujourd'hui, tant qu'un onglet est ouvert.</span>
+        <span className="spacer" />
+        {estConnecte() ? (
+          <Btn small onClick={() => { deconnecter(); forcer((x) => x + 1) }}>Déconnecter</Btn>
+        ) : (
+          <Btn small kind="primary" onClick={connecter}>Connecter Google</Btn>
+        )}
+      </p>
+      <details open={!sv.clientId.trim()}>
+      <summary className="small" style={{ cursor: 'pointer', color: 'var(--accent)' }}>Détails & réglages</summary>
+      <p className="small muted" style={{ margin: '8px 0 10px' }}>
+        Lecture seule, toutes les ~60 secondes. Le jeton reste dans le navigateur — rien ne transite
+        ailleurs, et les quotas gratuits de Google sont sans commune mesure avec l'usage de l'agence.
       </p>
       <div className="form-row">
         <Field label="Adresse surveillée" hint="vide = toute la boîte de réception du compte connecté">
@@ -202,17 +211,7 @@ function CarteSurveillance() {
           <TextInput value={sv.clientId} onChange={(v) => majSv('clientId', v)} placeholder="1234…apps.googleusercontent.com" />
         </Field>
       </div>
-      <div className="toolbar" style={{ marginTop: 8, marginBottom: 0 }}>
-        {estConnecte() ? (
-          <>
-            <Badge tone="ok">connecté — surveillance active</Badge>
-            <Btn small onClick={() => { deconnecter(); forcer((x) => x + 1) }}>Déconnecter</Btn>
-          </>
-        ) : (
-          <Btn kind="primary" onClick={connecter}>Connecter Google</Btn>
-        )}
-        {message && <span className="small">{message}</span>}
-      </div>
+      {message && <p className="small" style={{ marginTop: 8 }}>{message}</p>}
       <details style={{ marginTop: 10 }}>
         <summary className="small" style={{ cursor: 'pointer', color: 'var(--accent)' }}>
           Guide : créer le Client ID Google (une fois, gratuit)
@@ -224,6 +223,7 @@ function CarteSurveillance() {
           <li>« Identifiants » → « Créer des identifiants » → <strong>ID client OAuth</strong>, type « Application Web » ; dans « Origines JavaScript autorisées », ajoutez les adresses du site (ex. http://localhost:5173 et votre URL vercel.app).</li>
           <li>Copiez l’ID client ci-dessus, « Connecter Google », choisissez le compte : c’est fini.</li>
         </ol>
+      </details>
       </details>
     </Card>
   )
@@ -305,11 +305,16 @@ function CarteIngestionServeur() {
         <p className="small muted">Lecture du statut…</p>
       ) : (
         <>
-          <p className="small" style={{ marginBottom: 8 }}>
+          <p className="small" style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 }}>
             {statut.connecte ? (
               <Badge tone="ok">Gmail connecté — {statut.compteEmail}</Badge>
             ) : statut.configure ? (
-              <Badge tone="warn">identifiants en place — Gmail pas encore connecté</Badge>
+              <>
+                <Badge tone="warn">identifiants en place</Badge>
+                <a className="btn btn-small btn-primary" href={statut.urlOauth} target="_blank" rel="noreferrer">
+                  Connecter Gmail
+                </a>
+              </>
             ) : (
               <Badge tone="muted">pas encore configuré</Badge>
             )}
@@ -318,7 +323,9 @@ function CarteIngestionServeur() {
             )}
             {statut.dernierResultat && <span className="muted"> · {statut.dernierResultat}</span>}
           </p>
-          <div className="form-row">
+          <details open={!statut.configure} style={{ marginTop: 4 }}>
+          <summary className="small" style={{ cursor: 'pointer', color: 'var(--accent)' }}>Détails & réglages</summary>
+          <div className="form-row" style={{ marginTop: 8 }}>
             <Field label="Compte Gmail à lire" hint="seul ce compte pourra se connecter">
               <TextInput value={compteEmail} onChange={setCompteEmail} placeholder="agence.ll@gmail.com" />
             </Field>
@@ -353,6 +360,7 @@ function CarteIngestionServeur() {
               <li>Copiez l'<strong>ID client</strong> et le <strong>secret client</strong> (bouton « Afficher le secret ») dans les champs ci-dessus, « Enregistrer côté serveur ».</li>
               <li>« Connecter Gmail » : choisissez le compte à lire ({compteEmail || 'celui renseigné ci-dessus'}) et acceptez la lecture seule. C'est fini — premier scan sous 10 minutes.</li>
             </ol>
+          </details>
           </details>
         </>
       )}
@@ -439,12 +447,26 @@ function CarteSync() {
   }
 
   return (
-    <Card titre="Synchronisation 2 postes — Supabase (offre gratuite, UE)">
-      <p className="small muted" style={{ marginBottom: 10 }}>
-        Optionnel. Une fois connecté, l’état de l’agence vit dans un espace partagé chiffré côté Supabase :
-        Julien et Zoé voient les mêmes données en temps réel, et c’est une sauvegarde automatique hors du
-        navigateur. Sans connexion, tout continue en local (localStorage) — la synchro ne bloque jamais.
-        La clé « publique » se colle ici sans risque : l’accès est verrouillé à vos 2 adresses.
+    <Card titre="Synchronisation 2 postes — Supabase">
+      <p className="small" style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', margin: '0 0 8px' }}>
+        {etat.connecte ? (
+          <Badge tone="ok">connecté{etat.email ? ` — ${etat.email}` : ''}</Badge>
+        ) : (
+          <Badge tone="muted">non connecté — données locales</Badge>
+        )}
+        <span className="muted">Les 2 postes voient les mêmes données, sauvegardées hors du navigateur.</span>
+        <span className="spacer" />
+        {etat.connecte ? (
+          <Btn small kind="primary" onClick={connecterEtReconcilier} disabled={occupe}>Synchroniser maintenant</Btn>
+        ) : (
+          <Btn small kind="primary" onClick={connecterEtReconcilier} disabled={occupe}>Relier / synchroniser</Btn>
+        )}
+      </p>
+      <details open={!etat.connecte && !cfg.url}>
+      <summary className="small" style={{ cursor: 'pointer', color: 'var(--accent)' }}>Détails & réglages</summary>
+      <p className="small muted" style={{ margin: '8px 0 10px' }}>
+        Optionnel et local-first : sans connexion, tout continue en localStorage. La clé « publique »
+        se colle ici sans risque — l’accès est verrouillé à vos 2 adresses.
       </p>
       <div className="form-row">
         <Field label="URL du projet Supabase">
@@ -491,6 +513,7 @@ function CarteSync() {
           <li>« Project Settings » → « API » : copiez <strong>Project URL</strong> et la clé <strong>anon / publishable</strong> ci-dessus.</li>
           <li>« Envoyer le lien magique », ouvrez-le sur ce poste, puis « Synchroniser ». Faites de même sur le 2ᵉ poste avec le même identifiant d’espace.</li>
         </ol>
+      </details>
       </details>
     </Card>
   )

@@ -20,8 +20,7 @@ import {
   TextArea,
   TextInput,
   confirmer,
-  toast,
-} from '../ui'
+  toast, RowMenu } from '../ui'
 import { fmtDate, todayISO, uid } from '../util'
 
 const CONTEXTES: { value: ContextePrompt; label: string }[] = [
@@ -130,15 +129,13 @@ export function PromptsContenu() {
                     <Btn small kind="primary" onClick={() => setUtilise(t)}>
                       Utiliser
                     </Btn>{' '}
-                    <Btn small onClick={() => setEdite(structuredClone(t))}>
-                      Modifier
-                    </Btn>{' '}
-                    <Btn small kind="ghost" onClick={() => dupliquer(t)}>
-                      Dupliquer
-                    </Btn>{' '}
-                    <Btn small kind="danger" onClick={() => supprimer(t)}>
-                      Suppr.
-                    </Btn>
+                    <RowMenu
+                      items={[
+                        { label: 'Modifier', onClick: () => setEdite(structuredClone(t)) },
+                        { label: 'Dupliquer', onClick: () => dupliquer(t) },
+                        { label: 'Supprimer', onClick: () => supprimer(t), danger: true },
+                      ]}
+                    />
                   </td>
                 </tr>
               ))}

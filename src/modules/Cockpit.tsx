@@ -543,7 +543,7 @@ export default function Cockpit() {
     .slice(0, 3)
 
   return (
-    <Page titre="cockpit" wordmark meta={`Pilotage · ${dateFR}`}>
+    <Page titre="aujourd’hui" wordmark meta={`Décisions du jour · ${dateFR}`}>
       {/* ---------- météo financière ---------- */}
       <div style={{ marginBottom: 16 }}>
         <div className="grid3">
@@ -581,7 +581,7 @@ export default function Cockpit() {
           const couleur = pct >= 1 ? 'var(--ok)' : pct >= 0.6 ? 'var(--c-blue)' : 'var(--c-red)'
           return (
             <div className="gauge" style={{ marginTop: 12 }}>
-              <a href="#/analyse" className="gauge-t" style={{ color: 'inherit', textDecoration: 'none' }}>
+              <a href="#/pilotage/missions" className="gauge-t" style={{ color: 'inherit', textDecoration: 'none' }}>
                 CA {annee} · {fmtPct(pct, 0)}
               </a>
               <span className="gauge-bar">

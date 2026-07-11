@@ -25,8 +25,7 @@ import { ligneActivable,
   TextInput,
   confirmer,
   toast,
-  useToday,
-} from '../ui'
+  useToday, RowMenu } from '../ui'
 import { addDays, addMonths, diffDays, download, fmtDate, fold, ouvrirGmail, todayISO, uid } from '../util'
 import { STATUTS_ACTIFS } from '../derive'
 
@@ -190,21 +189,23 @@ function OngletObligations({ today }: { today: string }) {
                     <Btn small kind="primary" onClick={() => marquerFaite(o)} title={o.periodiciteMois ? 'Reconduit à la prochaine échéance' : 'Supprime (ponctuelle)'}>
                       ✓ Fait
                     </Btn>{' '}
-                    <Btn
-                      small
-                      kind="danger"
-                      onClick={async () => {
-                        const snap = state
-                        if (await confirmer({ message: `Supprimer « ${o.libelle} » ?`, danger: true, confirmerLabel: 'Supprimer' })) {
-                          update((d) => {
-                            d.obligations = d.obligations.filter((x) => x.id !== o.id)
-                          })
-                          toast('Obligation supprimée.', { undo: () => replace(snap) })
-                        }
-                      }}
-                    >
-                      Suppr.
-                    </Btn>
+                    <RowMenu
+                      items={[
+                        {
+                          label: "Supprimer l'obligation",
+                          danger: true,
+                          onClick: async () => {
+                            const snap = state
+                            if (await confirmer({ message: `Supprimer « ${o.libelle} » ?`, danger: true, confirmerLabel: 'Supprimer' })) {
+                              update((d) => {
+                                d.obligations = d.obligations.filter((x) => x.id !== o.id)
+                              })
+                              toast('Obligation supprimée.', { undo: () => replace(snap) })
+                            }
+                          },
+                        },
+                      ]}
+                    />
                   </td>
                 </tr>
               )
@@ -342,21 +343,23 @@ function OngletContrats({ today }: { today: string }) {
                       >
                         ✓ Payé
                       </Btn>{' '}
-                      <Btn
-                        small
-                        kind="danger"
-                        onClick={async () => {
-                          const snap = state
-                          if (await confirmer({ message: `Supprimer le contrat « ${o.libelle} » ?`, danger: true, confirmerLabel: 'Supprimer' })) {
-                            update((d) => {
-                              d.obligations = d.obligations.filter((x) => x.id !== o.id)
-                            })
-                            toast('Contrat supprimé.', { undo: () => replace(snap) })
-                          }
-                        }}
-                      >
-                        Suppr.
-                      </Btn>
+                      <RowMenu
+                        items={[
+                          {
+                            label: 'Supprimer le contrat',
+                            danger: true,
+                            onClick: async () => {
+                              const snap = state
+                              if (await confirmer({ message: `Supprimer le contrat « ${o.libelle} » ?`, danger: true, confirmerLabel: 'Supprimer' })) {
+                                update((d) => {
+                                  d.obligations = d.obligations.filter((x) => x.id !== o.id)
+                                })
+                                toast('Contrat supprimé.', { undo: () => replace(snap) })
+                              }
+                            },
+                          },
+                        ]}
+                      />
                     </td>
                   </tr>
                 )
@@ -610,21 +613,23 @@ function OngletContacts({ today }: { today: string }) {
                         ✓ Relance
                       </Btn>
                     )}{' '}
-                    <Btn
-                      small
-                      kind="danger"
-                      onClick={async () => {
-                        const snap = state
-                        if (await confirmer({ message: `Supprimer ${c.nom} ?`, danger: true, confirmerLabel: 'Supprimer' })) {
-                          update((d) => {
-                            d.contacts = d.contacts.filter((x) => x.id !== c.id)
-                          })
-                          toast('Contact supprimé.', { undo: () => replace(snap) })
-                        }
-                      }}
-                    >
-                      Suppr.
-                    </Btn>
+                    <RowMenu
+                      items={[
+                        {
+                          label: 'Supprimer le contact',
+                          danger: true,
+                          onClick: async () => {
+                            const snap = state
+                            if (await confirmer({ message: `Supprimer ${c.nom} ?`, danger: true, confirmerLabel: 'Supprimer' })) {
+                              update((d) => {
+                                d.contacts = d.contacts.filter((x) => x.id !== c.id)
+                              })
+                              toast('Contact supprimé.', { undo: () => replace(snap) })
+                            }
+                          },
+                        },
+                      ]}
+                    />
                   </td>
                 </tr>
               )

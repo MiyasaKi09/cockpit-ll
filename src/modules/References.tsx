@@ -23,8 +23,7 @@ import {
   TextInput,
   confirmer,
   toast,
-  useToday,
-} from '../ui'
+  useToday, RowMenu } from '../ui'
 import { fmtDate, fmtMoney, fold, uid } from '../util'
 
 // ---------- helpers locaux ----------
@@ -349,9 +348,7 @@ export function ReferencesContenu() {
                   <Btn small kind="ghost" onClick={() => setModal({ ouvert: true, ref: r })}>
                     Modifier
                   </Btn>{' '}
-                  <Btn small kind="danger" onClick={() => supprimer(r)}>
-                    Supprimer
-                  </Btn>
+                  <RowMenu items={[{ label: 'Supprimer la référence', onClick: () => void supprimer(r), danger: true }]} />
                 </td>
               </tr>
             ))}

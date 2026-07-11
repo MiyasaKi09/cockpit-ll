@@ -158,8 +158,8 @@ export default function ProjetDocuments({ projet: p }: { projet: Projet }) {
       <Card titre="Documents du projet">
         <div className="pill-note">
           Le rangement automatique nécessite Chrome ou Edge (API File System Access). En attendant :
-          utilisez le générateur de noms du module <a href="#/classement">Classement</a> et le dossier
-          Drive du projet (onglet Ressources).
+          déposez les fichiers dans la <a href="#/documents">boîte d'arrivée</a> (le nom conforme est
+          proposé) et rangez-les via le dossier Drive du projet (onglet Ressources).
         </div>
       </Card>
     )

@@ -28,8 +28,7 @@ import { ligneActivable,
   NumInput,
   confirmer,
   toast,
-  useToday,
-} from '../ui'
+  useToday, RowMenu } from '../ui'
 import { diffDays, fmtDate, fold, todayISO, uid } from '../util'
 import { navigate, useRoute } from '../ui'
 
@@ -69,13 +68,8 @@ function ListeRessources({ ongletInitial }: { ongletInitial: string }) {
   const [onglet, setOnglet] = useState(ongletInitial)
   return (
     <Page
-      titre="Matériaux & artisans"
-      sousTitre="Notes de chantier, décennales surveillées, FDES pour l'argument carbone."
-      actions={
-        <a className="btn btn-small btn-ghost" href="#/classement" title="Renommer et ranger des lots de documents">
-          Classement documentaire →
-        </a>
-      }
+      titre="Annuaire"
+      sousTitre="Entreprises et matériaux : notes de chantier, décennales surveillées, FDES."
     >
       <Tabs
         tabs={[
@@ -420,21 +414,23 @@ function OngletArtisans() {
                 </td>
                 <td className="small">{a.notes || ''}</td>
                 <td className="right" onClick={(e) => e.stopPropagation()}>
-                  <Btn
-                    small
-                    kind="danger"
-                    onClick={async () => {
-                      const snap = state
-                      if (await confirmer({ message: `Supprimer ${a.nom} ?`, danger: true, confirmerLabel: 'Supprimer' })) {
-                        update((d) => {
-                          d.artisans = d.artisans.filter((x) => x.id !== a.id)
-                        })
-                        toast('Artisan supprimé.', { undo: () => replace(snap) })
-                      }
-                    }}
-                  >
-                    Suppr.
-                  </Btn>
+                  <RowMenu
+                    items={[
+                      {
+                        label: "Supprimer l'artisan",
+                        danger: true,
+                        onClick: async () => {
+                          const snap = state
+                          if (await confirmer({ message: `Supprimer ${a.nom} ?`, danger: true, confirmerLabel: 'Supprimer' })) {
+                            update((d) => {
+                              d.artisans = d.artisans.filter((x) => x.id !== a.id)
+                            })
+                            toast('Artisan supprimé.', { undo: () => replace(snap) })
+                          }
+                        },
+                      },
+                    ]}
+                  />
                 </td>
               </tr>
             ))}
@@ -650,21 +646,23 @@ function OngletMateriaux() {
                 </td>
                 <td className="small">{m.notes || ''}</td>
                 <td className="right" onClick={(e) => e.stopPropagation()}>
-                  <Btn
-                    small
-                    kind="danger"
-                    onClick={async () => {
-                      const snap = state
-                      if (await confirmer({ message: `Supprimer ${m.nom} ?`, danger: true, confirmerLabel: 'Supprimer' })) {
-                        update((d) => {
-                          d.materiaux = d.materiaux.filter((x) => x.id !== m.id)
-                        })
-                        toast('Matériau supprimé.', { undo: () => replace(snap) })
-                      }
-                    }}
-                  >
-                    Suppr.
-                  </Btn>
+                  <RowMenu
+                    items={[
+                      {
+                        label: 'Supprimer le matériau',
+                        danger: true,
+                        onClick: async () => {
+                          const snap = state
+                          if (await confirmer({ message: `Supprimer ${m.nom} ?`, danger: true, confirmerLabel: 'Supprimer' })) {
+                            update((d) => {
+                              d.materiaux = d.materiaux.filter((x) => x.id !== m.id)
+                            })
+                            toast('Matériau supprimé.', { undo: () => replace(snap) })
+                          }
+                        },
+                      },
+                    ]}
+                  />
                 </td>
               </tr>
             ))}

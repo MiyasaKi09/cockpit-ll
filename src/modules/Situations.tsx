@@ -24,6 +24,7 @@ import {
   RowMenu,
   Select,
   Table,
+  Tabs,
   TextArea,
   TextInput,
   confirmer,
@@ -983,20 +984,46 @@ function CarteRetenues() {
 }
 
 export default function Situations() {
+  // quatre tâches distinctes → quatre sous-vues (audit simplification) ;
+  // l'import manuel de la routine devient un dépannage replié
+  const { state } = useStore()
+  const [vue, setVue] = useState('verifier')
+  const nbAVerifier = state.situations.filter((s) => s.statut === 'a_verifier').length
   return (
     <Page
       titre="Situations de travaux"
       sousTitre="Les entreprises envoient à situations@ ; vous vérifiez et visez."
     >
-      <div className="pill-note">
-        La maîtrise d'œuvre porte le risque sur le délai de paiement : la date limite de
-        vérification est calculée d'après le délai du marché (15 j par défaut).
-      </div>
-      <CarteImport />
-      <CarteAVerifier />
-      <CarteHistorique />
-      <CarteAttendues />
-      <CarteRetenues />
+      <Tabs
+        tabs={[
+          { id: 'verifier', label: nbAVerifier > 0 ? `À vérifier (${nbAVerifier})` : 'À vérifier' },
+          { id: 'attendues', label: 'Attendues' },
+          { id: 'historique', label: 'Historique' },
+          { id: 'rg', label: 'Retenues de garantie' },
+        ]}
+        actif={vue}
+        onSelect={setVue}
+      />
+      {vue === 'verifier' && (
+        <>
+          <div className="pill-note">
+            La maîtrise d'œuvre porte le risque sur le délai de paiement : la date limite de
+            vérification est calculée d'après le délai du marché (15 j par défaut).
+          </div>
+          <CarteAVerifier />
+          <details style={{ marginTop: 8 }}>
+            <summary className="small" style={{ cursor: 'pointer', color: 'var(--accent)' }}>
+              Dépannage — coller à la main le retour JSON de la routine
+            </summary>
+            <div style={{ marginTop: 8 }}>
+              <CarteImport />
+            </div>
+          </details>
+        </>
+      )}
+      {vue === 'attendues' && <CarteAttendues />}
+      {vue === 'historique' && <CarteHistorique />}
+      {vue === 'rg' && <CarteRetenues />}
     </Page>
   )
 }

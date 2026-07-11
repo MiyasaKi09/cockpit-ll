@@ -18,6 +18,7 @@ import {
   Page,
   Select,
   Table,
+  Tabs,
   confirmer,
   toast,
   useToday,
@@ -375,7 +376,7 @@ function BarreConso({ ratio }: { ratio: number }) {
 
 // ---------- récap dérives par projet (cumul toutes semaines) ----------
 
-function RecapDerives() {
+export function RecapDerives() {
   const { state } = useStore()
   const actifs = state.projets.filter((p) => STATUTS_ACTIFS.includes(p.statut))
 
@@ -436,15 +437,18 @@ function RecapDerives() {
   )
 }
 
-// ---------- saisie mobile : UNE personne, UNE semaine, une liste ----------
+// ---------- saisie principale : UNE personne, UNE semaine, une liste ----------
 
-/** au téléphone, la grille 6 semaines est pénible : on saisit la tâche
- *  réelle — mes heures de la semaine, projet par projet */
-function SaisieMobile({ today }: { today: string }) {
-  const { state, update } = useStore()
+/** la tâche réelle — mes heures de la semaine, projet par projet.
+ *  Vue principale sur tous les écrans (audit simplification) ; la grille
+ *  6 semaines vit dans l'onglet Historique. */
+function SaisieSemaine({ today }: { today: string }) {
+  const { state, update, replace } = useStore()
   const personnes = state.settings.personnes
   const [personne, setPersonne] = useState(personnes[0] || '')
   const [semaine, setSemaine] = useState(() => mondayOf(today))
+  const [ajoutes, setAjoutes] = useState<Couple[]>([])
+  const [activitesVisibles, setActivitesVisibles] = useState<string[]>([])
   const semaineCourante = mondayOf(today)
 
   const actifs = state.projets.filter((p) => STATUTS_ACTIFS.includes(p.statut))
@@ -467,7 +471,14 @@ function SaisieMobile({ today }: { today: string }) {
   for (const t of state.temps) {
     if (t.personne === personne && t.semaine === semaine) pousser({ projetId: t.projetId, phase: t.phase })
   }
-  couples.sort(triCouples)
+  ajoutes.forEach(pousser)
+  // les lignes déjà pointées cette semaine passent devant : c'est le
+  // travail réellement actif, le reste attend en dessous
+  const aDesHeures = (c: Couple) =>
+    state.temps.some(
+      (t) => t.semaine === semaine && t.personne === personne && t.projetId === c.projetId && t.phase === c.phase,
+    )
+  couples.sort((a, b) => Number(aDesHeures(b)) - Number(aDesHeures(a)) || triCouples(a, b))
 
   const heuresDe = (c: Couple): number | null => {
     const e = state.temps.find(
@@ -505,10 +516,48 @@ function SaisieMobile({ today }: { today: string }) {
       else d.tempsHorsProjet.push({ id: uid('thp'), semaine, personne, categorie: cat, heures: v })
     })
 
+  /** reprend la semaine précédente SANS écraser : seules les cases vides
+   *  de la semaine courante sont remplies (préparé avant la mutation) */
+  const copierSemainePrecedente = () => {
+    const avant = addDays(semaine, -7)
+    const temps = state.temps.filter((t) => t.personne === personne && t.semaine === avant)
+    const hp = state.tempsHorsProjet.filter((t) => t.personne === personne && t.semaine === avant)
+    if (temps.length === 0 && hp.length === 0) {
+      toast('Rien à copier : la semaine précédente est vide.', { tone: 'warn' })
+      return
+    }
+    const snap = state
+    const nouveaux = temps
+      .filter(
+        (t) =>
+          !state.temps.some(
+            (x) => x.semaine === semaine && x.personne === personne && x.projetId === t.projetId && x.phase === t.phase,
+          ),
+      )
+      .map((t) => ({ id: uid('tps'), semaine, personne, projetId: t.projetId, phase: t.phase, heures: t.heures }))
+    const nouveauxHP = hp
+      .filter(
+        (t) =>
+          !state.tempsHorsProjet.some(
+            (x) => x.semaine === semaine && x.personne === personne && x.categorie === t.categorie,
+          ),
+      )
+      .map((t) => ({ id: uid('thp'), semaine, personne, categorie: t.categorie, heures: t.heures }))
+    update((d) => {
+      d.temps.push(...nouveaux)
+      d.tempsHorsProjet.push(...nouveauxHP)
+    })
+    toast(
+      `${nouveaux.length + nouveauxHP.length} ligne(s) reprise(s) de la semaine précédente — les cases déjà remplies sont conservées.`,
+      { tone: 'ok', undo: () => replace(snap) },
+    )
+  }
+
   const total =
     state.temps.filter((t) => t.semaine === semaine && t.personne === personne).reduce((s, t) => s + t.heures, 0) +
     state.tempsHorsProjet.filter((t) => t.semaine === semaine && t.personne === personne).reduce((s, t) => s + t.heures, 0)
   const theorique = state.settings.heuresParJour * 5
+  const projetsHorsListe = actifs.filter((p) => !couples.some((c) => c.projetId === p.id))
 
   const ligneStyle: React.CSSProperties = {
     display: 'flex',
@@ -540,6 +589,17 @@ function SaisieMobile({ today }: { today: string }) {
         )}
       </div>
 
+      <p className="small" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', margin: '4px 0 8px' }}>
+        <strong>{fmtHeures(total)} saisies</strong>
+        <span className="muted">sur {fmtHeures(theorique)} théoriques</span>
+        <Badge tone={total === 0 ? 'muted' : Math.abs(total - theorique) < 0.5 ? 'ok' : 'warn'}>
+          {total === 0 ? 'à saisir' : total < theorique ? 'incomplète' : total > theorique + 0.5 ? 'surcharge' : 'complète'}
+        </Badge>
+        <IndicateurEnregistrement />
+        <span className="spacer" />
+        <Btn small onClick={copierSemainePrecedente}>Copier la semaine précédente</Btn>
+      </p>
+
       {couples.length === 0 ? (
         <EmptyState>
           Aucun projet affecté à {personne || '—'} — l'affectation se fait sur la version bureau ou
@@ -565,28 +625,48 @@ function SaisieMobile({ today }: { today: string }) {
         })
       )}
 
-      <details style={{ marginTop: 10 }}>
-        <summary className="small" style={{ cursor: 'pointer' }}>Hors projet (non facturable)</summary>
-        {CATEGORIES_HORS_PROJET.map((cat) => (
-          <div key={cat} style={ligneStyle}>
-            <div className="small" style={{ flex: 1 }}>{cat}</div>
-            <NumInput
-              value={hpDe(cat)}
-              onChange={(v) => poserHP(cat, v)}
-              style={{ width: 76 }}
-              ariaLabel={`Heures de ${personne} — ${cat} (hors projet) — semaine du ${fmtDate(semaine)}`}
-            />
-          </div>
-        ))}
-      </details>
+      {/* hors projet : seules les activités réellement utilisées s'affichent,
+          le reste attend derrière « Ajouter une activité » */}
+      {CATEGORIES_HORS_PROJET.filter((cat) => (hpDe(cat) ?? 0) > 0 || activitesVisibles.includes(cat)).map((cat) => (
+        <div key={cat} style={ligneStyle}>
+          <div className="small" style={{ flex: 1 }}>{cat} <span className="muted">· hors projet</span></div>
+          <NumInput
+            value={hpDe(cat)}
+            onChange={(v) => poserHP(cat, v)}
+            style={{ width: 76 }}
+            ariaLabel={`Heures de ${personne} — ${cat} (hors projet) — semaine du ${fmtDate(semaine)}`}
+          />
+        </div>
+      ))}
 
-      <p className="small" style={{ marginTop: 10, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-        <strong>Total : {fmtHeures(total)}</strong>
-        <Badge tone={total === 0 ? 'muted' : Math.abs(total - theorique) < 0.5 ? 'ok' : 'warn'}>
-          théorique {fmtHeures(theorique)}
-        </Badge>
-        <IndicateurEnregistrement />
-      </p>
+      <div className="toolbar" style={{ marginTop: 10, marginBottom: 0, flexWrap: 'wrap' }}>
+        <Select
+          value=""
+          onChange={(v) => v && setActivitesVisibles((l) => [...new Set([...l, v])])}
+          options={[
+            { value: '', label: '+ Ajouter une activité (hors projet)' },
+            ...CATEGORIES_HORS_PROJET.filter((cat) => (hpDe(cat) ?? 0) <= 0 && !activitesVisibles.includes(cat)).map(
+              (cat) => ({ value: cat, label: cat }),
+            ),
+          ]}
+          style={{ maxWidth: 260 }}
+        />
+        {projetsHorsListe.length > 0 && (
+          <Select
+            value=""
+            onChange={(v) => {
+              if (!v) return
+              const p = actifs.find((x) => x.id === v)
+              setAjoutes((l) => [...l, { projetId: v, phase: phaseParDefaut(p, semaine) }])
+            }}
+            options={[
+              { value: '', label: '+ Ajouter un projet' },
+              ...projetsHorsListe.map((p) => ({ value: p.id, label: `${p.id} — ${p.nom}` })),
+            ]}
+            style={{ maxWidth: 260 }}
+          />
+        )}
+      </div>
     </Card>
   )
 }
@@ -600,66 +680,77 @@ function IndicateurEnregistrement() {
   )
 }
 
+// ---------- historique : la grille 6 semaines (vue secondaire) ----------
+
+function Historique({ today }: { today: string }) {
+  const { state } = useStore()
+  const [fin, setFin] = useState(() => mondayOf(todayISO()))
+  const personnes = state.settings.personnes
+  const finCourante = mondayOf(today)
+  const semaines = Array.from({ length: NB_SEMAINES }, (_, i) => addDays(fin, -7 * (NB_SEMAINES - 1 - i)))
+
+  return (
+    <>
+      <div className="toolbar">
+        <Btn onClick={() => setFin(addDays(fin, -7))} title="Reculer d'une semaine">
+          ‹
+        </Btn>
+        <Btn onClick={() => setFin(addDays(fin, 7))} title="Avancer d'une semaine">
+          ›
+        </Btn>
+        <Btn onClick={() => setFin(finCourante)} disabled={fin === finCourante}>
+          Cette semaine
+        </Btn>
+        <span>
+          Semaines du <strong>{fmtDate(semaines[0])}</strong> au{' '}
+          <strong>{fmtDate(addDays(fin, 6))}</strong>
+        </span>
+        {fin === finCourante && <Badge tone="info">• = semaine en cours</Badge>}
+        <IndicateurEnregistrement />
+      </div>
+      {personnes.map((p) => (
+        <TableauPersonne key={p} personne={p} semaines={semaines} today={today} />
+      ))}
+      <p className="muted small">
+        Les dérives heures par projet ont déménagé dans <a href="#/pilotage/missions">Pilotage → Missions</a>.
+      </p>
+    </>
+  )
+}
+
 // ---------- module ----------
 
 export default function Temps() {
   const { state } = useStore()
   const today = useToday()
-  const [fin, setFin] = useState(() => mondayOf(todayISO()))
+  const [vue, setVue] = useState<'semaine' | 'historique'>('semaine')
   const personnes = state.settings.personnes
-  const finCourante = mondayOf(today)
-
-  const semaines = Array.from({ length: NB_SEMAINES }, (_, i) => addDays(fin, -7 * (NB_SEMAINES - 1 - i)))
 
   return (
     <Page
       titre="Temps passé"
-      sousTitre="Une colonne par semaine, saisie enregistrée en direct. Ces heures calibrent marge et devis."
+      sousTitre="Ma semaine, projet par projet — l'historique et la grille complète à côté."
     >
-      {/* téléphone : la tâche réelle — une personne, une semaine, une liste */}
-      <div className="temps-mobile">
-        {personnes.length === 0 ? (
-          <Card>
-            <EmptyState>
-              Aucune personne définie — renseignez l’équipe dans <a href="#/parametres">Paramètres</a>.
-            </EmptyState>
-          </Card>
-        ) : (
-          <SaisieMobile today={today} />
-        )}
-      </div>
-
-      <div className="temps-desktop">
-        <div className="toolbar">
-          <Btn onClick={() => setFin(addDays(fin, -7))} title="Reculer d'une semaine">
-            ‹
-          </Btn>
-          <Btn onClick={() => setFin(addDays(fin, 7))} title="Avancer d'une semaine">
-            ›
-          </Btn>
-          <Btn onClick={() => setFin(finCourante)} disabled={fin === finCourante}>
-            Cette semaine
-          </Btn>
-          <span>
-            Semaines du <strong>{fmtDate(semaines[0])}</strong> au{' '}
-            <strong>{fmtDate(addDays(fin, 6))}</strong>
-          </span>
-          {fin === finCourante && <Badge tone="info">• = semaine en cours</Badge>}
-          <IndicateurEnregistrement />
-        </div>
-
-        {personnes.length === 0 ? (
-          <Card>
-            <EmptyState>
-              Aucune personne définie — renseignez l’équipe dans <a href="#/parametres">Paramètres</a>.
-            </EmptyState>
-          </Card>
-        ) : (
-          personnes.map((p) => <TableauPersonne key={p} personne={p} semaines={semaines} today={today} />)
-        )}
-      </div>
-
-      <RecapDerives />
+      {personnes.length === 0 ? (
+        <Card>
+          <EmptyState>
+            Aucune personne définie — renseignez l’équipe dans <a href="#/parametres">Paramètres</a>.
+          </EmptyState>
+        </Card>
+      ) : (
+        <>
+          <Tabs
+            tabs={[
+              { id: 'semaine', label: 'Ma semaine' },
+              { id: 'historique', label: 'Historique (6 semaines)' },
+            ]}
+            actif={vue}
+            onSelect={(id) => setVue(id as 'semaine' | 'historique')}
+          />
+          {vue === 'semaine' && <SaisieSemaine today={today} />}
+          {vue === 'historique' && <Historique today={today} />}
+        </>
+      )}
     </Page>
   )
 }

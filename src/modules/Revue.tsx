@@ -17,7 +17,7 @@ import {
   tempsParPersonne,
 } from '../derive'
 import { alertesActives } from '../alerts'
-import { Badge, Btn, Card, EmptyState, Icon, Money, Page, Progress, Stat, Table, useToday } from '../ui'
+import { Badge, Btn, Card, EmptyState, Icon, Money, Progress, Stat, Table, useToday } from '../ui'
 import { ouvrirRevuePDF } from '../pdf'
 import { addDays, addMonths, fmtDate, fmtMoney, fmtPct, monthKey } from '../util'
 
@@ -64,7 +64,8 @@ function toneParJour(v: number | null, objectif: number): 'ok' | 'warn' | 'dange
   return v >= objectif ? 'ok' : v >= objectif * 0.6 ? 'warn' : 'danger'
 }
 
-export default function Revue() {
+/** contenu de la revue imprimable — hébergé par la page Pilotage (vue Revue / PDF) */
+export function RevueContenu() {
   const { state } = useStore()
   const today = useToday()
   const [preset, setPreset] = useState<Preset>('mois')
@@ -113,16 +114,7 @@ export default function Revue() {
           : `${fmtDate(debut)} → ${fmtDate(fin)}`
 
   return (
-    <Page
-      titre="revue"
-      wordmark
-      meta={`Pilotage · ${libellePeriode}`}
-      actions={
-        <Btn kind="primary" onClick={() => ouvrirRevuePDF(state, debut, fin)}>
-          <Icon name="printer" size={14} /> Imprimer / PDF
-        </Btn>
-      }
-    >
+    <>
       {/* ---------- sélecteur de période ---------- */}
       <div className="toolbar" style={{ marginBottom: 16, gap: 10, flexWrap: 'wrap' }}>
         <span style={{ display: 'inline-flex', gap: 4 }}>
@@ -138,10 +130,10 @@ export default function Revue() {
           <ChampDate value={fin} onChange={majFin} />
         </span>
         <span className="spacer" />
-        <span className="muted small">
-          Le bilan daté et imprimable du pilotage. Pour disséquer le €/jour par mission, voir l'
-          <a href="#/analyse">Analyse €/jour</a>.
-        </span>
+        <span className="muted small">{libellePeriode}</span>
+        <Btn kind="primary" onClick={() => ouvrirRevuePDF(state, debut, fin)}>
+          <Icon name="printer" size={14} /> Imprimer / PDF
+        </Btn>
       </div>
 
       {/* ---------- bandeau KPI ---------- */}
@@ -376,6 +368,6 @@ export default function Revue() {
           })
         )}
       </Card>
-    </Page>
+    </>
   )
 }

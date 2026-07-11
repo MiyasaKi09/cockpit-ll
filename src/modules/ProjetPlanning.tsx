@@ -20,8 +20,7 @@ import {
   TextInput,
   confirmer,
   toast,
-  useToday,
-} from '../ui'
+  useToday, RowMenu } from '../ui'
 import { diffDays, fmtDate, fmtMoney, fold, todayISO, uid } from '../util'
 import { montantElement, sommeLignes } from '../dpgf'
 import { couleurPhase } from './Planning'
@@ -422,8 +421,8 @@ function CarteTaches({
                         options={Object.entries(LIBELLE_STATUT_TACHE).map(([value, label]) => ({ value, label }))}
                       />
                     </td>
-                    <td className="right" style={{ width: 70 }}>
-                      <Btn small kind="danger" onClick={() => void supprimer(t)}>Suppr.</Btn>
+                    <td className="right" style={{ width: 54 }}>
+                      <RowMenu items={[{ label: 'Supprimer la tâche', onClick: () => void supprimer(t), danger: true }]} />
                     </td>
                   </tr>
                 )

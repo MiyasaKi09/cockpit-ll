@@ -18,6 +18,7 @@ import {
   coutJourObjectif,
   nomProjet,
 } from '../derive'
+import { RecapDerives } from './Temps'
 import { Badge, Card, EmptyState, Page, Stat, Table } from '../ui'
 import { addDays, diffDays, fmtDate, fmtMoney, fmtPct, todayISO } from '../util'
 
@@ -250,7 +251,7 @@ function CarteClassement({ debut, fin }: { debut: string; fin: string }) {
 
 type Preset = 'annees' | 'quatrevingtdix' | 'libre'
 
-function CarteComparaison() {
+export function CarteComparaison() {
   const { state } = useStore()
   const auj = todayISO()
   const objectif = coutJourObjectif(state)
@@ -382,44 +383,16 @@ function CarteComparaison() {
 
 // ---------- module ----------
 
-export default function Analyse() {
+/** vue Missions de la page Pilotage — le €/jour réel par mission */
+export function MissionsContenu() {
   const { state } = useStore()
   const auj = todayISO()
 
   const objectif = coutJourObjectif(state)
   const annee = Number(auj.slice(0, 4))
-  const caRealise = caRealiseAnnee(state, annee)
-  const cible = caCible(state)
-  const pctCible = cible > 0 ? caRealise / cible : null
 
   return (
-    <Page
-      titre="Analyse — chaque mission paie-t-elle sa journée ?"
-      sousTitre={
-        <>
-          €/jour réel par mission, périodes comparables et histogramme mensuel. Pour le bilan daté
-          et imprimable de tout le pilotage, voir la <a href="#/revue">Revue de pilotage</a>.
-        </>
-      }
-    >
-      {cible > 0 && (
-        <Card titre={`Objectif de chiffre d'affaires ${annee}`}>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 22, fontWeight: 700 }}>{fmtMoney(caRealise)}</span>
-            <span className="muted">/ {fmtMoney(cible)} HT cible</span>
-            {pctCible !== null && (
-              <Badge tone={pctCible >= 1 ? 'ok' : pctCible >= 0.6 ? 'warn' : 'danger'}>{fmtPct(pctCible, 0)}</Badge>
-            )}
-          </div>
-          <div style={{ background: 'var(--line)', borderRadius: 99, height: 12, overflow: 'hidden', marginTop: 10 }}>
-            <div style={{ width: `${Math.min(100, (pctCible ?? 0) * 100)}%`, height: '100%', background: pctCible !== null && pctCible >= 1 ? 'var(--ok)' : pctCible !== null && pctCible >= 0.6 ? 'var(--warn)' : 'var(--danger)' }} />
-          </div>
-          <p className="muted small" style={{ marginTop: 8 }}>
-            CA facturé (émis ou encaissé) de l'année vs cible réglée dans Paramètres. Reste à faire :{' '}
-            <strong>{fmtMoney(Math.max(0, cible - caRealise))}</strong>.
-          </p>
-        </Card>
-      )}
+    <>
       <div className="grid3" style={{ marginBottom: 16 }}>
         <Stat
           label="Seuil de rentabilité (€/jour facturable)"
@@ -440,7 +413,7 @@ export default function Analyse() {
 
       <CarteCAMensuel />
       <CarteClassement debut={`${annee}-01-01`} fin={auj} />
-      <CarteComparaison />
-    </Page>
+      <RecapDerives />
+    </>
   )
 }

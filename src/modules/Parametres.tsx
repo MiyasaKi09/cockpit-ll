@@ -24,8 +24,7 @@ import {
   confirmer,
   toast,
   useRoute,
-  useToday,
-} from '../ui'
+  useToday, RowMenu } from '../ui'
 import { download, fmtDate, fmtMoney, fmtPct, fold, todayISO, uid } from '../util'
 import { coefSuggere, coutAgenceAnnuel, coutAnnuelPersonne, coutHorairePersonne, coutHoraireMoyen, coutJourObjectif, objectifCA, tauxVente, tauxVenteObjectif } from '../derive'
 import { connecterGoogle, deconnecter, estConnecte } from '../google'
@@ -91,7 +90,7 @@ function CarteEquipe() {
     <Card titre="Équipe & coûts réels — le cœur du calcul de marge">
       <p className="small muted" style={{ marginBottom: 10 }}>
         Chaque heure pointée est valorisée au coût réel de la personne (rémunération chargée ÷ heures
-        annuelles). La marge d'un projet et l'<a href="#/analyse">Analyse €/jour</a> reposent sur ces
+        annuelles). La marge d'un projet et le <a href="#/pilotage/missions">Pilotage (Missions)</a> reposent sur ces
         chiffres — pas sur un forfait.
       </p>
       <Table compact head={['Personne', 'Statut (SAS)', 'Saisie', <span key="b" className="right">€ / mois</span>, <span key="c" className="right">Coef. charges</span>, <span key="h" className="right">Heures / an</span>, <span key="f" className="right">% facturable</span>, <span key="ch" className="right">Coût horaire</span>, <span key="ca" className="right">Coût annuel chargé</span>, '']}>
@@ -126,7 +125,7 @@ function CarteEquipe() {
             <td className="right"><PctInput value={p.facturablePct} onChange={(v) => majPersonne(p.id, 'facturablePct', v)} style={{ width: 80 }} ariaLabel={`Part facturable de ${p.nom} en pourcentage`} /></td>
             <td className="right num"><strong>{fmtMoney(coutHorairePersonne(p), true)}</strong></td>
             <td className="right num">{fmtMoney(coutAnnuelPersonne(p))}</td>
-            <td className="right"><Btn small kind="danger" onClick={() => retirer(p.id)}>✕</Btn></td>
+            <td className="right"><RowMenu items={[{ label: "Retirer de l'équipe", onClick: () => void retirer(p.id), danger: true }]} /></td>
           </tr>
         ))}
       </Table>
@@ -151,7 +150,7 @@ function CarteEquipe() {
         <dt>Coût d'agence annuel (équipe + FG)</dt>
         <dd><strong>{fmtMoney(coutAgenceAnnuel(state))}</strong></dd>
         <dt>Seuil de rentabilité par jour facturable</dt>
-        <dd><strong>{fmtMoney(coutJourObjectif(state))}</strong> <span className="muted small">— l'objectif de l'Analyse €/jour</span></dd>
+        <dd><strong>{fmtMoney(coutJourObjectif(state))}</strong> <span className="muted small">— l'objectif €/jour du Pilotage</span></dd>
         <dt>Coût horaire moyen pondéré</dt>
         <dd>{fmtMoney(coutHoraireMoyen(state), true)} <span className="muted small">(rémunérations chargées ÷ heures annuelles de l'équipe)</span></dd>
       </dl>

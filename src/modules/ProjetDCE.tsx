@@ -22,8 +22,7 @@ import {
   TextArea,
   TextInput,
   confirmer,
-  toast,
-} from '../ui'
+  toast, RowMenu } from '../ui'
 import { fmtDate, fmtMoney, fold, todayISO, uid } from '../util'
 import {
   analyserCCTP,
@@ -1233,10 +1232,12 @@ function CarteLotsDCE({ projet: p }: { projet: Projet }) {
                 <span style={{ display: 'inline-flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                   <Btn small onClick={() => setElementsDe(l)}>Éléments</Btn>
                   <Btn small kind="primary" onClick={() => envoyerAuPlanning(l)}>Envoyer au planning</Btn>
-                  <Btn small onClick={() => void replanifier(l)} title="Recalcule les dates des tâches du lot sur la fenêtre actuelle">
-                    Replanifier
-                  </Btn>
-                  <Btn small kind="danger" onClick={() => void supprimer(l)}>Suppr.</Btn>
+                  <RowMenu
+                    items={[
+                      { label: 'Replanifier les tâches du lot', onClick: () => void replanifier(l) },
+                      { label: 'Supprimer le lot', onClick: () => void supprimer(l), danger: true },
+                    ]}
+                  />
                 </span>
               </td>
             </tr>

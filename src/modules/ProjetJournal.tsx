@@ -11,7 +11,7 @@ import { useStore } from '../store'
 import { suggererTags, taggerImage } from '../tagging'
 import { lireRacine, nomConforme, rangerFichier, supporteFS, type ResultatRangement } from '../fsdrive'
 import { creerDocument, empreinteSha256, enregistrerDocument } from '../registre'
-import { Badge, Btn, Card, CopyBtn, EmptyState, Select, TextArea, TextInput, confirmer, toast } from '../ui'
+import { Badge, Btn, Card, CopyBtn, EmptyState, Select, TextArea, TextInput, confirmer, toast, RowMenu } from '../ui'
 import { fmtDate, fold, todayISO, uid } from '../util'
 
 function noteEnMarkdown(p: Projet, n: NoteJournal): string {
@@ -265,21 +265,23 @@ export default function ProjetJournal({ projet: p }: { projet: Projet }) {
               </div>
               <div className="alert-actions">
                 <CopyBtn small kind="ghost" text={() => noteEnMarkdown(p, n)} label=".md" />
-                <Btn
-                  small
-                  kind="danger"
-                  onClick={async () => {
-                    const snap = state
-                    if (await confirmer({ message: 'Supprimer cette note ?', danger: true, confirmerLabel: 'Supprimer' })) {
-                      maj((pr) => {
-                        pr.journal = pr.journal.filter((x) => x.id !== n.id)
-                      })
-                      toast('Note supprimée.', { undo: () => replace(snap) })
-                    }
-                  }}
-                >
-                  ✕
-                </Btn>
+                <RowMenu
+                  items={[
+                    {
+                      label: 'Supprimer la note',
+                      danger: true,
+                      onClick: async () => {
+                        const snap = state
+                        if (await confirmer({ message: 'Supprimer cette note ?', danger: true, confirmerLabel: 'Supprimer' })) {
+                          maj((pr) => {
+                            pr.journal = pr.journal.filter((x) => x.id !== n.id)
+                          })
+                          toast('Note supprimée.', { undo: () => replace(snap) })
+                        }
+                      },
+                    },
+                  ]}
+                />
               </div>
             </div>
           ))

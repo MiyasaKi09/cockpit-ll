@@ -290,6 +290,35 @@ pre {
   color: var(--accent-ink);
   box-shadow: 2px 2px 0 var(--border);
 }
+/* groupe repliable : meme habillage que .nav-group, mais cliquable */
+.nav-group-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+}
+.nav-group-btn:hover { color: var(--ink); }
+.nav-group-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* statut compact des donnees, dans la ligne Parametres du pied de menu */
+.nav-statut {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ink-3);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+.nav-statut:hover { color: var(--ink); text-decoration: underline; }
+.nav-item.active .nav-statut { color: inherit; }
+
 .nav-count {
   background: var(--danger);
   color: #fff;

@@ -23,8 +23,7 @@ import {
   TextArea,
   TextInput,
   confirmer,
-  toast,
-} from '../ui'
+  toast, RowMenu } from '../ui'
 import type { Tone } from '../ui'
 import { fmtDate, fmtMoney, fmtPct, todayISO, uid } from '../util'
 import { MODELES_WHISPER, transcrireFichier, type ProgresTranscription } from '../transcription'
@@ -123,7 +122,7 @@ export function CarteMarches({ projet: p }: { projet: Projet }) {
               <td className="right">
                 <span style={{ display: 'inline-flex', gap: 6 }}>
                   <Btn small onClick={() => setModal({ marche: m })}>Modifier</Btn>
-                  <Btn small kind="danger" onClick={() => supprimer(m)}>Supprimer</Btn>
+                  <RowMenu items={[{ label: 'Supprimer le marché', onClick: () => supprimer(m), danger: true }]} />
                 </span>
               </td>
             </tr>

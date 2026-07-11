@@ -38,7 +38,7 @@ import { ligneActivable,
 import type { Tone } from '../ui'
 import { PipelineContenu } from './Developpement'
 import { ReferencesContenu } from './References'
-import { diffDays, fmtPct, fold, todayISO, uid } from '../util'
+import { diffDays, fmtPct, fold, todayISO, uid, fmtDate } from '../util'
 import { CRITERES_GO_NOGO, evaluerGoNoGo } from '../derive'
 import { assemble, contexteConsultation } from '../prompts'
 import { importerConsultations, parseRetourRoutine } from '../importRoutines'
@@ -47,6 +47,7 @@ import { CRITERES_DEFAUT, rechercherBoamp, rechercherEvenementsBoamp, type Evene
 import type { AnnonceExterne, CriteresBoamp } from '../boamp'
 import { rechercherTed } from '../ted'
 import { scorerAnnonce, toneScore } from '../radar'
+import { collecterMaintenant, dernieresCollectes, listerSignauxVeille, type CollecteVeille } from '../veille'
 import { relaisDisponible } from '../relais'
 import { creerProjetDepuisConsultation } from '../consultations'
 import { genererDocxCandidature, nomFichierCandidature, referencesPertinentes } from '../candidature'
@@ -163,6 +164,7 @@ function CarteBoamp() {
   const [erreur, setErreur] = useState('')
   const [noteTed, setNoteTed] = useState('')
   const [noteEvenements, setNoteEvenements] = useState('')
+  const [collectes, setCollectes] = useState<CollecteVeille[]>([])
   const [enCours, setEnCours] = useState(false)
   const lanceAuto = useRef(false)
   /** décisions du Radar (écartée / surveillée) — partagées entre les 2 postes */
@@ -250,11 +252,41 @@ function CarteBoamp() {
     setEnCours(false)
   }
 
-  // critères déjà réglés → la veille se lance toute seule à l'ouverture de la page
+  /** signaux du service de fond (collecte serveur toutes les 4 h) —
+   *  le Radar se remplit même si personne n'a lancé de recherche */
+  const chargerServeur = async (): Promise<boolean> => {
+    try {
+      const serveur = await listerSignauxVeille(todayISO())
+      if (!serveur) return false
+      if (serveur.evenements.length > 0) {
+        const nb = appliquerEvenements(serveur.evenements)
+        if (nb > 0)
+          setNoteEvenements(`${nb} rectificatif(s)/résultat(s) rattaché(s) aux consultations suivies — dates limites mises à jour.`)
+      }
+      setCollectes(await dernieresCollectes())
+      if (serveur.annonces.length > 0) {
+        setAnnonces(serveur.annonces)
+        return true
+      }
+      return false
+    } catch {
+      return false // pas bloquant : la recherche directe reste disponible
+    }
+  }
+
+  // à l'ouverture : signaux serveur d'abord (session asynchrone → une
+  // relance), sinon l'ancienne recherche directe si les critères sont réglés
   useEffect(() => {
-    if (lanceAuto.current || !state.settings.veilleBoamp) return
+    if (lanceAuto.current) return
     lanceAuto.current = true
-    void rechercher(criteres)
+    void (async () => {
+      if (await chargerServeur()) return
+      setTimeout(() => {
+        void chargerServeur().then((ok) => {
+          if (!ok && state.settings.veilleBoamp) void rechercher(criteres)
+        })
+      }, 2500)
+    })()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const suivre = (a: AnnonceExterne) =>
@@ -331,6 +363,25 @@ function CarteBoamp() {
           </Btn>
         </Field>
       </div>
+      {collectes.length > 0 && (
+        <p className="small muted" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          Service de fond (toutes les 4 h, même Cockpit fermé) :{' '}
+          {collectes
+            .map((co) => `${co.source.toUpperCase()} ${co.statut === 'ok' ? '✓' : '⚠'} ${co.termineLe ? fmtDate(co.termineLe.slice(0, 10)) : '…'} (+${co.nbNouveaux})`)
+            .join(' · ')}
+          <Btn
+            small
+            kind="ghost"
+            onClick={() => {
+              void collecterMaintenant()
+                .then(() => chargerServeur())
+                .catch((e) => setErreur(e instanceof Error ? e.message : String(e)))
+            }}
+          >
+            Collecter maintenant
+          </Btn>
+        </p>
+      )}
       {erreur && <p className="small danger-text">{erreur}</p>}
       {noteTed && <p className="small muted">{noteTed}</p>}
       {noteEvenements && <p className="small ok-text">{noteEvenements}</p>}

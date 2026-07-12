@@ -80,7 +80,7 @@ export function contexteProjet(state: AppState, p: Projet): Record<string, strin
       ? `Marchés de travaux :\n${marches.map((m) => `  - ${m.lot} : ${m.entreprise}, ${fmtMoney(m.montantInitialHT + m.avenantsHT)} HT${m.actif ? ' (chantier en cours)' : ''}`).join('\n')}`
       : null,
     impayees.length
-      ? `Factures en retard :\n${impayees.map((f) => `  - ${f.id} ${f.libelle} : ${fmtMoney(ttc(f), true)} TTC, échue le ${fmtDate(encaissementPrevu(f))}`).join('\n')}`
+      ? `Factures en retard :\n${impayees.map((f) => `  - ${f.numero || f.id} ${f.libelle} : ${fmtMoney(ttc(f), true)} TTC, échue le ${fmtDate(encaissementPrevu(f))}`).join('\n')}`
       : null,
     p.notes ? `Notes : ${p.notes}` : null,
   ]
@@ -148,7 +148,7 @@ export function contexteFacture(state: AppState, f: Facture): Record<string, str
   const delaiMoyen = p ? delaiMoyenPaiement(state, p.typeMO) : null
   return {
     ...base,
-    facture_numero: f.id,
+    facture_numero: f.numero || f.id,
     facture_libelle: f.libelle,
     facture_ht: fmtMoney(f.montantHT, true),
     facture_ttc: fmtMoney(ttc(f), true),

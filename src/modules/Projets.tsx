@@ -50,7 +50,8 @@ import {
 } from '../miqcp'
 import { coutHoraireMoyen, coutJourObjectif, coutReelTemps, coutsExternes, encaissementPrevu, enJours, factureHT, heuresPrevues, heuresReelles, retardFacture, tauxVente, ttc } from '../derive'
 import { assemble, contexteProjet, copier } from '../prompts'
-import { facturesParDefaut } from '../echeancier'
+import { echeancesParDefaut } from '../echeancier'
+import { contratDuProjet, totalContratHT } from '../contrats'
 import ProjetNouveau from './ProjetNouveau'
 import ProjetChantier from './ProjetChantier'
 import ProjetDCE from './ProjetDCE'
@@ -412,9 +413,9 @@ function BarreProjetCompacte({ projet: p }: { projet: Projet }) {
   const prochainePhase = p.phases
     .filter((ph) => ph.fin && ph.fin >= today && ph.montantHT > 0)
     .sort((a, b) => (a.fin || '').localeCompare(b.fin || ''))[0]
-  const prochaineFacture = state.factures
-    .filter((f) => f.projetId === p.id && f.statut === 'prevue' && f.emission >= today)
-    .sort((a, b) => a.emission.localeCompare(b.emission))[0]
+  const prochaineEcheance = state.echeancesFacturation
+    .filter((e) => e.projetId === p.id && e.datePrevue >= today)
+    .sort((a, b) => a.datePrevue.localeCompare(b.datePrevue))[0]
   const enRetard = state.factures.filter((f) => f.projetId === p.id && retardFacture(f, today) > 0)
   return (
     <p
@@ -422,10 +423,10 @@ function BarreProjetCompacte({ projet: p }: { projet: Projet }) {
       style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center', margin: '0 2px 12px' }}
     >
       {phaseCourante && <Badge tone="info">phase {phaseCourante.code}</Badge>}
-      {prochaineFacture ? (
+      {prochaineEcheance ? (
         <span>
-          Prochaine échéance : <strong>facture {prochaineFacture.id}</strong> le{' '}
-          <DateF d={prochaineFacture.emission} />
+          Prochaine échéance : <strong>{fmtMoney(prochaineEcheance.montantHT)} HT à facturer</strong> le{' '}
+          <DateF d={prochaineEcheance.datePrevue} />
         </span>
       ) : prochainePhase ? (
         <span>
@@ -459,13 +460,13 @@ function BandeauProjet({ projet: p }: { projet: Projet }) {
   const prochainePhase = p.phases
     .filter((ph) => ph.fin && ph.fin >= today && ph.montantHT > 0)
     .sort((a, b) => (a.fin || '').localeCompare(b.fin || ''))[0]
-  const prochaineFacture = state.factures
-    .filter((f) => f.projetId === p.id && f.statut === 'prevue' && f.emission >= today)
-    .sort((a, b) => a.emission.localeCompare(b.emission))[0]
-  // l'échéance CONCRÈTE la plus proche : une facture datée bat un code de phase
+  const prochaineEcheance = state.echeancesFacturation
+    .filter((e) => e.projetId === p.id && e.datePrevue >= today)
+    .sort((a, b) => a.datePrevue.localeCompare(b.datePrevue))[0]
+  // l'échéance CONCRÈTE la plus proche : une facturation datée bat un code de phase
   const echeance =
-    prochaineFacture && (!prochainePhase?.fin || prochaineFacture.emission <= prochainePhase.fin)
-      ? { valeur: `Facture ${prochaineFacture.id}`, date: prochaineFacture.emission, complement: `${fmtMoney(prochaineFacture.montantHT)} HT — ${prochaineFacture.libelle}` }
+    prochaineEcheance && (!prochainePhase?.fin || prochaineEcheance.datePrevue <= prochainePhase.fin)
+      ? { valeur: 'Facture à émettre', date: prochaineEcheance.datePrevue, complement: `${fmtMoney(prochaineEcheance.montantHT)} HT — ${prochaineEcheance.libelle}` }
       : prochainePhase
         ? { valeur: prochainePhase.code, date: prochainePhase.fin!, complement: `rendu de phase (${LIBELLES_PHASES[prochainePhase.code]})` }
         : null
@@ -541,9 +542,13 @@ function OngletFinances({ projet: p }: { projet: Projet }) {
   const factures = state.factures
     .filter((f) => f.projetId === p.id)
     .sort((a, b) => a.emission.localeCompare(b.emission))
+  const echeances = state.echeancesFacturation
+    .filter((e) => e.projetId === p.id)
+    .sort((a, b) => a.datePrevue.localeCompare(b.datePrevue))
 
   const generer = async () => {
-    const nouvelles = facturesParDefaut(p, state.settings, state.factures)
+    // calculées AVANT la mutation (producteur rejouable)
+    const nouvelles = echeancesParDefaut(p, state.settings)
     if (nouvelles.length === 0) {
       toast('Rien à générer : datez d’abord les phases (onglet Pilotage) — l’échéancier se construit sur les fins de phases.', { tone: 'danger' })
       return
@@ -551,19 +556,20 @@ function OngletFinances({ projet: p }: { projet: Projet }) {
     if (
       !(await confirmer({
         message:
-          `Générer ${nouvelles.length} facture(s) prévisionnelle(s) selon le modèle « ${p.typeMO} » ?\n` +
-          `Les ${factures.length} facture(s) existantes du projet ne sont pas touchées — attention aux doublons si l’échéancier a déjà été généré.`,
+          `Générer ${nouvelles.length} échéance(s) de facturation selon le modèle « ${p.typeMO} » ?\n` +
+          `Les ${echeances.length} échéance(s) et ${factures.length} facture(s) existantes du projet ne sont pas touchées — attention aux doublons si l’échéancier a déjà été généré.`,
         danger: true,
         confirmerLabel: 'Générer',
       }))
     )
       return
     update((d) => {
-      d.factures.push(...facturesParDefaut(p, d.settings, d.factures))
+      d.echeancesFacturation.push(...nouvelles)
     })
-    toast(`${nouvelles.length} facture(s) prévisionnelle(s) générée(s).`, { tone: 'ok' })
+    toast(`${nouvelles.length} échéance(s) de facturation générée(s) — l’émission (numéro, gel) se fait dans Facturation.`, { tone: 'ok' })
   }
 
+  const contrat = contratDuProjet(state, p.id)
   const coutTemps = coutReelTemps(state, p.id)
   const externes = coutsExternes(state, p.id)
   const factTotal = factureHT(state, p.id)
@@ -583,12 +589,12 @@ function OngletFinances({ projet: p }: { projet: Projet }) {
           value={<Money v={coutTemps} />}
           sub="heures pointées × coût horaire de chaque personne"
         />
-        <Stat label="Coûts externes" value={<Money v={externes} />} sub="BET, sous-traitance (onglet Pilotage, par phase)" />
+        <Stat label="Budget externe (saisi)" value={<Money v={externes} />} sub="BET, sous-traitance — un budget, pas un coût réel (lot F2)" />
         <Stat
-          label="Marge réelle à date"
+          label="Marge estimée à date"
           value={<Money v={margeReelle} />}
           tone={margeReelle < 0 ? 'danger' : 'ok'}
-          sub={<>facturé {fmtMoney(factTotal)} − coûts</>}
+          sub={<>facturé {fmtMoney(factTotal)} − temps − budget externe saisi</>}
         />
         <Stat
           label="€ / jour réel"
@@ -599,18 +605,23 @@ function OngletFinances({ projet: p }: { projet: Projet }) {
       </div>
 
       <Card
-        titre={`Échéancier du projet (${factures.length} factures)`}
+        titre={`Échéancier du projet (${factures.length} facture${factures.length > 1 ? 's' : ''} · ${echeances.length} prévue${echeances.length > 1 ? 's' : ''})`}
         actions={
           <>
+            {contrat && (
+              <a href={`#/contrats/${contrat.id}`} className="small">
+                Contrat ({fmtMoney(totalContratHT(contrat))} HT{contrat.provisoire ? ' · provisoire' : ''}) →
+              </a>
+            )}
             <a href="#/facturation" className="small">Module Facturation →</a>
             <Btn small kind="primary" onClick={generer}>(Re)générer l'échéancier</Btn>
           </>
         }
       >
-        {factures.length === 0 ? (
+        {factures.length === 0 && echeances.length === 0 ? (
           <EmptyState>
-            Aucune facture — « (Re)générer l'échéancier » les crée automatiquement depuis les phases datées
-            (modèle {p.typeMO}).
+            Aucune facture ni échéance — « (Re)générer l'échéancier » crée les échéances automatiquement
+            depuis les phases datées (modèle {p.typeMO}).
           </EmptyState>
         ) : (
           <Table
@@ -621,7 +632,7 @@ function OngletFinances({ projet: p }: { projet: Projet }) {
               const retard = retardFacture(f, today)
               return (
                 <tr key={f.id}>
-                  <td className="mono">{f.id}</td>
+                  <td className="mono">{f.numero || f.id}</td>
                   <td>{f.phase}</td>
                   <td>{f.libelle}</td>
                   <td className="right"><Money v={f.montantHT} /></td>
@@ -632,15 +643,24 @@ function OngletFinances({ projet: p }: { projet: Projet }) {
                       <Badge tone="danger">en retard {retard} j</Badge>
                     ) : f.statut === 'encaissee' ? (
                       <Badge tone="ok">encaissée</Badge>
-                    ) : f.statut === 'emise' ? (
-                      <Badge tone="info">émise · échéance {encaissementPrevu(f)}</Badge>
                     ) : (
-                      <Badge tone="muted">prévue</Badge>
+                      <Badge tone="info">émise · échéance {encaissementPrevu(f)}</Badge>
                     )}
                   </td>
                 </tr>
               )
             })}
+            {echeances.map((e) => (
+              <tr key={e.id}>
+                <td className="muted small">— à émettre —</td>
+                <td>{e.phase}</td>
+                <td>{e.libelle}</td>
+                <td className="right"><Money v={e.montantHT} /></td>
+                <td className="right"><Money v={e.montantHT * (1 + e.tauxTVA)} /></td>
+                <td><DateF d={e.datePrevue} /></td>
+                <td><Badge tone="muted">prévue</Badge></td>
+              </tr>
+            ))}
           </Table>
         )}
       </Card>

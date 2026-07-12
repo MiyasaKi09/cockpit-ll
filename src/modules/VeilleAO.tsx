@@ -49,7 +49,7 @@ import { CRITERES_DEFAUT, rechercherBoamp, rechercherEvenementsBoamp, type Evene
 import type { AnnonceExterne, CriteresBoamp } from '../boamp'
 import { rechercherTed } from '../ted'
 import { scorerAnnonce, toneScore } from '../radar'
-import { collecterMaintenant, dernieresCollectes, listerSignauxVeille, type CollecteVeille } from '../veille'
+import { collecterMaintenant, demanderDce, dernieresCollectes, jobsEnAttente, listerSignauxVeille, relancerJob, type CollecteVeille, type JobVeille } from '../veille'
 import { relaisDisponible } from '../relais'
 import { creerProjetDepuisConsultation } from '../consultations'
 import { genererDocxCandidature, nomFichierCandidature, referencesPertinentes } from '../candidature'
@@ -167,6 +167,7 @@ function CarteBoamp() {
   const [noteTed, setNoteTed] = useState('')
   const [noteEvenements, setNoteEvenements] = useState('')
   const [collectes, setCollectes] = useState<CollecteVeille[]>([])
+  const [jobsAttente, setJobsAttente] = useState<JobVeille[]>([])
   const [enCours, setEnCours] = useState(false)
   const lanceAuto = useRef(false)
   /** décisions du Radar (écartée / surveillée) — partagées entre les 2 postes */
@@ -266,6 +267,7 @@ function CarteBoamp() {
           setNoteEvenements(`${nb} rectificatif(s)/résultat(s) rattaché(s) aux consultations suivies — dates limites mises à jour.`)
       }
       setCollectes(await dernieresCollectes())
+      setJobsAttente((await jobsEnAttente().catch(() => null)) || [])
       if (serveur.annonces.length > 0) {
         setAnnonces(serveur.annonces)
         return true
@@ -291,7 +293,11 @@ function CarteBoamp() {
     })()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const suivre = (a: AnnonceExterne) =>
+  const suivre = (a: AnnonceExterne) => {
+    // la validation DÉCLENCHE la tentative de récupération du DCE (0 ter D)
+    if (a.sourceBrute && !['boamp', 'ted'].includes(a.sourceBrute)) {
+      void demanderDce(a.sourceBrute, a.idweb, a.dceUrl || null)
+    }
     update((d) => {
       if (dejaSuivie(d, a)) return
       const radar = scorerAnnonce(d, a, todayISO())
@@ -322,6 +328,7 @@ function CarteBoamp() {
         notes: `Avis officiel : ${a.url}\nRadar ${radar.score}/100 — ${radar.raisons.slice(0, 3).join(' · ') || 'sans raison notée'}${radar.inconnues.length ? `\nÀ vérifier : ${radar.inconnues.join(' · ')}` : ''}`,
       })
     })
+  }
 
   return (
     <Card titre="Radar — BOAMP + TED, trié par pertinence pour l’agence">
@@ -395,6 +402,34 @@ function CarteBoamp() {
           </Btn>
         </p>
       )}
+      {jobsAttente.length > 0 && (
+        <details style={{ marginBottom: 8 }}>
+          <summary className="small warn-text" style={{ cursor: 'pointer' }}>
+            Enrichissement : {jobsAttente.length} fiche(s) en attente d'action (connexion requise, page pilotée en
+            JS, bloquée…)
+          </summary>
+          <div style={{ marginTop: 6 }}>
+            {jobsAttente.slice(0, 8).map((j) => (
+              <p key={j.id} className="small" style={{ display: 'flex', gap: 8, alignItems: 'center', margin: '2px 0' }}>
+                <Badge tone={j.status === 'needs_login' ? 'warn' : j.status === 'needs_browser' ? 'info' : 'danger'}>
+                  {j.status === 'needs_login' ? 'action humaine' : j.status === 'needs_browser' ? 'navigateur requis' : j.status}
+                </Badge>
+                <span className="muted" style={{ flex: 1 }}>
+                  {j.source.toUpperCase()} · {j.kind} · {j.error_detail || j.error_code || ''}
+                </span>
+                {j.url && (
+                  <a href={j.url} target="_blank" rel="noreferrer">
+                    ouvrir ↗
+                  </a>
+                )}
+                <Btn small kind="ghost" onClick={() => void relancerJob(j.id).then(() => chargerServeur())}>
+                  Relancer
+                </Btn>
+              </p>
+            ))}
+          </div>
+        </details>
+      )}
       {erreur && <p className="small danger-text">{erreur}</p>}
       {noteTed && <p className="small muted">{noteTed}</p>}
       {noteEvenements && <p className="small ok-text">{noteEvenements}</p>}
@@ -435,6 +470,8 @@ function CarteBoamp() {
                   {(a.plateformes || [a.plateforme]).map((pl) => (
                     <Badge key={pl} tone={pl === 'BOAMP' ? 'muted' : 'info'}>{pl}</Badge>
                   ))}
+                  {a.niveauAnalyse === 'fiche' && <Badge tone="ok">Fiche publique analysée</Badge>}
+                  {a.niveauAnalyse === 'dce' && <Badge tone="ok">DCE analysé</Badge>}
                   {dj !== null && <Badge tone={dj < 10 ? 'danger' : 'muted'}>J−{dj}</Badge>}
                   <span className="spacer" />
                   <span className="muted"><DateF d={a.dateParution} /></span>
@@ -446,10 +483,16 @@ function CarteBoamp() {
                 </p>
                 <p className="small muted" style={{ margin: '0 0 6px' }}>
                   {a.acheteur || 'acheteur non identifié'}
+                  {a.reference && <> · réf. {a.reference}</>}
                   {a.departements.length > 0 && <> · dép. {a.departements.join(', ')}</>}
                   {a.dateLimite && <> · limite <DateF d={a.dateLimite} /></>}
                   {a.procedure && <> · {a.procedure}</>}
                 </p>
+                {a.description && a.description !== a.objet && (
+                  <p className="small muted" style={{ margin: '0 0 6px' }}>
+                    {a.description.length > 220 ? a.description.slice(0, 220) + '…' : a.description}
+                  </p>
+                )}
                 {sc.raisons.length > 0 && (
                   <p className="small" style={{ margin: '0 0 2px' }}>
                     {sc.raisons.slice(0, 3).map((r, i) => (

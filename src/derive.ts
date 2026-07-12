@@ -1,8 +1,9 @@
 // Valeurs dérivées — une seule source de vérité par donnée :
 // le facturé vient des factures, les heures réelles du pointage.
 
-import type { AppState, Consultation, Facture, MarcheTravaux, PhaseCode, Projet, Situation, StatutConsultation } from './types'
+import type { AppState, Consultation, EcheanceFacturation, Facture, MarcheTravaux, PhaseCode, Projet, Situation, StatutConsultation } from './types'
 import { calculHonoraires } from './miqcp'
+import { regleSurFacture, ttcFacture } from './facture'
 import { addDays, diffDays, fmtMoney, fold } from './util'
 
 export function projetById(state: AppState, id: string): Projet | undefined {
@@ -26,11 +27,18 @@ export function factureHT(state: AppState, projetId: string, phase?: PhaseCode):
     .reduce((s, f) => s + f.montantHT, 0)
 }
 
-/** HT encaissé pour un projet */
+/** HT encaissé pour un projet — dérivé des PAIEMENTS (audit F0) :
+ *  part HT de chaque facture au prorata de ce qui est réellement réglé */
 export function encaisseHT(state: AppState, projetId: string): number {
-  return state.factures
-    .filter((f) => f.projetId === projetId && f.statut === 'encaissee')
-    .reduce((s, f) => s + f.montantHT, 0)
+  let total = 0
+  for (const f of state.factures) {
+    if (f.projetId !== projetId) continue
+    const t = ttcFacture(f)
+    if (t === 0) continue
+    const regle = regleSurFacture(state, f.id)
+    total += f.montantHT * Math.min(1, regle / t)
+  }
+  return total
 }
 
 export function heuresReelles(state: AppState, projetId: string, phase?: PhaseCode): number {
@@ -49,9 +57,30 @@ export function coutEngage(state: AppState, projetId: string): number {
   return coutReelTemps(state, projetId)
 }
 
+/** HT encaissé sur une période — part HT des paiements datés [debut, fin] */
+export function encaisseHTPeriode(state: AppState, debut: string, fin: string): number {
+  const parId = new Map(state.factures.map((f) => [f.id, f]))
+  let total = 0
+  for (const p of state.paiements) {
+    if (p.date < debut || p.date > fin) continue
+    for (const a of p.affectations) {
+      const f = parId.get(a.factureId)
+      if (!f) continue
+      const t = ttcFacture(f)
+      if (t !== 0) total += f.montantHT * (a.montant / t)
+    }
+  }
+  return total
+}
+
 /** date d'encaissement prévue d'une facture */
 export function encaissementPrevu(f: Facture): string {
   return addDays(f.emission, f.delaiJours)
+}
+
+/** date d'encaissement prévue d'une échéance (si facturée à la date prévue) */
+export function encaissementPrevuEcheance(e: EcheanceFacturation): string {
+  return addDays(e.datePrevue, e.delaiJours)
 }
 
 /** jours de retard d'une facture émise non encaissée (0 si pas en retard) */
@@ -62,6 +91,8 @@ export function retardFacture(f: Facture, today: string): number {
 }
 
 export function ttc(f: Facture): number {
+  // pièce émise figée : le TTC est celui du bloc gelé (audit F0)
+  if (f.figee) return f.figee.totalTTC
   return f.montantHT * (1 + f.tauxTVA)
 }
 
@@ -80,9 +111,14 @@ export interface Meteo {
 
 export function meteoFinanciere(state: AppState, today: string): Meteo {
   const horizon = addDays(today, 90)
-  const facturable90j = state.factures
-    .filter((f) => f.statut !== 'encaissee' && f.emission <= horizon)
-    .reduce((s, f) => s + f.montantHT, 0)
+  // factures émises non encaissées + échéances à facturer sous 90 j
+  const facturable90j =
+    state.factures
+      .filter((f) => f.statut !== 'encaissee' && f.emission <= horizon)
+      .reduce((s, f) => s + f.montantHT, 0) +
+    state.echeancesFacturation
+      .filter((e) => e.datePrevue <= horizon)
+      .reduce((s, e) => s + e.montantHT, 0)
   const carnetHT = state.projets
     .filter((p) => STATUTS_ACTIFS.includes(p.statut))
     .reduce((s, p) => {
@@ -104,17 +140,26 @@ export function dateLimiteVerif(state: AppState, s: Situation): string {
   return addDays(s.dateReception, delai)
 }
 
-/** délai moyen de paiement constaté (jours), par type de MO ou global */
+/** délai moyen de paiement constaté (jours), par type de MO ou global —
+ *  depuis les PAIEMENTS : date du dernier règlement qui solde la facture */
 export function delaiMoyenPaiement(state: AppState, typeMO?: string): number | null {
-  const encaissees = state.factures.filter((f) => {
-    if (f.statut !== 'encaissee' || !f.encaissementReel) return false
-    if (!typeMO) return true
-    const p = projetById(state, f.projetId)
-    return p?.typeMO === typeMO
-  })
-  if (encaissees.length === 0) return null
-  const total = encaissees.reduce((s, f) => s + diffDays(f.emission, f.encaissementReel!), 0)
-  return Math.round(total / encaissees.length)
+  const delais: number[] = []
+  for (const f of state.factures) {
+    if (typeMO) {
+      const p = projetById(state, f.projetId)
+      if (p?.typeMO !== typeMO) continue
+    }
+    const t = ttcFacture(f)
+    if (t <= 0) continue
+    if (regleSurFacture(state, f.id) < t - 0.01) continue // pas soldée
+    let dernier = ''
+    for (const p of state.paiements) {
+      if (p.affectations.some((a) => a.factureId === f.id) && p.date > dernier) dernier = p.date
+    }
+    if (dernier) delais.push(diffDays(f.emission, dernier))
+  }
+  if (delais.length === 0) return null
+  return Math.round(delais.reduce((s, d) => s + d, 0) / delais.length)
 }
 
 // ------------------------------------------------------------------
@@ -630,9 +675,13 @@ export function analyserPeriode(state: AppState, debut: string, fin: string): Sy
   const totalJours = lignes.reduce((s, l) => s + l.jours, 0)
   const totalCoutTemps = lignes.reduce((s, l) => s + l.coutTemps, 0)
   for (const l of lignes) {
-    // même définition que l'onglet Finances : marge = CA − coût du temps − coûts externes
+    // marge sur coûts DIRECTS de la période : CA − coût du temps pointé.
+    // Le budget externe (non daté, saisi sur les phases) reste affiché à
+    // titre indicatif mais n'est plus soustrait : il faussait la marge de
+    // toute période courte (audit finance §12 — un budget n'est pas un coût
+    // daté ; les achats réels arriveront avec le lot F2).
     l.coutExterne = coutsExternes(state, l.projetId)
-    l.margeReelle = l.ca - l.coutTemps - l.coutExterne
+    l.margeReelle = l.ca - l.coutTemps
     l.parJour = l.jours > 0.05 ? l.ca / l.jours : null
     l.partCA = totalCA > 0 ? l.ca / totalCA : 0
     l.partTemps = totalJours > 0 ? l.jours / totalJours : 0
@@ -657,27 +706,37 @@ export interface CAMensuel {
   prevuParMois: number[]
 }
 
-/** Matrice CA facturé projets × 12 mois pour une année (émis / encaissé / prévu) */
+/** Matrice CA facturé projets × 12 mois pour une année (émis / encaissé / prévu).
+ *  L'encaissé vient des PAIEMENTS (part HT au prorata du réglé), le prévu
+ *  des échéances de facturation — audit finance F0. */
 export function caParMois(state: AppState, annee: number): CAMensuel {
   const parProjet = new Map<string, number[]>()
   const emisParMois = Array(12).fill(0) as number[]
   const encaisseParMois = Array(12).fill(0) as number[]
   const prevuParMois = Array(12).fill(0) as number[]
 
+  const parId = new Map(state.factures.map((f) => [f.id, f]))
   for (const f of state.factures) {
-    const m = Number(f.emission.slice(5, 7)) - 1
     if (f.emission.slice(0, 4) === String(annee)) {
-      if (f.statut === 'prevue') {
-        prevuParMois[m] += f.montantHT
-      } else {
-        if (!parProjet.has(f.projetId)) parProjet.set(f.projetId, Array(12).fill(0))
-        parProjet.get(f.projetId)![m] += f.montantHT
-        emisParMois[m] += f.montantHT
-      }
+      const m = Number(f.emission.slice(5, 7)) - 1
+      if (!parProjet.has(f.projetId)) parProjet.set(f.projetId, Array(12).fill(0))
+      parProjet.get(f.projetId)![m] += f.montantHT
+      emisParMois[m] += f.montantHT
     }
-    if (f.statut === 'encaissee' && f.encaissementReel?.slice(0, 4) === String(annee)) {
-      encaisseParMois[Number(f.encaissementReel.slice(5, 7)) - 1] += f.montantHT
+  }
+  for (const p of state.paiements) {
+    if (p.date.slice(0, 4) !== String(annee)) continue
+    const m = Number(p.date.slice(5, 7)) - 1
+    for (const a of p.affectations) {
+      const f = parId.get(a.factureId)
+      if (!f) continue
+      const t = ttcFacture(f)
+      encaisseParMois[m] += t !== 0 ? f.montantHT * (a.montant / t) : 0
     }
+  }
+  for (const e of state.echeancesFacturation) {
+    if (e.datePrevue.slice(0, 4) !== String(annee)) continue
+    prevuParMois[Number(e.datePrevue.slice(5, 7)) - 1] += e.montantHT
   }
 
   const lignes = [...parProjet.entries()]

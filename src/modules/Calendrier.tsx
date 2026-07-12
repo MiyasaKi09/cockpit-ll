@@ -67,22 +67,23 @@ function evenements(state: AppState): EvtCal[] {
       evts.push({ date: p.dateCloture, label: p.id, icon: 'flag', lien: `#/projets/${p.id}`, couleur: COULEURS.projet, titreLong: `Clôture — ${p.nom}` })
   }
 
+  for (const e of state.echeancesFacturation) {
+    evts.push({
+      date: e.datePrevue,
+      label: `€ ${e.projetId}`,
+      lien: '#/facturation',
+      couleur: COULEURS.facture,
+      titreLong: `Facture à émettre — ${e.libelle}`,
+    })
+  }
   for (const f of state.factures) {
-    if (f.statut === 'prevue')
-      evts.push({
-        date: f.emission,
-        label: `€ ${f.projetId}`,
-        lien: '#/facturation',
-        couleur: COULEURS.facture,
-        titreLong: `Facture à émettre — ${f.id} · ${f.libelle}`,
-      })
     if (f.statut === 'emise')
       evts.push({
         date: encaissementPrevu(f),
         label: `⬇ ${f.projetId}`,
         lien: '#/facturation',
         couleur: COULEURS.encaissement,
-        titreLong: `Encaissement attendu — ${f.id} · ${f.libelle}`,
+        titreLong: `Encaissement attendu — ${f.numero || f.id} · ${f.libelle}`,
       })
   }
 

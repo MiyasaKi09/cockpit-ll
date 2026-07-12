@@ -8,7 +8,7 @@ import type { Projet, StatutProjet, TypeMO } from '../types'
 import { useStore } from '../store'
 import { OUVRAGES, calculHonoraires, phasesParDefaut, seuilPlancherActualise } from '../miqcp'
 import { tauxVente } from '../derive'
-import { daterPhases, facturesParDefaut } from '../echeancier'
+import { daterPhases, echeancesParDefaut } from '../echeancier'
 import { Badge, Btn, Field, Modal, NumInput, PctInput, Select, TextInput, navigate } from '../ui'
 import { addDays, fmtMoney, fmtPct, todayISO, uid } from '../util'
 
@@ -88,12 +88,11 @@ export default function ProjetNouveau({ onClose }: { onClose: () => void }) {
     }
     projet.phases = phases
 
+    // échéances calculées AVANT la mutation (producteur rejouable)
+    const echeances = genererFactures && debutEtudes ? echeancesParDefaut(projet, state.settings) : []
     update((d) => {
       d.projets.push(projet)
-      if (genererFactures && debutEtudes) {
-        const nouvelles = facturesParDefaut(projet, d.settings, d.factures)
-        d.factures.push(...nouvelles)
-      }
+      d.echeancesFacturation.push(...echeances)
     })
     onClose()
     navigate(`/projets/${projet.id}`)

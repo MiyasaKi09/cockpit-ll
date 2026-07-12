@@ -45,7 +45,9 @@ function SyntheseContenu() {
   const debutMois = `${today.slice(0, 7)}-01`
   const mois = useMemo(() => analyserPeriode(state, debutMois, today), [state, debutMois, today])
   const anneeSyn = useMemo(() => analyserPeriode(state, `${annee}-01-01`, today), [state, annee, today])
-  const margeMois = mois.totalCA - mois.totalCoutTemps - mois.totalCoutExterne
+  // marge sur coûts DIRECTS du mois (le budget externe non daté n'est
+  // plus soustrait d'une période courte — audit finance §12)
+  const margeMois = mois.totalCA - mois.totalCoutTemps
 
   // missions à surveiller : sous l'objectif €/jour avec du temps réellement posé
   const aSurveiller = anneeSyn.lignes
@@ -99,7 +101,7 @@ function SyntheseContenu() {
           sub={treso != null ? 'saisie dans Paramètres' : <a href="#/parametres">à renseigner dans Paramètres</a>}
         />
         <Stat
-          label="Marge réelle du mois"
+          label="Marge sur coûts directs (mois)"
           value={fmtMoney(margeMois)}
           tone={margeMois < 0 ? 'danger' : undefined}
           sub="CA émis − coût du temps pointé − coûts externes"

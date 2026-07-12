@@ -6,6 +6,7 @@ import type { ReactNode } from 'react'
 import type { AppState, DocumentCorpus, Entreprise, Personne } from './types'
 import { fold, uid } from './util'
 import { seedState, STATE_VERSION } from './seed'
+import { amorcerFinance } from './amorceFinance'
 import { DEPARTEMENTS_DEFAUT } from './boamp'
 import { connecterSync, demarrerRealtime, pousserEtat, syncActif } from './sync'
 
@@ -37,6 +38,20 @@ function migrate(parsed: AppState): AppState {
   etat.entreprises = Array.isArray(parsed.entreprises) ? parsed.entreprises : []
   // v12 → v13 : CRM organisations (clients & acheteurs, audit V3 Lot 5)
   etat.organisations = Array.isArray(parsed.organisations) ? parsed.organisations : []
+  // v13 → v14 : finance F0/F1 — la prévision (échéance) se sépare de la
+  // pièce (facture) ; paiements et contrats deviennent des collections.
+  // Toujours depuis `parsed` : le spread du seed ne doit pas injecter ses
+  // échéances d'exemple dans un état réel qui n'a pas encore la clé.
+  etat.echeancesFacturation = Array.isArray(parsed.echeancesFacturation) ? parsed.echeancesFacturation : []
+  etat.paiements = Array.isArray(parsed.paiements) ? parsed.paiements : []
+  etat.contrats = Array.isArray(parsed.contrats) ? parsed.contrats : []
+  // v14 → v15 : achats & frais, banque, pont comptable (F2/F3/F4)
+  etat.facturesAchat = Array.isArray(parsed.facturesAchat) ? parsed.facturesAchat : []
+  etat.notesFrais = Array.isArray(parsed.notesFrais) ? parsed.notesFrais : []
+  etat.attendusFinanciers = Array.isArray(parsed.attendusFinanciers) ? parsed.attendusFinanciers : []
+  etat.transactionsBancaires = Array.isArray(parsed.transactionsBancaires) ? parsed.transactionsBancaires : []
+  etat.importsBancaires = Array.isArray(parsed.importsBancaires) ? parsed.importsBancaires : []
+  etat.lotsComptables = Array.isArray(parsed.lotsComptables) ? parsed.lotsComptables : []
   amorcerEntreprises(etat)
   // v5 → v6 : journal d'interactions CRM. On amorce depuis les
   // derniereInteraction existantes pour ne rien perdre de l'historique.
@@ -98,6 +113,7 @@ function migrate(parsed: AppState): AppState {
   // lien situation↔facture DET, suivi des relances). Uniquement des champs
   // optionnels : les situations et factures existantes sont conservées telles
   // quelles (spread de `parsed`), rien à amorcer.
+  amorcerFinance(etat)
   return etat
 }
 
@@ -149,7 +165,11 @@ function load(): AppState {
       const parsed = JSON.parse(raw) as AppState
       if (parsed && parsed.version === STATE_VERSION) return parsed
       if (parsed && typeof parsed === 'object' && Array.isArray(parsed.projets)) {
-        return migrate(parsed)
+        // persisté tout de suite : l'amorçage (v14) crée des identifiants —
+        // sans écriture, chaque rechargement en régénérerait de nouveaux
+        const migre = migrate(parsed)
+        persist(migre)
+        return migre
       }
     }
   } catch {
@@ -228,6 +248,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           if (!Array.isArray(distant.entreprises)) distant.entreprises = local.entreprises
           // v12 → v13 : organisations (CRM acheteurs)
           if (!Array.isArray(distant.organisations)) distant.organisations = local.organisations
+          // v13 → v14 : finance (échéances de facturation, paiements, contrats)
+          if (!Array.isArray(distant.echeancesFacturation)) distant.echeancesFacturation = local.echeancesFacturation
+          if (!Array.isArray(distant.paiements)) distant.paiements = local.paiements
+          if (!Array.isArray(distant.contrats)) distant.contrats = local.contrats
+          // v14 → v15 : achats & frais, banque, pont comptable
+          if (!Array.isArray(distant.facturesAchat)) distant.facturesAchat = local.facturesAchat
+          if (!Array.isArray(distant.notesFrais)) distant.notesFrais = local.notesFrais
+          if (!Array.isArray(distant.attendusFinanciers)) distant.attendusFinanciers = local.attendusFinanciers
+          if (!Array.isArray(distant.transactionsBancaires)) distant.transactionsBancaires = local.transactionsBancaires
+          if (!Array.isArray(distant.importsBancaires)) distant.importsBancaires = local.importsBancaires
+          if (!Array.isArray(distant.lotsComptables)) distant.lotsComptables = local.lotsComptables
           // re-fusionne la config machine-locale (jamais synchronisée)
           replace({ ...distant, settings: { ...distant.settings, sync } })
         })

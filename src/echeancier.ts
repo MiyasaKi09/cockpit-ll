@@ -9,22 +9,13 @@
 //    · PRO 50/50 · ACT-DCE 40/30/30 · DET mensuel · AOR remise.
 // Règle d'or : jamais d'honoraires conditionnés à l'OBTENTION du
 // permis — on facture au dépôt et à la complétude.
-// Tout est généré « prévue » et reste modifiable facture par
-// facture dans le module Facturation.
+// Tout est généré en ÉCHÉANCES de facturation : des prévisions
+// modifiables, SANS numéro légal (le numéro n'existe qu'à
+// l'émission — audit finance F0).
 // ============================================================
 
-import type { Facture, Phase, PhaseCode, Projet, Settings } from './types'
-import { addDays, monthKey } from './util'
-
-/** prochain numéro AAAA-NNN, en continuant la séquence globale de l'année */
-function compteurParAnnee(existantes: Facture[]): Map<string, number> {
-  const compteur = new Map<string, number>()
-  for (const f of existantes) {
-    const m = /^(\d{4})-[A-Z]?(\d+)$/.exec(f.id)
-    if (m) compteur.set(m[1], Math.max(compteur.get(m[1]) || 0, Number(m[2])))
-  }
-  return compteur
-}
+import type { EcheanceFacturation, Phase, PhaseCode, Projet, Settings } from './types'
+import { addDays, monthKey, uid } from './util'
 
 /** dernier jour du mois d'une date ISO */
 function finDeMois(iso: string): string {
@@ -187,35 +178,28 @@ function jalonsParticulier(phases: Phase[]): Jalon[] {
 
 /**
  * Génère l'échéancier complet d'un projet à partir de ses phases datées.
- * Ne touche pas aux factures existantes : retourne les nouvelles factures
- * à ajouter (numérotation AAAA-NNN continue sur l'année, statut « prévue »).
+ * Ne touche pas aux factures existantes : retourne des ÉCHÉANCES à
+ * ajouter — de simples prévisions, sans numéro (audit finance F0).
  */
-export function facturesParDefaut(projet: Projet, settings: Settings, existantes: Facture[]): Facture[] {
+export function echeancesParDefaut(projet: Projet, settings: Settings): EcheanceFacturation[] {
   const jalons =
     projet.typeMO === 'Particulier' ? jalonsParticulier(projet.phases) : jalonsPublic(projet.phases)
   jalons.sort((a, b) => a.emission.localeCompare(b.emission))
 
-  const compteur = compteurParAnnee(existantes)
   const delai = settings.delaisPaiement[projet.typeMO]
 
   return jalons
     .filter((j) => j.montantHT > 0)
-    .map((j) => {
-      const annee = j.emission.slice(0, 4)
-      const n = (compteur.get(annee) || 0) + 1
-      compteur.set(annee, n)
-      return {
-        id: `${annee}-${String(n).padStart(3, '0')}`,
-        projetId: projet.id,
-        phase: j.phase,
-        libelle: j.libelle,
-        montantHT: j.montantHT,
-        tauxTVA: 0.2,
-        emission: j.emission,
-        delaiJours: delai,
-        statut: 'prevue' as const,
-      }
-    })
+    .map((j) => ({
+      id: uid('ech'),
+      projetId: projet.id,
+      phase: j.phase,
+      libelle: j.libelle,
+      montantHT: j.montantHT,
+      tauxTVA: 0.2,
+      datePrevue: j.emission,
+      delaiJours: delai,
+    }))
 }
 
 /**

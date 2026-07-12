@@ -1,0 +1,15 @@
+{
+  "name": "cockpit-ll-scraper-worker",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Navigateur serveur de repli pour la veille AO (jobs needs_browser uniquement)",
+  "type": "module",
+  "scripts": {
+    "start": "node --experimental-strip-types src/worker.ts"
+  },
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.0",
+    "playwright": "^1.47.0"
+  }
+}

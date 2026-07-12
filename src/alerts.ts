@@ -47,28 +47,30 @@ export function computeAlertes(state: AppState, today: string): Alerte[] {
     }
   }
 
-  // --- Factures : prévues dont la date d'émission est passée → à émettre ;
-  // émises dont l'encaissement prévu est dépassé → impayé.
+  // --- Échéances de facturation dont la date prévue est passée → facture
+  // à émettre (l'émission attribue le numéro légal — audit F0) ;
+  // factures émises dont l'encaissement prévu est dépassé → impayé.
+  for (const e of state.echeancesFacturation) {
+    if (e.datePrevue > today) continue
+    alertes.push({
+      id: `emettre:${e.id}`,
+      type: 'facture_a_emettre',
+      gravite: diffDays(e.datePrevue, today) > 15 ? 3 : 2,
+      titre: `Facture à émettre (${fmtMoney(e.montantHT)} HT)`,
+      detail: `${nomProjet(state, e.projetId)} · ${e.libelle} · prévue le ${fmtDate(e.datePrevue)}`,
+      lien: '#/facturation',
+      date: e.datePrevue,
+      action: { kind: 'emettre_facture', refId: e.id, label: '✓ Émettre' },
+    })
+  }
   for (const f of state.factures) {
-    if (f.statut === 'prevue' && f.emission <= today) {
-      alertes.push({
-        id: `emettre:${f.id}`,
-        type: 'facture_a_emettre',
-        gravite: diffDays(f.emission, today) > 15 ? 3 : 2,
-        titre: `Facture ${f.id} à émettre (${fmtMoney(f.montantHT)} HT)`,
-        detail: `${nomProjet(state, f.projetId)} · ${f.libelle} · prévue le ${fmtDate(f.emission)}`,
-        lien: '#/facturation',
-        date: f.emission,
-        action: { kind: 'emettre_facture', refId: f.id, label: '✓ Émettre' },
-      })
-    }
     const retard = retardFacture(f, today)
     if (retard > 0) {
       alertes.push({
         id: `retard:${f.id}`,
         type: 'facture_retard',
         gravite: retard > 15 ? 3 : 2,
-        titre: `Impayé : facture ${f.id} en retard de ${retard} j`,
+        titre: `Impayé : facture ${f.numero || f.id} en retard de ${retard} j`,
         detail: `${nomProjet(state, f.projetId)} · ${f.libelle} · ${fmtMoney(f.montantHT)} HT · échéance ${fmtDate(encaissementPrevu(f))}`,
         lien: '#/facturation',
         date: encaissementPrevu(f),

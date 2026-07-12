@@ -75,12 +75,17 @@ export function fluxPrevisionnels(state: AppState, today: string, scenario: Scen
     // probable : délai réellement constaté sur ce type de client, sinon contractuel
     const base =
       scenario === 'probable' && delaiConstate != null ? addDays(f.emission, delaiConstate) : encaissementPrevu(f)
-    const date = borner(addDays(base, p.retardEncaissement), today)
-    if (date > fin) continue
+    // audit F6 : une facture en retard n'est PLUS « encaissée aujourd'hui » —
+    // elle reçoit une date FUTURE (recouvrement) au lieu d'être bornée à today
+    const enRetard = encaissementPrevu(f) < today
+    const date = enRetard
+      ? addDays(today, p.retardEncaissement > 0 ? p.retardEncaissement + 15 : 15)
+      : addDays(base, p.retardEncaissement)
+    if (date < today || date > fin) continue
     flux.push({
       date,
       montant: solde,
-      libelle: `Encaissement ${f.numero || f.id} — ${f.libelle}`,
+      libelle: `Encaissement ${f.numero || f.id} — ${f.libelle}${enRetard ? ' (en retard — estimé)' : ''}`,
       source: 'facture_client',
       lien: '#/facturation',
     })

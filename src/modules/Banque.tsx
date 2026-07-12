@@ -244,6 +244,8 @@ function LigneMouvement({ t }: { t: TransactionBancaire }) {
       if (f) {
         f.payeLe = t.date
         f.transactionId = t.id
+        // le rapprochement bancaire est la PREUVE du paiement (audit F6)
+        f.paiementAConfirmer = false
         f.evenements = [...(f.evenements || []), { date: t.date, type: 'paiement', detail: `Rapproché du relevé (${fmtMoney(Math.abs(t.montant), true)}).` }]
       }
       const tx = d.transactionsBancaires.find((y) => y.id === t.id)

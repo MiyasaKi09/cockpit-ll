@@ -52,6 +52,12 @@ function migrate(parsed: AppState): AppState {
   etat.transactionsBancaires = Array.isArray(parsed.transactionsBancaires) ? parsed.transactionsBancaires : []
   etat.importsBancaires = Array.isArray(parsed.importsBancaires) ? parsed.importsBancaires : []
   etat.lotsComptables = Array.isArray(parsed.lotsComptables) ? parsed.lotsComptables : []
+  // v15 → v16 : finance F6-F10 — pilotage unique (5 collections additives)
+  etat.revisionsResteAFaire = Array.isArray(parsed.revisionsResteAFaire) ? parsed.revisionsResteAFaire : []
+  etat.pistesAvenant = Array.isArray(parsed.pistesAvenant) ? parsed.pistesAvenant : []
+  etat.decisionsDirection = Array.isArray(parsed.decisionsDirection) ? parsed.decisionsDirection : []
+  etat.simulations = Array.isArray(parsed.simulations) ? parsed.simulations : []
+  etat.connecteurs = Array.isArray(parsed.connecteurs) ? parsed.connecteurs : []
   amorcerEntreprises(etat)
   // v5 → v6 : journal d'interactions CRM. On amorce depuis les
   // derniereInteraction existantes pour ne rien perdre de l'historique.
@@ -259,6 +265,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           if (!Array.isArray(distant.transactionsBancaires)) distant.transactionsBancaires = local.transactionsBancaires
           if (!Array.isArray(distant.importsBancaires)) distant.importsBancaires = local.importsBancaires
           if (!Array.isArray(distant.lotsComptables)) distant.lotsComptables = local.lotsComptables
+          // v15 → v16 : finance F6-F10 (pilotage unique) — un poste plus ancien
+          // qui n'a pas ces clés ne doit pas effacer les collections locales
+          if (!Array.isArray(distant.revisionsResteAFaire)) distant.revisionsResteAFaire = local.revisionsResteAFaire
+          if (!Array.isArray(distant.pistesAvenant)) distant.pistesAvenant = local.pistesAvenant
+          if (!Array.isArray(distant.decisionsDirection)) distant.decisionsDirection = local.decisionsDirection
+          if (!Array.isArray(distant.simulations)) distant.simulations = local.simulations
+          if (!Array.isArray(distant.connecteurs)) distant.connecteurs = local.connecteurs
           // re-fusionne la config machine-locale (jamais synchronisée)
           replace({ ...distant, settings: { ...distant.settings, sync } })
         })

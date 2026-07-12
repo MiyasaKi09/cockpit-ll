@@ -22,6 +22,9 @@ import Finance from './modules/Finance'
 import Achats from './modules/Achats'
 import Banque from './modules/Banque'
 import Comptable from './modules/Comptable'
+import FinanceRevue from './modules/FinanceRevue'
+import Previsions from './modules/Previsions'
+import Connecteurs from './modules/Connecteurs'
 import Temps from './modules/Temps'
 import VeilleAO from './modules/VeilleAO'
 import Claude from './modules/Claude'
@@ -182,7 +185,14 @@ export default function App() {
       page = <Contrats />
       break
     case 'finance':
-      page = route[1] === 'achats' ? <Achats /> : route[1] === 'banque' ? <Banque /> : route[1] === 'comptable' ? <Comptable /> : <Finance />
+      page =
+        route[1] === 'achats' ? <Achats />
+        : route[1] === 'banque' ? <Banque />
+        : route[1] === 'comptable' ? <Comptable />
+        : route[1] === 'revue' ? <FinanceRevue />
+        : route[1] === 'previsions' ? <Previsions />
+        : route[1] === 'connecteurs' ? <Connecteurs />
+        : <Finance />
       break
     case 'temps':
       page = <Temps />

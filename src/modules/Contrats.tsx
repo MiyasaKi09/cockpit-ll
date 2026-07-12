@@ -52,6 +52,7 @@ import {
 import type { ModificationAvenant } from '../contrats'
 import { projetById } from '../derive'
 import { fmtDate, fmtMoney, uid } from '../util'
+import FinanceNav from './FinanceNav'
 
 const LIBELLE_NATURE = Object.fromEntries(NATURES_LIGNE.map((n) => [n.id, n.label])) as Record<
   NatureLigneContrat,
@@ -469,7 +470,8 @@ export default function Contrats() {
   }
 
   return (
-    <Page titre="Contrats & budgets" sousTitre="Le contrat signé est la racine du chiffre — les budgets s'y lisent, les avenants s'y tracent.">
+    <Page titre="Finance" sousTitre="Contrats & budgets — le contrat signé est la racine du chiffre, les avenants s'y tracent.">
+      <FinanceNav actif="contrats" />
       <div className="grid4" style={{ marginBottom: 16 }}>
         <Stat label="Signé HT (contrats clients)" value={<Money v={totalSigne} />} sub="lignes actives uniquement" />
         <Stat label="Facturé HT" value={<Money v={totalFacture} />} sub={<>reste {fmtMoney(Math.max(0, totalSigne - totalFacture))}</>} />

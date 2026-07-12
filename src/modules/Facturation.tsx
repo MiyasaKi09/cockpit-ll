@@ -13,7 +13,7 @@
 // ============================================================
 
 import { useMemo, useState } from 'react'
-import type { AppState, EcheanceFacturation, Facture, LigneFacture, PhaseCode, TypeMO } from '../types'
+import type { AppState, EcheanceFacturation, EvenementTransmission, Facture, LigneFacture, PhaseCode, TypeMO } from '../types'
 import { useStore } from '../store'
 import {
   Badge,
@@ -64,8 +64,10 @@ import {
 import type { BrouillonFacture } from '../facture'
 import { LIBELLES_PHASES, PHASES_ORDRE } from '../miqcp'
 import { assemble, contexteFacture } from '../prompts'
-import { fmtDate, fmtMoney, ouvrirGmail, uid } from '../util'
+import { download, fmtDate, fmtMoney, ouvrirGmail, uid } from '../util'
 import { ouvrirFacturePDF } from '../pdf'
+import { genererCII, nomFichierCII } from '../facturx'
+import FinanceNav from './FinanceNav'
 
 // ---------- helpers locaux ----------
 
@@ -716,6 +718,96 @@ function HistoriqueModal({
   )
 }
 
+// ---------- suivi de transmission (F5 — Chorus Pro / PDP, audit §11.4) ----------
+
+function TransmissionModal({
+  f,
+  today,
+  onClose,
+  onAjouter,
+}: {
+  f: Facture
+  today: string
+  onClose: () => void
+  onAjouter: (e: EvenementTransmission) => void
+}) {
+  const [plateforme, setPlateforme] = useState<EvenementTransmission['plateforme']>('chorus')
+  const [statut, setStatut] = useState<EvenementTransmission['statut']>('deposee')
+  const [date, setDate] = useState<string | null>(today)
+  const [reference, setReference] = useState('')
+  const [motif, setMotif] = useState('')
+  return (
+    <Modal titre={`Transmission — facture ${f.numero || f.id}`} onClose={onClose}>
+      <p className="muted small" style={{ margin: '0 0 10px' }}>
+        Le cycle de vie (dépôt, rejet, mise à disposition, paiement) est MÉMORISÉ ici tant que la
+        plateforme n'est pas branchée — un rejet devient une action précise avec son motif.
+      </p>
+      {(f.transmissions || []).length > 0 && (
+        <div style={{ marginBottom: 10 }}>
+          {(f.transmissions || []).map((t, i) => (
+            <div key={i} className="small" style={{ padding: '2px 0' }}>
+              {fmtDate(t.date)} · <Badge tone={t.statut === 'rejetee' ? 'danger' : t.statut === 'payee' ? 'ok' : 'info'}>{t.statut.replace(/_/g, ' ')}</Badge> {t.plateforme}
+              {t.reference ? ` · réf ${t.reference}` : ''}
+              {t.motif ? ` — ${t.motif}` : ''}
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="form-row">
+        <Field label="Plateforme">
+          <Select
+            value={plateforme}
+            onChange={(v) => setPlateforme(v as EvenementTransmission['plateforme'])}
+            options={[
+              { value: 'chorus', label: 'Chorus Pro (client public)' },
+              { value: 'pdp', label: 'Plateforme agréée (PDP)' },
+              { value: 'email', label: 'E-mail (PDF)' },
+              { value: 'autre', label: 'Autre' },
+            ]}
+          />
+        </Field>
+        <Field label="Statut">
+          <Select
+            value={statut}
+            onChange={(v) => setStatut(v as EvenementTransmission['statut'])}
+            options={[
+              { value: 'deposee', label: 'Déposée' },
+              { value: 'rejetee', label: 'Rejetée' },
+              { value: 'mise_a_disposition', label: 'Mise à disposition' },
+              { value: 'approuvee', label: 'Approuvée' },
+              { value: 'payee', label: 'Payée (côté plateforme)' },
+            ]}
+          />
+        </Field>
+        <Field label="Date">
+          <DateInput value={date} onChange={setDate} />
+        </Field>
+      </div>
+      <div className="form-row" style={{ marginTop: 10 }}>
+        <Field label="Référence plateforme">
+          <TextInput value={reference} onChange={setReference} placeholder="n° de dépôt / d'engagement" />
+        </Field>
+        <Field label="Motif (obligatoire si rejet)">
+          <TextInput value={motif} onChange={setMotif} />
+        </Field>
+      </div>
+      <div className="form-foot">
+        <Btn onClick={onClose}>Fermer</Btn>
+        <Btn
+          kind="primary"
+          onClick={() => {
+            if (!date) return toast('Indiquer la date.', { tone: 'danger' })
+            if (statut === 'rejetee' && !motif.trim()) return toast('Un rejet porte toujours son motif.', { tone: 'danger' })
+            onAjouter({ date, plateforme, statut, reference: reference.trim() || undefined, motif: motif.trim() || undefined })
+          }}
+        >
+          Enregistrer l'événement
+        </Btn>
+      </div>
+    </Modal>
+  )
+}
+
 // ---------- carte « Relances à faire » ----------
 
 function CarteRelances({ state, today }: { state: AppState; today: string }) {
@@ -845,6 +937,7 @@ export default function Facturation() {
   const [paiement, setPaiement] = useState<Facture | null>(null)
   const [avoir, setAvoir] = useState<Facture | null>(null)
   const [rapprochement, setRapprochement] = useState<Facture | null>(null)
+  const [transmission, setTransmission] = useState<Facture | null>(null)
 
   // route profonde `#/facturation/emettre/<id>` (Cockpit, alertes) → parcours d'émission
   const emissionRouteId = route[1] === 'emettre' ? route[2] : null
@@ -1007,6 +1100,30 @@ export default function Facturation() {
     toast('Facture historique rapprochée.', { tone: 'ok' })
   }
 
+  const exporterCII = (f: Facture) => {
+    if (!f.figee) return
+    try {
+      download(nomFichierCII(f.figee), genererCII(f), 'application/xml')
+      toast('XML Factur-X (CII, EN 16931) généré depuis la copie figée — à valider avec le cabinet/PDP.', { tone: 'ok' })
+    } catch (e) {
+      toast(String(e), { tone: 'danger' })
+    }
+  }
+
+  const ajouterTransmission = (f: Facture, e: EvenementTransmission) => {
+    update((d) => {
+      const x = d.factures.find((y) => y.id === f.id)
+      if (!x) return
+      x.transmissions = [...(x.transmissions || []), e]
+      x.evenements = [
+        ...(x.evenements || []),
+        { date: e.date, type: 'transmission', detail: `${e.plateforme} : ${e.statut}${e.motif ? ` — ${e.motif}` : ''}` },
+      ]
+    })
+    setTransmission(null)
+    toast(e.statut === 'rejetee' ? 'Rejet enregistré — il apparaît dans « à traiter » avec son motif.' : 'Événement de transmission enregistré.', { tone: 'ok' })
+  }
+
   const marquerControlee = (f: Facture) =>
     update((d) => {
       const x = d.factures.find((y) => y.id === f.id)
@@ -1015,9 +1132,10 @@ export default function Facturation() {
 
   return (
     <Page
-      titre="Facturation"
-      sousTitre="Échéances à facturer, pièces émises (figées), paiements et relances."
+      titre="Finance"
+      sousTitre="Ventes — échéances à facturer, pièces émises (figées), paiements et relances."
     >
+      <FinanceNav actif="ventes" />
       {/* ----- stats ----- */}
       <div
         style={{
@@ -1237,6 +1355,11 @@ export default function Facturation() {
                     {etatPaiement(state, f) === 'partielle' && (
                       <div className="muted small">solde {fmtMoney(solde, true)}</div>
                     )}
+                    {(f.transmissions || []).length > 0 && (
+                      <div className={`small ${f.transmissions![f.transmissions!.length - 1].statut === 'rejetee' ? 'danger-text' : 'muted'}`}>
+                        {f.transmissions![f.transmissions!.length - 1].plateforme} : {f.transmissions![f.transmissions!.length - 1].statut.replace(/_/g, ' ')}
+                      </div>
+                    )}
                   </td>
                   <td>
                     <div style={{ display: 'flex', gap: 6, alignItems: 'center', justifyContent: 'flex-end' }}>
@@ -1251,6 +1374,12 @@ export default function Facturation() {
                           { label: 'Préparer l’e-mail', onClick: () => emailFacture(state, f) },
                           ...(f.type !== 'avoir'
                             ? [{ label: 'Créer un avoir…', onClick: () => setAvoir(f) }]
+                            : []),
+                          ...(f.figee
+                            ? [
+                                { label: 'Export Factur-X (XML)', onClick: () => exporterCII(f) },
+                                { label: 'Suivi de transmission…', onClick: () => setTransmission(f) },
+                              ]
                             : []),
                           ...(!f.figee
                             ? [{ label: 'Rapprocher (historique)…', onClick: () => setRapprochement(f) }]
@@ -1342,6 +1471,14 @@ export default function Facturation() {
           f={rapprochement}
           onClose={() => setRapprochement(null)}
           onSave={(v) => rapprocherHistorique(rapprochement, v)}
+        />
+      )}
+      {transmission && (
+        <TransmissionModal
+          f={transmission}
+          today={today}
+          onClose={() => setTransmission(null)}
+          onAjouter={(e) => ajouterTransmission(transmission, e)}
         />
       )}
     </Page>

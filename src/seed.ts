@@ -7,7 +7,7 @@
 import type { AppState, Facture, PromptTemplate } from './types'
 import { amorcerFinance } from './amorceFinance'
 
-export const STATE_VERSION = 14
+export const STATE_VERSION = 15
 
 const P = (v: number) => Math.round(v * 100) / 100
 
@@ -980,6 +980,56 @@ export function seedState(): AppState {
     echeancesFacturation: [],
     paiements: [],
     contrats: [],
+
+    // v15 — finance F2/F3/F4 : achats, banque, comptable
+    facturesAchat: [
+      {
+        id: 'fa-p03-bet',
+        fournisseur: 'BET Structure Nord',
+        numeroFournisseur: 'FS-2026-118',
+        dateFacture: '2026-06-10',
+        dateEcheance: '2026-07-10',
+        montantHT: 600,
+        montantTVA: 120,
+        montantTTC: 720,
+        ventilations: [{ id: 'va-p03-bet', montantHT: 600, projetId: 'P03', phase: 'DET', categorie: 'BET / cotraitant' }],
+        statut: 'validee',
+        source: 'manuel',
+        notes: 'EXEMPLE — mission structure, visites de chantier',
+      },
+      {
+        id: 'fa-inbox-repro',
+        fournisseur: 'Repro Amiens',
+        dateFacture: '2026-07-05',
+        montantHT: 86,
+        montantTVA: 17.2,
+        montantTTC: 103.2,
+        ventilations: [{ id: 'va-repro', montantHT: 86, projetId: 'P03', phase: 'DET', categorie: 'Maquette / image / reprographie' }],
+        statut: 'a_valider',
+        source: 'gmail',
+        confiance: 0.82,
+        raisons: ['EXEMPLE — pièce jointe Gmail « facture_repro_juillet.pdf »', 'fournisseur déjà connu'],
+      },
+    ],
+    notesFrais: [
+      {
+        id: 'nf-zoe-sncf',
+        personne: 'Zoé',
+        date: '2026-07-03',
+        fournisseur: 'SNCF',
+        libelle: 'EXEMPLE — AR réunion de chantier P03',
+        montantTTC: 64.8,
+        moyen: 'perso',
+        projetId: 'P03',
+        phase: 'DET',
+        categorie: 'Déplacements / hébergement',
+        statut: 'a_rembourser',
+      },
+    ],
+    attendusFinanciers: [],
+    transactionsBancaires: [],
+    importsBancaires: [],
+    lotsComptables: [],
   }
   amorcerFinance(etat)
   return etat

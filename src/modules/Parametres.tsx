@@ -44,6 +44,67 @@ const TYPES_MO: TypeMO[] = ['Public', 'Privé pro', 'Particulier']
 
 /** L'équipe avec rémunérations réelles : le coût horaire de chacun
  *  se calcule tout seul — plus de forfait approximatif. */
+
+/** frais généraux détaillés en LIGNES budgétaires (audit finance §5.9) —
+ *  l'override global reste pendant la migration, l'écart est affiché */
+function LignesFraisGeneraux() {
+  const { state, update } = useStore()
+  const lignes = state.settings.fraisGenerauxLignes || []
+  const total = Math.round(lignes.reduce((s, l) => s + l.montantAnnuel, 0) * 100) / 100
+  const ecart = Math.round((state.settings.fraisGenerauxAnnuels - total) * 100) / 100
+  const ajouterLigne = () => {
+    const nouvelle = { id: uid('fg'), libelle: '', montantAnnuel: 0 }
+    update((d) => {
+      d.settings.fraisGenerauxLignes = [...(d.settings.fraisGenerauxLignes || []), nouvelle]
+    })
+  }
+  const maj = (id: string, patch: Partial<{ libelle: string; montantAnnuel: number }>) =>
+    update((d) => {
+      d.settings.fraisGenerauxLignes = (d.settings.fraisGenerauxLignes || []).map((l) => (l.id === id ? { ...l, ...patch } : l))
+    })
+  const retirer = (id: string) =>
+    update((d) => {
+      d.settings.fraisGenerauxLignes = (d.settings.fraisGenerauxLignes || []).filter((l) => l.id !== id)
+    })
+  return (
+    <div style={{ marginTop: 12 }}>
+      <div className="small" style={{ fontWeight: 650, marginBottom: 4 }}>
+        Frais généraux détaillés (lignes budgétaires annuelles)
+      </div>
+      {lignes.map((l) => (
+        <div key={l.id} className="toolbar" style={{ marginBottom: 4 }}>
+          <TextInput value={l.libelle} onChange={(v) => maj(l.id, { libelle: v })} placeholder="ex. Loyer atelier" />
+          <NumInput value={l.montantAnnuel} onChange={(v) => maj(l.id, { montantAnnuel: v ?? 0 })} style={{ width: 110 }} />
+          <Btn small onClick={() => retirer(l.id)}>✕</Btn>
+        </div>
+      ))}
+      <div className="toolbar">
+        <Btn small onClick={ajouterLigne}>+ Ligne de frais</Btn>
+        {lignes.length > 0 && (
+          <span className={`small ${Math.abs(ecart) > 1 ? 'warn-text' : 'muted'}`}>
+            Somme des lignes : <strong>{fmtMoney(total)}</strong>
+            {Math.abs(ecart) > 1 && <> — écart de {fmtMoney(ecart)} avec l'override global ci-dessus</>}
+          </span>
+        )}
+      </div>
+      <div className="form-row" style={{ marginTop: 10 }}>
+        <Field label="Seuil d'alerte de trésorerie (€)" hint="point bas sous lequel la prévision 13 semaines alerte">
+          <NumInput
+            value={state.settings.seuilTresorerie ?? null}
+            onChange={(v) => update((d) => void (d.settings.seuilTresorerie = v))}
+          />
+        </Field>
+        <Field label="TVA / impôts mensuels prévisionnels (€)" hint="décaissement paramétré avec le cabinet — utilisé par la prévision de trésorerie">
+          <NumInput
+            value={state.settings.tvaMensuelleEstimee ?? null}
+            onChange={(v) => update((d) => void (d.settings.tvaMensuelleEstimee = v))}
+          />
+        </Field>
+      </div>
+    </div>
+  )
+}
+
 function CarteEquipe() {
   const { state, update, replace } = useStore()
   const eq = state.settings.equipe
@@ -138,7 +199,7 @@ function CarteEquipe() {
       <div className="toolbar" style={{ marginTop: 10, marginBottom: 0 }}>
         <Btn small onClick={ajouter}>+ Ajouter une personne</Btn>
         <span className="spacer" />
-        <Field label="Frais généraux annuels HT (€)" hint="loyer, logiciels, assurances, compta…">
+        <Field label="Frais généraux annuels HT (€)" hint="override global — la référence devient la somme des lignes ci-dessous (audit finance)">
           <NumInput
             value={state.settings.fraisGenerauxAnnuels}
             onChange={(v) => update((d) => void (d.settings.fraisGenerauxAnnuels = v ?? 0))}
@@ -146,6 +207,7 @@ function CarteEquipe() {
           />
         </Field>
       </div>
+      <LignesFraisGeneraux />
       <dl className="kv" style={{ marginTop: 12 }}>
         <dt>Coût d'agence annuel (équipe + FG)</dt>
         <dd><strong>{fmtMoney(coutAgenceAnnuel(state))}</strong></dd>

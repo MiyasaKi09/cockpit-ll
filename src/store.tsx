@@ -45,6 +45,13 @@ function migrate(parsed: AppState): AppState {
   etat.echeancesFacturation = Array.isArray(parsed.echeancesFacturation) ? parsed.echeancesFacturation : []
   etat.paiements = Array.isArray(parsed.paiements) ? parsed.paiements : []
   etat.contrats = Array.isArray(parsed.contrats) ? parsed.contrats : []
+  // v14 → v15 : achats & frais, banque, pont comptable (F2/F3/F4)
+  etat.facturesAchat = Array.isArray(parsed.facturesAchat) ? parsed.facturesAchat : []
+  etat.notesFrais = Array.isArray(parsed.notesFrais) ? parsed.notesFrais : []
+  etat.attendusFinanciers = Array.isArray(parsed.attendusFinanciers) ? parsed.attendusFinanciers : []
+  etat.transactionsBancaires = Array.isArray(parsed.transactionsBancaires) ? parsed.transactionsBancaires : []
+  etat.importsBancaires = Array.isArray(parsed.importsBancaires) ? parsed.importsBancaires : []
+  etat.lotsComptables = Array.isArray(parsed.lotsComptables) ? parsed.lotsComptables : []
   amorcerEntreprises(etat)
   // v5 → v6 : journal d'interactions CRM. On amorce depuis les
   // derniereInteraction existantes pour ne rien perdre de l'historique.
@@ -245,6 +252,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           if (!Array.isArray(distant.echeancesFacturation)) distant.echeancesFacturation = local.echeancesFacturation
           if (!Array.isArray(distant.paiements)) distant.paiements = local.paiements
           if (!Array.isArray(distant.contrats)) distant.contrats = local.contrats
+          // v14 → v15 : achats & frais, banque, pont comptable
+          if (!Array.isArray(distant.facturesAchat)) distant.facturesAchat = local.facturesAchat
+          if (!Array.isArray(distant.notesFrais)) distant.notesFrais = local.notesFrais
+          if (!Array.isArray(distant.attendusFinanciers)) distant.attendusFinanciers = local.attendusFinanciers
+          if (!Array.isArray(distant.transactionsBancaires)) distant.transactionsBancaires = local.transactionsBancaires
+          if (!Array.isArray(distant.importsBancaires)) distant.importsBancaires = local.importsBancaires
+          if (!Array.isArray(distant.lotsComptables)) distant.lotsComptables = local.lotsComptables
           // re-fusionne la config machine-locale (jamais synchronisée)
           replace({ ...distant, settings: { ...distant.settings, sync } })
         })

@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { useStore } from './store'
 import { ConfirmHost, Icon, ToastHost, useRoute, useToday } from './ui'
 import { alertesActives } from './alerts'
+import { badgeFinance } from './financeActions'
 import { basculerTheme, themeCourant } from './theme'
 import { syncActif } from './sync'
 import { SurveillanceCtx, useSurveillance } from './surveillance'
@@ -17,6 +18,10 @@ import Projets from './modules/Projets'
 import Situations from './modules/Situations'
 import Facturation from './modules/Facturation'
 import Contrats from './modules/Contrats'
+import Finance from './modules/Finance'
+import Achats from './modules/Achats'
+import Banque from './modules/Banque'
+import Comptable from './modules/Comptable'
 import Temps from './modules/Temps'
 import VeilleAO from './modules/VeilleAO'
 import Claude from './modules/Claude'
@@ -44,10 +49,11 @@ const NAV: { groupe: string; repliable?: boolean; items: { path: string; label: 
     ],
   },
   {
+    // audit finance §3.1 : une seule entrée Finance (6 vues internes) ;
+    // Pilotage reste accessible par sa route et la Vue d'ensemble
     groupe: 'Gestion',
     items: [
-      { path: 'facturation', label: 'Factures' },
-      { path: 'contrats', label: 'Contrats' },
+      { path: 'finance', label: 'Finance' },
       { path: 'situations', label: 'Situations' },
       { path: 'pilotage', label: 'Pilotage' },
     ],
@@ -97,6 +103,8 @@ export default function App() {
   const nbDocsATraiter = state.registreDocuments.filter((d) =>
     ['recu', 'a_classer', 'a_valider'].includes(d.statut),
   ).length
+  // badge Finance : uniquement les décisions humaines (audit §3.3)
+  const nbFinance = badgeFinance(state, today)
   const [theme, setTheme] = useState(themeCourant())
   const [rechercheOuverte, setRechercheOuverte] = useState(false)
   /** tiroir de navigation mobile (ouvert par le hamburger de la topbar) */
@@ -172,6 +180,9 @@ export default function App() {
       break
     case 'contrats':
       page = <Contrats />
+      break
+    case 'finance':
+      page = route[1] === 'achats' ? <Achats /> : route[1] === 'banque' ? <Banque /> : route[1] === 'comptable' ? <Comptable /> : <Finance />
       break
     case 'temps':
       page = <Temps />
@@ -266,13 +277,14 @@ export default function App() {
                   <a
                     key={it.path}
                     href={`#/${it.path}`}
-                    className={`nav-item ${g.repliable ? 'nav-item-sec' : ''} ${section === it.path ? 'active' : ''}`}
+                    className={`nav-item ${g.repliable ? 'nav-item-sec' : ''} ${section === it.path || (it.path === 'finance' && ['facturation', 'contrats'].includes(section)) ? 'active' : ''}`}
                   >
                     <span>{it.label}</span>
                     {it.path === '' && nbAlertes > 0 && <span className="nav-count">{nbAlertes}</span>}
                     {it.path === 'documents' && nbDocsATraiter > 0 && (
                       <span className="nav-count">{nbDocsATraiter}</span>
                     )}
+                    {it.path === 'finance' && nbFinance > 0 && <span className="nav-count">{nbFinance}</span>}
                   </a>
                 ))}
             </div>

@@ -372,6 +372,11 @@ export interface Facture {
   historiqueAControler?: boolean
   /** ligne de contrat qui justifie la facture (F1) */
   contratLigneId?: string | null
+  /** cycle de vie de transmission (Chorus/PDP) — mémorisé, jamais inventé (F5) */
+  transmissions?: EvenementTransmission[]
+  statutComptable?: StatutComptable
+  lotComptableId?: string | null
+  motifRejetComptable?: string
 }
 
 // --- Audit finance F0 : la PRÉVISION n'est pas la PIÈCE ---
@@ -404,6 +409,8 @@ export interface Paiement {
   moyen?: string // virement, chèque…
   reference?: string
   affectations: { factureId: string; montant: number }[]
+  statutComptable?: StatutComptable
+  lotComptableId?: string | null
   notes?: string
 }
 
@@ -472,6 +479,206 @@ export interface Contrat {
   provisoire?: boolean
   notes?: string
   evenements?: { date: string; type: string; detail?: string }[]
+}
+
+// --- Audit finance F2 : achats, frais et complétude ---
+
+/** ventilation d'une dépense sur projet/phase/catégorie — la somme des
+ *  ventilations doit égaler le HT de la pièce (contrôle bloquant §8.2) */
+export interface VentilationAchat {
+  id: string
+  montantHT: number
+  projetId?: string | null
+  phase?: PhaseCode | null
+  categorie: string
+  refacturable?: boolean
+  compteComptable?: string
+}
+
+export type StatutAchat = 'a_valider' | 'validee' | 'ecartee'
+/** statut COMPTABLE d'une pièce — mis à jour par l'export et le retour du
+ *  cabinet, sans jamais écraser la pièce opérationnelle (audit §5.6) */
+export type StatutComptable = 'exporte' | 'comptabilise' | 'rejete'
+
+export interface FactureAchat {
+  id: string
+  fournisseur: string
+  entrepriseId?: string | null
+  /** numéro porté par la pièce du fournisseur — unicité tiers+numéro contrôlée */
+  numeroFournisseur?: string
+  dateFacture: string
+  dateEcheance?: string | null
+  montantHT: number
+  montantTVA?: number | null
+  montantTTC: number
+  ventilations: VentilationAchat[]
+  statut: StatutAchat
+  /** payée le — renseigné par le rapprochement bancaire ou à la main */
+  payeLe?: string | null
+  transactionId?: string | null
+  /** pièce au registre documentaire (empreinte SHA-256 = dédoublonnage) */
+  documentId?: string | null
+  empreinte?: string
+  source: 'manuel' | 'gmail' | 'drive' | 'import' | 'xml'
+  confiance?: number | null
+  raisons?: string[]
+  doublonDeId?: string | null
+  /** engagement fournisseur ou contrat récurrent honoré par cette pièce */
+  contratId?: string | null
+  statutComptable?: StatutComptable
+  lotComptableId?: string | null
+  motifRejetComptable?: string
+  notes?: string
+  evenements?: { date: string; type: string; detail?: string }[]
+}
+
+export type StatutNoteFrais = 'a_rembourser' | 'remboursee'
+
+/** dépense payée personnellement (parcours allégé — audit §5.4) */
+export interface NoteFrais {
+  id: string
+  personne: string
+  date: string
+  fournisseur?: string
+  libelle: string
+  montantTTC: number
+  tauxTVA?: number | null
+  moyen: 'perso' | 'agence'
+  projetId?: string | null
+  phase?: PhaseCode | null
+  categorie: string
+  /** indemnités kilométriques (séparées d'une facture classique) */
+  kilometres?: number | null
+  documentId?: string | null
+  statut: StatutNoteFrais
+  statutComptable?: StatutComptable
+  lotComptableId?: string | null
+  evenements?: { date: string; type: string; detail?: string }[]
+}
+
+// --- moteur de complétude (audit §8) : une absence attendue devient une
+// exception à confirmer, jamais une erreur silencieuse.
+// La liste des attendus se DÉRIVE (contrats récurrents, banque, historique) ;
+// on ne stocke que les décisions humaines (exception confirmée, reçu manuel).
+export type ExceptionAttendu = 'non_recue' | 'contrat_termine' | 'reporte' | 'doublon' | 'justifie'
+
+export interface AttenduFinancier {
+  id: string
+  type: 'facture_fournisseur' | 'justificatif_banque'
+  /** contrat récurrent × période ('AAAA-MM') ou transaction bancaire */
+  contratId?: string | null
+  periode?: string | null
+  transactionId?: string | null
+  libelle: string
+  exception: ExceptionAttendu
+  date: string // décision ISO
+  notes?: string
+}
+
+// --- Audit finance F3 : banque & trésorerie ---
+
+export interface TransactionBancaire {
+  /** idempotence : identifiant banque si présent, sinon empreinte
+   *  date|montant|libellé (réimporter le même relevé n'ajoute rien) */
+  id: string
+  date: string
+  /** signé : crédit positif, débit négatif */
+  montant: number
+  libelle: string
+  reference?: string
+  importId: string
+  /** rapprochement VALIDÉ par l'utilisateur (le Cockpit propose seulement) */
+  rapprochement?: {
+    type: 'paiement_client' | 'facture_achat' | 'note_frais' | 'interne' | 'justifie'
+    paiementId?: string
+    factureAchatId?: string
+    noteFraisId?: string
+    detail?: string
+    valideLe: string
+  } | null
+}
+
+export interface ImportBancaire {
+  id: string
+  date: string
+  nomFichier: string
+  nbLignes: number
+  nbNouvelles: number
+  /** solde de fin de relevé (si présent dans le fichier ou saisi) */
+  soldeFinal?: number | null
+  dateSolde?: string | null
+}
+
+/** mapping CSV bancaire mémorisé (audit §5.5 — phase initiale) */
+export interface MappingBancaire {
+  separateur: string
+  entete: boolean
+  formatDate: 'JJ/MM/AAAA' | 'AAAA-MM-JJ'
+  colDate: number
+  colLibelle: number
+  /** soit une colonne montant signé, soit débit/crédit séparés */
+  colMontant?: number | null
+  colDebit?: number | null
+  colCredit?: number | null
+}
+
+// --- Audit finance F4 : pont expert-comptable ---
+
+export interface ProfilComptable {
+  logiciel?: string
+  separateur: ';' | ',' | 'tab'
+  formatDate: 'JJ/MM/AAAA' | 'AAAA-MM-JJ'
+  journaux: { ventes: string; achats: string; banque: string; od: string }
+  comptes: {
+    produits: string
+    clients: string
+    fournisseurs: string
+    tvaCollectee: string
+    tvaDeductible: string
+    banque: string
+    /** compte de remboursement des notes de frais (ex. 421 ou 467) */
+    notesFrais: string
+    /** compte de charge par défaut quand la ventilation n'en précise pas */
+    chargesDefaut: string
+  }
+  /** dimensions analytiques projet/phase dans l'export */
+  analytique?: boolean
+  /** règle de création des comptes tiers (préfixe + nom replié) */
+  prefixeClient?: string
+  prefixeFournisseur?: string
+  /** régime de TVA confirmé par le cabinet */
+  regimeTVA?: string
+  notes?: string
+}
+
+export interface LotComptable {
+  id: string
+  periode: string // 'AAAA-MM'
+  version: number
+  dateExport: string
+  par?: string
+  /** empreinte SHA-256 du zip exporté */
+  empreinte?: string
+  nomFichier: string
+  /** identifiants exportés — le diff V1/V2 et l'anti double-export s'appuient dessus */
+  factureIds: string[]
+  achatIds: string[]
+  fraisIds: string[]
+  paiementIds: string[]
+  controles: string[]
+  statut: 'exporte' | 'retour_recu'
+  retour?: { date: string; acceptees: number; rejets: { pieceId: string; motif: string }[] }
+}
+
+// --- Audit finance F5 : facturation électronique ---
+
+/** statut de cycle de vie mémorisé (Chorus Pro / PDP / e-mail) — audit §11.4 */
+export interface EvenementTransmission {
+  date: string
+  plateforme: 'chorus' | 'pdp' | 'email' | 'autre'
+  statut: 'deposee' | 'rejetee' | 'mise_a_disposition' | 'approuvee' | 'payee'
+  reference?: string
+  motif?: string
 }
 
 export interface TempsEntry {
@@ -835,8 +1042,20 @@ export interface Settings {
   personnes: string[]
   /** l'équipe avec rémunérations réelles → coûts horaires par personne */
   equipe: Personne[]
-  /** frais généraux annuels HT (loyer, logiciels, assurances…) */
+  /** frais généraux annuels HT (loyer, logiciels, assurances…) — override
+   *  global conservé pendant la migration ; la référence devient la somme
+   *  des lignes budgétaires ci-dessous (audit §5.9) */
   fraisGenerauxAnnuels: number
+  /** frais généraux détaillés en lignes budgétaires annuelles */
+  fraisGenerauxLignes?: { id: string; libelle: string; montantAnnuel: number }[]
+  /** profil d'échange avec le cabinet comptable (F4) — configuré une fois */
+  profilComptable?: ProfilComptable
+  /** mapping du CSV bancaire, mémorisé après le premier import (F3) */
+  banqueMapping?: MappingBancaire
+  /** seuil d'alerte de point bas de trésorerie (€) */
+  seuilTresorerie?: number | null
+  /** décaissement mensuel prévisionnel de TVA/impôts (paramétré avec le cabinet) */
+  tvaMensuelleEstimee?: number | null
   /** modèle de nomenclature documentaire */
   nomenclature: string
   /** mention d'exigibilité TVA imprimée sur les factures — à CONFIRMER avec
@@ -937,6 +1156,10 @@ export interface DocumentRecord {
   contratId?: string | null
   /** facture de vente dont ce document est la copie figée envoyée */
   factureId?: string | null
+  /** facture fournisseur justifiée par ce document (F2) */
+  factureAchatId?: string | null
+  noteFraisId?: string | null
+  lotComptableId?: string | null
   /** catégorie contrôlée (CCTP, DPGF, CR, SITU, PLAN, ADM, PHOTO…) */
   categorie: string
   sousType?: string
@@ -1050,6 +1273,17 @@ export interface AppState {
   paiements: Paiement[]
   /** contrats clients, engagements fournisseurs et contrats d'agence (F1) */
   contrats: Contrat[]
+  /** factures fournisseurs et leurs ventilations (F2) */
+  facturesAchat: FactureAchat[]
+  /** notes de frais (F2) */
+  notesFrais: NoteFrais[]
+  /** décisions sur les attendus financiers — exceptions confirmées (F2, §8) */
+  attendusFinanciers: AttenduFinancier[]
+  /** lignes de relevés bancaires importées (F3) */
+  transactionsBancaires: TransactionBancaire[]
+  importsBancaires: ImportBancaire[]
+  /** lots d'export comptable versionnés (F4) */
+  lotsComptables: LotComptable[]
 }
 
 /** document du corpus de l'assistant : texte réglementaire (Légifrance,

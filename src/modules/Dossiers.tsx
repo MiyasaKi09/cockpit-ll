@@ -9,7 +9,7 @@
 // rendu → jury) sans détourner les statuts d'un AO classique.
 // ============================================================
 
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import type {
   CategorieExigence,
   Consultation,
@@ -40,6 +40,8 @@ import {
 } from '../ui'
 import { diffDays, fmtHeures, fold, mondayOf, todayISO, uid } from '../util'
 import { probaConsultation } from '../derive'
+import { unzipSync } from 'fflate'
+import { extraireTexteFichier } from '../cctp'
 import {
   CATEGORIES_EXIGENCE,
   ETAPES_CONCOURS,
@@ -377,6 +379,8 @@ function CarteChecklist({ c, maj }: { c: Consultation; maj: (p: Partial<Consulta
   const [rcOuvert, setRcOuvert] = useState(false)
   const [texteRC, setTexteRC] = useState('')
   const [extraction, setExtraction] = useState<ExtractionRC | null>(null)
+  const [analyseEnCours, setAnalyseEnCours] = useState(false)
+  const refFichierRC = useRef<HTMLInputElement>(null)
   const [retenues, setRetenues] = useState<Set<string>>(new Set())
   const [ajouts, setAjouts] = useState<Record<string, string>>({})
   const exigences = c.exigences || []
@@ -385,6 +389,51 @@ function CarteChecklist({ c, maj }: { c: Consultation; maj: (p: Partial<Consulta
     const base = checklistDeBase(c)
     maj({ exigences: [...exigences, ...base] })
     toast(`${base.length} éléments ajoutés (base agence — ${c.typeAvis === 'concours' ? 'concours' : 'appel d’offres'}).`)
+  }
+
+  /** 0 ter D : le RC arrive en FICHIER (ou dans le ZIP du DCE téléchargé
+   *  par le serveur) — il est identifié par son nom, son texte est extrait
+   *  (pdf.js/docx déjà embarqués) et alimente le MÊME flux de propositions
+   *  que le collage manuel. Rien n'est deviné : l'humain accepte toujours. */
+  const analyserFichierRC = async (fichier: File) => {
+    setAnalyseEnCours(true)
+    try {
+      let cible: File = fichier
+      if (/\.zip$/i.test(fichier.name)) {
+        const entrees = unzipSync(new Uint8Array(await fichier.arrayBuffer()))
+        const noms = Object.keys(entrees).filter((n) => !n.endsWith('/') && /\.(pdf|docx?|txt)$/i.test(n))
+        // le RC s'identifie par son nom : « RC », « règlement de (la) consultation/concours »
+        const nomRc = noms.find(
+          (n) => /(^|[\/_\-. ])rc([\/_\-. ])/i.test(n) || /r[eè]glement/i.test(n),
+        )
+        if (!nomRc) {
+          toast(`RC introuvable dans le ZIP (${noms.length} document(s)) — ouvrez le fichier du règlement directement.`, { tone: 'warn' })
+          return
+        }
+        const nomCourt = nomRc.split('/').pop() || nomRc
+        cible = new File([entrees[nomRc].slice().buffer as ArrayBuffer], nomCourt, {
+          type: /\.pdf$/i.test(nomCourt) ? 'application/pdf' : '',
+        })
+        toast(`RC identifié dans le DCE : ${nomCourt}`)
+      }
+      const texte = await extraireTexteFichier(cible)
+      if (!texte.trim()) {
+        toast('Aucun texte lisible dans ce fichier (scan ? protégé ?).', { tone: 'warn' })
+        return
+      }
+      setTexteRC(texte)
+      setRcOuvert(true)
+      const r = extraireExigencesRC(texte)
+      setExtraction(r)
+      setRetenues(new Set(r.exigences.map((e) => e.id)))
+      if (r.exigences.length === 0 && r.criteres.length === 0) {
+        toast('Rien d’extractible avec certitude dans ce RC — ajoutez les exigences à la main.', { tone: 'warn' })
+      }
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Analyse du fichier impossible.', { tone: 'danger' })
+    } finally {
+      setAnalyseEnCours(false)
+    }
   }
 
   const analyserRC = () => {
@@ -444,6 +493,25 @@ function CarteChecklist({ c, maj }: { c: Consultation; maj: (p: Partial<Consulta
         <Btn small kind={rcOuvert ? 'ghost' : 'default'} onClick={() => setRcOuvert(!rcOuvert)}>
           {rcOuvert ? 'Fermer l’extraction RC' : 'Coller le RC → extraire les exigences'}
         </Btn>
+        <Btn
+          small
+          onClick={() => refFichierRC.current?.click()}
+          disabled={analyseEnCours}
+          title="Ouvre le RC (PDF/DOCX/TXT) ou le ZIP du DCE : le règlement y est identifié tout seul et ses exigences sont proposées."
+        >
+          {analyseEnCours ? 'Analyse…' : 'Analyser le RC (fichier ou DCE .zip)'}
+        </Btn>
+        <input
+          ref={refFichierRC}
+          type="file"
+          accept=".pdf,.docx,.doc,.txt,.zip"
+          style={{ display: 'none' }}
+          onChange={(e) => {
+            const f = e.target.files?.[0]
+            e.target.value = ''
+            if (f) void analyserFichierRC(f)
+          }}
+        />
       </div>
 
       {rcOuvert && (

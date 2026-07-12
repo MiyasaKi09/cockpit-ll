@@ -31,6 +31,18 @@ export interface AnnonceExterne {
   procedure?: string
   /** descripteurs officiels (ex. « Maîtrise d'oeuvre ») — signal de pertinence */
   descripteurs?: string[]
+  // --- Lot 0 ter : enrichissement des fiches publiques ---
+  /** identifiant technique de la source (aws, place… — pour relancer/demander le DCE) */
+  sourceBrute?: string
+  /** référence de la consultation lue sur la fiche */
+  reference?: string
+  /** alerte (mail brut) · fiche (page publique lue) · dce (DCE analysé) */
+  niveauAnalyse?: 'alerte' | 'fiche' | 'dce'
+  /** objet détaillé lu sur la fiche publique */
+  description?: string
+  /** accès au DCE constaté sur la fiche */
+  dceAccess?: 'public' | 'form' | 'login' | 'unknown'
+  dceUrl?: string
 }
 
 export type AnnonceBoamp = AnnonceExterne

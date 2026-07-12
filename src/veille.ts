@@ -31,6 +31,10 @@ export function labelSource(source: string): string {
 interface LigneSignal {
   source: string
   source_id: string
+  niveau_analyse?: 'alerte' | 'fiche' | 'dce' | null
+  reference?: string | null
+  url_canonique?: string | null
+  detail?: { description?: string; dceAccess?: string; dceUrl?: string; lieu?: string } | null
   type: 'initial' | 'rectificatif' | 'modification' | 'annulation' | 'resultat'
   type_avis: 'marche' | 'concours'
   objet: string
@@ -62,7 +66,7 @@ export async function listerSignauxVeille(
   const { data, error } = await sb
     .from('veille_signaux')
     .select(
-      'source,source_id,type,type_avis,objet,acheteur,date_parution,date_limite,departements,procedure,descripteurs,annonces_liees,url,cle_canonique',
+      'source,source_id,type,type_avis,objet,acheteur,date_parution,date_limite,departements,procedure,descripteurs,annonces_liees,url,cle_canonique,niveau_analyse,reference,url_canonique,detail',
     )
     .order('date_parution', { ascending: false })
     .limit(250)
@@ -86,12 +90,18 @@ export async function listerSignauxVeille(
       departements: l.departements || [],
       typeMarche: '',
       nature: l.source === 'ted' ? 'Avis TED' : 'Avis de marché',
-      url: l.url || '',
+      url: l.url_canonique || l.url || '',
       plateforme: label,
       plateformes: [label],
       typeAvis: l.type_avis,
       procedure: l.procedure || undefined,
       descripteurs: l.descripteurs || [],
+      sourceBrute: l.source,
+      reference: l.reference || undefined,
+      niveauAnalyse: l.niveau_analyse || undefined,
+      description: l.detail?.description || undefined,
+      dceAccess: (l.detail?.dceAccess as AnnonceExterne['dceAccess']) || undefined,
+      dceUrl: l.detail?.dceUrl || undefined,
     }
     const cle = (l as LigneSignal & { cle_canonique?: string }).cle_canonique || `${l.source}:${l.source_id}`
     const existante = parCle.get(cle)
@@ -106,6 +116,15 @@ export async function listerSignauxVeille(
       base.dateLimite = base.dateLimite ?? autre.dateLimite
       base.acheteur = base.acheteur || autre.acheteur
       if (base.departements.length === 0) base.departements = autre.departements
+      // l'enrichissement le plus profond gagne (alerte < fiche < dce)
+      const rang = (n?: string) => (n === 'dce' ? 2 : n === 'fiche' ? 1 : 0)
+      if (rang(autre.niveauAnalyse) > rang(base.niveauAnalyse)) {
+        base.niveauAnalyse = autre.niveauAnalyse
+        base.reference = autre.reference ?? base.reference
+        base.description = autre.description ?? base.description
+        base.dceAccess = autre.dceAccess ?? base.dceAccess
+        base.dceUrl = autre.dceUrl ?? base.dceUrl
+      }
       parCle.set(cle, base)
     }
   }
@@ -174,6 +193,60 @@ export async function signauxPourAcheteur(
     dateLimite: (l.date_limite as string | null) || null,
     url: (l.url as string | null) || null,
   }))
+}
+
+// ---------- Lot 0 ter : file d'enrichissement ----------
+
+export interface JobVeille {
+  id: string
+  source: string
+  kind: string
+  status: string
+  url: string | null
+  error_code: string | null
+  error_detail: string | null
+  signal_source_id: string | null
+}
+
+/** jobs qui attendent une décision ou signalent un problème —
+ *  needs_login (action humaine), needs_browser, blocked, failed */
+export async function jobsEnAttente(): Promise<JobVeille[] | null> {
+  const sb = clientSupabase()
+  if (!sb) return null
+  const { data, error } = await sb
+    .from('veille_jobs')
+    .select('id,source,kind,status,url,error_code,error_detail,signal_source_id')
+    .in('status', ['needs_login', 'needs_browser', 'blocked', 'failed'])
+    .order('created_at', { ascending: false })
+    .limit(20)
+  if (error) throw new Error(`File illisible : ${error.message}`)
+  return (data || []) as JobVeille[]
+}
+
+/** relance ciblée d'un job (repasse en file — le prochain cycle le reprend) */
+export async function relancerJob(id: string): Promise<void> {
+  const sb = clientSupabase()
+  if (!sb) return
+  const { error } = await sb
+    .from('veille_jobs')
+    .update({ status: 'queued', attempts: 0, next_attempt_at: new Date().toISOString(), error_code: null, error_detail: null })
+    .eq('id', id)
+  if (error) throw new Error(`Relance impossible : ${error.message}`)
+}
+
+/** après VALIDATION d'une opportunité : demande la récupération du DCE
+ *  (retrait public seulement — sinon la file marquera l'action humaine) */
+export async function demanderDce(source: string, sourceId: string, url?: string | null): Promise<boolean> {
+  const sb = clientSupabase()
+  if (!sb) return false
+  const { error } = await sb.from('veille_jobs').insert({
+    signal_source: source,
+    signal_source_id: sourceId,
+    source,
+    kind: 'fetch_dce',
+    url: url || null,
+  })
+  return !error
 }
 
 /** déclenche une collecte immédiate côté serveur (jeton agence) */

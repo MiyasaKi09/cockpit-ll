@@ -31,7 +31,7 @@ import {
   toast,
   useToday,
 } from '../ui'
-import { clamp, diffDays, fmtDate, fmtMois, fmtMoney, fmtPct, fold, monthKey, ouvrirGmail } from '../util'
+import { clamp, diffDays, fmtDate, fmtMois, fmtMoney, fmtPct, fold, monthKey, ouvrirGmail, uid } from '../util'
 import {
   dateLimiteVerif,
   decompteSituation,
@@ -78,16 +78,6 @@ function LienProjet({ state, projetId }: { state: AppState; projetId: string }) 
   )
 }
 
-/** prochain numéro « AAAA-NNN » (suite du compteur global de l'année) */
-function prochainNumeroFacture(factures: { id: string }[], emissionISO: string): string {
-  let max = 0
-  for (const f of factures) {
-    const m = /^\d{4}-(\d+)$/.exec(f.id)
-    if (m) max = Math.max(max, Number(m[1]))
-  }
-  return `${emissionISO.slice(0, 4)}-${String(max + 1).padStart(3, '0')}`
-}
-
 /** pastille de cohérence du décompte (cumul, dépassement marché) */
 function BadgeCoherence({ state, sit }: { state: AppState; sit: Situation }) {
   const dc = decompteSituation(state, sit)
@@ -113,7 +103,8 @@ function NetAPayer({ state, sit }: { state: AppState; sit: Situation }) {
   )
 }
 
-/** crée (statut prévue) la facture d'honoraires DET du mois depuis une situation validée */
+/** crée l'ÉCHÉANCE d'honoraires DET du mois depuis une situation validée —
+ *  la facture (numéro légal, gel) naît ensuite dans le parcours d'émission */
 async function facturerDET(
   state: AppState,
   update: (fn: (d: AppState) => void) => void,
@@ -128,30 +119,33 @@ async function facturerDET(
     )
     return
   }
-  if (sit.factureId && state.factures.some((f) => f.id === sit.factureId)) {
-    if (!(await confirmer({ message: `Une facture DET (${sit.factureId}) existe déjà pour cette situation. En créer une autre ?`, danger: true }))) return
+  if (
+    sit.factureId &&
+    (state.factures.some((f) => f.id === sit.factureId) || state.echeancesFacturation.some((e) => e.id === sit.factureId))
+  ) {
+    if (!(await confirmer({ message: `Une facturation DET existe déjà pour cette situation. En créer une autre ?`, danger: true }))) return
   }
-  const id = prochainNumeroFacture(state.factures, today)
+  // id calculé AVANT la mutation (producteur rejouable)
+  const id = uid('ech')
   const p = state.projets.find((x) => x.id === sit.projetId)
   const delai = p ? state.settings.delaisPaiement[p.typeMO] : 30
   update((d) => {
-    d.factures.push({
+    d.echeancesFacturation.push({
       id,
       projetId: sit.projetId,
       phase: 'DET',
       libelle: `DET — avancement ${sit.entreprise}${sit.lot ? ' · ' + sit.lot : ''} (${fmtMois(sit.mois)})`,
       montantHT: montant,
       tauxTVA: 0.2,
-      emission: today,
+      datePrevue: today,
       delaiJours: delai,
-      statut: 'prevue',
       situationId: sit.id,
     })
     const x = d.situations.find((s) => s.id === sit.id)
     if (x) x.factureId = id
   })
   toast(
-    `Facture ${id} créée (prévue, ${fmtMoney(montant, true)} HT — honoraires DET d'avancement) : à ajuster puis émettre dans Facturation.`,
+    `Échéance créée (${fmtMoney(montant, true)} HT — honoraires DET d'avancement) : à ajuster puis émettre dans Facturation.`,
     { tone: 'ok' },
   )
 }

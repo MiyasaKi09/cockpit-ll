@@ -5,8 +5,9 @@
 // ============================================================
 
 import type { AppState, Facture, PromptTemplate } from './types'
+import { amorcerFinance } from './amorceFinance'
 
-export const STATE_VERSION = 13
+export const STATE_VERSION = 14
 
 const P = (v: number) => Math.round(v * 100) / 100
 
@@ -262,7 +263,7 @@ Sélectionne les 3 à 5 références les plus pertinentes pour CETTE consultatio
 ]
 
 export function seedState(): AppState {
-  return {
+  const etat: AppState = {
     version: STATE_VERSION,
     settings: {
       nomAgence: 'Agence L&L',
@@ -973,5 +974,13 @@ export function seedState(): AppState {
     tachesChantier: [],
     registreDocuments: [],
     entreprises: [],
+
+    // v14 — finance F0/F1 : remplies par l'amorçage ci-dessous
+    // (les factures « prévues » du seed deviennent des échéances)
+    echeancesFacturation: [],
+    paiements: [],
+    contrats: [],
   }
+  amorcerFinance(etat)
+  return etat
 }

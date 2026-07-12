@@ -173,7 +173,7 @@ function UtiliserGabarit({ t, onClose }: { t: PromptTemplate; onClose: () => voi
           label: `${m.projetId} · ${m.lot} — ${m.entreprise}`,
         }))
       case 'facture':
-        return state.factures.map((f) => ({ value: f.id, label: `${f.id} · ${f.projetId} — ${f.libelle}` }))
+        return state.factures.map((f) => ({ value: f.id, label: `${f.numero || f.id} · ${f.projetId} — ${f.libelle}` }))
       case 'consultation':
         return state.consultations.map((c) => ({ value: c.id, label: c.intitule }))
       case 'libre':

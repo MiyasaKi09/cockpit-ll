@@ -2,7 +2,7 @@
 // imprimable propre s'ouvre et le navigateur « Enregistre en
 // PDF » (Ctrl+P). Déterministe, zéro service externe.
 
-import type { AppState, Facture, Situation } from './types'
+import type { AppState, Facture, FactureFigee, Situation } from './types'
 import {
   analyserPeriode,
   caCible,
@@ -10,6 +10,7 @@ import {
   caRealiseAnnee,
   coutJourObjectif,
   decompteSituation,
+  encaisseHTPeriode,
   encaissementPrevu,
   nomProjet,
   projetById,
@@ -22,13 +23,111 @@ function echapper(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
-/** ouvre la facture dans une fenêtre imprimable (→ PDF via Ctrl+P) */
+/** ouvre la facture dans une fenêtre imprimable (→ PDF via Ctrl+P).
+ *  Pièce ÉMISE : le document se régénère depuis la copie FIGÉE — l'état
+ *  courant (adresse du client, réglages) ne compte plus (audit F0). */
 export function ouvrirFacturePDF(state: AppState, f: Facture): void {
+  if (f.figee) return ouvrirFactureFigee(f, f.figee)
+  ouvrirFactureHistorique(state, f)
+}
+
+/** rendu depuis le bloc figé — la seule vérité de la pièce émise */
+function ouvrirFactureFigee(f: Facture, fg: FactureFigee): void {
+  const titre = f.type === 'avoir' ? 'Avoir' : 'Facture'
+  const a = fg.agence
+  const lignesHtml = fg.lignes
+    .map((l) => {
+      const ht = Math.round(l.quantite * l.prixUnitaireHT * 100) / 100
+      return `<tr>
+      <td>${echapper(l.designation)}</td>
+      <td class="r">${l.quantite === 1 && l.unite === 'forfait' ? 'forfait' : `${l.quantite} ${echapper(l.unite)}`}</td>
+      <td class="r">${fmtMoney(l.prixUnitaireHT, true)}</td>
+      <td class="r">${Math.round(l.tauxTVA * 1000) / 10} %</td>
+      <td class="r">${fmtMoney(ht, true)}</td>
+    </tr>`
+    })
+    .join('\n')
+  const html = `<!doctype html>
+<html lang="fr"><head><meta charset="utf-8"><title>${titre} ${echapper(fg.numero)}</title>
+<style>
+  body { font-family: -apple-system, 'Segoe UI', Roboto, Arial, sans-serif; color: #1a2233; margin: 48px; font-size: 14px; }
+  header { display: flex; justify-content: space-between; margin-bottom: 36px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .muted { color: #5a6478; }
+  .bloc { margin: 22px 0; }
+  table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+  th { text-align: left; border-bottom: 2px solid #1a2233; padding: 8px 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+  td { padding: 10px 6px; border-bottom: 1px solid #e3e6ec; }
+  td.r, th.r { text-align: right; font-variant-numeric: tabular-nums; }
+  .totaux td { border-bottom: none; padding: 6px; }
+  .totaux .net td { font-weight: 700; font-size: 16px; border-top: 2px solid #1a2233; }
+  .mentions { margin-top: 40px; font-size: 11px; color: #5a6478; line-height: 1.6; }
+  .impression { position: fixed; top: 12px; right: 12px; }
+  @media print { .impression { display: none; } body { margin: 24px; } }
+</style></head><body>
+<button class="impression" onclick="window.print()">Imprimer / PDF</button>
+<header>
+  <div>
+    <h1>${echapper(a.nom)}</h1>
+    <div class="muted">Architecture — maîtrise d'œuvre${a.adresse ? `<br>${echapper(a.adresse)}` : ''}${a.siret ? `<br>SIRET ${echapper(a.siret)}` : ''}${a.tva ? ` · TVA ${echapper(a.tva)}` : ''}</div>
+  </div>
+  <div style="text-align:right">
+    <h1>${titre} ${echapper(fg.numero)}</h1>
+    <div class="muted">Émis${f.type === 'avoir' ? '' : 'e'} le ${fmtDate(fg.dateEmission)}${fg.datePrestation ? `<br>Prestation : ${fmtDate(fg.datePrestation)}` : ''}<br>Échéance : ${fmtDate(encaissementPrevu(f))} (${fg.delaiJours} jours)</div>
+  </div>
+</header>
+
+<div class="bloc">
+  <strong>Client</strong><br>
+  ${echapper(fg.clientNom)}${fg.clientAdresse ? `<br><span class="muted">${echapper(fg.clientAdresse).replace(/\n/g, '<br>')}</span>` : ''}${fg.clientSiret ? `<br><span class="muted">SIRET ${echapper(fg.clientSiret)}</span>` : ''}
+</div>
+
+${fg.objet || fg.numeroEngagement ? `<div class="bloc">
+  <strong>Objet</strong><br>
+  ${fg.objet ? echapper(fg.objet) : ''}${fg.numeroEngagement ? `<br><span class="muted">N° d'engagement / marché : ${echapper(fg.numeroEngagement)}</span>` : ''}
+</div>` : ''}
+
+<table>
+  <thead><tr><th>Désignation</th><th class="r">Quantité</th><th class="r">PU HT</th><th class="r">TVA</th><th class="r">Montant HT</th></tr></thead>
+  <tbody>
+    ${lignesHtml}
+  </tbody>
+</table>
+<table class="totaux" style="width: 46%; margin-left: auto;">
+  <tbody>
+    <tr><td>Total HT</td><td class="r">${fmtMoney(fg.totalHT, true)}</td></tr>
+    <tr><td>TVA</td><td class="r">${fmtMoney(fg.totalTVA, true)}</td></tr>
+    <tr class="net"><td>Net à payer TTC</td><td class="r">${fmtMoney(fg.totalTTC, true)}</td></tr>
+  </tbody>
+</table>
+
+${a.iban ? `<div class="bloc"><strong>Règlement par virement</strong><br>
+  ${a.banque ? `${echapper(a.banque)}<br>` : ''}IBAN ${echapper(a.iban)}${a.bic ? ` · BIC ${echapper(a.bic)}` : ''}</div>` : ''}
+
+<div class="mentions">
+  ${echapper(fg.mentionTVA)}. Paiement à ${fg.delaiJours} jours.
+  Tout retard de paiement entraîne de plein droit des pénalités au taux légal en vigueur ainsi
+  qu'une indemnité forfaitaire de recouvrement de 40 € (art. L441-10 du Code de commerce) pour
+  les professionnels. Escompte pour paiement anticipé : néant.<br>
+  ${[echapper(a.nom), a.capital ? `SAS au capital de ${echapper(a.capital)}` : '', a.rcs ? `RCS ${echapper(a.rcs)}` : '', a.siret ? `SIRET ${echapper(a.siret)}` : ''].filter(Boolean).join(' · ')}
+  ${fg.empreinte ? `<br>Empreinte de la pièce (SHA-256) : ${echapper(fg.empreinte)}` : ''}
+</div>
+</body></html>`
+
+  const w = window.open('', '_blank')
+  if (!w) return
+  w.document.write(html)
+  w.document.close()
+}
+
+/** rendu de repli pour les factures HISTORIQUES migrées (jamais gelées) —
+ *  document reconstitué depuis l'état courant, à rapprocher du PDF envoyé */
+function ouvrirFactureHistorique(state: AppState, f: Facture): void {
   const p = projetById(state, f.projetId)
   const s = state.settings
   const tva = f.montantHT * f.tauxTVA
   const html = `<!doctype html>
-<html lang="fr"><head><meta charset="utf-8"><title>Facture ${echapper(f.id)}</title>
+<html lang="fr"><head><meta charset="utf-8"><title>Facture ${echapper(f.numero || f.id)}</title>
 <style>
   body { font-family: -apple-system, 'Segoe UI', Roboto, Arial, sans-serif; color: #1a2233; margin: 48px; font-size: 14px; }
   header { display: flex; justify-content: space-between; margin-bottom: 36px; }
@@ -51,7 +150,7 @@ export function ouvrirFacturePDF(state: AppState, f: Facture): void {
     <div class="muted">Architecture — maîtrise d'œuvre<br>${echapper(s.personnes.join(' · '))}${s.adresseAgence ? `<br>${echapper(s.adresseAgence)}` : ''}${s.siretAgence ? `<br>SIRET ${echapper(s.siretAgence)}` : ''}${s.numeroTVA ? ` · TVA ${echapper(s.numeroTVA)}` : ''}</div>
   </div>
   <div style="text-align:right">
-    <h1>Facture ${echapper(f.id)}</h1>
+    <h1>Facture ${echapper(f.numero || f.id)}</h1>
     <div class="muted">Émise le ${fmtDate(f.emission)}<br>Échéance : ${fmtDate(encaissementPrevu(f))} (${f.delaiJours} jours)</div>
   </div>
 </header>
@@ -92,6 +191,7 @@ ${s.iban ? `<div class="bloc"><strong>Règlement par virement</strong><br>
   les professionnels. Escompte pour paiement anticipé : néant.<br>
   ${[echapper(s.nomAgence), s.capitalSocial ? `SAS au capital de ${echapper(s.capitalSocial)}` : '', s.rcs ? `RCS ${echapper(s.rcs)}` : '', s.siretAgence ? `SIRET ${echapper(s.siretAgence)}` : ''].filter(Boolean).join(' · ')}
   ${!s.iban ? '<br>Coordonnées bancaires à compléter dans Paramètres.' : ''}
+  <br>Document reconstitué depuis l'état courant (facture migrée, jamais gelée) — à rapprocher du PDF réellement envoyé.
 </div>
 </body></html>`
 
@@ -192,10 +292,9 @@ export function ouvrirRevuePDF(state: AppState, debut: string, fin: string): voi
   const caRealise = caRealiseAnnee(state, annee)
   const cible = caCible(state)
   const objectif = coutJourObjectif(state)
-  const encaisse = state.factures
-    .filter((f) => f.statut === 'encaissee' && f.encaissementReel && f.encaissementReel >= debut && f.encaissementReel <= fin)
-    .reduce((acc, f) => acc + f.montantHT, 0)
-  const marge = syn.totalCA - syn.totalCoutTemps - syn.totalCoutExterne
+  // encaissé dérivé des PAIEMENTS ; marge sur coûts DIRECTS (audit F0)
+  const encaisse = encaisseHTPeriode(state, debut, fin)
+  const marge = syn.totalCA - syn.totalCoutTemps
   const euroJour = syn.parJourMoyen
 
   const cell = (v: number) => `<td class="r">${v > 0 ? fmtMoney(v) : '·'}</td>`

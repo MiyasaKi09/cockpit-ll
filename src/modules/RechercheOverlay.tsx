@@ -150,13 +150,23 @@ function chercher(state: AppState, q: string): Resultat[] {
   }
 
   for (const f of state.factures) {
-    if (hit(f.id, f.libelle))
+    if (hit(f.numero || f.id, f.libelle))
       res.push({
         groupe: 'Factures',
-        titre: `${f.id} — ${f.libelle}`,
+        titre: `${f.numero || f.id} — ${f.libelle}`,
         detail: `${f.projetId} · ${fmtMoney(f.montantHT)} HT`,
         lien: '#/facturation',
         projets: [f.projetId],
+      })
+  }
+  for (const e of state.echeancesFacturation) {
+    if (hit(e.libelle))
+      res.push({
+        groupe: 'Factures',
+        titre: `À émettre — ${e.libelle}`,
+        detail: `${e.projetId} · ${fmtMoney(e.montantHT)} HT · prévue le ${fmtDate(e.datePrevue)}`,
+        lien: '#/facturation',
+        projets: [e.projetId],
       })
   }
 

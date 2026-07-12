@@ -12,7 +12,7 @@ import { useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import type { Alerte } from '../types'
 import { useStore } from '../store'
-import { Btn, Card, DateF, EmptyState, Icon, Modal, Money, Page, RowMenu, Stat, confirmer, toast, useToday } from '../ui'
+import { Btn, Card, DateF, EmptyState, Icon, Modal, Money, Page, RowMenu, Stat, confirmer, navigate, toast, useToday } from '../ui'
 import { alertesActives } from '../alerts'
 import { STATUTS_ACTIFS, caCible, caRealiseAnnee, meteoFinanciere } from '../derive'
 import { addDays, fmtDate, fmtMoney, fmtPct, ouvrirGmail } from '../util'
@@ -59,7 +59,7 @@ function RienASignaler({ children }: { children: ReactNode }) {
 /** raccourci « marquer… » : les actions financières/contractuelles portent
  *  une confirmation explicite (sinon exécution directe, toujours annulable) */
 type ActionRapide =
-  | { kind: 'emettre_facture'; refId: string; label: string; confirme: string }
+  | { kind: 'emettre_facture'; refId: string; label: string; confirme?: undefined }
   | { kind: 'valider_situation'; refId: string; label: string; confirme: string }
   | { kind: 'note_faite'; refId: string; projetId: string; label: string; confirme?: undefined }
 
@@ -112,21 +112,18 @@ function itemsAFaire(state: ReturnType<typeof useStore>['state'], today: string)
       marqueur: 'square',
     })
   }
-  for (const f of state.factures.filter((x) => x.statut === 'prevue' && x.emission <= today)) {
+  // audit F0 : plus de « marquer émise » à l'aveugle — l'émission passe
+  // par le parcours contrôlé (contrôles bloquants, numéro légal, gel)
+  for (const e of state.echeancesFacturation.filter((x) => x.datePrevue <= today)) {
     items.push({
-      id: `fac-${f.id}`,
+      id: `fac-${e.id}`,
       gravite: 3,
-      titre: `Émettre la facture ${f.id} — ${fmtMoney(f.montantHT)} HT`,
-      detail: `${f.projetId} · ${f.libelle} · prévue le ${fmtDate(f.emission)}`,
-      lien: '#/facturation',
-      dateLimite: f.emission,
+      titre: `Émettre la facture — ${fmtMoney(e.montantHT)} HT`,
+      detail: `${e.projetId} · ${e.libelle} · prévue le ${fmtDate(e.datePrevue)}`,
+      lien: `#/facturation/emettre/${e.id}`,
+      dateLimite: e.datePrevue,
       marqueur: 'circle',
-      rapide: {
-        kind: 'emettre_facture',
-        refId: f.id,
-        label: 'Marquer émise…',
-        confirme: `Marquer la facture ${f.id} (${fmtMoney(f.montantHT)} HT — ${f.libelle}) comme ÉMISE sans l'ouvrir ?\nElle entre au facturé et dans le suivi des retards à sa date d'émission.`,
-      },
+      rapide: { kind: 'emettre_facture', refId: e.id, label: 'Émettre…' },
     })
   }
   for (const r of state.reunions.filter((x) => x.statut !== 'diffuse' && x.date <= today)) {
@@ -172,10 +169,7 @@ function trierAFaire(a: ItemAFaire, b: ItemAFaire): number {
 /** exécute un raccourci « marquer… » (mutation du store) */
 function executerRapide(update: ReturnType<typeof useStore>['update'], a: ActionRapide): void {
   update((d) => {
-    if (a.kind === 'emettre_facture') {
-      const f = d.factures.find((x) => x.id === a.refId)
-      if (f && f.statut === 'prevue') f.statut = 'emise'
-    } else if (a.kind === 'valider_situation') {
+    if (a.kind === 'valider_situation') {
       const s = d.situations.find((x) => x.id === a.refId)
       if (s) s.statut = 'validee'
     } else if (a.kind === 'note_faite') {
@@ -310,11 +304,16 @@ function CentreActions() {
   const horizon = addDays(today, 7)
 
   const faireRapide = async (a: ActionRapide) => {
+    if (a.kind === 'emettre_facture') {
+      // audit F0 : l'émission attribue le numéro légal et fige la pièce —
+      // elle s'ouvre toujours dans le parcours contrôlé, jamais en un clic
+      navigate(`/facturation/emettre/${a.refId}`)
+      return
+    }
     if (a.confirme && !(await confirmer({ message: a.confirme, confirmerLabel: a.label.replace('…', '') }))) return
     const snap = state
     executerRapide(update, a)
-    const libelle =
-      a.kind === 'valider_situation' ? 'Situation validée.' : a.kind === 'emettre_facture' ? 'Facture émise.' : 'Note marquée faite.'
+    const libelle = a.kind === 'valider_situation' ? 'Situation validée.' : 'Note marquée faite.'
     toast(libelle, { undo: () => replace(snap) })
   }
 
@@ -330,19 +329,21 @@ function CentreActions() {
   // action rapide d'une alerte : financière → confirmation explicite
   const executerAlerte = async (a: Alerte) => {
     const action = a.action!
-    if (action.kind === 'emettre_facture' || action.kind === 'valider_situation') {
+    if (action.kind === 'emettre_facture') {
+      // parcours contrôlé (numéro légal, contrôles, gel) — audit F0
+      navigate(`/facturation/emettre/${action.refId}`)
+      return
+    }
+    if (action.kind === 'valider_situation') {
       const ok = await confirmer({
-        message: `${a.titre}\n\nMarquer comme ${action.kind === 'emettre_facture' ? 'ÉMISE' : 'VALIDÉE'} sans ouvrir la fiche ?`,
+        message: `${a.titre}\n\nMarquer comme VALIDÉE sans ouvrir la fiche ?`,
         confirmerLabel: action.label,
       })
       if (!ok) return
     }
     const snap = state
     update((d) => {
-      if (action.kind === 'emettre_facture') {
-        const f = d.factures.find((x) => x.id === action.refId)
-        if (f && f.statut === 'prevue') f.statut = 'emise'
-      } else if (action.kind === 'valider_situation') {
+      if (action.kind === 'valider_situation') {
         const s = d.situations.find((x) => x.id === action.refId)
         if (s) s.statut = 'validee'
       } else if (action.kind === 'obligation_faite') {
@@ -360,8 +361,7 @@ function CentreActions() {
         }
       }
     })
-    const libelle =
-      action.kind === 'emettre_facture' ? 'Facture émise.' : action.kind === 'valider_situation' ? 'Situation validée.' : 'Obligation faite.'
+    const libelle = action.kind === 'valider_situation' ? 'Situation validée.' : 'Obligation faite.'
     toast(libelle, { undo: () => replace(snap) })
   }
 
@@ -594,9 +594,9 @@ export default function Cockpit() {
         .map((ph) => ({ projet: p, phase: ph })),
     )
 
-  const prochainesFactures = state.factures
-    .filter((f) => f.statut === 'prevue' && f.emission >= today)
-    .sort((a, b) => a.emission.localeCompare(b.emission))
+  const prochainesFactures = state.echeancesFacturation
+    .filter((e) => e.datePrevue >= today)
+    .sort((a, b) => a.datePrevue.localeCompare(b.datePrevue))
     .slice(0, 3)
 
   const prochainesObligations = state.obligations
@@ -694,14 +694,13 @@ export default function Cockpit() {
 
               <Repere titre="Prochaines factures à émettre">
                 {prochainesFactures.length === 0 ? (
-                  <RienASignaler>Aucune facture prévue à venir.</RienASignaler>
+                  <RienASignaler>Aucune facturation prévue à venir.</RienASignaler>
                 ) : (
-                  prochainesFactures.map((f) => (
-                    <Ligne key={f.id}>
-                      <a href="#/facturation">{f.id}</a> ·{' '}
-                      <a href={`#/projets/${f.projetId}`}>{f.projetId}</a> — {f.libelle}
+                  prochainesFactures.map((e) => (
+                    <Ligne key={e.id}>
+                      <a href={`#/projets/${e.projetId}`}>{e.projetId}</a> — {e.libelle}
                       <div className="muted">
-                        <Money v={f.montantHT} /> HT · à émettre le <DateF d={f.emission} />
+                        <Money v={e.montantHT} /> HT · à émettre le <DateF d={e.datePrevue} />
                       </div>
                     </Ligne>
                   ))

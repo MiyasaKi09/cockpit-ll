@@ -647,7 +647,7 @@ export default function Parametres({ ongletInitial = 'agence' }: { ongletInitial
       <div className="grid2">
         <Card titre="Trésorerie disponible (météo financière)">
           <div className="form-row">
-            <Field label="Solde disponible (€)" hint="source : relevé bancaire ou Excel maître">
+            <Field label="Solde disponible (€)" hint="saisi À LA MAIN depuis le relevé bancaire — rien ne le met à jour automatiquement (rapprochement bancaire : lot F3)">
               <NumInput
                 value={s.tresorerieDispo}
                 onChange={(v) => maj((d) => void (d.settings.tresorerieDispo = v))}
@@ -891,6 +891,18 @@ export default function Parametres({ ongletInitial = 'agence' }: { ongletInitial
           </Field>
           <Field label="BIC">
             <TextInput value={s.bic || ''} onChange={(v) => maj((d) => void (d.settings.bic = v))} />
+          </Field>
+        </div>
+        <div className="form-row">
+          <Field
+            label="Mention TVA (imprimée sur chaque facture)"
+            hint="régime réel de l'agence — « TVA sur les encaissements » par défaut ; « TVA sur les débits » si l'option est exercée"
+          >
+            <TextInput
+              value={s.mentionTVA || ''}
+              onChange={(v) => maj((d) => void (d.settings.mentionTVA = v))}
+              placeholder="TVA sur les encaissements"
+            />
           </Field>
         </div>
       </Card>

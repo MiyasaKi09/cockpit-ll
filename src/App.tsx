@@ -16,6 +16,7 @@ import Pilotage from './modules/Pilotage'
 import Projets from './modules/Projets'
 import Situations from './modules/Situations'
 import Facturation from './modules/Facturation'
+import Contrats from './modules/Contrats'
 import Temps from './modules/Temps'
 import VeilleAO from './modules/VeilleAO'
 import Claude from './modules/Claude'
@@ -46,6 +47,7 @@ const NAV: { groupe: string; repliable?: boolean; items: { path: string; label: 
     groupe: 'Gestion',
     items: [
       { path: 'facturation', label: 'Factures' },
+      { path: 'contrats', label: 'Contrats' },
       { path: 'situations', label: 'Situations' },
       { path: 'pilotage', label: 'Pilotage' },
     ],
@@ -167,6 +169,9 @@ export default function App() {
       break
     case 'facturation':
       page = <Facturation />
+      break
+    case 'contrats':
+      page = <Contrats />
       break
     case 'temps':
       page = <Temps />

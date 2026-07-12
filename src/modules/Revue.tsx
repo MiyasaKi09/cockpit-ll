@@ -13,6 +13,7 @@ import {
   caParMois,
   caRealiseAnnee,
   coutJourObjectif,
+  encaisseHTPeriode,
   nomProjet,
   tempsParPersonne,
 } from '../derive'
@@ -91,20 +92,17 @@ export function RevueContenu() {
   const cible = caCible(state)
   const alertes = alertesActives(state, today)
 
-  const encaisse = useMemo(
+  // encaissé dérivé des PAIEMENTS datés (audit F0)
+  const encaisse = useMemo(() => encaisseHTPeriode(state, debut, fin), [state, debut, fin])
+  // marge sur coûts DIRECTS de la période (le budget externe non daté
+  // n'est plus soustrait — même définition qu'analyserPeriode)
+  const marge = syn.totalCA - syn.totalCoutTemps
+  const echeancesPeriode = useMemo(
     () =>
-      state.factures
-        .filter((f) => f.statut === 'encaissee' && f.encaissementReel && f.encaissementReel >= debut && f.encaissementReel <= fin)
-        .reduce((acc, f) => acc + f.montantHT, 0),
-    [state.factures, debut, fin],
-  )
-  const marge = syn.totalCA - syn.totalCoutTemps - syn.totalCoutExterne
-  const facturesPeriode = useMemo(
-    () =>
-      state.factures
-        .filter((f) => f.statut === 'prevue' && f.emission >= debut && f.emission <= fin)
-        .sort((a, b) => a.emission.localeCompare(b.emission)),
-    [state.factures, debut, fin],
+      state.echeancesFacturation
+        .filter((e) => e.datePrevue >= debut && e.datePrevue <= fin)
+        .sort((a, b) => a.datePrevue.localeCompare(b.datePrevue)),
+    [state.echeancesFacturation, debut, fin],
   )
 
   const libellePeriode =
@@ -142,9 +140,10 @@ export function RevueContenu() {
         <Stat accent="blue" label="Encaissé (période)" value={<Money v={encaisse} />} />
         <Stat
           accent="red"
-          label="Marge réelle"
+          label="Marge sur coûts directs"
           value={<Money v={marge} />}
           tone={marge < 0 ? 'danger' : undefined}
+          sub="CA − temps pointé (hors budget externe non daté)"
         />
         <Stat
           label="€ / jour réel"
@@ -309,26 +308,26 @@ export function RevueContenu() {
 
       {/* ---------- échéances à émettre sur la période ---------- */}
       <Card titre="Factures à émettre sur la période">
-        {facturesPeriode.length === 0 ? (
-          <EmptyState>Aucune facture prévue à émettre entre ces deux dates.</EmptyState>
+        {echeancesPeriode.length === 0 ? (
+          <EmptyState>Aucune échéance de facturation entre ces deux dates.</EmptyState>
         ) : (
           <Table
             compact
             head={[
-              'N°',
+              'Phase',
               'Projet',
               'Libellé',
               <span key="ht" className="right">HT</span>,
               <span key="d" className="right">Prévue le</span>,
             ]}
           >
-              {facturesPeriode.map((f) => (
+              {echeancesPeriode.map((f) => (
                 <tr key={f.id}>
-                  <td>{f.id}</td>
+                  <td>{f.phase}</td>
                   <td><a href={`#/projets/${f.projetId}`}>{f.projetId}</a></td>
                   <td>{f.libelle}</td>
                   <td className="right num">{fmtMoney(f.montantHT)}</td>
-                  <td className="right">{fmtDate(f.emission)}</td>
+                  <td className="right">{fmtDate(f.datePrevue)}</td>
                 </tr>
               ))}
           </Table>

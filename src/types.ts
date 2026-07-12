@@ -54,6 +54,9 @@ export interface Projet {
   moa?: string
   /** e-mail de facturation / contact MOA (pré-remplit les e-mails sortants) */
   emailMOA?: string
+  /** adresse de FACTURATION du client (≠ adresse du chantier) — exigée
+   *  avant l'émission d'une facture (mentions légales) */
+  adresseFacturation?: string
   adresse?: string
   /** clé du référentiel OUVRAGES (ex. '12- Logements collectifs') */
   ouvrage: string | null
@@ -285,8 +288,54 @@ export interface Situation {
 
 export type StatutFacture = 'prevue' | 'emise' | 'encaissee'
 
+/** ligne d'une facture de vente — la précision exigée par les mentions
+ *  légales (désignation, quantité, unité, prix unitaire, TVA) */
+export interface LigneFacture {
+  id: string
+  designation: string
+  quantite: number
+  unite: string // forfait · h · j · % · u
+  prixUnitaireHT: number
+  /** FRACTION (0.2 = 20 %) — même convention que Facture.tauxTVA */
+  tauxTVA: number
+  phase?: PhaseCode | null
+}
+
+/** copie FIGÉE de la facture au moment de l'émission (audit finance F0) :
+ *  le PDF se régénère depuis CE bloc, jamais depuis l'état courant —
+ *  changer l'adresse du client ne modifie plus une facture historique */
+export interface FactureFigee {
+  numero: string
+  dateEmission: string
+  datePrestation?: string
+  clientNom: string
+  clientAdresse?: string
+  clientSiret?: string
+  numeroEngagement?: string
+  objet?: string
+  agence: {
+    nom: string
+    adresse?: string
+    siret?: string
+    tva?: string
+    rcs?: string
+    capital?: string
+    iban?: string
+    bic?: string
+    banque?: string
+  }
+  lignes: LigneFacture[]
+  totalHT: number
+  totalTVA: number
+  totalTTC: number
+  mentionTVA: string
+  delaiJours: number
+  /** empreinte SHA-256 du bloc figé (audit, unicité) */
+  empreinte?: string
+}
+
 export interface Facture {
-  id: string // numéro '2026-001'
+  id: string // identifiant INTERNE (les anciennes factures gardent leur numéro comme id)
   projetId: string
   phase: PhaseCode
   libelle: string
@@ -306,6 +355,123 @@ export interface Facture {
   niveauRelance?: number | null
   /** historique des relances passées (date + niveau) */
   relances?: { date: string; niveau: number }[]
+  // --- Audit finance F0 : intégrité de la pièce ---
+  /** numéro LÉGAL, attribué uniquement à l'émission (séquence continue) */
+  numero?: string
+  /** facture ordinaire ou avoir (correction — jamais de modification silencieuse) */
+  type?: 'facture' | 'avoir'
+  /** pour un avoir : la facture d'origine corrigée */
+  factureOrigineId?: string | null
+  /** lignes détaillées (mentions légales) — les anciennes factures n'en ont pas */
+  lignes?: LigneFacture[]
+  /** copie figée à l'émission — la vérité du PDF */
+  figee?: FactureFigee
+  /** journal d'audit : émission, paiement, avoir, relance… */
+  evenements?: { date: string; type: string; detail?: string }[]
+  /** facture migrée : la version PDF réellement envoyée n'a pas été rapprochée */
+  historiqueAControler?: boolean
+  /** ligne de contrat qui justifie la facture (F1) */
+  contratLigneId?: string | null
+}
+
+// --- Audit finance F0 : la PRÉVISION n'est pas la PIÈCE ---
+
+/** échéance de facturation : prévision modifiable, SANS numéro légal.
+ *  Les anciennes références '2027-D01' deviennent des identifiants internes. */
+export interface EcheanceFacturation {
+  id: string
+  projetId: string
+  phase: PhaseCode
+  libelle: string
+  montantHT: number
+  tauxTVA: number
+  /** date d'émission prévue */
+  datePrevue: string
+  delaiJours: number
+  /** ligne de contrat qui justifie l'échéance (F1) */
+  contratLigneId?: string | null
+  /** situation de travaux à l'origine (honoraires DET) */
+  situationId?: string | null
+  notes?: string
+}
+
+/** paiement reçu — un paiement peut régler PLUSIEURS factures, une facture
+ *  peut recevoir plusieurs paiements ; le statut se DÉRIVE du solde */
+export interface Paiement {
+  id: string
+  date: string // ISO
+  montant: number // TTC
+  moyen?: string // virement, chèque…
+  reference?: string
+  affectations: { factureId: string; montant: number }[]
+  notes?: string
+}
+
+// --- Audit finance F1 : le CONTRAT devient la racine du chiffre ---
+
+export type TypeContrat = 'client' | 'fournisseur' | 'agence'
+export type NatureLigneContrat = 'base' | 'complementaire' | 'option' | 'debours' | 'revision'
+export type EtatLigneContrat = 'active' | 'option' | 'supprimee'
+
+export interface LigneContrat {
+  id: string
+  nature: NatureLigneContrat
+  phase?: PhaseCode | null
+  designation: string
+  quantite: number
+  unite: string // forfait · h · j · % · u
+  prixUnitaireHT: number
+  tauxTVA?: number | null
+  /** budget de production interne (heures) */
+  heuresBudget?: number | null
+  /** budget de coûts externes (BET, sous-traitance, débours) — un BUDGET,
+   *  pas un coût réel tant qu'aucune facture fournisseur ne le justifie */
+  coutExterneBudgetHT?: number | null
+  /** ce qui déclenche la facture : signature, remise, jalon, avancement */
+  declencheur?: string
+  etat: EtatLigneContrat
+  /** avenant qui a créé ou supprimé la ligne (traçabilité avant/après) */
+  avenantId?: string | null
+}
+
+/** avenant : un contrat ne se réécrit JAMAIS silencieusement — l'avenant
+ *  ajoute des lignes et en désactive, l'historique reste lisible */
+export interface AvenantContrat {
+  id: string
+  date: string // ISO
+  motif: string
+  documentId?: string | null
+  /** résumé avant/après lisible */
+  detail?: string
+}
+
+export interface Contrat {
+  id: string
+  type: TypeContrat
+  intitule: string
+  /** tiers en clair + liens canoniques facultatifs */
+  tiers: string
+  organisationId?: string | null
+  entrepriseId?: string | null
+  projetId?: string | null
+  dateSignature?: string | null
+  dateNotification?: string | null
+  /** document signé (registre) */
+  documentId?: string | null
+  lignes: LigneContrat[]
+  avenants: AvenantContrat[]
+  // --- contrat d'agence récurrent (bail, logiciels, assurance…) ---
+  periodiciteMois?: number | null
+  /** montant attendu PAR période (détection d'oubli / de dérive) */
+  montantAttenduHT?: number | null
+  tolerancePct?: number | null
+  dateRenouvellement?: string | null
+  /** obligation d'origine (Échéances agence) — les deux vues restent liées */
+  obligationId?: string | null
+  /** contrat provisoire migré des phases — à contrôler face au document signé */
+  provisoire?: boolean
+  notes?: string
+  evenements?: { date: string; type: string; detail?: string }[]
 }
 
 export interface TempsEntry {
@@ -673,6 +839,10 @@ export interface Settings {
   fraisGenerauxAnnuels: number
   /** modèle de nomenclature documentaire */
   nomenclature: string
+  /** mention d'exigibilité TVA imprimée sur les factures — à CONFIRMER avec
+   *  le cabinet (encaissements par défaut pour les prestations de services,
+   *  option possible sur les débits) ; un réglage, pas une phrase codée en dur */
+  mentionTVA?: string
   /** alerteId → ISO « en sommeil jusqu'au » */
   snoozes: Record<string, string>
   dernierImportExcel?: ImportExcelMeta | null
@@ -763,6 +933,10 @@ export interface DocumentRecord {
   consultationId?: string | null
   /** organisation acheteuse (CRM) */
   organisationId?: string | null
+  /** contrat signé / avenant justifié par ce document (finance F1) */
+  contratId?: string | null
+  /** facture de vente dont ce document est la copie figée envoyée */
+  factureId?: string | null
   /** catégorie contrôlée (CCTP, DPGF, CR, SITU, PLAN, ADM, PHOTO…) */
   categorie: string
   sousType?: string
@@ -870,6 +1044,12 @@ export interface AppState {
   entreprises: Entreprise[]
   /** organisations clientes / acheteuses — le CRM par client (audit V3) */
   organisations: Organisation[]
+  /** prévisions de facturation (audit finance F0 : la prévision n'est pas la pièce) */
+  echeancesFacturation: EcheanceFacturation[]
+  /** paiements reçus — le statut d'une facture se dérive de son solde */
+  paiements: Paiement[]
+  /** contrats clients, engagements fournisseurs et contrats d'agence (F1) */
+  contrats: Contrat[]
 }
 
 /** document du corpus de l'assistant : texte réglementaire (Légifrance,

@@ -12,7 +12,7 @@ import { useStore } from '../store'
 import { Badge, Btn, Card, confirmer, DateInput, EmptyState, Field, Icon, NumInput, navigate, Page, Select, Table, Tabs, TextInput, toast, useRoute, useToday } from '../ui'
 import { addDays, diffDays, fmtDate, fmtHeures, mondayOf, todayISO, uid } from '../util'
 import { LIBELLES_PHASES, PHASES_ORDRE } from '../miqcp'
-import { daterPhases, facturesParDefaut } from '../echeancier'
+import { daterPhases, echeancesParDefaut } from '../echeancier'
 import { STATUTS_ACTIFS, capacitePersonneSemaine, capaciteSemaine, chargePlanifieeSemaine, heuresAbsenceSemaine } from '../derive'
 import { EcheancesContenu } from './Calendrier'
 
@@ -138,19 +138,16 @@ function EditionDates({ projet: p }: { projet: Projet }) {
     })
   }
 
-  // Réaligne l'échéancier de facturation « prévue » sur les dates actuelles
-  // des phases (après un décalage). On ne touche jamais aux factures déjà
-  // émises ou encaissées — seules les prévues sont régénérées.
-  const prevuesDuProjet = state.factures.filter((f) => f.projetId === p.id && f.statut === 'prevue').length
+  // Réaligne l'échéancier de facturation sur les dates actuelles des phases
+  // (après un décalage). On ne touche jamais aux factures émises ou
+  // encaissées — seules les ÉCHÉANCES (prévisions sans numéro) se régénèrent.
+  const prevuesDuProjet = state.echeancesFacturation.filter((e) => e.projetId === p.id).length
   const realignerEcheancier = async () => {
-    if (prevuesDuProjet > 0 && !(await confirmer({ message: `Régénérer l'échéancier prévisionnel de ${p.id} ?\n\nLes ${prevuesDuProjet} facture(s) « prévue(s) » seront remplacées d'après les dates actuelles des phases. Les factures déjà émises ou encaissées ne bougent pas.`, danger: true }))) return
+    if (prevuesDuProjet > 0 && !(await confirmer({ message: `Régénérer l'échéancier prévisionnel de ${p.id} ?\n\nLes ${prevuesDuProjet} échéance(s) prévue(s) seront remplacées d'après les dates actuelles des phases. Les factures déjà émises ou encaissées ne bougent pas.`, danger: true }))) return
+    // calculées AVANT la mutation : le producteur update() doit rester rejouable
+    const nouvelles = echeancesParDefaut(p, state.settings)
     update((d) => {
-      const pr = d.projets.find((x) => x.id === p.id)
-      if (!pr) return
-      // on garde tout sauf les prévues de CE projet, puis on régénère
-      const gardees = d.factures.filter((f) => f.projetId !== p.id || f.statut !== 'prevue')
-      const nouvelles = facturesParDefaut(pr, d.settings, gardees)
-      d.factures = [...gardees, ...nouvelles]
+      d.echeancesFacturation = [...d.echeancesFacturation.filter((e) => e.projetId !== p.id), ...nouvelles]
     })
   }
 

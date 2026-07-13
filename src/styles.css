@@ -423,11 +423,14 @@ pre {
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
 .grid4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+.grid5 { display: grid; grid-template-columns: repeat(5, 1fr); gap: 16px; }
 @media (max-width: 1000px) {
   .grid3, .grid4 { grid-template-columns: 1fr 1fr; }
+  .grid5 { grid-template-columns: repeat(3, 1fr); }
 }
 @media (max-width: 700px) {
   .grid2, .grid3, .grid4 { grid-template-columns: 1fr; }
+  .grid5 { grid-template-columns: 1fr 1fr; }
   .main { padding: 16px; }
 }
 
@@ -1075,7 +1078,7 @@ button.etoile:hover { color: var(--warn); }
   /* rien ne déborde de l'écran : tout ce qui est large défile dans son bloc */
   .table { display: block; overflow-x: auto; }
   .card { min-width: 0; }
-  .grid2 > *, .grid3 > *, .grid4 > * { min-width: 0; }
+  .grid2 > *, .grid3 > *, .grid4 > *, .grid5 > * { min-width: 0; }
   .page-actions { flex-shrink: 1; min-width: 0; justify-content: flex-start; }
   .page-actions .btn { white-space: normal; text-align: left; }
   .card-h { flex-wrap: wrap; }

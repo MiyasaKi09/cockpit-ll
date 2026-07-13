@@ -13,6 +13,7 @@ import { zipSync, strToU8 } from 'fflate'
 import type { AppState, FactureAchat, Facture, LotComptable, NoteFrais, Paiement, ProfilComptable } from './types'
 import { ttcFacture } from './facture'
 import { attendusOuverts } from './achats'
+import { genererCII, nomFichierCII } from './facturx'
 import { fold, monthKey } from './util'
 
 export const PROFIL_DEFAUT: ProfilComptable = {
@@ -110,12 +111,12 @@ export function controlesCloture(state: AppState, periode: string, today: string
       ? { libelle: 'Banque rapprochée', niveau: 'ok' }
       : { libelle: 'Banque rapprochée', niveau: 'a_verifier', detail: `${nonRapprochees.length} mouvement(s) non rapproché(s)`, lien: '#/finance/banque' },
   )
-  // pièces présentes
+  // pièces présentes — audit F6 : une dépense SANS justificatif BLOQUE la clôture
   const sansPiece = p.achats.filter((f) => !f.documentId)
   controles.push(
     sansPiece.length === 0
-      ? { libelle: 'Pièces jointes présentes', niveau: 'ok' }
-      : { libelle: 'Pièces jointes présentes', niveau: 'a_verifier', detail: `${sansPiece.length} achat(s) sans justificatif attaché`, lien: '#/finance/achats' },
+      ? { libelle: 'Justificatifs des achats présents', niveau: 'ok' }
+      : { libelle: 'Justificatifs des achats présents', niveau: 'bloquant', detail: `${sansPiece.length} dépense(s) sans justificatif — bloque la clôture`, lien: '#/finance/achats' },
   )
   // ventes migrées à contrôler
   const aControler = p.ventes.filter((f) => f.historiqueAControler)
@@ -359,6 +360,43 @@ export async function construirePaquet(
     'notes-de-frais.csv': strToU8(csvEcritures(parJournal(profil.journaux.od), profil)),
     'paiements.csv': strToU8(csvEcritures(parJournal(profil.journaux.banque), profil)),
   }
+  // audit F6 : CII des ventes (pièces récupérables), index et liste des
+  // pièces INDISPONIBLES (justificatifs d'achat non joints dans le Cockpit)
+  const recuperables: string[] = []
+  const indisponibles: string[] = []
+  for (const f of p.ventes) {
+    if (f.figee) {
+      try {
+        const nom = `pieces/ventes/${nomFichierCII(f.figee)}`
+        fichiers[nom] = strToU8(genererCII(f))
+        recuperables.push(`${f.numero || f.id} → ${nom}`)
+      } catch {
+        indisponibles.push(`Vente ${f.numero || f.id} — CII non générable`)
+      }
+    } else {
+      indisponibles.push(`Vente ${f.numero || f.id} — facture migrée non figée (pas de CII)`)
+    }
+  }
+  for (const f of p.achats) {
+    if (f.documentId) recuperables.push(`Achat ${f.fournisseur} ${f.numeroFournisseur || f.id} — justificatif ${f.documentId} (Drive)`)
+    else indisponibles.push(`Achat ${f.fournisseur} ${f.numeroFournisseur || f.id} — AUCUN justificatif (bloque la clôture)`)
+  }
+  const index = [
+    `# Index du paquet — ${periode} (v${version})`,
+    '',
+    '## Écritures',
+    '- ventes.csv, achats.csv, notes-de-frais.csv, paiements.csv, tiers.csv',
+    '',
+    `## Pièces récupérables (${recuperables.length})`,
+    ...recuperables.map((r) => `- ${r}`),
+    '',
+    `## Pièces indisponibles (${indisponibles.length})`,
+    ...(indisponibles.length ? indisponibles.map((r) => `- ${r}`) : ['- aucune']),
+  ].join('\n')
+  fichiers['index.md'] = strToU8(index)
+  fichiers['pieces-indisponibles.md'] = strToU8(
+    indisponibles.length ? `# Pièces indisponibles — ${periode}\n\n${indisponibles.map((r) => `- ${r}`).join('\n')}` : `# Aucune pièce indisponible — ${periode}`,
+  )
   const octets = zipSync(fichiers, { level: 6 })
   const empreinte = await empreinteOctets(octets)
   const nomFichier = `${periode}_Cockpit-LL_Comptabilite_v${version}.zip`

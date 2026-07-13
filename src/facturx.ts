@@ -245,3 +245,72 @@ export function lireFactureXML(xml: string): FactureXmlLue | null {
   }
   return null
 }
+
+// ------------------------------------------------------------------
+// F10 — lecture LIGNE PAR LIGNE (CII ou UBL), TVA par taux, XML source
+// ------------------------------------------------------------------
+
+export interface LigneFactureXml {
+  designation: string
+  quantite?: number
+  montantHT: number
+  tauxTVA: number
+}
+
+export interface FactureXmlDetail extends FactureXmlLue {
+  lignes: LigneFactureXml[]
+  tvaParTaux: { taux: number; base: number; tva: number }[]
+  /** XML source conservé tel quel (audit F10) */
+  xmlSource: string
+}
+
+function pct(v: number | undefined): number {
+  if (v == null) return 0
+  return v > 1 ? Math.round(v) / 100 : v
+}
+
+/** lit une facture CII/UBL avec ses lignes et sa ventilation de TVA par taux ;
+ *  conserve le XML source. Retourne null si non reconnu. */
+export function lireFactureXMLDetail(xml: string): FactureXmlDetail | null {
+  const entete = lireFactureXML(xml)
+  if (!entete) return null
+  const doc = new DOMParser().parseFromString(xml, 'application/xml')
+  const lignes: LigneFactureXml[] = []
+  const tous = doc.getElementsByTagName('*')
+  if (entete.syntaxe === 'cii') {
+    for (let i = 0; i < tous.length; i++) {
+      const item = tous[i]
+      if (item.localName !== 'IncludedSupplyChainTradeLineItem') continue
+      const prod = premierParNom(item, 'SpecifiedTradeProduct')
+      const som = premierParNom(item, 'SpecifiedTradeSettlementLineMonetarySummation')
+      const tax = premierParNom(item, 'ApplicableTradeTax')
+      lignes.push({
+        designation: (prod ? texteDe(prod, 'Name') : undefined) || 'Ligne',
+        quantite: nombreDe(item, 'BilledQuantity'),
+        montantHT: (som ? nombreDe(som, 'LineTotalAmount') : undefined) ?? 0,
+        tauxTVA: pct(tax ? nombreDe(tax, 'RateApplicablePercent') : undefined),
+      })
+    }
+  } else {
+    for (let i = 0; i < tous.length; i++) {
+      const item = tous[i]
+      if (item.localName !== 'InvoiceLine' && item.localName !== 'CreditNoteLine') continue
+      const taxCat = premierParNom(item, 'ClassifiedTaxCategory') || premierParNom(item, 'TaxCategory')
+      lignes.push({
+        designation: texteDe(item, 'Description') || texteDe(item, 'Name') || 'Ligne',
+        quantite: nombreDe(item, 'InvoicedQuantity') ?? nombreDe(item, 'CreditedQuantity'),
+        montantHT: nombreDe(item, 'LineExtensionAmount') ?? 0,
+        tauxTVA: pct(taxCat ? nombreDe(taxCat, 'Percent') : undefined),
+      })
+    }
+  }
+  // ventilation de TVA par taux (depuis les lignes)
+  const parTaux = new Map<number, { taux: number; base: number; tva: number }>()
+  for (const l of lignes) {
+    const cur = parTaux.get(l.tauxTVA) || { taux: l.tauxTVA, base: 0, tva: 0 }
+    cur.base = Math.round((cur.base + l.montantHT) * 100) / 100
+    cur.tva = Math.round(cur.base * l.tauxTVA * 100) / 100
+    parTaux.set(l.tauxTVA, cur)
+  }
+  return { ...entete, lignes, tvaParTaux: [...parTaux.values()].sort((a, b) => b.base - a.base), xmlSource: xml }
+}

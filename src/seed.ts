@@ -7,7 +7,7 @@
 import type { AppState, Facture, PromptTemplate } from './types'
 import { amorcerFinance } from './amorceFinance'
 
-export const STATE_VERSION = 15
+export const STATE_VERSION = 16
 
 const P = (v: number) => Math.round(v * 100) / 100
 
@@ -1030,6 +1030,13 @@ export function seedState(): AppState {
     transactionsBancaires: [],
     importsBancaires: [],
     lotsComptables: [],
+
+    // v16 — finance F6-F10 : pilotage unique (aucune donnée métier inventée)
+    revisionsResteAFaire: [],
+    pistesAvenant: [],
+    decisionsDirection: [],
+    simulations: [],
+    connecteurs: [],
   }
   amorcerFinance(etat)
   return etat

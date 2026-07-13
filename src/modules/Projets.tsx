@@ -52,6 +52,7 @@ import { coutHoraireMoyen, coutJourObjectif, coutReelTemps, coutsExternes, encai
 import { assemble, contexteProjet, copier } from '../prompts'
 import { echeancesParDefaut } from '../echeancier'
 import { contratDuProjet, totalContratHT } from '../contrats'
+import { cinqEtatsExterne, margeFinale, productionEstimee, resteAFaireProjet } from '../economie'
 import ProjetNouveau from './ProjetNouveau'
 import ProjetChantier from './ProjetChantier'
 import ProjetDCE from './ProjetDCE'
@@ -532,6 +533,64 @@ function LigneIdentite({ projet: p }: { projet: Projet }) {
 }
 
 // ============================================================
+// Économie du projet (audit finance F6) — cinq états des coûts
+// externes (budget / engagé / facturé / payé / final prévu) et
+// reste à faire révisable par phase (base de la marge finale).
+// ============================================================
+
+function EconomieProjet({ projet: p }: { projet: Projet }) {
+  const { state, update } = useStore()
+  const today = useToday()
+  const cinq = cinqEtatsExterne(state, p)
+  const rf = resteAFaireProjet(state, p)
+  const [edit, setEdit] = useState(false)
+
+  const reviser = (phase: PhaseCode, champ: 'heuresRestantes' | 'coutExterneRestantHT', v: number | null) =>
+    update((d) => {
+      const ex = d.revisionsResteAFaire.find((r) => r.projetId === p.id && r.phase === phase)
+      if (ex) {
+        ex[champ] = v
+        ex.majLe = today
+      } else {
+        d.revisionsResteAFaire.push({ id: uid('rrf'), projetId: p.id, phase, heuresRestantes: null, coutExterneRestantHT: null, [champ]: v, majLe: today })
+      }
+    })
+  const valeurRev = (phase: PhaseCode, champ: 'heuresRestantes' | 'coutExterneRestantHT') =>
+    state.revisionsResteAFaire.find((r) => r.projetId === p.id && r.phase === phase)?.[champ] ?? null
+
+  return (
+    <Card
+      titre="Coûts externes — les cinq états (jamais confondus)"
+      actions={<Btn small onClick={() => setEdit((e) => !e)}>{edit ? 'Fermer' : 'Réviser le reste à faire'}</Btn>}
+    >
+      <div className="grid5">
+        <Stat label="Budget" value={<Money v={cinq.budget} />} sub="prévu" />
+        <Stat label="Engagé" value={<Money v={cinq.engage} />} sub="commandé (contrats fourn.)" />
+        <Stat label="Facturé" value={<Money v={cinq.facture} />} sub="factures fournisseurs" />
+        <Stat label="Payé" value={<Money v={cinq.paye} />} sub="preuve bancaire" />
+        <Stat label="Final prévu" value={<Money v={cinq.finalPrevu} />} sub="facturé + reste révisé" />
+      </div>
+      <p className="muted small" style={{ margin: '8px 2px 0' }}>
+        Reste à faire {rf.revise ? '(révisé)' : '(dérivé du budget)'} : {Math.round(rf.heures)} h internes + {fmtMoney(rf.coutExterne)} externes = {fmtMoney(rf.cout)} → base de la marge finale.
+      </p>
+      {edit && (
+        <Table compact head={['Phase', <span key="h" className="right">Heures restantes</span>, <span key="e" className="right">Coût externe restant HT</span>]}>
+          {p.phases
+            .filter((ph) => ph.montantHT > 0 || ph.heuresPrevues > 0 || (ph.coutExterneHT || 0) > 0)
+            .map((ph) => (
+              <tr key={ph.code}>
+                <td>{ph.code}</td>
+                <td className="right"><NumInput value={valeurRev(ph.code, 'heuresRestantes')} onChange={(v) => reviser(ph.code, 'heuresRestantes', v)} placeholder={String(Math.max(0, ph.heuresPrevues - heuresReelles(state, p.id, ph.code)))} style={{ width: 90 }} /></td>
+                <td className="right"><NumInput value={valeurRev(ph.code, 'coutExterneRestantHT')} onChange={(v) => reviser(ph.code, 'coutExterneRestantHT', v)} placeholder={String(ph.coutExterneHT || 0)} style={{ width: 100 }} /></td>
+              </tr>
+            ))}
+        </Table>
+      )}
+    </Card>
+  )
+}
+
+// ============================================================
 // Onglet Finances — factures du projet (auto) + temps
 // ============================================================
 
@@ -576,6 +635,9 @@ function OngletFinances({ projet: p }: { projet: Projet }) {
   const margeReelle = factTotal - coutTemps - externes
   const joursPointes = enJours(state, heuresReelles(state, p.id))
   const objectifJour = coutJourObjectif(state)
+  // audit F6 : production estimée / en-cours + marge finale prévisionnelle
+  const prod = productionEstimee(state, p)
+  const mf = margeFinale(state, p)
 
   const heuresParPhase = p.phases
     .map((ph) => ({ code: ph.code, prevu: ph.heuresPrevues, reel: heuresReelles(state, p.id, ph.code) }))
@@ -602,6 +664,15 @@ function OngletFinances({ projet: p }: { projet: Projet }) {
           tone={joursPointes > 0.05 ? (factTotal / joursPointes >= objectifJour ? 'ok' : 'warn') : undefined}
           sub={<>objectif {fmtMoney(objectifJour)} · <a href="#/pilotage/missions">Pilotage →</a></>}
         />
+      </div>
+
+      {/* ---------- économie du projet (audit finance F6) ---------- */}
+      <EconomieProjet projet={p} />
+      <div className="grid4" style={{ marginBottom: 16 }}>
+        <Stat label="Production estimée" value={<Money v={prod.production} />} sub="avancement × honoraires — indicatif, pas une écriture" />
+        <Stat label="En-cours (WIP)" value={<Money v={prod.enCours} />} tone={prod.enCours < 0 ? 'warn' : undefined} sub="production − facturé" />
+        <Stat label="Marge finale prévue" value={<Money v={mf.marge} />} tone={mf.marge < 0 ? 'danger' : 'ok'} sub={<>signés {fmtMoney(mf.honorairesSignes)} − coût final {fmtMoney(mf.coutFinal)}</>} />
+        <Stat label="Dérive de marge" value={<Money v={mf.derive} />} tone={mf.derive < -0.01 ? 'danger' : 'ok'} sub={<>vs marge initiale {fmtMoney(mf.margeInitiale)}</>} />
       </div>
 
       <Card

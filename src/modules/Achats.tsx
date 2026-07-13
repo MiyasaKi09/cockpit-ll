@@ -484,7 +484,10 @@ export default function Achats() {
       const x = d.facturesAchat.find((y) => y.id === f.id)
       if (x) {
         x.payeLe = date
-        x.evenements = [...(x.evenements || []), { date, type: 'paiement', detail: 'Marquée payée à la main (hors rapprochement bancaire).' }]
+        // audit F6 : paiement saisi HORS banque → « à confirmer » tant qu'un
+        // rapprochement bancaire n'en apporte pas la preuve
+        x.paiementAConfirmer = true
+        x.evenements = [...(x.evenements || []), { date, type: 'paiement', detail: 'Marquée payée à la main (hors banque) — à confirmer par rapprochement.' }]
       }
     })
 

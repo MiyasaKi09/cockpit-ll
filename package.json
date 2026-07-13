@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:finance": "node scripts/test-finance.cjs"
   },
   "dependencies": {
     "@huggingface/transformers": "^4.2.0",

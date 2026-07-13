@@ -473,6 +473,10 @@ export interface Contrat {
   montantAttenduHT?: number | null
   tolerancePct?: number | null
   dateRenouvellement?: string | null
+  /** contrat récurrent : ancrage sur la PREMIÈRE échéance réelle et arrêt à
+   *  la date de fin — la prévision ne décaisse ni avant ni après (F6) */
+  premiereEcheance?: string | null
+  dateFin?: string | null
   /** obligation d'origine (Échéances agence) — les deux vues restent liées */
   obligationId?: string | null
   /** contrat provisoire migré des phases — à contrôler face au document signé */
@@ -515,6 +519,9 @@ export interface FactureAchat {
   statut: StatutAchat
   /** payée le — renseigné par le rapprochement bancaire ou à la main */
   payeLe?: string | null
+  /** paiement saisi HORS banque (à la main) : « à confirmer » tant qu'un
+   *  rapprochement bancaire n'en apporte pas la preuve (F6) */
+  paiementAConfirmer?: boolean
   transactionId?: string | null
   /** pièce au registre documentaire (empreinte SHA-256 = dédoublonnage) */
   documentId?: string | null
@@ -679,6 +686,95 @@ export interface EvenementTransmission {
   statut: 'deposee' | 'rejetee' | 'mise_a_disposition' | 'approuvee' | 'payee'
   reference?: string
   motif?: string
+}
+
+// ============================================================
+// Finance F6-F10 — pilotage unique. Le moteur src/economie.ts
+// compose contrats/temps/achats/banque/pièces/consultations ;
+// ces cinq collections ne stockent QUE des décisions humaines —
+// jamais une détection promue seule en engagement contractuel
+// ni en facture légale.
+// ============================================================
+
+/** F6 — reste à faire révisé par phase : base de la marge FINALE
+ *  (honoraires signés − réel − reste à faire), révision humaine */
+export interface RevisionResteAFaire {
+  id: string
+  projetId: string
+  phase: PhaseCode
+  heuresRestantes?: number | null
+  coutExterneRestantHT?: number | null
+  majLe: string // ISO
+  par?: string
+  notes?: string
+}
+
+/** F7 — demande hors-périmètre repérée dans un courrier / CR / journal,
+ *  promue À LA MAIN au pipeline. Ce n'est qu'à la confirmation de l'avenant
+ *  SIGNÉ qu'une ligne active est ajoutée au contrat. */
+export type StatutPisteAvenant = 'au_pipeline' | 'chiffree' | 'confirmee' | 'ecartee'
+
+export interface PisteAvenant {
+  id: string
+  projetId?: string | null
+  contratId?: string | null
+  /** extrait qui a déclenché la piste (courrier, CR, note de journal) */
+  origine: string
+  origineType?: 'courrier' | 'cr' | 'journal' | 'manuel'
+  libelle: string
+  montantEstimeHT?: number | null
+  statut: StatutPisteAvenant
+  /** avenant créé quand la piste est confirmée signée */
+  avenantId?: string | null
+  creeLe: string // ISO
+  notes?: string
+}
+
+/** F8 — décision de direction (responsable, échéance, statut) */
+export type StatutDecision = 'a_faire' | 'en_cours' | 'faite'
+
+export interface DecisionDirection {
+  id: string
+  sujet: string
+  responsable?: string
+  echeance?: string | null
+  statut: StatutDecision
+  origine?: string
+  creeLe: string // ISO
+  faiteLe?: string | null
+}
+
+/** F9 — simulation de projet sauvegardable (aide à la décision, jamais
+ *  versée dans les projets réels) */
+export interface SimulationProjet {
+  id: string
+  nom: string
+  honorairesHT: number
+  /** probabilité de signature (0..1) */
+  probabilite: number
+  /** délai d'encaissement estimé (jours) */
+  delaiEncaissementJours: number
+  heures: number
+  coutsExternesHT: number
+  /** embauche simulée : coût mensuel chargé à partir d'un mois */
+  embauche?: { moisApres: number; coutMensuel: number } | null
+  /** investissement ponctuel simulé */
+  investissement?: { moisApres: number; montant: number } | null
+  creeLe: string // ISO
+}
+
+/** F10 — connecteur direct : URL de passerelle SERVEUR HTTPS + healthcheck.
+ *  Aucun secret n'est stocké dans le navigateur ni dans AppState. */
+export type TypeConnecteur = 'banque' | 'mail' | 'drive' | 'cabinet' | 'chorus' | 'pdp'
+
+export interface Connecteur {
+  id: string
+  type: TypeConnecteur
+  libelle: string
+  /** URL HTTPS de la passerelle serveur — jamais de secret ici */
+  urlPasserelle?: string
+  actif?: boolean
+  dernierHealthcheck?: { date: string; ok: boolean; detail?: string } | null
 }
 
 export interface TempsEntry {
@@ -1284,6 +1380,17 @@ export interface AppState {
   importsBancaires: ImportBancaire[]
   /** lots d'export comptable versionnés (F4) */
   lotsComptables: LotComptable[]
+  // --- Finance F6-F10 : pilotage unique ---
+  /** reste à faire révisé par phase (base de la marge finale, F6) */
+  revisionsResteAFaire: RevisionResteAFaire[]
+  /** pistes d'avenant hors-périmètre (F7) — pipeline avant l'avenant signé */
+  pistesAvenant: PisteAvenant[]
+  /** décisions de direction (F8) */
+  decisionsDirection: DecisionDirection[]
+  /** simulations de projet sauvegardées (F9) */
+  simulations: SimulationProjet[]
+  /** connecteurs directs (F10) — passerelles serveur, sans secret */
+  connecteurs: Connecteur[]
 }
 
 /** document du corpus de l'assistant : texte réglementaire (Légifrance,

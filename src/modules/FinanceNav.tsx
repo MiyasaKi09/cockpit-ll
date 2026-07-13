@@ -3,7 +3,16 @@
 
 import { Tabs, navigate } from '../ui'
 
-export type VueFinance = 'ensemble' | 'contrats' | 'ventes' | 'achats' | 'banque' | 'comptable'
+export type VueFinance =
+  | 'ensemble'
+  | 'contrats'
+  | 'ventes'
+  | 'achats'
+  | 'banque'
+  | 'comptable'
+  | 'revue'
+  | 'previsions'
+  | 'connecteurs'
 
 const VUES: { id: VueFinance; label: string; route: string }[] = [
   { id: 'ensemble', label: "Vue d'ensemble", route: '/finance' },
@@ -12,6 +21,9 @@ const VUES: { id: VueFinance; label: string; route: string }[] = [
   { id: 'achats', label: 'Achats & frais', route: '/finance/achats' },
   { id: 'banque', label: 'Banque & trésorerie', route: '/finance/banque' },
   { id: 'comptable', label: 'Comptable', route: '/finance/comptable' },
+  { id: 'revue', label: 'Revue de direction', route: '/finance/revue' },
+  { id: 'previsions', label: 'Prévisions', route: '/finance/previsions' },
+  { id: 'connecteurs', label: 'Connecteurs', route: '/finance/connecteurs' },
 ]
 
 export default function FinanceNav({ actif }: { actif: VueFinance }) {

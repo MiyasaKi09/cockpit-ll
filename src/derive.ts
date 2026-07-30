@@ -1,8 +1,8 @@
 // Valeurs dérivées — une seule source de vérité par donnée :
 // le facturé vient des factures, les heures réelles du pointage.
 
-import type { AppState, Consultation, EcheanceFacturation, Facture, MarcheTravaux, PhaseCode, Projet, Situation, StatutConsultation } from './types'
-import { calculHonoraires } from './miqcp'
+import type { AppState, BaselineHeures, Consultation, EcheanceFacturation, Facture, MarcheTravaux, Phase, PhaseCode, Projet, Situation, StatutConsultation } from './types'
+import { PHASES_ORDRE, calculHonoraires } from './miqcp'
 import {
   creanceFactureTTC,
   montantRestantAnnulableHT,
@@ -57,6 +57,160 @@ export function heuresPrevues(projet: Projet, phase?: PhaseCode): number {
   return projet.phases
     .filter((ph) => phase === undefined || ph.code === phase)
     .reduce((s, ph) => s + ph.heuresPrevues, 0)
+}
+
+// ------------------------------------------------------------------
+// Baseline des heures — la prévision FIGÉE (CDC §11.3, critère 15)
+//
+// `heuresPrevues` ci-dessus lit la répartition COURANTE, celle que
+// « Recalculer la répartition » écrase sans retour. Mesurer l'écart
+// prévu / réel dessus, c'est mesurer contre une cible qui bouge : au
+// premier recalcul l'écart repart de zéro, et la semaine de mesure
+// perdue ne se rattrape pas. D'où une donnée de référence distincte —
+// et rien du moteur existant ne change : aucune fonction ci-dessus
+// n'est modifiée, ce bloc n'est qu'additif.
+// ------------------------------------------------------------------
+
+/** heures arrondies au dixième — même précision que `fmtHeures` */
+function arrondiHeures(h: number): number {
+  return Math.round(h * 10) / 10
+}
+
+const ORIGINES_BASELINE: BaselineHeures['origine'][] = ['signature', 'creation', 'reprise', 'revision']
+
+/** construit une baseline à partir d'une répartition de phases. Pure : elle
+ *  dit à quoi ressemble une référence, l'appelant décide QUAND figer.
+ *  Une phase à 0 h est conservée — « 0 h prévue » est une prévision, pas une
+ *  absence de prévision, et la distinction porte l'écart. */
+export function baselineDepuisPhases(
+  phases: Phase[],
+  meta: {
+    le: string
+    par?: string | null
+    origine: BaselineHeures['origine']
+    honorairesBaseHT?: number | null
+  },
+): BaselineHeures {
+  const parPhase: Partial<Record<PhaseCode, number>> = {}
+  for (const ph of phases || []) {
+    if (!ph || !PHASES_ORDRE.includes(ph.code)) continue
+    parPhase[ph.code] = arrondiHeures(typeof ph.heuresPrevues === 'number' ? ph.heuresPrevues : 0)
+  }
+  return {
+    le: meta.le,
+    par: meta.par || undefined,
+    origine: meta.origine,
+    parPhase,
+    honorairesBaseHT: meta.honorairesBaseHT ?? null,
+  }
+}
+
+/** ramène une baseline lue d'un JSON (import, état distant, version future) à
+ *  une valeur sûre : phase inconnue écartée — comptée dans le total, elle
+ *  gonflerait la référence sans jamais apparaître dans aucune ligne — et
+ *  origine hors liste ramenée à « reprise », qui ne surpromet rien.
+ *  `undefined` quand il n'y a rien d'exploitable. */
+export function normaliserBaselineHeures(valeur: unknown): BaselineHeures | undefined {
+  if (!valeur || typeof valeur !== 'object') return undefined
+  const brut = valeur as Partial<BaselineHeures>
+  if (typeof brut.le !== 'string' || !brut.le) return undefined
+  const parPhase: Partial<Record<PhaseCode, number>> = {}
+  const source = (brut.parPhase || {}) as Record<string, unknown>
+  for (const code of PHASES_ORDRE) {
+    const h = source[code]
+    if (typeof h === 'number' && Number.isFinite(h)) parPhase[code] = arrondiHeures(h)
+  }
+  return {
+    le: brut.le,
+    par: typeof brut.par === 'string' && brut.par.trim() ? brut.par.trim() : undefined,
+    origine: ORIGINES_BASELINE.includes(brut.origine as BaselineHeures['origine'])
+      ? (brut.origine as BaselineHeures['origine'])
+      : 'reprise',
+    parPhase,
+    honorairesBaseHT: typeof brut.honorairesBaseHT === 'number' ? brut.honorairesBaseHT : null,
+  }
+}
+
+/** valeur de `Projet.baselineHeures` après migration (palier v20).
+ *  - une baseline déjà posée est seulement NORMALISÉE ;
+ *  - `null` — « volontairement sans référence » — est respecté ;
+ *  - la reprise ne se déclenche qu'au FRANCHISSEMENT du palier (`reprendre`),
+ *    jamais à chaque chargement : rejouée, elle réécrirait une référence que
+ *    l'utilisateur vient de redéfinir ou d'effacer, et personne ne le verrait.
+ *  La reprise est étiquetée `reprise`, jamais `signature` : la répartition
+ *  trouvée en place n'est pas la prévision du contrat, c'est seulement la
+ *  meilleure approximation encore disponible. */
+export function baselineApresMigration(
+  projet: Projet,
+  reprendre: boolean,
+  le: string,
+): BaselineHeures | null | undefined {
+  if (projet.baselineHeures === null) return null
+  const existante = normaliserBaselineHeures(projet.baselineHeures)
+  if (existante) return existante
+  if (!reprendre) return undefined
+  const phases = Array.isArray(projet.phases) ? projet.phases : []
+  const total = phases.reduce((s, ph) => s + (typeof ph?.heuresPrevues === 'number' ? ph.heuresPrevues : 0), 0)
+  if (total <= 0) return undefined
+  return baselineDepuisPhases(phases, { le, origine: 'reprise' })
+}
+
+/** heures de la prévision figée, option par phase. `null` — et jamais 0 —
+ *  quand il n'y a pas de référence : un 0 se lirait comme « rien n'était
+ *  prévu », donc comme un dépassement intégral. */
+export function heuresBaseline(projet: Projet, phase?: PhaseCode): number | null {
+  const b = projet.baselineHeures
+  if (!b || !b.parPhase) return null
+  if (phase !== undefined) {
+    const h = b.parPhase[phase]
+    return typeof h === 'number' && Number.isFinite(h) ? h : null
+  }
+  let total = 0
+  let trouve = false
+  for (const code of PHASES_ORDRE) {
+    const h = b.parPhase[code]
+    if (typeof h === 'number' && Number.isFinite(h)) {
+      total += h
+      trouve = true
+    }
+  }
+  return trouve ? arrondiHeures(total) : null
+}
+
+/** comparaison prévu / réel du §11.3, en heures et signée */
+export interface EcartHeuresPhase {
+  /** prévision FIGÉE — `null` si le projet n'en a pas, ou si la phase est née
+   *  après le figeage */
+  baseline: number | null
+  /** répartition COURANTE : ce qu'un recalcul remplace */
+  prevu: number
+  reel: number
+  /** référence retenue pour l'écart : la baseline dès qu'elle existe */
+  reference: number
+  /** réel − référence, signé (le « +28 h » du §11.3) */
+  ecart: number
+  /** l'écart est-il mesuré sur la prévision figée ? Sinon il se remet à zéro
+   *  au prochain recalcul, et l'écran doit pouvoir le dire. */
+  surBaseline: boolean
+  /** courant − figé : de combien la PRÉVISION elle-même a bougé depuis la
+   *  signature. C'est la valeur que la baseline seule rend visible. */
+  derivePrevision: number | null
+}
+
+export function ecartHeures(state: AppState, projet: Projet, phase?: PhaseCode): EcartHeuresPhase {
+  const baseline = heuresBaseline(projet, phase)
+  const prevu = arrondiHeures(heuresPrevues(projet, phase))
+  const reel = arrondiHeures(heuresReelles(state, projet.id, phase))
+  const reference = baseline ?? prevu
+  return {
+    baseline,
+    prevu,
+    reel,
+    reference,
+    ecart: arrondiHeures(reel - reference),
+    surBaseline: baseline !== null,
+    derivePrevision: baseline === null ? null : arrondiHeures(prevu - baseline),
+  }
 }
 
 export function coutEngage(state: AppState, projetId: string): number {

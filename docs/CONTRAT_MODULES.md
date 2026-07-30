@@ -103,7 +103,20 @@ honorairesTotauxHT, sousPlancher}`), `phasesParDefaut(honorairesBaseHT, tauxHora
 `coutEngage`, `encaissementPrevu(f)`, `retardFacture(f, today)`, `ttc(f)`,
 `STATUTS_ACTIFS`, `meteoFinanciere(state, today): {tresorerie, tresorerieMajLe,
 facturable90j, carnetHT}`, `dateLimiteVerif(state, situation)`,
-`delaiMoyenPaiement(state, typeMO?)`.
+`delaiMoyenPaiement(state, typeMO?)` ; **baseline des heures** (CDC §11.3) :
+`heuresBaseline(projet, phase?)` (`null`, jamais `0`, quand il n'y a pas de
+référence), `ecartHeures(state, projet, phase?): EcartHeuresPhase`
+(`{baseline, prevu, reel, reference, ecart, surBaseline, derivePrevision}` — l'écart
+signé du §11.3), `baselineDepuisPhases(phases, meta)`, `normaliserBaselineHeures`,
+`baselineApresMigration(projet, reprendre, le)`.
+
+**La prévision d'heures figée ne vit jamais dans `Phase`.** `Projet.baselineHeures` est
+un champ à part parce que « Recalculer la répartition » remplace `projet.phases` en
+entier : une référence rangée dans une phase disparaîtrait avec elle, sans erreur, et
+l'écart prévu / réel se reconstituerait faux la semaine suivante. Un écran qui compare
+prévu et réel passe par `ecartHeures` — jamais par une soustraction locale — et n'écrit
+`baselineHeures` que sur un geste humain explicite (signature, figeage, redéfinition).
+`scripts/test-baseline-heures.cjs` le vérifie, et il porte le critère 15 du §22.
 
 `moi.ts` : `useMoi(): Moi` (`{personne, nom, source: 'session'|'poste'|'aucune', emailSession,
 sessionOrpheline, choisir(nom|null)}`), `useSessionSupabase()` (session Supabase **réactive** :
@@ -189,7 +202,10 @@ Routage interne : `useRoute()` → `['projets']` = liste ; `['projets', id]` = f
     colonnes calculées : facturé HT (`factureHT(state, id, code)`), reste, heures réelles
     (`heuresReelles`), écart heures (badge warn/danger si > seuil). Ligne total.
     Bouton « Recalculer la répartition » (phasesParDefaut sur les honoraires base actuels,
-    confirm car écrase).
+    confirm car écrase) — il **ne touche pas** `baselineHeures`, et le confirm le dit.
+    Bouton « Figer / Redéfinir la référence » à côté : c'est le seul chemin d'écriture
+    manuel de la prévision figée. Colonne « H. référence » (`heuresBaseline`) et écart de
+    la répartition courante à la référence.
   - Carte **Marchés de travaux** : liste des `state.marches` du projet (lot, entreprise,
     montant+avenants, RG, révision, actif ✓), CRUD en Modal, lien vers `#/situations`.
   - Boutons pré-prompts de la fiche (via gabarits `state.prompts` avec `contexte === 'projet'`,

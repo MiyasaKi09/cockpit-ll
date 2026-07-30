@@ -4,9 +4,10 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { AppState, DocumentCorpus, Entreprise, Personne } from './types'
-import { fold, uid } from './util'
+import { fold, todayISO, uid } from './util'
 import { seedState, STATE_VERSION } from './seed'
 import { PHASES_ORDRE } from './miqcp'
+import { baselineApresMigration } from './derive'
 import { reprendreAxes } from './categorisation'
 import { amorcerFinance } from './amorceFinance'
 import { DEPARTEMENTS_DEFAUT } from './boamp'
@@ -58,6 +59,13 @@ function migrate(parsed: AppState): AppState {
     settings: { ...base.settings, ...(parsed.settings || {}) },
     version: STATE_VERSION,
   }
+  // v19 → v20 : la baseline des heures se REPREND une seule fois, au
+  // franchissement du palier. `migrate()` s'exécute à chaque chargement (et
+  // sur tout état distant reçu) : une reprise inconditionnelle repose(rait)
+  // la référence la nuit suivant sa redéfinition, sans erreur ni trace.
+  const versionAncienne = typeof parsed.version === 'number' ? parsed.version : 0
+  const reprendreBaselines = versionAncienne < 20
+  const aujourdhui = todayISO()
   etat.reunions = Array.isArray(parsed.reunions) ? parsed.reunions : []
   // v18 → v19 : les trois axes du §5.2 (src/categorisation.ts). Le palier
   // REPREND les courriers existants sans rien inventer : le type d'échange
@@ -190,6 +198,13 @@ function migrate(parsed: AppState): AppState {
     adresseProjet: texteNormalise(p.adresseProjet)?.toLowerCase(),
     driveFolderId: texteNormalise(p.driveFolderId),
     calendarId: texteNormalise(p.calendarId),
+    // v19 → v20 : prévision d'heures figée (CDC §11.3, critère 15). Sur un
+    // état antérieur, la répartition en place tient lieu de référence — c'est
+    // la seule encore disponible, et chaque « Recalculer la répartition » qui
+    // passe en détruit un peu plus. Elle est étiquetée « reprise » et pas
+    // « signature » : l'écran ne doit jamais la présenter comme la prévision
+    // du contrat. Aucune donnée n'est remplacée, aucun calcul ne change.
+    baselineHeures: baselineApresMigration(p, reprendreBaselines, aujourdhui),
   }))
   // v6 → v7 : facturation & situations pro (révision/RG sur les situations,
   // lien situation↔facture DET, suivi des relances). Uniquement des champs

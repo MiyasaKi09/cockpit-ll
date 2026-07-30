@@ -21,7 +21,14 @@ import { amorcerFinance } from './amorceFinance'
 // DÉRIVE une fois de `type` et `urgence`, qui restent la source ; il ne
 // supprime ni ne réécrit aucun champ existant, et un état v18 rouvert
 // sur une version antérieure garde tout ce qu'il avait.
-export const STATE_VERSION = 19
+// v20 : `Projet.baselineHeures` — prévision d'heures FIGÉE, distincte de
+// la répartition courante (CDC §11.3, critère 15). Palier additif et
+// nullable. La reprise ne s'exécute qu'AU franchissement du palier : la
+// répartition trouvée en place devient la référence, étiquetée
+// « reprise » et non « signature ». Un état v19 rouvert sur une version
+// antérieure garde tout ; « Recalculer la répartition » ne touche pas ce
+// champ, qui vit hors du tableau `phases` (voir src/types.ts).
+export const STATE_VERSION = 20
 
 const P = (v: number) => Math.round(v * 100) / 100
 
@@ -357,6 +364,19 @@ export function seedState(): AppState {
           { code: 'AOR', pctBase: 0.055, montantHT: P(9495.45), debut: '2028-05-01', fin: '2028-06-30', heuresPrevues: 106 },
           { code: 'MC', pctBase: null, montantHT: 9000, debut: null, fin: null, heuresPrevues: 100 },
         ],
+        // EXEMPLE — prévision figée à la signature (CDC §11.3) : ici la
+        // répartition n'a pas encore bougé, l'écart se mesure donc sur les
+        // mêmes heures que la répartition courante.
+        baselineHeures: {
+          le: '2026-09-15',
+          par: 'Julien',
+          origine: 'signature',
+          honorairesBaseHT: P(172644.52),
+          parPhase: {
+            DIAG: 100, ESQ: 96, APS: 182, APD: 336, PRO: 384,
+            'ACT-DCE': 144, VISA: 163, DET: 508, AOR: 106, MC: 100,
+          },
+        },
       },
       {
         id: 'P02',
@@ -390,6 +410,16 @@ export function seedState(): AppState {
           { code: 'AOR', pctBase: 0.055, montantHT: 1188, debut: '2028-01-01', fin: '2028-01-31', heuresPrevues: 13 },
           { code: 'MC', pctBase: null, montantHT: 0, debut: null, fin: null, heuresPrevues: 0 },
         ],
+        baselineHeures: {
+          le: '2026-09-20',
+          par: 'Zoé',
+          origine: 'signature',
+          honorairesBaseHT: 21600,
+          parPhase: {
+            DIAG: 0, ESQ: 12, APS: 23, APD: 42, PRO: 48,
+            'ACT-DCE': 18, VISA: 20, DET: 64, AOR: 13, MC: 0,
+          },
+        },
       },
       {
         // EXEMPLE — projet en pleine phase chantier : marchés actifs, situations
@@ -443,6 +473,22 @@ export function seedState(): AppState {
           { code: 'AOR', pctBase: 0.055, montantHT: 5376, debut: '2027-02-01', fin: '2027-03-31', heuresPrevues: 60 },
           { code: 'MC', pctBase: null, montantHT: 0, debut: null, fin: null, heuresPrevues: 0 },
         ],
+        // EXEMPLE — le cas que ce champ existe pour : la répartition courante
+        // (1 085 h) n'est plus celle de la signature (990 h). Elle a été
+        // recalculée depuis, le taux horaire de vente ayant changé entre
+        // temps ; les honoraires, eux, n'ont pas bougé. Sans référence figée,
+        // l'écart prévu / réel se serait recalé en silence sur la nouvelle
+        // prévision et la dérive de 95 h aurait disparu du tableau.
+        baselineHeures: {
+          le: '2025-02-20',
+          par: 'Julien',
+          origine: 'signature',
+          honorairesBaseHT: 97750,
+          parPhase: {
+            DIAG: 0, ESQ: 50, APS: 95, APD: 170, PRO: 200,
+            'ACT-DCE': 75, VISA: 85, DET: 260, AOR: 55, MC: 0,
+          },
+        },
       },
     ],
 

@@ -30,6 +30,40 @@ export interface Phase {
   coutExterneHT?: number
 }
 
+/** Prévision d'heures FIGÉE — la référence de la comparaison prévu / réel
+ *  (CDC §11.3, critère 15).
+ *
+ *  Elle vit à côté de `Projet.phases`, jamais DEDANS, et c'est là toute la
+ *  garantie : « Recalculer la répartition » remplace le tableau `phases` en
+ *  entier (`pr.phases = phasesParDefaut(…)`), donc une baseline rangée dans
+ *  une `Phase` disparaîtrait avec lui — silencieusement, et sans que l'écart
+ *  mesuré la semaine suivante puisse être reconstitué. La séparation
+ *  structurelle vaut mieux qu'une précaution dans le bouton : un futur
+ *  producteur de phases n'a rien à savoir de la baseline pour la respecter.
+ *  `scripts/test-baseline-heures.cjs` le vérifie.
+ *
+ *  Elle ne se réécrit que par une action humaine explicite (figer à la
+ *  signature, redéfinir depuis la fiche projet). */
+export interface BaselineHeures {
+  /** date ISO du figeage */
+  le: string
+  /** qui l'a figée. Trace DATÉE, au sens de `DocumentRecord.validePar` : elle
+   *  dit qui a agi ce jour-là, pas qui travaille sur le projet aujourd'hui —
+   *  elle n'entre donc pas dans l'inventaire de src/personnes.ts et un
+   *  renommage ne la réécrit pas (même doctrine, même motif). */
+  par?: string
+  /** d'où viennent ces heures. Une REPRISE (répartition trouvée en place au
+   *  franchissement du palier v20) n'est pas une signature : l'écran doit le
+   *  dire, sinon le chiffre se lit comme un engagement contractuel. */
+  origine: 'signature' | 'creation' | 'reprise' | 'revision'
+  /** heures prévues par phase à cet instant (code de phase → heures).
+   *  Une phase absente n'existait pas au figeage — ce n'est pas 0 h. */
+  parPhase: Partial<Record<PhaseCode, number>>
+  /** honoraires de base HT qui justifiaient cette répartition : la source du
+   *  chiffre, pas seulement le chiffre */
+  honorairesBaseHT?: number | null
+}
+
 /** lien utile rattaché au projet (Drive, plateforme, DCE…) */
 export interface LienProjet {
   id: string
@@ -76,6 +110,11 @@ export interface Projet {
   missionsComplHT: number
   notes?: string
   phases: Phase[]
+  /** prévision d'heures figée à la signature (CDC §11.3). Trois états, et le
+   *  troisième compte : `undefined` = jamais figée (la reprise du palier v20
+   *  peut la poser) ; `null` = délibérément sans référence, la reprise n'y
+   *  touche pas ; un objet = la référence. */
+  baselineHeures?: BaselineHeures | null
   /** rattachements de l'espace projet — tout s'ajoute au fil de l'eau */
   liens: LienProjet[]
   materiauxIds: string[]

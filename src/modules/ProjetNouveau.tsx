@@ -7,7 +7,8 @@ import { useMemo, useState } from 'react'
 import type { Projet, StatutProjet, TypeMO } from '../types'
 import { useStore } from '../store'
 import { OUVRAGES, calculHonoraires, phasesParDefaut, seuilPlancherActualise } from '../miqcp'
-import { tauxVente } from '../derive'
+import { baselineDepuisPhases, tauxVente } from '../derive'
+import { useMoi } from '../moi'
 import { daterPhases, echeancesParDefaut } from '../echeancier'
 import { Badge, Btn, Field, Modal, NumInput, PctInput, Select, TextInput, navigate } from '../ui'
 import { addDays, fmtMoney, fmtPct, todayISO, uid } from '../util'
@@ -26,6 +27,7 @@ function prochainId(ids: string[]): string {
 
 export default function ProjetNouveau({ onClose }: { onClose: () => void }) {
   const { state, update } = useStore()
+  const moi = useMoi()
   const [etape, setEtape] = useState(1)
 
   // — étape 1 : le projet
@@ -87,6 +89,18 @@ export default function ProjetNouveau({ onClose }: { onClose: () => void }) {
       phases = daterPhases(phases, debutEtudes, dureeEtudes, dureeChantier)
     }
     projet.phases = phases
+    // la prévision d'heures est figée ICI, à la naissance du projet (CDC
+    // §11.3, critère 15) : mesurée plus tard, elle aurait déjà bougé, et
+    // « Recalculer la répartition » l'aurait écrasée entre-temps. Le champ
+    // vit hors du tableau `phases`, qu'un recalcul remplace en entier.
+    if (phases.some((ph) => ph.heuresPrevues > 0)) {
+      projet.baselineHeures = baselineDepuisPhases(phases, {
+        le: todayISO(),
+        par: moi.nom,
+        origine: statut === 'Signé' ? 'signature' : 'creation',
+        honorairesBaseHT: h.honorairesBaseHT,
+      })
+    }
 
     // échéances calculées AVANT la mutation (producteur rejouable)
     const echeances = genererFactures && debutEtudes ? echeancesParDefaut(projet, state.settings) : []

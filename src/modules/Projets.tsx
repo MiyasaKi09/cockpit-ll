@@ -7,8 +7,9 @@
 
 import { useState } from 'react'
 import type { ReactNode } from 'react'
-import type { Phase, PhaseCode, Projet, StatutProjet, TypeMO } from '../types'
+import type { BaselineHeures, Phase, PhaseCode, Projet, StatutProjet, TypeMO } from '../types'
 import { useStore } from '../store'
+import { useMoi } from '../moi'
 import { ligneActivable,
   Badge,
   Btn,
@@ -36,7 +37,7 @@ import { ligneActivable,
   useToday,
 } from '../ui'
 import type { Tone } from '../ui'
-import { adresseProjetProposee, adresseProjetValide, fmtHeures, fmtMoney, fmtPct, fold, todayISO, uid } from '../util'
+import { adresseProjetProposee, adresseProjetValide, fmtDate, fmtHeures, fmtMoney, fmtPct, fold, todayISO, uid } from '../util'
 import {
   CRITERES_COMPLEXITE,
   LIBELLES_PHASES,
@@ -48,7 +49,7 @@ import {
   seuilPlancherActualise,
   totalPointsComplexite,
 } from '../miqcp'
-import { coutHoraireMoyen, coutJourObjectif, coutReelTemps, coutsExternes, encaisseHT, encaissementPrevu, enJours, factureHT, heuresPrevues, heuresReelles, retardFacture, tauxVente, ttc } from '../derive'
+import { baselineDepuisPhases, coutHoraireMoyen, coutJourObjectif, coutReelTemps, coutsExternes, ecartHeures, encaisseHT, encaissementPrevu, enJours, factureHT, heuresBaseline, heuresPrevues, heuresReelles, retardFacture, tauxVente, ttc } from '../derive'
 import { assemble, contexteProjet, copier } from '../prompts'
 import { echeancesParDefaut } from '../echeancier'
 import { contratDuProjet, totalContratHT } from '../contrats'
@@ -94,6 +95,83 @@ function EcartHeures({ reel, prevu, seuil }: { reel: number; prevu: number; seui
   const ratio = reel / prevu
   const tone: Tone = ratio >= 1 ? 'danger' : ratio >= seuil ? 'warn' : 'ok'
   return <Badge tone={tone}>{fmtPct(ratio, 0)}</Badge>
+}
+
+// ---------- prévision d'heures figée (CDC §11.3, critère 15) ----------
+
+/** ce que la référence dit d'elle-même. Une reprise n'est PAS une signature :
+ *  la nommer autrement ferait passer une répartition trouvée en place pour un
+ *  engagement contractuel. */
+const LIBELLES_ORIGINE_BASELINE: Record<BaselineHeures['origine'], string> = {
+  signature: 'figée à la signature',
+  creation: 'figée à la création du projet',
+  reprise: 'reprise de la répartition en place',
+  revision: 'redéfinie',
+}
+
+/** heures signées, comme le §11.3 les écrit : « +28 h », « −12 h » */
+function ecartSigne(h: number): string {
+  const arrondi = Math.round(h * 10) / 10
+  if (arrondi === 0) return '0 h'
+  return `${arrondi > 0 ? '+' : '−'}${fmtHeures(Math.abs(arrondi))}`
+}
+
+/** l'écart du §11.3 en heures, signé. Un écart positif, c'est la référence
+ *  déjà dépassée : même seuil que le badge de consommation ci-dessus (100 %),
+ *  et donc jamais deux lectures contradictoires sur la même ligne. */
+function EcartSigne({ h }: { h: number | null }) {
+  if (h === null) return <span className="muted">—</span>
+  const arrondi = Math.round(h * 10) / 10
+  const classe = arrondi > 0 ? 'danger-text' : arrondi < 0 ? 'ok-text' : ''
+  return <span className={`num ${classe}`}>{ecartSigne(arrondi)}</span>
+}
+
+/** d'où vient la référence, et ce qu'un recalcul lui fait (rien) */
+function NoteBaseline({ projet: p }: { projet: Projet }) {
+  const b = p.baselineHeures
+  const total = heuresBaseline(p)
+  if (!b || total === null) {
+    return (
+      <p className="muted small" style={{ margin: '0 2px 10px' }}>
+        Aucune prévision de référence : l’écart prévu / réel se mesure sur la répartition courante,
+        que « Recalculer la répartition » écrase. « Modifier les phases » → « Figer la référence »
+        la fixe une fois pour toutes.
+      </p>
+    )
+  }
+  return (
+    <p className="muted small" style={{ margin: '0 2px 10px' }}>
+      Prévision de référence : <strong>{fmtHeures(total)}</strong> — {LIBELLES_ORIGINE_BASELINE[b.origine]}{' '}
+      le <DateF d={b.le} />
+      {b.par ? ` par ${b.par}` : ''}
+      {b.honorairesBaseHT ? `, sur ${fmtMoney(b.honorairesBaseHT)} d’honoraires de base` : ''}. « Recalculer la
+      répartition » ne la touche pas.
+    </p>
+  )
+}
+
+/** cellule « H. référence » d'une phase : la prévision figée, et de combien la
+ *  répartition courante s'en est éloignée depuis */
+function CelluleReference({ projet: p, phase: ph }: { projet: Projet; phase: Phase }) {
+  const ref = heuresBaseline(p, ph.code)
+  if (ref === null) {
+    return (
+      <td className="right muted" title={p.baselineHeures ? 'phase absente de la prévision de référence : elle est née après le figeage' : 'aucune prévision figée sur ce projet'}>
+        —
+      </td>
+    )
+  }
+  const derive = Math.round((ph.heuresPrevues - ref) * 10) / 10
+  return (
+    <td className="right">
+      {fmtHeures(ref)}
+      {derive !== 0 && (
+        <div className="muted small" title="la répartition courante s’est éloignée de la référence">
+          {ecartSigne(derive)} vs réf.
+        </div>
+      )}
+    </td>
+  )
 }
 
 // ============================================================
@@ -651,9 +729,13 @@ function OngletFinances({ projet: p }: { projet: Projet }) {
   const prod = productionEstimee(state, p)
   const mf = margeFinale(state, p)
 
+  // comparaison prévu / réel du §11.3 : l'écart se mesure sur la prévision
+  // FIGÉE dès qu'il y en a une (`ecartHeures`, src/derive.ts), pas sur la
+  // répartition courante qu'un recalcul remet à plat. Aucun calcul ici.
   const heuresParPhase = p.phases
-    .map((ph) => ({ code: ph.code, prevu: ph.heuresPrevues, reel: heuresReelles(state, p.id, ph.code) }))
-    .filter((x) => x.prevu > 0 || x.reel > 0)
+    .map((ph) => ({ code: ph.code, ...ecartHeures(state, p, ph.code) }))
+    .filter((x) => x.prevu > 0 || x.reel > 0 || (x.baseline ?? 0) > 0)
+  const heuresProjet = ecartHeures(state, p)
 
   return (
     <>
@@ -748,21 +830,59 @@ function OngletFinances({ projet: p }: { projet: Projet }) {
         )}
       </Card>
 
-      <Card titre="Temps passé par phase" actions={<a href="#/temps" className="small">Saisie des temps →</a>}>
+      <Card
+        titre="Temps par phase — prévu / réel"
+        actions={
+          <>
+            <a href={`#/projets/${p.id}/pilotage`} className="small">Phases →</a>
+            <a href="#/temps" className="small">Saisie des temps →</a>
+          </>
+        }
+      >
+        <NoteBaseline projet={p} />
         {heuresParPhase.length === 0 ? (
           <EmptyState>Aucune heure prévue ni pointée.</EmptyState>
         ) : (
-          <Table compact head={['Phase', <span key="p" className="right">Prévu</span>, <span key="r" className="right">Pointé</span>, 'Écart']}>
+          <Table
+            compact
+            head={[
+              'Phase',
+              <span key="b" className="right" title="prévision figée — la référence de l’écart (CDC §11.3)">Référence</span>,
+              <span key="p" className="right" title="répartition courante, écrasée par « Recalculer la répartition »">Prévu</span>,
+              <span key="r" className="right">Pointé</span>,
+              <span key="e" className="right">Écart</span>,
+              'Consommation',
+            ]}
+          >
             {heuresParPhase.map((x) => (
               <tr key={x.code}>
                 <td>{x.code} <span className="muted small">{LIBELLES_PHASES[x.code]}</span></td>
+                <td className="right num">{x.baseline !== null ? fmtHeures(x.baseline) : '—'}</td>
                 <td className="right num">{fmtHeures(x.prevu)}</td>
                 <td className="right num">{fmtHeures(x.reel)}</td>
-                <td><EcartHeures reel={x.reel} prevu={x.prevu} seuil={state.settings.seuilDeriveHeures} /></td>
+                <td className="right">
+                  <EcartSigne h={x.reel > 0 || x.reference > 0 ? x.ecart : null} />
+                </td>
+                <td><EcartHeures reel={x.reel} prevu={x.reference} seuil={state.settings.seuilDeriveHeures} /></td>
               </tr>
             ))}
+            <tr>
+              <td><strong>Total</strong></td>
+              <td className="right num"><strong>{heuresProjet.baseline !== null ? fmtHeures(heuresProjet.baseline) : '—'}</strong></td>
+              <td className="right num"><strong>{fmtHeures(heuresProjet.prevu)}</strong></td>
+              <td className="right num"><strong>{fmtHeures(heuresProjet.reel)}</strong></td>
+              <td className="right"><strong><EcartSigne h={heuresProjet.ecart} /></strong></td>
+              <td><EcartHeures reel={heuresProjet.reel} prevu={heuresProjet.reference} seuil={state.settings.seuilDeriveHeures} /></td>
+            </tr>
           </Table>
         )}
+        <p className="muted small" style={{ margin: '8px 2px 0' }}>
+          L’écart est mesuré sur {heuresProjet.surBaseline ? 'la prévision figée' : 'la répartition courante, faute de référence figée'}
+          {heuresProjet.derivePrevision !== null && heuresProjet.derivePrevision !== 0 && (
+            <> — la répartition courante s’en est éloignée de {ecartSigne(heuresProjet.derivePrevision)} depuis</>
+          )}
+          .
+        </p>
       </Card>
     </>
   )
@@ -1003,10 +1123,14 @@ function NoteCritere({ value, onChange }: { value: number; onChange: (n: number)
 
 function CartePhases({ projet: p }: { projet: Projet }) {
   const { state, update } = useStore()
+  const today = useToday()
+  const moi = useMoi()
   const seuil = state.settings.seuilDeriveHeures
   const [edition, setEdition] = useState(false)
   const [colonnesDetaillees, setColonnesDetaillees] = useState(false)
   const detail = edition || colonnesDetaillees
+  const baseline = p.baselineHeures || null
+  const totalBaseline = heuresBaseline(p)
 
   const majPhase = (code: PhaseCode, fn: (ph: Phase) => void) =>
     update((d) => {
@@ -1020,17 +1144,62 @@ function CartePhases({ projet: p }: { projet: Projet }) {
       !(await confirmer({
         message:
           `Recalculer la répartition des phases sur ${fmtMoney(h.honorairesBaseHT)} d’honoraires de base ?\n` +
-          'Attention : montants, dates et heures prévues saisis sur les phases seront écrasés (DIAG et MC remis à zéro).',
+          'Attention : montants, dates et heures prévues saisis sur les phases seront écrasés (DIAG et MC remis à zéro).\n' +
+          (totalBaseline !== null
+            ? `La prévision de référence (${fmtHeures(totalBaseline)}) n’est pas touchée : l’écart prévu / réel continue de se mesurer dessus.`
+            : 'Aucune prévision de référence n’est figée sur ce projet : l’écart prévu / réel repartira de la nouvelle répartition.'),
         danger: true,
         confirmerLabel: 'Recalculer',
       }))
     )
       return
+    // NE JAMAIS toucher `pr.baselineHeures` ici — c'est la garantie du
+    // critère 15, et scripts/test-baseline-heures.cjs la vérifie.
     update((d) => {
       const pr = d.projets.find((x) => x.id === p.id)
       if (pr) pr.phases = phasesParDefaut(h.honorairesBaseHT, tauxVente(d))
     })
     toast('Répartition des phases recalculée.', { tone: 'ok' })
+  }
+
+  /** fige (ou redéfinit) la prévision de référence — geste humain explicite */
+  const figerBaseline = async () => {
+    const total = heuresPrevues(p)
+    if (total <= 0) {
+      toast('Rien à figer : aucune heure prévue sur les phases.', { tone: 'danger' })
+      return
+    }
+    const h = calculHonoraires(p, state.settings)
+    if (
+      !(await confirmer({
+        message: baseline
+          ? `Redéfinir la prévision de référence de ${p.id} ?\n` +
+            `Actuelle : ${fmtHeures(totalBaseline)} (${LIBELLES_ORIGINE_BASELINE[baseline.origine]} le ${fmtDate(baseline.le)}).\n` +
+            `Nouvelle : la répartition en place, ${fmtHeures(total)}.\n` +
+            'L’écart prévu / réel déjà mesuré est remis à zéro sur cette nouvelle référence.'
+          : `Figer la répartition en place (${fmtHeures(total)}) comme prévision de référence de ${p.id} ?\n` +
+            '« Recalculer la répartition » ne la touchera plus : c’est elle qui portera l’écart prévu / réel.',
+        danger: !!baseline,
+        confirmerLabel: baseline ? 'Redéfinir' : 'Figer',
+      }))
+    )
+      return
+    update((d) => {
+      const pr = d.projets.find((x) => x.id === p.id)
+      if (!pr) return
+      pr.baselineHeures = baselineDepuisPhases(pr.phases, {
+        le: today,
+        par: moi.nom,
+        origine: baseline ? 'revision' : 'signature',
+        honorairesBaseHT: h.honorairesBaseHT,
+      })
+    })
+    toast(
+      baseline
+        ? `Prévision de référence redéfinie à ${fmtHeures(total)}.`
+        : `Prévision de référence figée à ${fmtHeures(total)} — l’écart se mesure désormais dessus.`,
+      { tone: 'ok' },
+    )
   }
 
   const encaissePhase = (code: PhaseCode) => encaisseHT(state, p.id, code)
@@ -1057,6 +1226,7 @@ function CartePhases({ projet: p }: { projet: Projet }) {
         edition ? (
           <span style={{ display: 'inline-flex', gap: 6 }}>
             <Btn small onClick={recalculer}>Recalculer la répartition</Btn>
+            <Btn small onClick={figerBaseline}>{baseline ? 'Redéfinir la référence' : 'Figer la référence'}</Btn>
             <Btn small kind="primary" onClick={() => setEdition(false)}>Terminé</Btn>
           </span>
         ) : (
@@ -1070,6 +1240,7 @@ function CartePhases({ projet: p }: { projet: Projet }) {
         )
       }
     >
+      <NoteBaseline projet={p} />
       {p.phases.length === 0 ? (
         <EmptyState>Aucune phase — « Modifier les phases » puis « Recalculer la répartition » pour générer la mission de base.</EmptyState>
       ) : (
@@ -1082,6 +1253,13 @@ function CartePhases({ projet: p }: { projet: Projet }) {
             'Début',
             'Fin',
             ...(detail ? [<span key="hp" className="right">H. prévues</span>] : []),
+            ...(detail
+              ? [
+                  <span key="hb" className="right" title="prévision figée — un recalcul de la répartition ne la touche pas (CDC §11.3)">
+                    H. référence
+                  </span>,
+                ]
+              : []),
             ...(detail ? [<span key="ce" className="right" title="BET cotraitants, sous-traitance, débours — vient en moins de la marge">Coût ext. HT</span>] : []),
             <span key="f" className="right">% fact.</span>,
             ...(detail ? [<span key="pay" className="right">% payé</span>] : []),
@@ -1136,6 +1314,7 @@ function CartePhases({ projet: p }: { projet: Projet }) {
                     )}
                   </td>
                 )}
+                {detail && <CelluleReference projet={p} phase={ph} />}
                 {detail && (
                   <td className="right">
                     {edition ? (
@@ -1166,6 +1345,14 @@ function CartePhases({ projet: p }: { projet: Projet }) {
             <td />
             <td />
             {detail && <td className="right"><strong>{fmtHeures(totaux.hPrev)}</strong></td>}
+            {detail && (
+              <td className="right">
+                <strong>{totalBaseline !== null ? fmtHeures(totalBaseline) : '—'}</strong>
+                {totalBaseline !== null && Math.abs(totaux.hPrev - totalBaseline) >= 0.1 && (
+                  <div className="muted small">{ecartSigne(totaux.hPrev - totalBaseline)} vs réf.</div>
+                )}
+              </td>
+            )}
             {detail && <td className="right"><strong><Money v={totaux.externe} /></strong></td>}
             <td className="right num"><strong>{totaux.montant > 0 ? fmtPct(totaux.facture / totaux.montant, 0) : '—'}</strong></td>
             {detail && <td />}
@@ -1188,6 +1375,7 @@ function CartePhases({ projet: p }: { projet: Projet }) {
 
 function ModalEditionProjet({ projet, onClose }: { projet: Projet; onClose: () => void }) {
   const { state, update } = useStore()
+  const moi = useMoi()
 
   const [nom, setNom] = useState(projet.nom)
   const [typeMO, setTypeMO] = useState<string>(projet.typeMO)
@@ -1224,6 +1412,15 @@ function ModalEditionProjet({ projet, onClose }: { projet: Projet; onClose: () =
   const enregistrer = () => {
     if (nom.trim() === '') return
     const livraison = statut === 'Livré' && projet.statut !== 'Livré'
+    // le CDC §11.3 fige la prévision « à la signature » : c'est donc ce
+    // passage de statut qui la pose, une fois, et seulement si le projet
+    // n'a pas déjà de référence (`undefined` = jamais figée ; `null` =
+    // volontairement sans référence, on n'y revient pas).
+    const signature =
+      statut === 'Signé' &&
+      projet.statut !== 'Signé' &&
+      projet.baselineHeures === undefined &&
+      heuresPrevues(projet) > 0
     update((d) => {
       const pr = d.projets.find((x) => x.id === projet.id)
       if (!pr) return
@@ -1259,6 +1456,17 @@ function ModalEditionProjet({ projet, onClose }: { projet: Projet; onClose: () =
       pr.driveFolderId = driveFolderId.trim() || undefined
       pr.calendarId = calendarId.trim() || undefined
 
+      // à la signature, la répartition en place devient la prévision de
+      // référence : mesurée plus tard, elle aurait déjà dérivé
+      if (signature) {
+        pr.baselineHeures = baselineDepuisPhases(pr.phases, {
+          le: todayISO(),
+          par: moi.nom,
+          origine: 'signature',
+          honorairesBaseHT: calculHonoraires(pr, state.settings).honorairesBaseHT,
+        })
+      }
+
       // à la livraison, le projet devient automatiquement une référence
       if (livraison && !d.references.some((r) => fold(r.nom) === fold(pr.nom))) {
         const finAOR = pr.phases.find((ph) => ph.code === 'AOR')?.fin
@@ -1284,6 +1492,11 @@ function ModalEditionProjet({ projet, onClose }: { projet: Projet; onClose: () =
     if (livraison)
       toast(
         `${projet.id} livré : la référence « ${nom.trim()} » a été créée dans la base (surface et attestation à compléter).`,
+        { tone: 'ok' },
+      )
+    if (signature)
+      toast(
+        `${projet.id} signé : la prévision de référence est figée à ${fmtHeures(heuresPrevues(projet))} — l’écart prévu / réel se mesurera dessus.`,
         { tone: 'ok' },
       )
     onClose()

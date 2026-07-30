@@ -129,6 +129,10 @@ function migrate(parsed: AppState): AppState {
     return {
       id: p.id,
       nom: p.nom,
+      // v16 → v17 : l'adresse de connexion (pont compte ↔ personne, useMoi).
+      // Cette reconstruction champ par champ efface tout champ non listé :
+      // l'oublier ici viderait l'adresse à chaque rechargement, sans erreur.
+      email: typeof p.email === 'string' && p.email.trim() ? p.email.trim() : undefined,
       remuMensuelle: typeof p.remuMensuelle === 'number' ? p.remuMensuelle : ancien.brutMensuel ?? 0,
       modeRemu: p.modeRemu === 'net' ? 'net' : 'brut',
       statut: p.statut === 'salarie' ? 'salarie' : 'dirigeant',

@@ -29,7 +29,7 @@ Ce qui ne change pas, et qui est le cœur du contrat :
 - Un module = un fichier `src/modules/X.tsx`, export default d'un composant sans props.
 - **Les fichiers partagés se modifient, mais jamais en passant** (`types.ts`, `store.tsx`,
   `ui.tsx`, `util.ts`, `miqcp.ts`, `alerts.ts`, `derive.ts`, `prompts.ts`, `seed.ts`,
-  `routines.ts`, `importRoutines.ts`, `personnes.ts`, `styles.css`, `App.tsx`). L'interdiction
+  `routines.ts`, `importRoutines.ts`, `personnes.ts`, `moi.ts`, `styles.css`, `App.tsx`). L'interdiction
   absolue précédente avait un motif réel — un module qui bricole `ui.tsx` casse les 42 autres —
   mais elle produisait l'inverse de son intention : des composants locaux dupliqués, des styles
   en ligne, et un repli mobile qui s'est dégradé module par module. La règle est donc :
@@ -62,6 +62,13 @@ Ce qui ne change pas, et qui est le cœur du contrat :
   chiffre recalculé sur place diverge tôt ou tard de celui du module qui fait autorité, et
   l'écart se découvre en réunion. Si la valeur n'existe pas, elle s'ajoute au module de calcul,
   pas à l'écran qui l'affiche.
+- **L'utilisateur courant se lit par `useMoi()`** (`src/moi.ts`), jamais par
+  `settings.personnes[0]`. L'identité a deux étages : la session Supabase quand elle existe
+  (la personne dont `Personne.email` correspond), sinon le choix « je suis X » mémorisé sur
+  le poste, sinon `null` — et `null` veut dire `null` : un écran qui ne sait pas qui est là
+  ne doit rien signer, pas désigner le premier de la liste. Le choix par poste vit dans le
+  `localStorage`, jamais dans `settings` : `settings` est synchronisé, et les deux postes
+  s'écraseraient. `scripts/test-identite.cjs` le vérifie.
 - **Une personne se référence par son nom, partout** — et donc `src/personnes.ts` tient
   l'inventaire des endroits qui la citent. Toute nouvelle collection portant un nom de personne
   s'y ajoute, sinon un renommage dans les Paramètres orpheline ses données en silence.
@@ -93,6 +100,12 @@ honorairesTotauxHT, sousPlancher}`), `phasesParDefaut(honorairesBaseHT, tauxHora
 `STATUTS_ACTIFS`, `meteoFinanciere(state, today): {tresorerie, tresorerieMajLe,
 facturable90j, carnetHT}`, `dateLimiteVerif(state, situation)`,
 `delaiMoyenPaiement(state, typeMO?)`.
+
+`moi.ts` : `useMoi(): Moi` (`{personne, nom, source: 'session'|'poste'|'aucune', emailSession,
+sessionOrpheline, choisir(nom|null)}`), `useSessionSupabase()` (session Supabase **réactive** :
+le composant se re-rend à la connexion comme à la déconnexion), `useIdentitePoste()`,
+`identitePoste()` / `definirIdentitePoste(nom|null)` hors React, `resoudreMoi(equipe, email,
+choixPoste)` (règle pure, testable), `normaliserEmail`.
 
 `alerts.ts` : `computeAlertes(state, today)`, `alertesActives(state, today)` (snoozes filtrés).
 Snooze = `d.settings.snoozes[alerte.id] = dateISO` (jusqu'à cette date).

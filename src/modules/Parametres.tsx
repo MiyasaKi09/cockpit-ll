@@ -8,6 +8,7 @@ import { useStore } from '../store'
 import { seedState } from '../seed'
 import { computeAlertes } from '../alerts'
 import { renommerPersonne } from '../personnes'
+import { definirIdentitePoste, identitePoste, useMoi, useSessionSupabase } from '../moi'
 import {
   Badge,
   Btn,
@@ -116,11 +117,13 @@ function CarteEquipe() {
   const { state, update, replace } = useStore()
   const eq = state.settings.equipe
 
-  const majPersonne = (id: string, champ: 'nom' | 'remuMensuelle' | 'coefCharges' | 'heuresAnnuelles' | 'facturablePct', v: string | number | null) =>
+  const majPersonne = (id: string, champ: 'nom' | 'email' | 'remuMensuelle' | 'coefCharges' | 'heuresAnnuelles' | 'facturablePct', v: string | number | null) =>
     update((d) => {
       const p = d.settings.equipe.find((x) => x.id === id)
       if (!p) return
       if (champ === 'nom') p.nom = String(v ?? '')
+      // l'adresse est le pont vers le compte de connexion : vide = pas de pont
+      else if (champ === 'email') p.email = String(v ?? '').trim() || undefined
       else (p as unknown as Record<string, number>)[champ] = typeof v === 'number' ? v : 0
       d.settings.personnes = d.settings.equipe.map((x) => x.nom).filter(Boolean)
     })
@@ -169,11 +172,28 @@ function CarteEquipe() {
       d.settings.personnes = d.settings.equipe.map((x) => x.nom).filter(Boolean)
     })
     nomAvantSaisie.current[id] = nouveau
+    // le choix « je suis X » du poste est mémorisé par le NOM : sans cette
+    // ligne, se renommer ferait perdre son identité à celui qui se renomme
+    if (identitePoste() === ancien) definirIdentitePoste(nouveau)
     if (reecrites > 0) {
       toast(`${ancien} renommé·e en ${nouveau} — ${reecrites} référence${reecrites > 1 ? 's' : ''} mise${reecrites > 1 ? 's' : ''} à jour.`, {
         undo: () => replace(snap),
       })
     }
+  }
+
+  /** deux personnes ne peuvent pas partager une adresse : `useMoi()`
+   *  résoudrait la session vers l'une des deux, arbitrairement. */
+  const validerEmail = (id: string, saisi: string) => {
+    const valeur = saisi.trim().toLowerCase()
+    if (!valeur) return
+    const occupee = eq.some((x) => x.id !== id && (x.email || '').trim().toLowerCase() === valeur)
+    if (!occupee) return
+    update((d) => {
+      const p = d.settings.equipe.find((x) => x.id === id)
+      if (p) p.email = undefined
+    })
+    toast(`« ${saisi.trim()} » est déjà l'adresse d'une autre personne — la session ne saurait plus qui est connecté.`)
   }
 
   /** changer Net/Brut ou le statut recale le coefficient sur la
@@ -202,6 +222,8 @@ function CarteEquipe() {
       d.settings.equipe = d.settings.equipe.filter((x) => x.id !== id)
       d.settings.personnes = d.settings.equipe.map((x) => x.nom)
     })
+    // ce poste ne peut plus se dire « je suis » quelqu'un qui n'est plus là
+    if (identitePoste() === p.nom) definirIdentitePoste(null)
     toast('Personne retirée.', { undo: () => replace(snap) })
   }
 
@@ -212,7 +234,12 @@ function CarteEquipe() {
         annuelles). La marge d'un projet et le <a href="#/pilotage/missions">Pilotage (Missions)</a> reposent sur ces
         chiffres — pas sur un forfait.
       </p>
-      <Table compact head={['Personne', 'Statut (SAS)', 'Saisie', <span key="b" className="right">€ / mois</span>, <span key="c" className="right">Coef. charges</span>, <span key="h" className="right">Heures / an</span>, <span key="f" className="right">% facturable</span>, <span key="ch" className="right">Coût horaire</span>, <span key="ca" className="right">Coût annuel chargé</span>, '']}>
+      <p className="small muted" style={{ marginBottom: 10 }}>
+        L'<strong>adresse de connexion</strong> relie un compte de l'espace partagé à une personne :
+        c'est elle qui permet au Cockpit de savoir qui est devant l'écran. Sans session ouverte, chaque
+        poste choisit « je suis… » en bas du menu — le choix reste sur le poste et n'est jamais partagé.
+      </p>
+      <Table compact head={['Personne', 'Adresse de connexion', 'Statut (SAS)', 'Saisie', <span key="b" className="right">€ / mois</span>, <span key="c" className="right">Coef. charges</span>, <span key="h" className="right">Heures / an</span>, <span key="f" className="right">% facturable</span>, <span key="ch" className="right">Coût horaire</span>, <span key="ca" className="right">Coût annuel chargé</span>, '']}>
         {eq.map((p) => (
           <tr key={p.id}>
             <td>
@@ -225,6 +252,16 @@ function CarteEquipe() {
                 onCommit={(v) => validerNom(p.id, v)}
                 style={{ width: 100 }}
                 ariaLabel={`Nom de ${p.nom || 'la personne'}`}
+              />
+            </td>
+            <td>
+              <TextInput
+                value={p.email || ''}
+                onChange={(v) => majPersonne(p.id, 'email', v)}
+                onCommit={(v) => validerEmail(p.id, v)}
+                placeholder="prenom@…"
+                style={{ width: 168 }}
+                ariaLabel={`Adresse de connexion de ${p.nom || 'la personne'}`}
               />
             </td>
             <td>
@@ -523,7 +560,11 @@ function CarteSync() {
   const [message, setMessage] = useState('')
   const [occupe, setOccupe] = useState(false)
   const [, forcer] = useState(0)
+  // abonnement à la session : le retour du lien magique se produit hors de
+  // tout geste local, et sans cela la carte restait « non connecté » à l'écran
+  useSessionSupabase()
   const etat = syncEtat()
+  const moi = useMoi()
 
   const majSync = (champ: 'url' | 'anonKey' | 'workspaceId' | 'email', v: string) =>
     replace({
@@ -636,6 +677,14 @@ function CarteSync() {
         ) : (
           <Badge tone="muted">non connecté — données locales</Badge>
         )}
+        {etat.connecte &&
+          (moi.source === 'session' ? (
+            <Badge tone="info">reconnu·e : {moi.nom}</Badge>
+          ) : (
+            <Badge tone="warn">
+              aucune personne ne porte cette adresse — renseignez-la dans « Équipe & coûts réels »
+            </Badge>
+          ))}
         <span className="muted">Les 2 postes voient les mêmes données, sauvegardées hors du navigateur.</span>
         <span className="spacer" />
         {etat.connecte ? (

@@ -2,11 +2,12 @@
 
 import { useEffect, useState } from 'react'
 import { useStore } from './store'
-import { Btn, ConfirmHost, Icon, ToastHost, useRoute, useToday } from './ui'
+import { Btn, ConfirmHost, Icon, Select, ToastHost, useRoute, useToday } from './ui'
 import { alertesActives } from './alerts'
 import { badgeFinance } from './financeActions'
 import { basculerTheme, themeCourant } from './theme'
-import { syncActif } from './sync'
+import { useMoi, useSessionSupabase } from './moi'
+import type { InstantaneSession } from './sync'
 import { SurveillanceCtx, useSurveillance } from './surveillance'
 import { diffDays } from './util'
 import type { AppState } from './types'
@@ -83,9 +84,19 @@ const NAV: { groupe: string; repliable?: boolean; items: { path: string; label: 
 const CLE_NAV_GROUPES = 'cockpit-ll-nav-groupes'
 
 /** statut compact des données (pied de menu) — le détail vit dans la
- *  santé des données, ouverte au clic */
-function statutCompact(state: AppState, today: string): { texte: string; titre: string } {
-  if (syncActif()) return { texte: 'synchronisé', titre: 'Espace partagé connecté — les 2 postes voient les mêmes données.' }
+ *  santé des données, ouverte au clic. La session est passée en argument :
+ *  lue depuis un hook, elle rend ce statut réactif (avant, il fallait
+ *  recharger la page pour voir « synchronisé » après une connexion). */
+function statutCompact(
+  state: AppState,
+  today: string,
+  session: InstantaneSession,
+): { texte: string; titre: string } {
+  if (session.connecte)
+    return {
+      texte: 'synchronisé',
+      titre: `Espace partagé connecté${session.email ? ` — session ${session.email}` : ''} — les 2 postes voient les mêmes données.`,
+    }
   const sauvegarde = state.settings.derniereSauvegarde
   if (!sauvegarde) return { texte: 'local', titre: 'Données locales, aucune sauvegarde JSON — cliquez pour la santé des données.' }
   const jours = diffDays(sauvegarde.slice(0, 10), today)
@@ -95,6 +106,40 @@ function statutCompact(state: AppState, today: string): { texte: string; titre: 
   }
 }
 
+/** Qui est devant l'écran (pied de menu). Deux étages : la session Supabase
+ *  quand elle existe, sinon le choix « je suis… » mémorisé sur ce poste.
+ *  Sans l'un ni l'autre, l'application ne devine pas — elle demande. */
+function IdentiteCourante() {
+  const { state } = useStore()
+  const moi = useMoi()
+  const noms = (state.settings.equipe || []).map((p) => p.nom).filter(Boolean)
+
+  if (moi.source === 'session' && moi.nom) {
+    return (
+      <div className="nav-moi" title={`Session de l'espace partagé : ${moi.emailSession}`}>
+        <span className="nav-moi-label">Connecté·e</span>
+        <strong>{moi.nom}</strong>
+      </div>
+    )
+  }
+  return (
+    <div className="nav-moi">
+      <span className="nav-moi-label">Je suis</span>
+      <Select
+        value={moi.nom ?? ''}
+        onChange={(v) => moi.choisir(v || null)}
+        options={[{ value: '', label: '— personne —' }, ...noms.map((n) => ({ value: n, label: n }))]}
+        style={{ width: '100%' }}
+      />
+      {moi.sessionOrpheline && (
+        <a href="#/parametres" className="small muted">
+          Session {moi.emailSession} non rattachée — renseignez l'adresse dans Paramètres.
+        </a>
+      )}
+    </div>
+  )
+}
+
 export default function App() {
   const route = useRoute()
   const { state, update, persistenceError, clearPersistenceError, syncError } = useStore()
@@ -102,6 +147,9 @@ export default function App() {
   // INT-02 : la surveillance Gmail/Agenda tourne à la racine — elle continue
   // de capter les mails quel que soit l'écran affiché (le Cockpit ne fait que lire)
   const surveillance = useSurveillance(state, update)
+  // session RÉACTIVE : sans cet abonnement, le pied de menu affichait encore
+  // « local » après une connexion réussie, jusqu'au rechargement de la page
+  const session = useSessionSupabase()
   const nbAlertes = alertesActives(state, today).filter((a) => a.gravite >= 2).length
   const nbDocsATraiter = state.registreDocuments.filter((d) =>
     ['recu', 'a_classer', 'a_valider'].includes(d.statut),
@@ -301,6 +349,7 @@ export default function App() {
           )
         })}
         <div className="sidebar-foot">
+          <IdentiteCourante />
           <a
             href="#/parametres"
             className={`nav-item nav-item-sec ${section === 'parametres' ? 'active' : ''}`}
@@ -309,13 +358,13 @@ export default function App() {
             <span>Paramètres</span>
             <button
               className="nav-statut"
-              title={statutCompact(state, today).titre}
+              title={statutCompact(state, today, session).titre}
               onClick={(e) => {
                 e.preventDefault()
                 window.location.hash = '#/sante'
               }}
             >
-              ● {statutCompact(state, today).texte}
+              ● {statutCompact(state, today, session).texte}
             </button>
           </a>
           <button

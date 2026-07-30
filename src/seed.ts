@@ -7,7 +7,10 @@
 import type { AppState, Facture, PromptTemplate } from './types'
 import { amorcerFinance } from './amorceFinance'
 
-export const STATE_VERSION = 16
+// v17 : `Personne.email` — pont entre un compte de connexion et une
+// personne (identité à deux étages, src/moi.ts). Palier additif : le
+// champ est optionnel, aucun état existant ne perd quoi que ce soit.
+export const STATE_VERSION = 17
 
 const P = (v: number) => Math.round(v * 100) / 100
 

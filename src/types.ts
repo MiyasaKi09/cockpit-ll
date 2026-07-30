@@ -832,6 +832,12 @@ export type StatutRemu = 'dirigeant' | 'salarie'
 export interface Personne {
   id: string
   nom: string
+  /** adresse de connexion de la personne — le pont entre un compte
+   *  (session Supabase) et la personne référencée par son nom dans tout
+   *  l'état. Optionnelle : le Cockpit s'utilise hors ligne et sans session,
+   *  et l'agence n'a pas encore son domaine. Comparée sans tenir compte de
+   *  la casse (voir `normaliserEmail` dans src/moi.ts). */
+  email?: string
   /** montant mensuel saisi — brut ou net selon modeRemu */
   remuMensuelle: number
   /** ce que représente le montant saisi */

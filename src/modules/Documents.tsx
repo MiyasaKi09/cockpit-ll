@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { DocumentRecord, Projet } from '../types'
 import { useStore } from '../store'
+import { useMoi } from '../moi'
 import {
   Badge,
   Btn,
@@ -68,6 +69,11 @@ import {
 
 function CarteArriveesServeur() {
   const { state, update } = useStore()
+  // qui signe le classement : la personne reconnue si l'application sait qui
+  // est là, et seulement à défaut le premier de la liste — le raccourci
+  // historique faisait signer toutes les validations par la même personne
+  const moi = useMoi()
+  const signataire = moi.nom ?? state.settings.personnes[0]
   const [liste, setListe] = useState<EntrantDistant[] | null>(null)
   const [choix, setChoix] = useState<Record<string, { projetId: string; categorie: string; dossier: string }>>({})
   const [message, setMessage] = useState('')
@@ -156,7 +162,7 @@ function CarteArriveesServeur() {
         const { doc } = enregistrerDocument(d, structuredClone(docPret))
         ajouterEvenementMail(doc, e)
       })
-      await marquerEntrant(e.id, 'classe', state.settings.personnes[0])
+      await marquerEntrant(e.id, 'classe', signataire)
       setListe((prev) => (prev || []).filter((x) => x.id !== e.id))
       toast(
         chemin
@@ -175,7 +181,7 @@ function CarteArriveesServeur() {
     if (!(await confirmer(`Rejeter « ${e.nomFichier} » ? La pièce reste tracée côté serveur mais ne sera plus proposée.`)))
       return
     try {
-      await marquerEntrant(e.id, 'rejete', state.settings.personnes[0])
+      await marquerEntrant(e.id, 'rejete', signataire)
       setListe((prev) => (prev || []).filter((x) => x.id !== e.id))
     } catch (err) {
       setMessage(err instanceof Error ? err.message : String(err))
@@ -688,6 +694,9 @@ function ModalRevueEntrants({
 
 function CarteAVerifier() {
   const { state, update } = useStore()
+  // même règle qu'à la boîte d'arrivée : on ne signe pas au nom d'un autre
+  const moi = useMoi()
+  const signataire = moi.nom ?? state.settings.personnes[0]
   const aVerifier = state.registreDocuments.filter((d) =>
     ['recu', 'a_classer', 'a_valider'].includes(d.statut),
   )
@@ -695,7 +704,7 @@ function CarteAVerifier() {
   const valider = (doc: DocumentRecord) =>
     update((d) => {
       const x = d.registreDocuments.find((y) => y.id === doc.id)
-      if (x) validerDocument(x, state.settings.personnes[0])
+      if (x) validerDocument(x, signataire)
     })
 
   const rejeter = async (doc: DocumentRecord) => {

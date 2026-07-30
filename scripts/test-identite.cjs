@@ -182,4 +182,97 @@ assert.match(
   'src/modules/Parametres.tsx : le champ adresse doit être rendu dans le tableau de l’équipe',
 )
 
-console.log('test-identite : OK — identité à deux étages, session observable, adresse préservée.')
+// --- 6. l'auteur d'une écriture partagée est établi par le serveur (0.5) -----
+//
+// Cinquième invariant muet : si `updated_by` redevenait un paramètre du
+// client, le journal d'audit continuerait de se remplir — d'identifiants
+// d'onglet. Rien ne casserait, et personne ne le verrait.
+
+const migrations = fs
+  .readdirSync(path.join(racine, 'supabase/migrations'))
+  .filter((f) => f.endsWith('.sql'))
+  .sort()
+
+/** dernière définition SQL de la RPC : c'est elle qui fait foi en base */
+const derniereDefinition = [...migrations.map((f) => `supabase/migrations/${f}`)]
+  .filter((f) => /create or replace function public\.enregistrer_workspace/.test(lire(f)))
+  .pop()
+assert.ok(
+  derniereDefinition,
+  'aucune migration ne définit enregistrer_workspace : le seul chemin d’écriture a disparu',
+)
+
+const corpsRpc = (fichier) => {
+  const source = lire(fichier)
+  const debut = source.indexOf('create or replace function public.enregistrer_workspace')
+  assert.ok(debut >= 0, `${fichier} : définition de enregistrer_workspace introuvable`)
+  const fin = source.indexOf('$$;', debut)
+  assert.ok(fin > debut, `${fichier} : corps de enregistrer_workspace non terminé`)
+  return source.slice(debut, fin)
+}
+
+// La RPC fait foi en base, `schema.sql` amorce un projet neuf : les deux
+// doivent dire la même chose, sinon un nouveau projet repart avec l'ancien
+// comportement.
+for (const fichier of [derniereDefinition, 'supabase/schema.sql']) {
+  const corps = corpsRpc(fichier)
+  assert.match(
+    corps,
+    /v_auteur\s*:=\s*coalesce\(auth\.uid\(\)::text/,
+    `${fichier} : l’auteur doit venir d’auth.uid(), pas d’un paramètre — un client peut annoncer n’importe qui`,
+  )
+  assert.doesNotMatch(
+    corps,
+    /updated_by\s*=\s*[^,;\n]*p_updated_by/,
+    `${fichier} : updated_by ne doit jamais être renseigné depuis p_updated_by`,
+  )
+  assert.match(
+    corps,
+    /updated_by\s*=\s*v_auteur/,
+    `${fichier} : la mise à jour doit estampiller updated_by côté serveur`,
+  )
+  assert.match(
+    corps,
+    /updated_by,\s*updated_by_client[\s\S]*?v_auteur,\s*nullif\(p_updated_by/,
+    `${fichier} : à l’insertion, l’auteur est v_auteur et l’onglet annoncé va dans updated_by_client`,
+  )
+  // Le contrôle du compte connecté reste la première ligne de défense.
+  assert.match(
+    corps,
+    /raise exception 'Compte non autorisé\.'/,
+    `${fichier} : le contrôle du compte connecté ne doit pas disparaître avec l’estampille`,
+  )
+}
+
+// La signature ne bouge pas : le front appelle la RPC avec cinq paramètres
+// nommés, et une signature modifiée en base ferait échouer chaque envoi.
+const signature = /create or replace function public\.enregistrer_workspace\(([\s\S]*?)\)\s*returns/.exec(
+  lire(derniereDefinition),
+)
+const parametresSql = [...signature[1].matchAll(/(p_[a-z_]+)\s+[a-z]/g)].map((m) => m[1])
+const appel = /\.rpc\('enregistrer_workspace',\s*\{([\s\S]*?)\n\s*\}\)/.exec(sync)
+assert.ok(appel, 'src/sync.ts : l’appel à enregistrer_workspace est introuvable')
+const parametresFront = [...appel[1].matchAll(/^\s*(p_[a-z_]+):/gm)].map((m) => m[1])
+assert.deepEqual(
+  parametresFront.slice().sort(),
+  parametresSql.slice().sort(),
+  'la signature de la RPC et l’appel de src/sync.ts ont divergé : chaque synchronisation échouerait',
+)
+
+// MON_ID garde son autre usage — reconnaître ses propres échos — et le filtre
+// doit rester valide de part et d’autre de la migration, quel que soit l’ordre
+// entre le déploiement du front et son application.
+assert.match(
+  sync,
+  /row\.updated_by_client === MON_ID \|\| row\.updated_by === MON_ID/,
+  'src/sync.ts : l’anti-écho doit accepter les DEUX colonnes — sinon un poste réapplique ses propres écritures pendant la fenêtre de bascule',
+)
+assert.match(
+  sync,
+  /p_updated_by: MON_ID/,
+  'src/sync.ts : l’onglet émetteur doit continuer d’être annoncé, c’est lui qui alimente le filtre anti-écho',
+)
+
+console.log(
+  'test-identite : OK — identité à deux étages, session observable, adresse préservée, auteur estampillé côté serveur.',
+)

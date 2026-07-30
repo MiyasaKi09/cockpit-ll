@@ -22,6 +22,11 @@ Le schéma crée :
 - la fonction `enregistrer_workspace`, seul chemin d’écriture, exécutée en
   `security definer` avec un `search_path` verrouillé et un contrôle explicite
   du compte connecté ;
+- l’estampille de l’auteur : la fonction renseigne elle-même `updated_by` depuis
+  `auth.uid()`. Le paramètre `p_updated_by` reste accepté — la signature ne
+  bouge pas — mais il n’est plus qu’une annonce du navigateur, rangée dans
+  `updated_by_client`, où elle sert au filtre anti-écho Realtime et à rien
+  d’autre : un client peut annoncer n’importe qui, une session non ;
 - une colonne `revision` utilisée comme verrou optimiste ;
 - la publication Realtime de la table.
 

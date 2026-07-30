@@ -97,7 +97,11 @@ export function abonnerSession(ecouteur: () => void): () => void {
   }
 }
 
-/** identifiant de CETTE instance de page — deux onglets doivent rester distincts. */
+/** identifiant de CETTE instance de page — deux onglets doivent rester distincts.
+ *  Ce n'est PAS une identité d'auteur : il est régénéré à chaque onglet et à
+ *  chaque profil de navigateur. Qui a écrit est estampillé par le serveur dans
+ *  `workspace.updated_by` (auth.uid(), migration 20260730160000) ; `MON_ID` ne
+ *  sert qu'à reconnaître ses propres échos Realtime. */
 const CLE_CONFLIT = 'cockpit-ll-sync-conflit'
 const CLE_EN_ATTENTE = 'cockpit-ll-sync-en-attente'
 const CLE_REVISION = 'cockpit-ll-sync-revision'
@@ -532,15 +536,25 @@ function souscrire(): void {
           espaceAbonnement !== workspaceId
         )
           return
-        const row = payload.new as { data?: AppState; updated_by?: string; revision?: number } | null
+        const row = payload.new as {
+          data?: AppState
+          updated_by?: string
+          updated_by_client?: string
+          revision?: number
+        } | null
         if (!row) return
         const revision = Number(row.revision)
         if (!Number.isSafeInteger(revision) || revision < 0) {
           demanderRefetchRealtime()
           return
         }
-        // anti-écho A : on ignore NOS propres écritures (comparé au contenu, robuste)
-        if (row.updated_by === MON_ID) {
+        // anti-écho A : on ignore NOS propres écritures (comparé au contenu, robuste).
+        // L'onglet émetteur est annoncé dans `updated_by_client` depuis la
+        // migration 20260730160000 ; avant elle, il occupait `updated_by`, qui
+        // porte désormais l'identité du compte. Comparer les deux colonnes garde
+        // le filtre valide des deux côtés de la bascule, quel que soit l'ordre
+        // entre le déploiement du front et l'application de la migration.
+        if (row.updated_by_client === MON_ID || row.updated_by === MON_ID) {
           if (revisionCourante === null || revision > revisionCourante)
             memoriserRevision(revision, new Date().toISOString())
           return
@@ -640,6 +654,8 @@ export async function pousserEtat(
       p_id: espaceAuDepart,
       p_data: etatPartageable(state),
       p_version: state.version,
+      // annonce de l'onglet émetteur, pas une identité : le serveur l'ignore
+      // pour `updated_by` et le range dans `updated_by_client`
       p_updated_by: MON_ID,
       p_expected_revision: revisionAttendue,
     })

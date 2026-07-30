@@ -15,7 +15,10 @@ import { createClient } from '@supabase/supabase-js'
 import { chromium } from 'playwright'
 import { ADAPTATEURS, type FicheExtraite } from './adaptateurs.ts'
 
-const UA = 'CockpitLL-Veille/1.0 (agence architecture ; contact : julenglet@gmail.com)'
+// User-Agent honnête (garde-fou ci-dessus), sans y inscrire d'adresse de
+// connexion : le contact vient de la configuration du worker.
+const CONTACT = (process.env.VEILLE_CONTACT_EMAIL || '').trim()
+const UA = `CockpitLL-Veille/1.0 (agence architecture${CONTACT ? ` ; contact : ${CONTACT}` : ''})`
 const VERSION = 'worker-0.1'
 const DELAI_MAX_JOB_MS = 45_000
 const PAGES_MAX_PAR_DOMAINE_HEURE = 20

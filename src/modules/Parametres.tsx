@@ -27,7 +27,7 @@ import {
   toast,
   useRoute,
   useToday, RowMenu } from '../ui'
-import { download, fmtDate, fmtMoney, fmtPct, fold, todayISO, uid } from '../util'
+import { DOMAINE_AGENCE, download, fmtDate, fmtMoney, fmtPct, fold, todayISO, uid } from '../util'
 import { coefSuggere, coutAgenceAnnuel, coutAnnuelPersonne, coutHorairePersonne, coutHoraireMoyen, coutJourObjectif, objectifCA, tauxVente, tauxVenteObjectif } from '../derive'
 import { connecterGoogle, deconnecter, estConnecte } from '../google'
 import {
@@ -697,7 +697,7 @@ function CarteSync() {
       <summary className="small" style={{ cursor: 'pointer', color: 'var(--accent)' }}>Détails & réglages</summary>
       <p className="small muted" style={{ margin: '8px 0 10px' }}>
         Optionnel et local-first : sans connexion, tout continue en localStorage. La clé « publique »
-        se colle ici sans risque — l’accès est verrouillé à vos 2 adresses.
+        se colle ici sans risque — l’accès est verrouillé aux membres inscrits au registre.
       </p>
       <div className="form-row">
         <Field label="URL du projet Supabase">
@@ -711,8 +711,15 @@ function CarteSync() {
         <Field label="Identifiant d’espace" hint="le même sur les 2 postes (ex. agence-ll)">
           <TextInput value={cfg.workspaceId} onChange={(v) => majSync('workspaceId', v)} placeholder="agence-ll" />
         </Field>
-        <Field label="Votre e-mail (lien magique)" hint="julenglet@gmail.com ou zoefhebert@gmail.com">
-          <TextInput value={cfg.email || ''} onChange={(v) => majSync('email', v)} placeholder="julenglet@gmail.com" />
+        <Field
+          label="Votre e-mail (lien magique)"
+          hint="l’adresse inscrite au registre des membres — celle avec laquelle vous vous connectez"
+        >
+          <TextInput
+            value={cfg.email || ''}
+            onChange={(v) => majSync('email', v)}
+            placeholder={`prenom@${DOMAINE_AGENCE}`}
+          />
         </Field>
       </div>
       <div className="toolbar" style={{ marginTop: 8, marginBottom: 0, flexWrap: 'wrap' }}>

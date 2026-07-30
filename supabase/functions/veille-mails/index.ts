@@ -22,9 +22,9 @@
 // ============================================================
 
 import { createClient, type SupabaseClient } from 'jsr:@supabase/supabase-js@2.110.0'
+import { jetonDeMembreActif } from '../_shared/membres.ts'
 
 const VERSION_PARSEUR = 'mails-2.0'
-const AGENCE = ['julenglet@gmail.com', 'zoefhebert@gmail.com']
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -420,10 +420,7 @@ Deno.serve(async (req: Request) => {
   let autorise = Boolean(secretRecu && cfg.cron_secret && secretRecu === cfg.cron_secret)
   if (!autorise) {
     const jeton = req.headers.get('authorization')?.replace(/^Bearer\s+/i, '')
-    if (jeton) {
-      const { data } = await sb.auth.getUser(jeton)
-      autorise = AGENCE.includes(data.user?.email?.toLowerCase() || '')
-    }
+    autorise = await jetonDeMembreActif(sb, jeton)
   }
   if (!autorise) return json({ erreur: 'Accès refusé.' }, 401)
 

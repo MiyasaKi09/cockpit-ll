@@ -87,6 +87,17 @@ assert.equal(
   'chaque tâche cron doit déclarer un délai explicite',
 )
 
+// Le contrôle d'accès passe par le registre des membres (livrable 0.2) et non
+// plus par une liste d'adresses recopiée dans chaque fonction. Le détail est
+// vérifié par scripts/test-registre-membres.cjs ; ici on garde le principe.
+for (const nom of ['gmail-ingestion', 'ingestion-config', 'veille-collecte', 'veille-enrichir', 'veille-mails']) {
+  assert.match(
+    lire(`supabase/functions/${nom}/index.ts`),
+    /from '\.\.\/_shared\/membres\.ts'/,
+    `${nom} doit autoriser depuis le registre des membres, pas depuis une constante locale`,
+  )
+}
+
 const oauth = lire('supabase/functions/gmail-oauth/index.ts')
 const configIngestion = lire('supabase/functions/ingestion-config/index.ts')
 assert.match(configIngestion, /workspaceId: cfg\?\.workspace_id/, 'le workspace configuré doit être exposé sans secret')
@@ -121,6 +132,7 @@ assert.match(oauth, /\.select\('id'\)\s*\.maybeSingle\(\)/, 'la mise à jour du 
 
 for (const fichier of [
   'supabase/functions/_shared/oauth-init.ts',
+  'supabase/functions/_shared/membres.ts',
   'supabase/functions/gmail-oauth/index.ts',
   'supabase/functions/gmail-ingestion/index.ts',
   'supabase/functions/ingestion-config/index.ts',

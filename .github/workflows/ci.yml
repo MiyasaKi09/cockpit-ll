@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint server scripts
+        run: npm run lint
+
+      - name: Type-check and build
+        run: npm run build
+
+      - name: Assistant API tests
+        run: npm run test:assistant
+
+      - name: Relay security tests
+        run: npm run test:relais
+
+      - name: Edge Functions security tests
+        run: npm run test:edge-security
+
+      - name: Sync privacy tests
+        run: npm run test:sync-state
+
+      - name: Invoice invariant tests
+        run: npm run test:facture-invariants
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Finance browser recipe
+        run: npm run test:finance

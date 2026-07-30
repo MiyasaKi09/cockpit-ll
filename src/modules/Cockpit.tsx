@@ -626,7 +626,7 @@ export default function Cockpit() {
             accent="blue"
             label="Facturable 90 j"
             value={<Money v={meteo.facturable90j} />}
-            sub="honoraires à facturer sous 90 jours"
+            sub="HT restant à encaisser ou à facturer sous 90 jours"
           />
           <Stat
             accent="red"

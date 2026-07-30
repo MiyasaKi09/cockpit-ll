@@ -37,7 +37,7 @@ export default function Finance() {
     const solde = soldeFacture(state, f)
     if (solde <= 0.01) continue
     aEncaisser += solde
-    if (retardFacture(f, today) > 0) dontRetard += solde
+    if (retardFacture(state, f, today) > 0) dontRetard += solde
   }
   // à décaisser : achats validés non payés (dont non validés / sans pièce)
   const aPayer = state.facturesAchat.filter((f) => f.statut === 'validee' && !f.payeLe)

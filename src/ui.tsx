@@ -657,12 +657,14 @@ export function TextArea({
   rows = 4,
   placeholder,
   mono,
+  disabled,
 }: {
   value: string
   onChange: (v: string) => void
   rows?: number
   placeholder?: string
   mono?: boolean
+  disabled?: boolean
 }) {
   return (
     <textarea
@@ -671,6 +673,7 @@ export function TextArea({
       onChange={(e) => onChange(e.target.value)}
       rows={rows}
       placeholder={placeholder}
+      disabled={disabled}
     />
   )
 }
@@ -783,14 +786,22 @@ export function Select({
   onChange,
   options,
   style,
+  disabled,
 }: {
   value: string
   onChange: (v: string) => void
   options: { value: string; label: string }[]
   style?: CSSProperties
+  disabled?: boolean
 }) {
   return (
-    <select className="input" value={value} onChange={(e) => onChange(e.target.value)} style={style}>
+    <select
+      className="input"
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      style={style}
+      disabled={disabled}
+    >
       {options.map((o) => (
         <option key={o.value} value={o.value}>
           {o.label}

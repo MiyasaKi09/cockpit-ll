@@ -1,5 +1,6 @@
 // ============================================================
-// Recette finance F6-F10 (audit — pilotage unique).
+// Recette finance F3 et F6-F10 (audit — pilotage unique).
+// F3 — rapprochement bancaire atomique : un mouvement, une seule cible ;
 // F6 — moteur économique : cinq états des coûts externes, production
 //      estimée / en-cours, reste à faire révisé qui fait dériver la
 //      marge finale, facture en retard encaissée dans le FUTUR ;
@@ -256,13 +257,23 @@ function demarrerPreview() {
     console.error('dist/ absent — lancez `npm run build` avant `npm run test:finance`.')
     process.exit(2)
   }
-  const viteBin = path.join(RACINE, 'node_modules', '.bin', process.platform === 'win32' ? 'vite.cmd' : 'vite')
-  const srv = spawn(viteBin, ['preview', '--port', '4173', '--strictPort'], {
+  // Lance directement Node plutôt que le wrapper .cmd : sous Windows,
+  // tuer le wrapper laisserait le processus Vite enfant actif et verrouillerait Rolldown.
+  const viteBin = path.join(RACINE, 'node_modules', 'vite', 'bin', 'vite.js')
+  const srv = spawn(process.execPath, [viteBin, 'preview', '--port', '4173', '--strictPort'], {
     cwd: RACINE,
     stdio: 'ignore',
-    shell: process.platform === 'win32',
+    windowsHide: true,
   })
   return srv
+}
+
+async function arreterPreview(srv) {
+  if (srv.exitCode !== null) return
+  const arrete = new Promise((resolve) => srv.once('exit', resolve))
+  srv.kill()
+  await Promise.race([arrete, new Promise((resolve) => setTimeout(resolve, 2000))])
+  if (srv.exitCode === null) srv.kill('SIGKILL')
 }
 async function attendrePort(url, essais = 60) {
   for (let i = 0; i < essais; i++) {
@@ -585,6 +596,71 @@ async function attendrePort(url, essais = 60) {
       ok('F10 · passerelle enregistrée (URL HTTPS seule) — aucun secret dans le navigateur ni dans l’état')
     else ko('secret dans l’état', clefs.join(','))
 
+    // -- garde atomique : un même débit ne peut servir à deux rapprochements --
+    await page.evaluate((date) => {
+      const e = JSON.parse(localStorage.getItem('cockpit-ll-v1'))
+      e.transactionsBancaires.push({
+        id: 'TX-RACE',
+        date,
+        montant: -100,
+        libelle: 'DOUBLE RAPPROCHEMENT TEST FOURNISSEUR RACE',
+        importId: 'IMP-RACE',
+        rapprochement: null,
+      })
+      e.facturesAchat.push({
+        id: 'FA-RACE',
+        fournisseur: 'Fournisseur Race',
+        numeroFournisseur: 'RACE-100',
+        dateFacture: date,
+        montantHT: 83.33,
+        montantTVA: 16.67,
+        montantTTC: 100,
+        ventilations: [],
+        statut: 'validee',
+        source: 'manuel',
+      })
+      e.notesFrais.push({
+        id: 'NF-RACE',
+        personne: 'Test',
+        date,
+        libelle: 'Note concurrente',
+        montantTTC: 100,
+        moyen: 'perso',
+        categorie: 'Test',
+        statut: 'a_rembourser',
+      })
+      localStorage.setItem('cockpit-ll-v1', JSON.stringify(e))
+    }, J(-1))
+    await page.goto(BASE + '#/finance/banque', { waitUntil: 'networkidle' })
+    await page.reload({ waitUntil: 'networkidle' })
+    const ligneRace = page.locator('tbody tr', { hasText: 'DOUBLE RAPPROCHEMENT TEST' }).first()
+    await ligneRace.getByRole('button', { name: 'Rapprocher…' }).click()
+    await ligneRace.evaluate((ligne) => {
+      const boutons = [...ligne.querySelectorAll('button')]
+      const fournisseur = boutons.find((bouton) => bouton.textContent?.includes('Fournisseur Fournisseur Race'))
+      const note = boutons.find((bouton) => bouton.textContent?.includes('Remboursement note de frais Test'))
+      if (!fournisseur || !note) throw new Error('Les deux cibles concurrentes sont absentes.')
+      fournisseur.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      note.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    await page.waitForFunction(() => {
+      const e = JSON.parse(localStorage.getItem('cockpit-ll-v1'))
+      return !!e.transactionsBancaires.find((t) => t.id === 'TX-RACE')?.rapprochement
+    })
+    const rapprochementRace = await page.evaluate(() => {
+      const e = JSON.parse(localStorage.getItem('cockpit-ll-v1'))
+      const tx = e.transactionsBancaires.find((t) => t.id === 'TX-RACE')
+      const achat = e.facturesAchat.find((f) => f.id === 'FA-RACE')
+      const note = e.notesFrais.find((n) => n.id === 'NF-RACE')
+      return {
+        type: tx?.rapprochement?.type,
+        ciblesModifiees: Number(achat?.transactionId === 'TX-RACE') + Number(note?.statut === 'remboursee'),
+      }
+    })
+    if (rapprochementRace.ciblesModifiees === 1)
+      ok(`F3 · garde atomique : un double clic concurrent ne produit qu’un rapprochement (${rapprochementRace.type})`)
+    else ko('garde atomique rapprochement', JSON.stringify(rapprochementRace))
+
     await browser.close()
   } catch (e) {
     echecs++
@@ -597,13 +673,13 @@ async function attendrePort(url, essais = 60) {
     }
     await browser.close().catch(() => {})
   } finally {
-    srv.kill('SIGKILL')
+    await arreterPreview(srv)
   }
 
   console.log(
     echecs
       ? `\n✗ ${echecs} échec(s)`
-      : '\nOK — F6/F7/F8/F9/F10 : moteur économique (5 états, production, marge qui dérive), hors-périmètre → avenant signé, jalon → échéance, revue ordonnée, budget 12 mois + simulateur + ROI, imports idempotents et passerelles sans secret.',
+      : '\nOK — F3/F6/F7/F8/F9/F10 : rapprochement atomique, moteur économique (5 états, production, marge qui dérive), hors-périmètre → avenant signé, jalon → échéance, revue ordonnée, budget 12 mois + simulateur + ROI, imports idempotents et passerelles sans secret.',
   )
   process.exit(echecs ? 1 : 0)
 })().catch((e) => {

@@ -48,7 +48,7 @@ import {
   seuilPlancherActualise,
   totalPointsComplexite,
 } from '../miqcp'
-import { coutHoraireMoyen, coutJourObjectif, coutReelTemps, coutsExternes, encaissementPrevu, enJours, factureHT, heuresPrevues, heuresReelles, retardFacture, tauxVente, ttc } from '../derive'
+import { coutHoraireMoyen, coutJourObjectif, coutReelTemps, coutsExternes, encaisseHT, encaissementPrevu, enJours, factureHT, heuresPrevues, heuresReelles, retardFacture, tauxVente, ttc } from '../derive'
 import { assemble, contexteProjet, copier } from '../prompts'
 import { echeancesParDefaut } from '../echeancier'
 import { contratDuProjet, totalContratHT } from '../contrats'
@@ -417,7 +417,7 @@ function BarreProjetCompacte({ projet: p }: { projet: Projet }) {
   const prochaineEcheance = state.echeancesFacturation
     .filter((e) => e.projetId === p.id && e.datePrevue >= today)
     .sort((a, b) => a.datePrevue.localeCompare(b.datePrevue))[0]
-  const enRetard = state.factures.filter((f) => f.projetId === p.id && retardFacture(f, today) > 0)
+  const enRetard = state.factures.filter((f) => f.projetId === p.id && retardFacture(state, f, today) > 0)
   return (
     <p
       className="small"
@@ -471,7 +471,7 @@ function BandeauProjet({ projet: p }: { projet: Projet }) {
       : prochainePhase
         ? { valeur: prochainePhase.code, date: prochainePhase.fin!, complement: `rendu de phase (${LIBELLES_PHASES[prochainePhase.code]})` }
         : null
-  const enRetard = state.factures.filter((f) => f.projetId === p.id && retardFacture(f, today) > 0)
+  const enRetard = state.factures.filter((f) => f.projetId === p.id && retardFacture(state, f, today) > 0)
 
   return (
     <div className="grid4" style={{ marginBottom: 8 }}>
@@ -700,7 +700,7 @@ function OngletFinances({ projet: p }: { projet: Projet }) {
             head={['N°', 'Phase', 'Libellé', <span key="h" className="right">HT</span>, <span key="t" className="right">TTC</span>, 'Émission', 'Statut']}
           >
             {factures.map((f) => {
-              const retard = retardFacture(f, today)
+              const retard = retardFacture(state, f, today)
               return (
                 <tr key={f.id}>
                   <td className="mono">{f.numero || f.id}</td>
@@ -1021,10 +1021,7 @@ function CartePhases({ projet: p }: { projet: Projet }) {
     toast('Répartition des phases recalculée.', { tone: 'ok' })
   }
 
-  const encaissePhase = (code: PhaseCode) =>
-    state.factures
-      .filter((f) => f.projetId === p.id && f.phase === code && f.statut === 'encaissee')
-      .reduce((s2, f) => s2 + f.montantHT, 0)
+  const encaissePhase = (code: PhaseCode) => encaisseHT(state, p.id, code)
 
   const totaux = p.phases.reduce(
     (t, ph) => {

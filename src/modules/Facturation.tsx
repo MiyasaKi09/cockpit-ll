@@ -12,7 +12,7 @@
 // sont des brouillons à relire avant tout envoi.
 // ============================================================
 
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import type { AppState, EcheanceFacturation, EvenementTransmission, Facture, LigneFacture, PhaseCode, TypeMO } from '../types'
 import { useStore } from '../store'
 import {
@@ -53,13 +53,19 @@ import {
   construireFigee,
   controlerAvantEmission,
   empreinteFigee,
+  erreurInsertionFacture,
+  erreurRapprochementHistorique,
   etatPaiement,
+  montantRestantAnnulableHT,
   nouveauPaiement,
   prochainNumero,
   regleSurFacture,
   soldeFacture,
+  totauxAvoirPourEmission,
   totauxLignes,
   trousNumerotation,
+  validerAvoir,
+  validerPaiement,
 } from '../facture'
 import type { BrouillonFacture } from '../facture'
 import { LIBELLES_PHASES, PHASES_ORDRE } from '../miqcp'
@@ -72,6 +78,11 @@ import FinanceNav from './FinanceNav'
 // ---------- helpers locaux ----------
 
 const TYPES_MO: TypeMO[] = ['Public', 'Privé pro', 'Particulier']
+
+interface ResultatMutation {
+  ok: boolean
+  erreur?: string
+}
 
 /** niveaux de relance graduée, du plus doux au plus ferme */
 const NIVEAUX_RELANCE: { tplId: string; label: string }[] = [
@@ -90,10 +101,10 @@ function niveauConseille(retardJours: number): number {
 /** statut DÉRIVÉ du solde (audit F0) — jamais choisi à la main */
 function BadgeEtat({ state, f, today }: { state: AppState; f: Facture; today: string }) {
   if (f.type === 'avoir') return <Badge tone="warn">avoir</Badge>
-  const retard = retardFacture(f, today)
-  if (retard > 0) return <Badge tone="danger">en retard {retard} j</Badge>
   const etat = etatPaiement(state, f)
   if (etat === 'payee') return <Badge tone="ok">payée</Badge>
+  const retard = retardFacture(state, f, today)
+  if (retard > 0) return <Badge tone="danger">en retard {retard} j</Badge>
   if (etat === 'partielle') return <Badge tone="warn">partiellement réglée</Badge>
   return <Badge tone="info">émise</Badge>
 }
@@ -279,7 +290,12 @@ function EmissionModal({
   state: AppState
   today: string
   onClose: () => void
-  onEmettre: (nouvelle: Facture, adresseFacturation: string) => void
+  onEmettre: (
+    nouvelle: Facture,
+    adresseFacturation: string,
+    echeanceAttendue: EcheanceFacturation,
+    brouillonAttendu: BrouillonFacture,
+  ) => Promise<ResultatMutation>
 }) {
   const projet = projetById(state, echeance.projetId)
   const [dateEmission, setDateEmission] = useState<string | null>(today)
@@ -287,6 +303,8 @@ function EmissionModal({
   const [clientAdresse, setClientAdresse] = useState(projet?.adresseFacturation || '')
   const [numeroEngagement, setNumeroEngagement] = useState(projet?.numeroEngagement || '')
   const [horsContrat, setHorsContrat] = useState('')
+  const [emissionEnCours, setEmissionEnCours] = useState(false)
+  const verrouEmission = useRef(false)
   const [lignes, setLignes] = useState<LigneFacture[]>([
     {
       id: uid('lig'),
@@ -323,42 +341,70 @@ function EmissionModal({
   const controle = useMemo(() => controlerAvantEmission(state, projet, brouillon), [state, projet, brouillon])
   const totaux = totauxLignes(lignes)
   const numeroPrevu = dateEmission ? prochainNumero(state, dateEmission) : '—'
+  const fermerSiLibre = () => {
+    if (!verrouEmission.current) onClose()
+  }
 
   const emettre = async () => {
     if (controle.bloquants.length > 0 || !dateEmission) return
-    const numero = prochainNumero(state, dateEmission)
-    const figee = construireFigee(state, brouillon, numero, projet?.objetFacture || undefined, echeance.delaiJours)
-    figee.empreinte = await empreinteFigee(figee)
-    const nouvelle: Facture = {
-      // l'id INTERNE de l'échéance est conservé : les liens (situation…) restent valides
-      id: echeance.id,
-      projetId: echeance.projetId,
-      phase: echeance.phase,
-      libelle: echeance.libelle,
-      montantHT: totaux.ht,
-      tauxTVA: totaux.ht !== 0 ? Math.round((totaux.tva / totaux.ht) * 10000) / 10000 : echeance.tauxTVA,
-      emission: dateEmission,
-      delaiJours: echeance.delaiJours,
-      statut: 'emise',
-      situationId: echeance.situationId ?? null,
-      contratLigneId: echeance.contratLigneId ?? null,
-      numero,
-      type: 'facture',
-      lignes: lignes.map((l) => ({ ...l })),
-      figee,
-      evenements: [
-        {
-          date: dateEmission,
-          type: 'emission',
-          detail: `Numéro ${numero} attribué, pièce figée${figee.empreinte ? ` (empreinte ${figee.empreinte.slice(0, 12)}…)` : ''}.`,
-        },
-      ],
+    // Le ref ferme la fenêtre entre le clic et le prochain rendu React.
+    if (verrouEmission.current) return
+    verrouEmission.current = true
+    setEmissionEnCours(true)
+    let terminee = false
+    try {
+      const numero = prochainNumero(state, dateEmission)
+      const figee = construireFigee(state, brouillon, numero, projet?.objetFacture || undefined, echeance.delaiJours)
+      figee.empreinte = await empreinteFigee(figee)
+      const nouvelle: Facture = {
+        // l'id INTERNE de l'échéance est conservé : les liens (situation…) restent valides
+        id: echeance.id,
+        projetId: echeance.projetId,
+        phase: echeance.phase,
+        libelle: echeance.libelle,
+        montantHT: totaux.ht,
+        tauxTVA: totaux.ht !== 0 ? Math.round((totaux.tva / totaux.ht) * 10000) / 10000 : echeance.tauxTVA,
+        emission: dateEmission,
+        delaiJours: echeance.delaiJours,
+        statut: 'emise',
+        situationId: echeance.situationId ?? null,
+        contratLigneId: echeance.contratLigneId ?? null,
+        numero,
+        type: 'facture',
+        lignes: lignes.map((l) => ({ ...l })),
+        figee,
+        evenements: [
+          {
+            date: dateEmission,
+            type: 'emission',
+            detail: `Numéro ${numero} attribué, pièce figée${figee.empreinte ? ` (empreinte ${figee.empreinte.slice(0, 12)}…)` : ''}.`,
+          },
+        ],
+      }
+      const resultat = await onEmettre(nouvelle, clientAdresse, echeance, brouillon)
+      if (!resultat.ok) {
+        toast(resultat.erreur || 'La facture n’a pas pu être émise.', { tone: 'danger' })
+        return
+      }
+      terminee = true
+      toast(`Facture ${nouvelle.numero} émise et figée — PDF et e-mail dans le menu de la ligne.`, { tone: 'ok' })
+      onClose()
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'La facture n’a pas pu être émise.', { tone: 'danger' })
+    } finally {
+      if (!terminee) {
+        verrouEmission.current = false
+        setEmissionEnCours(false)
+      }
     }
-    onEmettre(nouvelle, clientAdresse)
   }
 
   return (
-    <Modal titre={`Émettre la facture — ${echeance.projetId} · ${echeance.libelle}`} onClose={onClose} large>
+    <Modal
+      titre={`Émettre la facture — ${echeance.projetId} · ${echeance.libelle}`}
+      onClose={fermerSiLibre}
+      large
+    >
       <p className="muted small" style={{ margin: '0 0 12px' }}>
         L'émission attribue le numéro <strong className="mono">{numeroPrevu}</strong> et FIGE la pièce
         (copie complète + empreinte) : elle ne sera plus modifiable — toute correction passera par un avoir.
@@ -464,9 +510,13 @@ function EmissionModal({
       )}
 
       <div className="form-foot">
-        <Btn onClick={onClose}>Annuler</Btn>
-        <Btn kind="primary" disabled={controle.bloquants.length > 0} onClick={() => void emettre()}>
-          Émettre ({numeroPrevu})
+        <Btn disabled={emissionEnCours} onClick={fermerSiLibre}>Annuler</Btn>
+        <Btn
+          kind="primary"
+          disabled={emissionEnCours || controle.bloquants.length > 0}
+          onClick={() => void emettre()}
+        >
+          {emissionEnCours ? 'Émission en cours…' : `Émettre (${numeroPrevu})`}
         </Btn>
       </div>
     </Modal>
@@ -486,7 +536,7 @@ function PaiementModal({
   state: AppState
   today: string
   onClose: () => void
-  onConfirm: (date: string, montant: number, moyen: string, reference: string) => void
+  onConfirm: (date: string, montant: number, moyen: string, reference: string) => Promise<ResultatMutation>
 }) {
   const solde = soldeFacture(state, f)
   const regle = regleSurFacture(state, f.id)
@@ -494,8 +544,50 @@ function PaiementModal({
   const [montant, setMontant] = useState<number | null>(solde)
   const [moyen, setMoyen] = useState('virement')
   const [reference, setReference] = useState('')
+  const [enregistrementEnCours, setEnregistrementEnCours] = useState(false)
+  const verrouPaiement = useRef(false)
+  const controlePaiement = validerPaiement(
+    state,
+    montant ?? 0,
+    [{ factureId: f.id, montant: montant ?? 0 }],
+  )
+  const erreurPaiement = montant !== null && !controlePaiement.valide ? controlePaiement.erreurs[0] : null
+  const fermerSiLibre = () => {
+    if (!verrouPaiement.current) onClose()
+  }
+
+  const confirmerPaiement = async () => {
+    if (!date) return toast('Indiquer la date du paiement.', { tone: 'danger' })
+    if (montant === null) return toast('Indiquer le montant reçu.', { tone: 'danger' })
+    if (!controlePaiement.valide) return toast(controlePaiement.erreurs[0], { tone: 'danger' })
+    if (verrouPaiement.current) return
+    verrouPaiement.current = true
+    setEnregistrementEnCours(true)
+    let termine = false
+    try {
+      const resultat = await onConfirm(date, montant, moyen, reference)
+      if (!resultat.ok) {
+        toast(resultat.erreur || 'Le paiement n’a pas pu être enregistré.', { tone: 'danger' })
+        return
+      }
+      termine = true
+      toast('Paiement enregistré — le statut découle du solde.', { tone: 'ok' })
+      onClose()
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Le paiement n’a pas pu être enregistré.', { tone: 'danger' })
+    } finally {
+      if (!termine) {
+        verrouPaiement.current = false
+        setEnregistrementEnCours(false)
+      }
+    }
+  }
+
   return (
-    <Modal titre={`Paiement reçu — facture ${f.numero || f.id}`} onClose={onClose}>
+    <Modal
+      titre={`Paiement reçu — facture ${f.numero || f.id}`}
+      onClose={fermerSiLibre}
+    >
       <dl className="kv" style={{ marginBottom: 14 }}>
         <dt>Libellé</dt>
         <dd>{f.libelle}</dd>
@@ -536,17 +628,19 @@ function PaiementModal({
           <TextInput value={reference} onChange={setReference} />
         </Field>
       </div>
+      {erreurPaiement && (
+        <div className="pill-note" style={{ marginTop: 10, borderColor: 'var(--danger)', color: 'var(--danger)' }}>
+          {erreurPaiement}
+        </div>
+      )}
       <div className="form-foot">
-        <Btn onClick={onClose}>Annuler</Btn>
+        <Btn disabled={enregistrementEnCours} onClick={fermerSiLibre}>Annuler</Btn>
         <Btn
           kind="primary"
-          onClick={() => {
-            if (!date) return toast('Indiquer la date du paiement.', { tone: 'danger' })
-            if (montant === null || montant === 0) return toast('Indiquer le montant reçu.', { tone: 'danger' })
-            onConfirm(date, montant, moyen, reference)
-          }}
+          disabled={enregistrementEnCours || !date || montant === null || !controlePaiement.valide}
+          onClick={() => void confirmerPaiement()}
         >
-          Enregistrer le paiement
+          {enregistrementEnCours ? 'Enregistrement…' : 'Enregistrer le paiement'}
         </Btn>
       </div>
     </Modal>
@@ -566,64 +660,113 @@ function AvoirModal({
   state: AppState
   today: string
   onClose: () => void
-  onConfirm: (avoir: Facture) => void
+  onConfirm: (avoir: Facture) => Promise<ResultatMutation>
 }) {
   const [mode, setMode] = useState<'total' | 'partiel'>('total')
   const [montantPartiel, setMontantPartiel] = useState<number | null>(null)
   const [date, setDate] = useState<string | null>(today)
+  const [emissionEnCours, setEmissionEnCours] = useState(false)
+  const verrouEmission = useRef(false)
   const numeroPrevu = date ? prochainNumero(state, date) : '—'
   const htOrigine = f.figee?.totalHT ?? f.montantHT
+  const montantRestantHT = montantRestantAnnulableHT(state, f)
+  const montantDemandeHT = mode === 'total' ? montantRestantHT : montantPartiel ?? 0
+  const controleAvoir = validerAvoir(state, f, montantDemandeHT)
+  const erreursVisibles =
+    mode === 'total' || montantPartiel !== null
+      ? controleAvoir.erreurs
+      : controleAvoir.erreurs.filter((e) => !e.includes('strictement positif'))
+  const fermerSiLibre = () => {
+    if (!verrouEmission.current) onClose()
+  }
 
   const creer = async () => {
     if (!date) return toast("Indiquer la date d'émission de l'avoir.", { tone: 'danger' })
-    if (mode === 'partiel' && (!montantPartiel || montantPartiel <= 0))
-      return toast('Indiquer le montant HT de l’avoir partiel.', { tone: 'danger' })
-    const lignes = brouillonAvoir(f, mode === 'partiel' ? montantPartiel! : undefined)
-    const totaux = totauxLignes(lignes)
-    const numero = prochainNumero(state, date)
-    const brouillon: BrouillonFacture = {
-      projetId: f.projetId,
-      clientNom: f.figee?.clientNom || projetById(state, f.projetId)?.moa || '',
-      clientAdresse: f.figee?.clientAdresse || projetById(state, f.projetId)?.adresseFacturation || '',
-      dateEmission: date,
-      lignes,
-      numeroEngagement: f.figee?.numeroEngagement,
+    if (!controleAvoir.valide) return toast(controleAvoir.erreurs[0], { tone: 'danger' })
+    // Le ref rend le verrou effectif dès le premier clic, avant le rendu disabled.
+    if (verrouEmission.current) return
+    verrouEmission.current = true
+    setEmissionEnCours(true)
+    let terminee = false
+    try {
+      // Un avoir partiel est réparti sur tous les taux encore annulables.
+      // En mode total, le moteur reprend exactement le solde de chaque taux.
+      const lignes = brouillonAvoir(
+        state,
+        f,
+        mode === 'partiel' ? montantDemandeHT : undefined,
+      )
+      const totaux = totauxAvoirPourEmission(state, f, lignes, mode === 'total')
+      const numero = prochainNumero(state, date)
+      const brouillon: BrouillonFacture = {
+        projetId: f.projetId,
+        clientNom: f.figee?.clientNom || projetById(state, f.projetId)?.moa || '',
+        clientAdresse: f.figee?.clientAdresse || projetById(state, f.projetId)?.adresseFacturation || '',
+        dateEmission: date,
+        lignes,
+        numeroEngagement: f.figee?.numeroEngagement,
+      }
+      const figee = construireFigee(state, brouillon, numero, `Avoir sur facture ${f.numero || f.id}`, f.delaiJours)
+      figee.totalHT = totaux.ht
+      figee.totalTVA = totaux.tva
+      figee.totalTTC = totaux.ttc
+      figee.ventilationTVA = totaux.ventilationTVA
+      figee.empreinte = await empreinteFigee(figee)
+      const avoir: Facture = {
+        id: uid('fac'),
+        projetId: f.projetId,
+        phase: f.phase,
+        libelle: `Avoir sur facture ${f.numero || f.id}`,
+        montantHT: totaux.ht, // négatif
+        tauxTVA: f.tauxTVA,
+        emission: date,
+        delaiJours: f.delaiJours,
+        statut: 'emise',
+        numero,
+        type: 'avoir',
+        factureOrigineId: f.id,
+        lignes,
+        figee,
+        evenements: [{ date, type: 'emission', detail: `Avoir ${numero} sur la facture ${f.numero || f.id}.` }],
+      }
+      const resultat = await onConfirm(avoir)
+      if (!resultat.ok) {
+        toast(resultat.erreur || 'L’avoir n’a pas pu être émis.', { tone: 'danger' })
+        return
+      }
+      terminee = true
+      toast(`Avoir ${avoir.numero} émis — il référence la facture d'origine.`, { tone: 'ok' })
+      onClose()
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'L’avoir n’a pas pu être émis.', { tone: 'danger' })
+    } finally {
+      if (!terminee) {
+        verrouEmission.current = false
+        setEmissionEnCours(false)
+      }
     }
-    const figee = construireFigee(state, brouillon, numero, `Avoir sur facture ${f.numero || f.id}`, f.delaiJours)
-    figee.empreinte = await empreinteFigee(figee)
-    const avoir: Facture = {
-      id: uid('fac'),
-      projetId: f.projetId,
-      phase: f.phase,
-      libelle: `Avoir sur facture ${f.numero || f.id}`,
-      montantHT: totaux.ht, // négatif
-      tauxTVA: f.tauxTVA,
-      emission: date,
-      delaiJours: f.delaiJours,
-      statut: 'emise',
-      numero,
-      type: 'avoir',
-      factureOrigineId: f.id,
-      lignes,
-      figee,
-      evenements: [{ date, type: 'emission', detail: `Avoir ${numero} sur la facture ${f.numero || f.id}.` }],
-    }
-    onConfirm(avoir)
   }
 
   return (
-    <Modal titre={`Créer un avoir — facture ${f.numero || f.id}`} onClose={onClose}>
+    <Modal
+      titre={`Créer un avoir — facture ${f.numero || f.id}`}
+      onClose={fermerSiLibre}
+    >
       <p className="muted small" style={{ margin: '0 0 12px' }}>
         Une facture émise ne se corrige jamais en silence : l'avoir <strong className="mono">{numeroPrevu}</strong>{' '}
         (numéroté dans la même séquence) annule tout ou partie de la pièce d'origine, les deux restent lisibles.
       </p>
+      <div className="pill-note" style={{ marginBottom: 10 }}>
+        Montant d’origine : <strong>{fmtMoney(htOrigine, true)} HT</strong> · encore annulable :{' '}
+        <strong>{fmtMoney(montantRestantHT, true)} HT</strong>.
+      </div>
       <div className="form-row">
         <Field label="Portée">
           <Select
             value={mode}
             onChange={(m) => setMode(m as 'total' | 'partiel')}
             options={[
-              { value: 'total', label: `Avoir total (${fmtMoney(htOrigine, true)} HT)` },
+              { value: 'total', label: `Annuler le solde restant (${fmtMoney(montantRestantHT, true)} HT)` },
               { value: 'partiel', label: 'Avoir partiel (montant HT à saisir)' },
             ]}
           />
@@ -634,15 +777,24 @@ function AvoirModal({
       </div>
       {mode === 'partiel' && (
         <div className="form-row" style={{ marginTop: 10 }}>
-          <Field label="Montant HT de l'avoir (positif)">
+          <Field label="Montant HT de l'avoir (positif)" hint={`maximum ${fmtMoney(montantRestantHT, true)} HT`}>
             <NumInput value={montantPartiel} onChange={setMontantPartiel} />
           </Field>
         </div>
       )}
+      {erreursVisibles.length > 0 && (
+        <div className="pill-note" style={{ marginTop: 10, borderColor: 'var(--danger)', color: 'var(--danger)' }}>
+          {erreursVisibles[0]}
+        </div>
+      )}
       <div className="form-foot">
-        <Btn onClick={onClose}>Annuler</Btn>
-        <Btn kind="primary" onClick={() => void creer()}>
-          Émettre l'avoir ({numeroPrevu})
+        <Btn disabled={emissionEnCours} onClick={fermerSiLibre}>Annuler</Btn>
+        <Btn
+          kind="primary"
+          disabled={emissionEnCours || !date || !controleAvoir.valide}
+          onClick={() => void creer()}
+        >
+          {emissionEnCours ? 'Émission en cours…' : `Émettre l’avoir (${numeroPrevu})`}
         </Btn>
       </div>
     </Modal>
@@ -666,7 +818,7 @@ function HistoriqueModal({
 }: {
   f: Facture
   onClose: () => void
-  onSave: (v: ValeursHistorique) => void
+  onSave: (v: ValeursHistorique) => Promise<ResultatMutation>
 }) {
   const [v, setV] = useState<ValeursHistorique>({
     libelle: f.libelle,
@@ -675,9 +827,60 @@ function HistoriqueModal({
     emission: f.emission,
     delaiJours: f.delaiJours,
   })
+  const [enregistrementEnCours, setEnregistrementEnCours] = useState(false)
+  const verrouEnregistrement = useRef(false)
   const set = (patch: Partial<ValeursHistorique>) => setV((prev) => ({ ...prev, ...patch }))
+  const enregistrer = async () => {
+    if (
+      !v.libelle.trim() ||
+      v.montantHT === null ||
+      !Number.isFinite(v.montantHT) ||
+      v.montantHT <= 0 ||
+      v.tvaPct === null ||
+      !Number.isFinite(v.tvaPct) ||
+      v.tvaPct < 0 ||
+      v.tvaPct > 100 ||
+      !v.emission ||
+      v.delaiJours === null ||
+      !Number.isFinite(v.delaiJours) ||
+      v.delaiJours < 0
+    ) {
+      toast('Indiquer un montant HT positif, une TVA entre 0 et 100 %, une date et un délai positif ou nul.', {
+        tone: 'danger',
+      })
+      return
+    }
+    if (verrouEnregistrement.current) return
+    verrouEnregistrement.current = true
+    setEnregistrementEnCours(true)
+    let terminee = false
+    try {
+      const resultat = await onSave({ ...v, libelle: v.libelle.trim() })
+      if (!resultat.ok) {
+        toast(resultat.erreur || 'Cette facture historique ne peut pas être rapprochée.', {
+          tone: 'danger',
+        })
+        return
+      }
+      terminee = true
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Cette facture historique ne peut pas être rapprochée.', {
+        tone: 'danger',
+      })
+    } finally {
+      if (!terminee) {
+        verrouEnregistrement.current = false
+        setEnregistrementEnCours(false)
+      }
+    }
+  }
   return (
-    <Modal titre={`Rapprocher la facture historique ${f.numero || f.id}`} onClose={onClose}>
+    <Modal
+      titre={`Rapprocher la facture historique ${f.numero || f.id}`}
+      onClose={() => {
+        if (!verrouEnregistrement.current) onClose()
+      }}
+    >
       <p className="muted small" style={{ margin: '0 0 12px' }}>
         Facture migrée, jamais gelée : alignez-la sur le PDF réellement envoyé. Les factures émises par le
         nouveau parcours ne sont, elles, plus modifiables.
@@ -702,16 +905,13 @@ function HistoriqueModal({
         </Field>
       </div>
       <div className="form-foot">
-        <Btn onClick={onClose}>Annuler</Btn>
+        <Btn disabled={enregistrementEnCours} onClick={onClose}>Annuler</Btn>
         <Btn
           kind="primary"
-          onClick={() => {
-            if (!v.libelle.trim() || v.montantHT === null || !v.emission || v.delaiJours === null)
-              return toast('Compléter libellé, montant, date et délai.', { tone: 'danger' })
-            onSave({ ...v, libelle: v.libelle.trim() })
-          }}
+          disabled={enregistrementEnCours}
+          onClick={() => void enregistrer()}
         >
-          Enregistrer
+          {enregistrementEnCours ? 'Enregistrement…' : 'Enregistrer'}
         </Btn>
       </div>
     </Modal>
@@ -813,8 +1013,8 @@ function TransmissionModal({
 function CarteRelances({ state, today }: { state: AppState; today: string }) {
   const { update } = useStore()
   const enRetard = state.factures
-    .filter((f) => f.type !== 'avoir' && retardFacture(f, today) > 0)
-    .sort((a, b) => retardFacture(b, today) - retardFacture(a, today))
+    .filter((f) => f.type !== 'avoir' && retardFacture(state, f, today) > 0)
+    .sort((a, b) => retardFacture(state, b, today) - retardFacture(state, a, today))
 
   // trace la relance quand son brouillon est copié (date + niveau + historique)
   const marquerRelance = (id: string, niveau: number) =>
@@ -840,7 +1040,7 @@ function CarteRelances({ state, today }: { state: AppState; today: string }) {
             head={['N°', 'Projet', 'Libellé', <span key="ttc" style={{ display: 'block', textAlign: 'right' }}>Solde TTC</span>, 'Retard', 'Dernière relance', 'Relance (brouillon)']}
           >
             {enRetard.map((f) => {
-              const retard = retardFacture(f, today)
+              const retard = retardFacture(state, f, today)
               const conseille = niveauConseille(retard)
               return (
                 <tr key={f.id}>
@@ -949,7 +1149,7 @@ export default function Facturation() {
   }
 
   // ----- stats de tête -----
-  const enRetard = state.factures.filter((f) => f.type !== 'avoir' && retardFacture(f, today) > 0)
+  const enRetard = state.factures.filter((f) => f.type !== 'avoir' && retardFacture(state, f, today) > 0)
   const montantRetardTTC = enRetard.reduce((s, f) => s + soldeFacture(state, f), 0)
   const factureCumulHT = state.factures.reduce((s, f) => s + f.montantHT, 0)
   const encaisseCumulTTC = state.paiements.reduce((s, p) => s + p.montant, 0)
@@ -976,7 +1176,7 @@ export default function Facturation() {
         .filter((f) => !filtreProjet || f.projetId === filtreProjet)
         .filter((f) => {
           if (!filtreEtat) return true
-          if (filtreEtat === 'retard') return f.type !== 'avoir' && retardFacture(f, today) > 0
+          if (filtreEtat === 'retard') return f.type !== 'avoir' && retardFacture(state, f, today) > 0
           if (filtreEtat === 'avoir') return f.type === 'avoir'
           if (filtreEtat === 'controler') return !!f.historiqueAControler
           const etat = etatPaiement(state, f)
@@ -1030,74 +1230,242 @@ export default function Facturation() {
     toast('Échéance supprimée.', { undo: () => replace(snap) })
   }
 
-  const emettreDepuisEcheance = (nouvelle: Facture, adresseFacturation: string) => {
-    const echeanceId = nouvelle.id
-    update((d) => {
-      d.factures.push(nouvelle)
-      d.echeancesFacturation = d.echeancesFacturation.filter((e) => e.id !== echeanceId)
-      const pr = d.projets.find((x) => x.id === nouvelle.projetId)
-      if (pr && adresseFacturation.trim()) pr.adresseFacturation = adresseFacturation.trim()
+  const emettreDepuisEcheance = (
+    nouvelle: Facture,
+    adresseFacturation: string,
+    echeanceAttendue: EcheanceFacturation,
+    brouillonAttendu: BrouillonFacture,
+  ): Promise<ResultatMutation> =>
+    new Promise((resolve) => {
+      const echeanceId = nouvelle.id
+      update((d) => {
+        const echeanceCourante = d.echeancesFacturation.find((e) => e.id === echeanceId)
+        if (!echeanceCourante) {
+          resolve({
+            ok: false,
+            erreur: 'Cette échéance a été supprimée ou déjà facturée sur un autre poste.',
+          })
+          return
+        }
+        const empreinteEcheance = (e: EcheanceFacturation) =>
+          JSON.stringify([
+            e.id,
+            e.projetId,
+            e.phase,
+            e.libelle,
+            e.montantHT,
+            e.tauxTVA,
+            e.datePrevue,
+            e.delaiJours,
+            e.situationId ?? null,
+            e.contratLigneId ?? null,
+          ])
+        if (empreinteEcheance(echeanceCourante) !== empreinteEcheance(echeanceAttendue)) {
+          resolve({
+            ok: false,
+            erreur:
+              'Cette échéance a changé pendant la préparation de la facture. Fermez puis rouvrez l’émission pour contrôler les nouvelles valeurs.',
+          })
+          return
+        }
+        const erreur = erreurInsertionFacture(d, nouvelle)
+        if (erreur) {
+          resolve({ ok: false, erreur })
+          return
+        }
+        const projetCourant = d.projets.find((p) => p.id === nouvelle.projetId)
+        const controleCourant = controlerAvantEmission(d, projetCourant, brouillonAttendu)
+        if (controleCourant.bloquants.length > 0) {
+          resolve({ ok: false, erreur: controleCourant.bloquants[0] })
+          return
+        }
+        if (!nouvelle.figee || !nouvelle.numero) {
+          resolve({ ok: false, erreur: 'La copie légale figée de la facture est absente.' })
+          return
+        }
+        const figeeCourante = construireFigee(
+          d,
+          brouillonAttendu,
+          nouvelle.numero,
+          projetCourant?.objetFacture || undefined,
+          echeanceCourante.delaiJours,
+        )
+        const { empreinte: _empreinte, ...figeeCandidate } = nouvelle.figee
+        if (JSON.stringify(figeeCourante) !== JSON.stringify(figeeCandidate)) {
+          resolve({
+            ok: false,
+            erreur:
+              'Les mentions légales, le projet ou les montants ont changé pendant le calcul de l’empreinte. Relancez l’émission.',
+          })
+          return
+        }
+        d.factures.push(nouvelle)
+        d.echeancesFacturation = d.echeancesFacturation.filter((e) => e.id !== echeanceId)
+        const pr = d.projets.find((x) => x.id === nouvelle.projetId)
+        if (pr && adresseFacturation.trim()) pr.adresseFacturation = adresseFacturation.trim()
+        resolve({ ok: true })
+      })
     })
-    fermerEmission()
-    toast(`Facture ${nouvelle.numero} émise et figée — PDF et e-mail dans le menu de la ligne.`, { tone: 'ok' })
-  }
 
-  const enregistrerPaiement = (f: Facture, date: string, montant: number, moyen: string, reference: string) => {
+  const enregistrerPaiement = (
+    f: Facture,
+    date: string,
+    montant: number,
+    moyen: string,
+    reference: string,
+  ): Promise<ResultatMutation> => {
     // paiement construit AVANT la mutation (producteur rejouable)
-    const p = nouveauPaiement(date, montant, [{ factureId: f.id, montant }], reference || undefined, moyen || undefined)
-    update((d) => {
-      d.paiements.push(p)
-      const x = d.factures.find((y) => y.id === f.id)
-      if (!x) return
-      // le statut matérialisé suit le solde — jamais édité ailleurs
-      const solde = soldeFacture(d, x)
-      if (solde <= 0.01) {
-        x.statut = 'encaissee'
-        x.encaissementReel = date
-      }
-      x.evenements = [
-        ...(x.evenements || []),
-        { date, type: 'paiement', detail: `${fmtMoney(montant, true)} TTC${moyen ? ` (${moyen})` : ''}${solde > 0.01 ? ` — solde restant ${fmtMoney(solde, true)}` : ' — facture soldée'}` },
-      ]
+    let p: ReturnType<typeof nouveauPaiement>
+    try {
+      p = nouveauPaiement(
+        state,
+        date,
+        montant,
+        [{ factureId: f.id, montant }],
+        reference || undefined,
+        moyen || undefined,
+      )
+    } catch (e) {
+      return Promise.resolve({
+        ok: false,
+        erreur: e instanceof Error ? e.message : 'Le paiement est invalide.',
+      })
+    }
+    return new Promise((resolve) => {
+      update((d) => {
+        const controle = validerPaiement(d, p.montant, p.affectations)
+        if (!controle.valide) {
+          resolve({ ok: false, erreur: controle.erreurs[0] })
+          return
+        }
+        d.paiements.push(p)
+        const x = d.factures.find((y) => y.id === f.id)
+        if (!x) {
+          // Cette branche est normalement impossible après validerPaiement,
+          // mais évite de journaliser un paiement orphelin si l'état est altéré.
+          d.paiements = d.paiements.filter((paiement) => paiement.id !== p.id)
+          resolve({ ok: false, erreur: `La facture ${f.numero || f.id} est introuvable.` })
+          return
+        }
+        // le statut matérialisé suit le solde — jamais édité ailleurs
+        const solde = soldeFacture(d, x)
+        if (solde <= 0.01) {
+          x.statut = 'encaissee'
+          x.encaissementReel = date
+        }
+        x.evenements = [
+          ...(x.evenements || []),
+          { date, type: 'paiement', detail: `${fmtMoney(montant, true)} TTC${moyen ? ` (${moyen})` : ''}${solde > 0.01 ? ` — solde restant ${fmtMoney(solde, true)}` : ' — facture soldée'}` },
+        ]
+        resolve({ ok: true })
+      })
     })
-    setPaiement(null)
-    toast('Paiement enregistré — le statut découle du solde.', { tone: 'ok' })
   }
 
-  const emettreAvoir = (a: Facture) => {
-    update((d) => {
-      d.factures.push(a)
-      const origine = d.factures.find((y) => y.id === a.factureOrigineId)
-      if (origine) {
+  const emettreAvoir = (a: Facture): Promise<ResultatMutation> =>
+    new Promise((resolve) => {
+      update((d) => {
+        const erreurIdentite = erreurInsertionFacture(d, a)
+        if (erreurIdentite) {
+          resolve({ ok: false, erreur: erreurIdentite })
+          return
+        }
+        const origine = d.factures.find((y) => y.id === a.factureOrigineId)
+        if (!origine) {
+          resolve({ ok: false, erreur: 'La facture d’origine de cet avoir est introuvable.' })
+          return
+        }
+        const montantAvoirHT = Math.abs(a.figee?.totalHT ?? a.montantHT)
+        const controle = validerAvoir(
+          d,
+          origine,
+          montantAvoirHT,
+          a.figee?.lignes || a.lignes,
+          a.figee
+            ? {
+                ht: a.figee.totalHT,
+                tva: a.figee.totalTVA,
+                ttc: a.figee.totalTTC,
+                ventilationTVA: a.figee.ventilationTVA,
+              }
+            : undefined,
+        )
+        if (!controle.valide) {
+          resolve({ ok: false, erreur: controle.erreurs[0] })
+          return
+        }
+        d.factures.push(a)
+        const soldeOrigine = soldeFacture(d, origine)
         origine.evenements = [
           ...(origine.evenements || []),
-          { date: a.emission, type: 'avoir', detail: `Avoir ${a.numero} émis (${fmtMoney(a.montantHT, true)} HT).` },
+          {
+            date: a.emission,
+            type: 'avoir',
+            detail:
+              `Avoir ${a.numero} émis (${fmtMoney(a.montantHT, true)} HT).` +
+              (soldeOrigine <= 0.01 ? ' Créance soldée par avoir, sans encaissement.' : ''),
+          },
         ]
-      }
+        resolve({ ok: true })
+      })
     })
-    setAvoir(null)
-    toast(`Avoir ${a.numero} émis — il référence la facture d'origine.`, { tone: 'ok' })
-  }
 
-  const rapprocherHistorique = (f: Facture, v: ValeursHistorique) => {
-    update((d) => {
-      const x = d.factures.find((y) => y.id === f.id)
-      if (!x || x.figee) return // une pièce gelée ne se modifie jamais
-      x.libelle = v.libelle
-      x.montantHT = v.montantHT!
-      x.tauxTVA = (v.tvaPct ?? 20) / 100
-      x.emission = v.emission!
-      x.delaiJours = v.delaiJours!
-      // réaligne le paiement de reprise (créé par la migration) sur le nouveau TTC
-      const pay = d.paiements.find((p) => p.id === `pay-migr-${x.id}`)
-      if (pay && pay.affectations.length === 1) {
-        const nouveauTTC = Math.round(x.montantHT * (1 + x.tauxTVA) * 100) / 100
-        pay.montant = nouveauTTC
-        pay.affectations[0].montant = nouveauTTC
-      }
+  const rapprocherHistorique = async (
+    f: Facture,
+    v: ValeursHistorique,
+  ): Promise<ResultatMutation> => {
+    const resultat = await new Promise<ResultatMutation>((resolve) => {
+      update((d) => {
+        const x = d.factures.find((y) => y.id === f.id)
+        if (!x) {
+          resolve({ ok: false, erreur: 'Cette facture historique est introuvable.' })
+          return
+        }
+        if (x.figee) {
+          resolve({ ok: false, erreur: 'Une pièce déjà figée ne peut plus être modifiée.' })
+          return
+        }
+        const erreurDependance = erreurRapprochementHistorique(d, x.id)
+        if (erreurDependance) {
+          resolve({ ok: false, erreur: erreurDependance })
+          return
+        }
+        if (
+          v.montantHT === null ||
+          !Number.isFinite(v.montantHT) ||
+          v.montantHT <= 0 ||
+          v.tvaPct === null ||
+          !Number.isFinite(v.tvaPct) ||
+          v.tvaPct < 0 ||
+          v.tvaPct > 100 ||
+          !v.emission ||
+          v.delaiJours === null ||
+          !Number.isFinite(v.delaiJours) ||
+          v.delaiJours < 0
+        ) {
+          resolve({ ok: false, erreur: 'Les montants, la TVA, la date ou le délai sont invalides.' })
+          return
+        }
+        x.libelle = v.libelle
+        x.montantHT = v.montantHT
+        x.tauxTVA = v.tvaPct / 100
+        x.emission = v.emission
+        x.delaiJours = v.delaiJours
+        // réaligne le paiement de reprise (créé par la migration) sur le nouveau TTC
+        const pay = d.paiements.find((p) => p.id === `pay-migr-${x.id}`)
+        if (pay && pay.affectations.length === 1) {
+          const nouveauTTC = Math.round(x.montantHT * (1 + x.tauxTVA) * 100) / 100
+          pay.montant = nouveauTTC
+          pay.affectations[0].montant = nouveauTTC
+        }
+        resolve({ ok: true })
+      })
     })
-    setRapprochement(null)
-    toast('Facture historique rapprochée.', { tone: 'ok' })
+    if (resultat.ok) {
+      setRapprochement(null)
+      toast('Facture historique rapprochée.', { tone: 'ok' })
+    }
+    return resultat
   }
 
   const exporterCII = (f: Facture) => {
@@ -1306,7 +1674,7 @@ export default function Facturation() {
             ]}
           >
             {factures.map((f) => {
-              const retard = f.type !== 'avoir' ? retardFacture(f, today) : 0
+              const retard = f.type !== 'avoir' ? retardFacture(state, f, today) : 0
               const solde = soldeFacture(state, f)
               const origine = f.factureOrigineId ? state.factures.find((x) => x.id === f.factureOrigineId) : undefined
               return (

@@ -301,6 +301,16 @@ export interface LigneFacture {
   phase?: PhaseCode | null
 }
 
+/** Ventilation fiscale figée par taux. Elle devient indispensable lorsqu'un
+ * centime d'arrondi d'un avoir final ne peut pas être retrouvé depuis ses
+ * seules bases HT (notamment après plusieurs avoirs partiels). */
+export interface VentilationTVAFigee {
+  tauxTVA: number
+  baseHT: number
+  montantTVA: number
+  montantTTC: number
+}
+
 /** copie FIGÉE de la facture au moment de l'émission (audit finance F0) :
  *  le PDF se régénère depuis CE bloc, jamais depuis l'état courant —
  *  changer l'adresse du client ne modifie plus une facture historique */
@@ -328,6 +338,8 @@ export interface FactureFigee {
   totalHT: number
   totalTVA: number
   totalTTC: number
+  /** vérité fiscale par taux ; optionnelle pour les anciennes pièces */
+  ventilationTVA?: VentilationTVAFigee[]
   mentionTVA: string
   delaiJours: number
   /** empreinte SHA-256 du bloc figé (audit, unicité) */

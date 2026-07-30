@@ -102,9 +102,13 @@ export interface StatutIngestion {
   configure: boolean
   connecte: boolean
   compteEmail: string
+  workspaceId: string
   dernierScan: string | null
   dernierResultat: string | null
+  /** URI fixe à déclarer dans Google Cloud. */
   urlOauth: string
+  /** Départ OAuth court et signé, délivré à la session agence. */
+  urlConnexion?: string | null
 }
 
 /** statut de l'ingestion serveur (sans aucun secret) */
@@ -118,9 +122,10 @@ export async function lireStatutIngestion(): Promise<StatutIngestion | null> {
 
 /** enregistre les identifiants OAuth côté serveur (table privée) */
 export async function majConfigIngestion(cfg: {
-  clientId: string
-  clientSecret: string
+  clientId?: string
+  clientSecret?: string
   compteEmail: string
+  workspaceId: string
 }): Promise<void> {
   const sb = clientSupabase()
   if (!sb) throw new Error('Espace partagé non connecté.')

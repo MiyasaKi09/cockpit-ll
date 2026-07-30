@@ -8,13 +8,47 @@ import { fold, uid } from './util'
 import { seedState, STATE_VERSION } from './seed'
 import { amorcerFinance } from './amorceFinance'
 import { DEPARTEMENTS_DEFAUT } from './boamp'
-import { connecterSync, demarrerRealtime, pousserEtat, syncActif } from './sync'
+import {
+  changementCibleInterdit,
+  cibleSynchronisation,
+  fusionnerEtatDistant,
+} from './syncState'
+import {
+  effacerRecuperationLocaleRequise,
+  marquerRecuperationLocaleRequise,
+  MESSAGE_RECUPERATION_LOCALE,
+  recuperationLocaleRequise,
+} from './syncSafety'
+import {
+  adopterRevisionDistante,
+  cibleSyncCourante,
+  connecterSync,
+  demarrerRealtime,
+  effacerConflitSync,
+  etatLocalEnAttentePour,
+  marquerEtatLocalEnAttente,
+  pousserEtat,
+  relancerRealtime,
+  signalerConflitSync,
+  signalerRecuperationLocaleRequise,
+  syncActif,
+  syncEtat,
+  tirerEtat,
+  type ResultatPush,
+} from './sync'
 
 const STORAGE_KEY = 'cockpit-ll-v1'
+let erreurPersistanceInitiale: string | null = null
 
 /** migration sans perte : complète les champs apparus depuis la v1 */
 function migrate(parsed: AppState): AppState {
-  const etat: AppState = { ...seedState(), ...parsed, version: STATE_VERSION }
+  const base = seedState()
+  const etat: AppState = {
+    ...base,
+    ...parsed,
+    settings: { ...base.settings, ...(parsed.settings || {}) },
+    version: STATE_VERSION,
+  }
   etat.reunions = Array.isArray(parsed.reunions) ? parsed.reunions : []
   etat.courriers = Array.isArray(parsed.courriers) ? parsed.courriers : []
   etat.tempsHorsProjet = Array.isArray(parsed.tempsHorsProjet) ? parsed.tempsHorsProjet : []
@@ -164,34 +198,75 @@ function amorcerEntreprises(etat: AppState): void {
   }
 }
 
-function load(): AppState {
+function messageErreurPersistance(e: unknown): string {
+  const detail = e instanceof Error ? e.message : String(e)
+  return `Les données n’ont pas pu être enregistrées dans ce navigateur (${detail}). Exportez une sauvegarde JSON avant de fermer l’onglet.`
+}
+
+function persist(state: AppState): string | null {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (raw) {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state))
+    return null
+  } catch (e) {
+    return messageErreurPersistance(e)
+  }
+}
+
+function load(): AppState {
+  let raw: string | null = null
+  try {
+    raw = localStorage.getItem(STORAGE_KEY)
+  } catch (e) {
+    marquerRecuperationLocaleRequise()
+    erreurPersistanceInitiale = messageErreurPersistance(e)
+  }
+
+  if (raw !== null) {
+    try {
       const parsed = JSON.parse(raw) as AppState
-      if (parsed && parsed.version === STATE_VERSION) return parsed
       if (parsed && typeof parsed === 'object' && Array.isArray(parsed.projets)) {
+        // Même à version courante, normaliser les collections manquantes :
+        // une sauvegarde partielle ne doit pas casser l'interface.
+        const migre = migrate(parsed)
         // persisté tout de suite : l'amorçage (v14) crée des identifiants —
         // sans écriture, chaque rechargement en régénérerait de nouveaux
-        const migre = migrate(parsed)
-        persist(migre)
+        const erreur = persist(migre)
+        if (erreur) erreurPersistanceInitiale = erreur
         return migre
       }
+      throw new Error('format de sauvegarde invalide')
+    } catch (e) {
+      marquerRecuperationLocaleRequise()
+      const cleSecours = `${STORAGE_KEY}-corrompu-${Date.now()}`
+      try {
+        localStorage.setItem(cleSecours, raw)
+        // La copie datée devient la preuve à conserver. Retirer ensuite la
+        // valeur primaire illisible évite de dupliquer le même gros document
+        // à chaque rechargement ; le verrou de récupération reste persistant.
+        try {
+          localStorage.removeItem(STORAGE_KEY)
+        } catch {
+          /* la copie de secours existe déjà ; le verrou empêche tout envoi */
+        }
+        erreurPersistanceInitiale =
+          `La sauvegarde locale était illisible et a été conservée sous « ${cleSecours} ». Les données d’exemple sont affichées : restaurez un export JSON avant toute saisie.`
+      } catch {
+        erreurPersistanceInitiale =
+          `La sauvegarde locale est illisible (${e instanceof Error ? e.message : String(e)}) et sa copie de secours a échoué. N’effectuez aucune saisie avant d’avoir restauré un export JSON.`
+      }
     }
-  } catch {
-    // stockage corrompu → seed
   }
   const frais = seedState()
   amorcerEntreprises(frais)
   return frais
 }
 
-function persist(state: AppState) {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state))
-  } catch {
-    // quota dépassé : on continue en mémoire
-  }
+type ConfigSync = NonNullable<AppState['settings']['sync']>
+
+interface ResultatSynchronisation {
+  ok: boolean
+  action?: 'authentification' | 'recupere' | 'initialise' | 'pousse'
+  erreur?: string
 }
 
 interface StoreCtx {
@@ -199,114 +274,482 @@ interface StoreCtx {
   /** mutation via producteur : update(d => { d.projets.push(...) }) */
   update: (fn: (draft: AppState) => void) => void
   /** remplacement complet (import JSON, réinitialisation) */
-  replace: (next: AppState) => void
+  replace: (
+    next: AppState,
+    options?: { localSeulement?: boolean; restaurationSure?: boolean },
+  ) => boolean
+  /** erreur durable visible tant qu'une écriture locale n'a pas réussi */
+  persistenceError: string | null
+  clearPersistenceError: () => void
+  /** erreur de connexion, de lecture ou de conflit de synchronisation */
+  syncError: string | null
+  /** connexion + réconciliation atomique avec les refs internes du store */
+  synchroniserMaintenant: (
+    config: ConfigSync,
+    options?: { recupererConflit?: boolean },
+  ) => Promise<ResultatSynchronisation>
+  /** sérialise un envoi manuel avec les envois automatiques */
+  pousserMaintenant: () => Promise<ResultatPush>
 }
 
 const Ctx = createContext<StoreCtx | null>(null)
 
+interface EnvoiEnAttente {
+  state: AppState
+  cible: string
+}
+
 export function StoreProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AppState>(load)
+  const [persistenceError, setPersistenceError] = useState<string | null>(
+    () => erreurPersistanceInitiale,
+  )
+  const [syncError, setSyncError] = useState<string | null>(() =>
+    recuperationLocaleRequise() ? MESSAGE_RECUPERATION_LOCALE : null,
+  )
+  // --- Synchronisation Supabase (opt-in) — branchée DERRIÈRE la persistance ---
+  const appliquerDistant = useRef(false) // anti-écho B : une écriture distante ne se re-pousse pas
+  const etatLocalSeulement = useRef<AppState | null>(null) // config machine : persistée, jamais envoyée
+  const refPush = useRef<AppState | null>(null) // dernière version confirmée distante
+  const refEtat = useRef(state) // dernier état local, y compris avant le prochain rendu
+  const pushEnCours = useRef<Promise<ResultatPush> | null>(null)
+  const ciblePushEnCours = useRef<string | null>(null)
+  const pushEnAttente = useRef<EnvoiEnAttente | null>(null)
+  refEtat.current = state
 
   const update = useCallback((fn: (draft: AppState) => void) => {
     setState((prev) => {
       const draft = structuredClone(prev)
       fn(draft)
-      persist(draft)
+      refEtat.current = draft
+      marquerEtatLocalEnAttente(draft.settings.sync)
+      const erreur = persist(draft)
+      queueMicrotask(() => setPersistenceError(erreur))
       return draft
     })
   }, [])
 
-  const replace = useCallback((next: AppState) => {
-    // une sauvegarde d'une version antérieure passe par la migration
-    const withVersion = next.version === STATE_VERSION ? next : migrate(next)
-    persist(withVersion)
+  const replace = useCallback(
+    (
+      next: AppState,
+      options?: { localSeulement?: boolean; restaurationSure?: boolean },
+    ) => {
+      // Toute source (ancienne, distante ou importée) passe par la normalisation.
+      const withVersion = migrate(structuredClone(next))
+      const precedent = refEtat.current
+      const cibleAvant = cibleSynchronisation(precedent.settings.sync)
+      const cibleApres = cibleSynchronisation(withVersion.settings.sync)
+      const modificationsEnAttente =
+        !recuperationLocaleRequise() &&
+        (etatLocalEnAttentePour(precedent.settings.sync) ||
+          pushEnCours.current !== null ||
+          pushEnAttente.current !== null ||
+          (refPush.current !== null && precedent !== refPush.current))
+      if (
+        changementCibleInterdit(cibleAvant, cibleApres, modificationsEnAttente)
+      ) {
+        setSyncError(
+          'Synchronisez ou exportez les modifications en attente avant de changer de projet Supabase.',
+        )
+        return false
+      }
+
+      refEtat.current = withVersion
+      if (options?.localSeulement) etatLocalSeulement.current = withVersion
+      else marquerEtatLocalEnAttente(withVersion.settings.sync)
+      const erreur = persist(withVersion)
+      setPersistenceError(erreur)
+      setState(withVersion)
+
+      if (options?.restaurationSure && !erreur) {
+        if (effacerRecuperationLocaleRequise()) {
+          effacerConflitSync()
+          setSyncError(null)
+        } else {
+          setSyncError(MESSAGE_RECUPERATION_LOCALE)
+        }
+      }
+      return erreur === null
+    },
+    [],
+  )
+
+  const appliquerEtatDistant = useCallback((next: AppState): string | null => {
+    const withVersion = migrate(structuredClone(next))
+    appliquerDistant.current = true
+    refPush.current = withVersion
+    refEtat.current = withVersion
+    const erreur = persist(withVersion)
+    setPersistenceError(erreur)
     setState(withVersion)
+    return erreur
   }, [])
 
-  // --- Synchronisation Supabase (opt-in) — branchée DERRIÈRE la persistance ---
-  const appliquerDistant = useRef(false) // anti-écho B : une écriture distante ne se re-pousse pas
-  const refPush = useRef<AppState | null>(null) // baseline + garde StrictMode
-  const refEtat = useRef(state) // dernier état local (fusion des réceptions distantes)
-  refEtat.current = state
   const sync = state.settings.sync
+
+  const pousserEnSerie = useCallback(
+    (prochain: AppState, cible: string | null): Promise<ResultatPush> => {
+      if (recuperationLocaleRequise()) {
+        const erreur = signalerRecuperationLocaleRequise()
+        setSyncError(erreur)
+        return Promise.resolve({ ok: false, conflit: true, erreur })
+      }
+      if (!cible || cibleSyncCourante() !== cible) {
+        const erreur =
+          'La cible de synchronisation a changé : cet envoi local a été annulé.'
+        setSyncError(erreur)
+        return Promise.resolve({ ok: false, erreur })
+      }
+      if (pushEnCours.current && ciblePushEnCours.current !== cible) {
+        const erreur =
+          'Un envoi destiné à un autre espace est encore en cours. Aucun état n’a été transféré.'
+        setSyncError(erreur)
+        return Promise.resolve({ ok: false, erreur })
+      }
+      if (pushEnAttente.current && pushEnAttente.current.cible !== cible) {
+        const erreur =
+          'Une modification appartient à un autre espace Supabase. Synchronisez-la avant de changer de cible.'
+        setSyncError(erreur)
+        return Promise.resolve({ ok: false, erreur })
+      }
+
+      pushEnAttente.current = { state: prochain, cible }
+      marquerEtatLocalEnAttente(prochain.settings.sync)
+      if (!pushEnCours.current) {
+        const cibleExecution = cible
+        ciblePushEnCours.current = cibleExecution
+        const execution = (async (): Promise<ResultatPush> => {
+          let dernier: ResultatPush = { ok: false, erreur: 'Aucun état à synchroniser.' }
+          try {
+            while (pushEnAttente.current) {
+              const courant = pushEnAttente.current
+              if (courant.cible !== cibleExecution) {
+                const erreur =
+                  'La file de synchronisation contient une cible différente ; envoi annulé.'
+                setSyncError(erreur)
+                return { ok: false, erreur }
+              }
+              pushEnAttente.current = null
+              dernier = await pousserEtat(courant.state, cibleExecution)
+              if (!dernier.ok) {
+                // Ne rattache jamais le nouvel état à l'ancienne cible après un changement.
+                if (
+                  cibleSynchronisation(refEtat.current.settings.sync) === cibleExecution
+                ) {
+                  pushEnAttente.current = {
+                    state: refEtat.current,
+                    cible: cibleExecution,
+                  }
+                  marquerEtatLocalEnAttente(refEtat.current.settings.sync)
+                }
+                setSyncError(dernier.erreur || 'Synchronisation impossible.')
+                return dernier
+              }
+              refPush.current = courant.state
+              // Une saisie peut avoir eu lieu pendant le await, avant le debounce.
+              if (!pushEnAttente.current && refEtat.current !== courant.state) {
+                const cibleCourante = cibleSynchronisation(refEtat.current.settings.sync)
+                if (cibleCourante !== cibleExecution) {
+                  const erreur =
+                    'La cible a changé pendant l’envoi ; le nouvel état reste local.'
+                  setSyncError(erreur)
+                  return { ok: false, erreur }
+                }
+                pushEnAttente.current = {
+                  state: refEtat.current,
+                  cible: cibleExecution,
+                }
+              }
+            }
+            if (
+              cibleSyncCourante() === cibleExecution &&
+              refPush.current === refEtat.current &&
+              dernier.ok
+            ) {
+              adopterRevisionDistante(dernier.revision ?? null, syncEtat().derniereSync)
+              setSyncError(null)
+            } else {
+              marquerEtatLocalEnAttente(refEtat.current.settings.sync)
+            }
+            return dernier
+          } catch (e) {
+            const erreur = e instanceof Error ? e.message : String(e)
+            if (cibleSynchronisation(refEtat.current.settings.sync) === cibleExecution) {
+              pushEnAttente.current = {
+                state: refEtat.current,
+                cible: cibleExecution,
+              }
+              marquerEtatLocalEnAttente(refEtat.current.settings.sync)
+            }
+            setSyncError(erreur)
+            return { ok: false, erreur }
+          }
+        })()
+        pushEnCours.current = execution
+        void execution.finally(() => {
+          if (pushEnCours.current === execution) {
+            pushEnCours.current = null
+            ciblePushEnCours.current = null
+          }
+        })
+      }
+      return pushEnCours.current
+    },
+    [],
+  )
+
+  const pousserMaintenant = useCallback(async (): Promise<ResultatPush> => {
+    if (!syncActif()) {
+      const erreur = 'Aucune session Supabase active.'
+      setSyncError(erreur)
+      return { ok: false, erreur }
+    }
+    const cible = cibleSynchronisation(refEtat.current.settings.sync)
+    return pousserEnSerie(refEtat.current, cible)
+  }, [pousserEnSerie])
+
+  const synchroniserMaintenant = useCallback(
+    async (
+      config: ConfigSync,
+      options?: { recupererConflit?: boolean },
+    ): Promise<ResultatSynchronisation> => {
+      try {
+        const cible = cibleSynchronisation(config)
+        if (!cible)
+          return { ok: false, erreur: 'La configuration Supabase est incomplète.' }
+        await connecterSync(config.url, config.anonKey, config.workspaceId)
+        if (!syncActif()) return { ok: false, action: 'authentification' }
+        if (cibleSyncCourante() !== cible) {
+          const erreur =
+            'La cible Supabase a changé pendant la synchronisation ; aucun état n’a été transféré.'
+          setSyncError(erreur)
+          return { ok: false, erreur }
+        }
+        const terminer = (resultat: ResultatSynchronisation) => {
+          relancerRealtime()
+          return resultat
+        }
+        if (recuperationLocaleRequise() && !options?.recupererConflit) {
+          const erreur = signalerRecuperationLocaleRequise()
+          setSyncError(erreur)
+          return terminer({ ok: false, erreur })
+        }
+        if (syncEtat().conflit && !options?.recupererConflit) {
+          const erreur = signalerConflitSync()
+          setSyncError(erreur)
+          return terminer({ ok: false, erreur })
+        }
+
+        const baseline = refEtat.current
+        if (options?.recupererConflit) {
+          const remote = await tirerEtat(false)
+          if (refEtat.current !== baseline) {
+            const erreur = signalerConflitSync()
+            setSyncError(erreur)
+            return terminer({ ok: false, erreur })
+          }
+          if (!remote)
+            return terminer({
+              ok: false,
+              erreur: 'L’espace partagé est vide ou inaccessible.',
+            })
+          const erreurPersistance = appliquerEtatDistant(
+            fusionnerEtatDistant(remote.data, baseline),
+          )
+          if (erreurPersistance) {
+            const erreur =
+              'La version partagée a été lue mais ne peut pas être sécurisée localement. Aucun verrou de récupération n’a été levé.'
+            setSyncError(erreur)
+            return terminer({ ok: false, erreur })
+          }
+          if (
+            recuperationLocaleRequise() &&
+            !effacerRecuperationLocaleRequise()
+          ) {
+            setSyncError(MESSAGE_RECUPERATION_LOCALE)
+            return terminer({ ok: false, erreur: MESSAGE_RECUPERATION_LOCALE })
+          }
+          effacerConflitSync()
+          adopterRevisionDistante(remote.revision, remote.updated_at)
+          setSyncError(null)
+          return terminer({ ok: true, action: 'recupere' })
+        }
+
+        // Après une coupure/recharge, le marqueur persistant impose un CAS local
+        // avant tout pull : une saisie hors-ligne ne peut donc pas être écrasée.
+        if (syncEtat().localEnAttente) {
+          const resultat = await pousserEnSerie(baseline, cible)
+          return terminer(
+            resultat.ok
+              ? { ok: true, action: 'pousse' }
+              : { ok: false, erreur: resultat.erreur },
+          )
+        }
+
+        const remote = await tirerEtat(false)
+        // Protège une saisie faite pendant l'aller-retour réseau du pull initial.
+        if (refEtat.current !== baseline) {
+          const erreur = signalerConflitSync()
+          setSyncError(erreur)
+          return terminer({ ok: false, erreur })
+        }
+        if (remote) {
+          const erreurPersistance = appliquerEtatDistant(
+            fusionnerEtatDistant(remote.data, baseline),
+          )
+          if (erreurPersistance) {
+            setSyncError(erreurPersistance)
+            return terminer({ ok: false, erreur: erreurPersistance })
+          }
+          adopterRevisionDistante(remote.revision, remote.updated_at)
+          setSyncError(null)
+          return terminer({ ok: true, action: 'recupere' })
+        }
+
+        adopterRevisionDistante(null)
+        const resultat = await pousserEnSerie(baseline, cible)
+        return terminer(
+          resultat.ok
+            ? { ok: true, action: 'initialise' }
+            : { ok: false, erreur: resultat.erreur },
+        )
+      } catch (e) {
+        const erreur = e instanceof Error ? e.message : String(e)
+        setSyncError(erreur)
+        relancerRealtime()
+        return { ok: false, erreur }
+      }
+    },
+    [appliquerEtatDistant, pousserEnSerie],
+  )
 
   // (a) connexion + temps réel. Deps PRIMITIVES : ne se relance qu'au changement de config.
   useEffect(() => {
     if (!sync?.url || !sync.anonKey || !sync.workspaceId) return
+    refPush.current = null
+    pushEnAttente.current = null
     let vivant = true
     let arreter: (() => void) | undefined
     void (async () => {
-      try {
-        await connecterSync(sync.url, sync.anonKey, sync.workspaceId)
-        if (!vivant) return
-        arreter = demarrerRealtime((next) => {
-          appliquerDistant.current = true
-          // un poste pas encore à jour envoie un document qui ignore les
-          // collections récentes : on garde alors les données locales au lieu
-          // de les effacer (schéma additif — v10 → v11 : lotsDce, tachesChantier)
-          const distant = { ...next }
-          const local = refEtat.current
-          if (!Array.isArray(distant.lotsDce)) distant.lotsDce = local.lotsDce
-          if (!Array.isArray(distant.tachesChantier)) distant.tachesChantier = local.tachesChantier
-          // v11 → v12 : registre documentaire, entreprises, corpus renommé
-          if (!Array.isArray(distant.corpusDocuments)) distant.corpusDocuments = local.corpusDocuments
-          if (!Array.isArray(distant.registreDocuments)) distant.registreDocuments = local.registreDocuments
-          if (!Array.isArray(distant.entreprises)) distant.entreprises = local.entreprises
-          // v12 → v13 : organisations (CRM acheteurs)
-          if (!Array.isArray(distant.organisations)) distant.organisations = local.organisations
-          // v13 → v14 : finance (échéances de facturation, paiements, contrats)
-          if (!Array.isArray(distant.echeancesFacturation)) distant.echeancesFacturation = local.echeancesFacturation
-          if (!Array.isArray(distant.paiements)) distant.paiements = local.paiements
-          if (!Array.isArray(distant.contrats)) distant.contrats = local.contrats
-          // v14 → v15 : achats & frais, banque, pont comptable
-          if (!Array.isArray(distant.facturesAchat)) distant.facturesAchat = local.facturesAchat
-          if (!Array.isArray(distant.notesFrais)) distant.notesFrais = local.notesFrais
-          if (!Array.isArray(distant.attendusFinanciers)) distant.attendusFinanciers = local.attendusFinanciers
-          if (!Array.isArray(distant.transactionsBancaires)) distant.transactionsBancaires = local.transactionsBancaires
-          if (!Array.isArray(distant.importsBancaires)) distant.importsBancaires = local.importsBancaires
-          if (!Array.isArray(distant.lotsComptables)) distant.lotsComptables = local.lotsComptables
-          // v15 → v16 : finance F6-F10 (pilotage unique) — un poste plus ancien
-          // qui n'a pas ces clés ne doit pas effacer les collections locales
-          if (!Array.isArray(distant.revisionsResteAFaire)) distant.revisionsResteAFaire = local.revisionsResteAFaire
-          if (!Array.isArray(distant.pistesAvenant)) distant.pistesAvenant = local.pistesAvenant
-          if (!Array.isArray(distant.decisionsDirection)) distant.decisionsDirection = local.decisionsDirection
-          if (!Array.isArray(distant.simulations)) distant.simulations = local.simulations
-          if (!Array.isArray(distant.connecteurs)) distant.connecteurs = local.connecteurs
-          // re-fusionne la config machine-locale (jamais synchronisée)
-          replace({ ...distant, settings: { ...distant.settings, sync } })
-        })
-      } catch {
-        // mauvaise config / hors-ligne → mode localStorage pur (jamais bloquant)
-      }
+      const resultat = await synchroniserMaintenant(sync)
+      if (!vivant) return
+      if (!resultat.ok && resultat.action !== 'authentification')
+        setSyncError(resultat.erreur || 'Synchronisation impossible.')
+      arreter = demarrerRealtime(
+        (next) => {
+          if (recuperationLocaleRequise()) {
+            setSyncError(signalerRecuperationLocaleRequise())
+            return false
+          }
+          if (syncEtat().conflit) {
+            setSyncError(signalerConflitSync())
+            return false
+          }
+          const changementsLocaux =
+            pushEnCours.current !== null ||
+            syncEtat().localEnAttente ||
+            (refPush.current !== null && refEtat.current !== refPush.current)
+          if (changementsLocaux) {
+            setSyncError(signalerConflitSync())
+            return false
+          }
+          const fusionne = fusionnerEtatDistant(next, refEtat.current)
+          const erreurPersistance = appliquerEtatDistant(fusionne)
+          if (erreurPersistance) {
+            setSyncError(erreurPersistance)
+            return false
+          }
+          setSyncError(null)
+          return true
+        },
+        (erreur) => {
+          if (!vivant) return
+          if (erreur) setSyncError(erreur)
+          else if (!syncEtat().conflit) setSyncError(null)
+        },
+      )
     })()
     return () => {
       vivant = false
       arreter?.()
     }
-  }, [sync?.url, sync?.anonKey, sync?.workspaceId, replace])
+  }, [
+    sync?.url,
+    sync?.anonKey,
+    sync?.workspaceId,
+    appliquerEtatDistant,
+    synchroniserMaintenant,
+  ])
 
   // (b) push débouncé de l'état local vers l'espace partagé
   useEffect(() => {
     if (!syncActif()) return
+    if (
+      etatLocalSeulement.current === state &&
+      !syncEtat().localEnAttente
+    ) {
+      etatLocalSeulement.current = null
+      if (refPush.current !== null) refPush.current = state
+      return
+    }
+    etatLocalSeulement.current = null
     if (appliquerDistant.current) {
       // ce changement vient d'une réception distante → ne pas le renvoyer
       appliquerDistant.current = false
-      refPush.current = state
       return
     }
-    if (refPush.current === null || refPush.current === state) {
-      // première activation ou re-montage StrictMode (même référence d'état)
-      refPush.current = state
-      return
-    }
+    if (refPush.current === null || refPush.current === state) return
+    const cible = cibleSynchronisation(state.settings.sync)
+    marquerEtatLocalEnAttente(state.settings.sync)
     const id = setTimeout(() => {
-      refPush.current = state
-      void pousserEtat(state)
+      void pousserEnSerie(state, cible)
     }, 700)
     return () => clearTimeout(id)
-  }, [state])
+  }, [state, pousserEnSerie])
 
-  const value = useMemo(() => ({ state, update, replace }), [state, update, replace])
+  // Un échec conserve le snapshot ; le retour réseau déclenche une reprise
+  // même si aucune nouvelle saisie n'a eu lieu entre-temps.
+  useEffect(() => {
+    const reprendre = () => {
+      if (
+        syncActif() &&
+        !syncEtat().conflit &&
+        !recuperationLocaleRequise() &&
+        refPush.current !== null &&
+        (syncEtat().localEnAttente || refEtat.current !== refPush.current)
+      )
+        void pousserEnSerie(
+          refEtat.current,
+          cibleSynchronisation(refEtat.current.settings.sync),
+        )
+    }
+    window.addEventListener('online', reprendre)
+    return () => window.removeEventListener('online', reprendre)
+  }, [pousserEnSerie])
+
+  const clearPersistenceError = useCallback(() => setPersistenceError(null), [])
+  const value = useMemo(
+    () => ({
+      state,
+      update,
+      replace,
+      persistenceError,
+      clearPersistenceError,
+      syncError,
+      synchroniserMaintenant,
+      pousserMaintenant,
+    }),
+    [
+      state,
+      update,
+      replace,
+      persistenceError,
+      clearPersistenceError,
+      syncError,
+      synchroniserMaintenant,
+      pousserMaintenant,
+    ],
+  )
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
 }
 

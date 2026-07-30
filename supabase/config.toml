@@ -1,0 +1,21 @@
+# Les callbacks et tâches planifiées arrivent sans JWT Supabase :
+# chaque fonction ci-dessous applique donc sa propre authentification
+# (state OAuth signé ou x-cron-secret).
+[functions.gmail-oauth]
+verify_jwt = false
+
+[functions.gmail-ingestion]
+verify_jwt = false
+
+[functions.veille-collecte]
+verify_jwt = false
+
+[functions.veille-mails]
+verify_jwt = false
+
+[functions.veille-enrichir]
+verify_jwt = false
+
+# Configuration pilotée depuis le Cockpit : JWT utilisateur obligatoire.
+[functions.ingestion-config]
+verify_jwt = true

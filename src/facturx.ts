@@ -49,18 +49,31 @@ export function genererCII(f: Facture): string {
   const totalTTC = Math.round(signe * fg.totalTTC * 100) / 100
   // ventilation de TVA par taux (BG-23)
   const parTaux = new Map<number, { base: number; tva: number }>()
-  for (const l of lignes) {
-    const cur = parTaux.get(l.tauxTVA) || { base: 0, tva: 0 }
-    cur.base = Math.round((cur.base + l.totalHT) * 100) / 100
-    parTaux.set(l.tauxTVA, cur)
+  if (fg.ventilationTVA?.length) {
+    for (const ventilation of fg.ventilationTVA) {
+      const courant = parTaux.get(ventilation.tauxTVA) || { base: 0, tva: 0 }
+      courant.base = Math.round((courant.base + signe * ventilation.baseHT) * 100) / 100
+      courant.tva = Math.round((courant.tva + signe * ventilation.montantTVA) * 100) / 100
+      parTaux.set(ventilation.tauxTVA, courant)
+    }
+  } else {
+    for (const l of lignes) {
+      const cur = parTaux.get(l.tauxTVA) || { base: 0, tva: 0 }
+      cur.base = Math.round((cur.base + l.totalHT) * 100) / 100
+      parTaux.set(l.tauxTVA, cur)
+    }
+    // La TVA par taux se déduit de la base ; l'écart d'arrondi global
+    // éventuel est porté par le taux dont la base est la plus importante.
+    for (const [taux, valeur] of parTaux) {
+      valeur.tva = Math.round(valeur.base * taux * 100) / 100
+    }
+    const principal = [...parTaux.values()].sort((a, b) => b.base - a.base)[0]
+    if (principal) {
+      const tvaVentilee = [...parTaux.values()].reduce((somme, valeur) => somme + valeur.tva, 0)
+      principal.tva = Math.round((principal.tva + totalTVA - tvaVentilee) * 100) / 100
+    }
   }
-  // la TVA par taux se déduit de la base ; l'écart d'arrondi va sur le taux principal
-  let tvaCumul = 0
   const tauxTries = [...parTaux.entries()].sort((a, b) => b[1].base - a[1].base)
-  tauxTries.forEach(([taux, v], i) => {
-    v.tva = i === tauxTries.length - 1 ? Math.round((totalTVA - tvaCumul) * 100) / 100 : Math.round(v.base * taux * 100) / 100
-    tvaCumul = Math.round((tvaCumul + v.tva) * 100) / 100
-  })
 
   const sirenVendeur = siren(fg.agence.siret)
   const sirenClient = siren(fg.clientSiret)

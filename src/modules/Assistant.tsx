@@ -7,8 +7,8 @@
 //   - la clé API vit sur le serveur (api/assistant.js), jamais ici ;
 //   - l'assistant ne répond QU'À PARTIR des documents fournis ;
 //   - tout ce qui sort est un BROUILLON que l'architecte relit ;
-//   - corpus : Légifrance (Licence Ouverte, source + version notées),
-//     JAMAIS de texte AFNOR / CSTB (DTU, NF, Eurocodes) — protégés.
+//   - les documents privés (DTU, NF, Eurocodes achetés) restent locaux
+//     et ne sont jamais transmis au fournisseur IA.
 // ============================================================
 
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -55,9 +55,9 @@ export function AssistantPage() {
     >
       {dispo === false && (
         <div className="pill-note" style={{ marginBottom: 12, borderColor: 'var(--warn)' }}>
-          Assistant indisponible ici. Il fonctionne sur le site déployé (Vercel) avec la variable
-          d’environnement <span className="mono">ANTHROPIC_API_KEY</span> — la clé ne passe jamais
-          par le navigateur. Vous pouvez déjà préparer le corpus dans l’onglet dédié.
+          Assistant indisponible ici. Il exige une session Supabase autorisée et la configuration
+          serveur Vercel ; la clé Anthropic ne passe jamais par le navigateur. Reliez ce poste dans
+          Paramètres → Branchements, puis rechargez cette page. Vous pouvez déjà préparer le corpus.
         </div>
       )}
       <Tabs tabs={ONGLETS} actif={actif} onSelect={(id) => navigate(`/assistant/${id}`)} />
@@ -125,7 +125,13 @@ function themeDoc(d: DocumentCorpus): string {
 
 function OngletQuestion({ dispo }: { dispo: boolean }) {
   const { state } = useStore()
-  const reglementaires = state.corpusDocuments.filter((d) => d.type === 'reglementaire')
+  const reglementaires = useMemo(
+    () =>
+      state.corpusDocuments.filter(
+        (document) => document.type === 'reglementaire' && !document.prive,
+      ),
+    [state.corpusDocuments],
+  )
   // rien de coché par défaut : on ne paie (et n'envoie) que les textes utiles à la question
   const [coches, setCoches] = useState<Set<string>>(() => new Set())
   /** thèmes dépliés (le détail document par document reste accessible) */
@@ -144,9 +150,26 @@ function OngletQuestion({ dispo }: { dispo: boolean }) {
   const [question, setQuestion] = useState('')
   const [difficile, setDifficile] = useState(false)
   const [enCours, setEnCours] = useState(false)
-  const [reponse, setReponse] = useState<{ reponse: string; modele?: string } | null>(null)
+  const [reponse, setReponse] = useState<{
+    reponse: string
+    modele?: string
+    sources: string[]
+  } | null>(null)
+  const documentsSelectionnes = useMemo(
+    () => reglementaires.filter((document) => coches.has(document.id)),
+    [coches, reglementaires],
+  )
+  const poidsSelection = useMemo(
+    () => documentsSelectionnes.reduce((total, document) => total + document.texte.length, 0),
+    [documentsSelectionnes],
+  )
+  const selectionTropGrande =
+    documentsSelectionnes.length > 16 ||
+    poidsSelection > 650_000 ||
+    documentsSelectionnes.some((document) => document.texte.length > 120_000)
 
   const basculer = (id: string) => {
+    setReponse(null)
     setCoches((prev) => {
       const s = new Set(prev)
       if (s.has(id)) s.delete(id)
@@ -156,11 +179,19 @@ function OngletQuestion({ dispo }: { dispo: boolean }) {
   }
 
   const poser = async () => {
-    const docs: DocPourAssistant[] = reglementaires
-      .filter((d) => coches.has(d.id))
-      .map((d) => ({ titre: d.titre, source: d.source, texte: d.texte }))
+    const docs: DocPourAssistant[] = documentsSelectionnes.map((document) => ({
+      titre: document.titre,
+      source: document.source,
+      texte: document.texte,
+    }))
     if (docs.length === 0) {
       toast('Cochez au moins un texte du corpus — l’assistant ne répond qu’à partir de sources.', { tone: 'warn' })
+      return
+    }
+    if (selectionTropGrande) {
+      toast('Sélection trop volumineuse : réduisez le nombre ou la taille des textes.', {
+        tone: 'warn',
+      })
       return
     }
     setEnCours(true)
@@ -172,7 +203,7 @@ function OngletQuestion({ dispo }: { dispo: boolean }) {
         documents: docs,
         niveau: difficile ? 'difficile' : 'standard',
       })
-      setReponse(r)
+      setReponse({ ...r, sources: docs.map((document) => document.titre) })
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Erreur inattendue.', { tone: 'danger' })
     } finally {
@@ -216,10 +247,12 @@ function OngletQuestion({ dispo }: { dispo: boolean }) {
                     <input
                       type="checkbox"
                       checked={tout}
+                      disabled={enCours}
                       ref={(el) => {
                         if (el) el.indeterminate = nCoches > 0 && !tout
                       }}
                       onChange={() => {
+                        setReponse(null)
                         setCoches((prev) => {
                           const s = new Set(prev)
                           if (tout) docs.forEach((d) => s.delete(d.id))
@@ -255,7 +288,12 @@ function OngletQuestion({ dispo }: { dispo: boolean }) {
                   <div style={{ display: 'grid', gap: 5, margin: '6px 0 2px 26px' }}>
                     {docs.map((d) => (
                       <label key={d.id} style={{ display: 'flex', alignItems: 'baseline', gap: 8, cursor: 'pointer' }}>
-                        <input type="checkbox" checked={coches.has(d.id)} onChange={() => basculer(d.id)} />
+                        <input
+                          type="checkbox"
+                          checked={coches.has(d.id)}
+                          onChange={() => basculer(d.id)}
+                          disabled={enCours}
+                        />
                         <span className="small">
                           {d.titre} <span className="muted">({Math.max(1, Math.round(d.texte.length / 1000))} k)</span>
                         </span>
@@ -268,11 +306,18 @@ function OngletQuestion({ dispo }: { dispo: boolean }) {
           })}
         </div>
         {(() => {
-          const poids = reglementaires.filter((d) => coches.has(d.id)).reduce((s, d) => s + d.texte.length, 0)
-          if (poids <= 400_000) return null
+          if (selectionTropGrande) {
+            return (
+              <div className="pill-note" style={{ marginBottom: 10, borderColor: 'var(--danger)' }}>
+                Sélection refusée : 16 documents, 650 k caractères au total et 120 k par document
+                au maximum. Réduisez le corpus avant l’envoi.
+              </div>
+            )
+          }
+          if (poidsSelection <= 400_000) return null
           return (
             <div className="pill-note" style={{ marginBottom: 10, borderColor: 'var(--warn)' }}>
-              Sélection très volumineuse ({Math.round(poids / 1000)} k caractères) — l’assistant
+              Sélection très volumineuse ({Math.round(poidsSelection / 1000)} k caractères) — l’assistant
               risque de refuser ou de coûter cher. Gardez les textes du thème de la question.
             </div>
           )
@@ -280,22 +325,43 @@ function OngletQuestion({ dispo }: { dispo: boolean }) {
         <Field label="Votre question">
           <TextArea
             value={question}
-            onChange={setQuestion}
+            onChange={(texte) => {
+              setQuestion(texte)
+              setReponse(null)
+            }}
             rows={3}
             placeholder="Ex. : quel est le délai de paiement maximal d’un acompte pour un marché public d’une commune ?"
+            disabled={enCours}
           />
         </Field>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-          <Btn kind="primary" onClick={() => void poser()} disabled={!dispo || enCours || !question.trim()}>
+          <Btn
+            kind="primary"
+            onClick={() => void poser()}
+            disabled={!dispo || enCours || !question.trim() || selectionTropGrande}
+          >
             {enCours ? 'Recherche…' : 'Poser la question'}
           </Btn>
           <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
-            <input type="checkbox" checked={difficile} onChange={(e) => setDifficile(e.target.checked)} />
+            <input
+              type="checkbox"
+              checked={difficile}
+              onChange={(e) => {
+                setDifficile(e.target.checked)
+                setReponse(null)
+              }}
+              disabled={enCours}
+            />
             <span className="muted">Question difficile (modèle renforcé, plus cher)</span>
           </label>
         </div>
       </Card>
-      {reponse && <BlocReponse reponse={reponse.reponse} modele={reponse.modele} />}
+      {reponse && (
+        <>
+          <BlocReponse reponse={reponse.reponse} modele={reponse.modele} />
+          <p className="small muted">Sources transmises : {reponse.sources.join(' · ')}.</p>
+        </>
+      )}
     </>
   )
 }
@@ -304,16 +370,21 @@ function OngletQuestion({ dispo }: { dispo: boolean }) {
 
 function OngletCR({ dispo }: { dispo: boolean }) {
   const { state } = useStore()
-  const [projetId, setProjetId] = useState('tous')
+  const [projetId, setProjetId] = useState('')
   const [question, setQuestion] = useState('')
   const [enCours, setEnCours] = useState(false)
-  const [reponse, setReponse] = useState<{ reponse: string; modele?: string } | null>(null)
+  const [reponse, setReponse] = useState<{
+    reponse: string
+    modele?: string
+    projetId: string
+    projetNom: string
+  } | null>(null)
 
   const avecCR = useMemo(
     () =>
       state.reunions
         .filter((r) => r.cr && r.cr.trim() !== '')
-        .filter((r) => projetId === 'tous' || r.projetId === projetId)
+        .filter((r) => Boolean(projetId) && r.projetId === projetId)
         .sort((a, b) => b.date.localeCompare(a.date)),
     [state.reunions, projetId],
   )
@@ -321,8 +392,20 @@ function OngletCR({ dispo }: { dispo: boolean }) {
     const ids = new Set(state.reunions.filter((r) => r.cr && r.cr.trim() !== '').map((r) => r.projetId))
     return state.projets.filter((p) => ids.has(p.id))
   }, [state.reunions, state.projets])
+  const caracteresCR = useMemo(
+    () => avecCR.reduce((total, reunion) => total + (reunion.cr?.length || 0), 0),
+    [avecCR],
+  )
+  const corpusTropGrand =
+    avecCR.length > 16 ||
+    caracteresCR > 650_000 ||
+    avecCR.some((reunion) => (reunion.cr?.length || 0) > 120_000)
 
   const chercher = async () => {
+    if (!projetId || corpusTropGrand) return
+    const projetCible = state.projets.find((p) => p.id === projetId)
+    if (!projetCible) return
+    const projetIdCible = projetCible.id
     const docs: DocPourAssistant[] = avecCR.map((r) => {
       const p = state.projets.find((x) => x.id === r.projetId)
       return {
@@ -334,7 +417,11 @@ function OngletCR({ dispo }: { dispo: boolean }) {
     setReponse(null)
     try {
       const r = await interrogerAssistant({ mode: 'cr', question, documents: docs })
-      setReponse(r)
+      setReponse({
+        ...r,
+        projetId: projetIdCible,
+        projetNom: projetCible.nom,
+      })
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Erreur inattendue.', { tone: 'danger' })
     } finally {
@@ -349,38 +436,73 @@ function OngletCR({ dispo }: { dispo: boolean }) {
           « Qu’a-t-on décidé sur les menuiseries ? » « Depuis quand attend-on le DOE du lot 03 ? » —
           l’assistant lit les CR conservés sur les réunions et cite le CR source.
         </p>
-        {avecCR.length === 0 ? (
+        {projetsAvecCR.length === 0 ? (
           <EmptyState>
-            Aucun compte-rendu conservé{projetId !== 'tous' ? ' sur ce projet' : ''}. Les CR se
-            créent depuis la fiche projet (onglet Chantier) — le texte est gardé sur chaque réunion.
+            Aucun compte-rendu conservé. Les CR se créent depuis la fiche projet (onglet Chantier)
+            — le texte est gardé sur chaque réunion.
           </EmptyState>
         ) : (
           <>
             <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 10 }}>
               <Select
                 value={projetId}
-                onChange={setProjetId}
+                onChange={(id) => {
+                  setProjetId(id)
+                  setReponse(null)
+                }}
                 options={[
-                  { value: 'tous', label: `Tous les projets (${avecCR.length} CR)` },
+                  { value: '', label: 'Choisir un projet…' },
                   ...projetsAvecCR.map((p) => ({ value: p.id, label: `${p.id} — ${p.nom}` })),
                 ]}
+                disabled={enCours}
               />
             </div>
-            <Field label="Votre question">
-              <TextArea
-                value={question}
-                onChange={setQuestion}
-                rows={2}
-                placeholder="Ex. : où en est la reprise de la fissure du voile B2 ?"
-              />
-            </Field>
-            <Btn kind="primary" onClick={() => void chercher()} disabled={!dispo || enCours || !question.trim()}>
-              {enCours ? 'Recherche…' : `Chercher dans ${avecCR.length} CR`}
-            </Btn>
+            {!projetId ? (
+              <p className="small muted">
+                Choisissez un projet : aucun compte-rendu n’est transmis à l’assistant par défaut.
+              </p>
+            ) : (
+              <>
+                <p className="small muted">
+                  {avecCR.length} CR sélectionné{avecCR.length > 1 ? 's' : ''} (
+                  {Math.ceil(caracteresCR / 1000)} k caractères) — seuls les CR de ce projet seront
+                  transmis au fournisseur IA.
+                </p>
+                {corpusTropGrand && (
+                  <p className="small danger-text">
+                    Corpus trop volumineux : limitez ce projet à 16 CR, 650 k caractères au total
+                    et 120 k par CR avant l’envoi.
+                  </p>
+                )}
+                <Field label="Votre question">
+                  <TextArea
+                    value={question}
+                    onChange={setQuestion}
+                    rows={2}
+                    placeholder="Ex. : où en est la reprise de la fissure du voile B2 ?"
+                    disabled={enCours}
+                  />
+                </Field>
+                <Btn
+                  kind="primary"
+                  onClick={() => void chercher()}
+                  disabled={!dispo || enCours || !question.trim() || corpusTropGrand}
+                >
+                  {enCours ? 'Recherche…' : `Chercher dans ${avecCR.length} CR`}
+                </Btn>
+              </>
+            )}
           </>
         )}
       </Card>
-      {reponse && <BlocReponse reponse={reponse.reponse} modele={reponse.modele} />}
+      {reponse && (
+        <>
+          <BlocReponse reponse={reponse.reponse} modele={reponse.modele} />
+          <p className="small muted">
+            Corpus utilisé : projet {reponse.projetId} — {reponse.projetNom}.
+          </p>
+        </>
+      )}
     </>
   )
 }
@@ -390,28 +512,57 @@ function OngletCR({ dispo }: { dispo: boolean }) {
 function OngletDocument({ dispo }: { dispo: boolean }) {
   const { state } = useStore()
   const today = useToday()
-  const modeles = state.corpusDocuments.filter((d) => d.type === 'modele')
+  const modeles = useMemo(
+    () => state.corpusDocuments.filter((document) => document.type === 'modele' && !document.prive),
+    [state.corpusDocuments],
+  )
   const [modeleId, setModeleId] = useState('')
   const [projetId, setProjetId] = useState('')
   const [instructions, setInstructions] = useState('')
   const [enCours, setEnCours] = useState(false)
-  const [reponse, setReponse] = useState<{ reponse: string; modele?: string } | null>(null)
+  const [reponse, setReponse] = useState<{
+    reponse: string
+    modele?: string
+    modeleId: string
+    modeleTitre: string
+    projetId: string
+    projetNom: string
+  } | null>(null)
 
   const modele = modeles.find((d) => d.id === modeleId)
   const projet = state.projets.find((p) => p.id === projetId)
 
   const generer = async () => {
     if (!modele || !projet) return
+    const modeleCible = {
+      id: modele.id,
+      titre: modele.titre,
+      source: modele.source,
+      texte: modele.texte,
+    }
+    const projetCible = structuredClone(projet)
     setEnCours(true)
     setReponse(null)
     try {
       const r = await interrogerAssistant({
         mode: 'doc',
         question: instructions.trim() || 'Rédige le document en suivant le modèle, adapté à ce projet.',
-        documents: [{ titre: modele.titre, source: modele.source, texte: modele.texte }],
-        contexte: `FICHE DU PROJET (données réelles du Cockpit, au ${fmtDate(today)}) :\n${contexteProjet(state, projet).fiche}`,
+        documents: [
+          {
+            titre: modeleCible.titre,
+            source: modeleCible.source,
+            texte: modeleCible.texte,
+          },
+        ],
+        contexte: `FICHE DU PROJET (données réelles du Cockpit, au ${fmtDate(today)}) :\n${contexteProjet(state, projetCible).fiche}`,
       })
-      setReponse(r)
+      setReponse({
+        ...r,
+        modeleId: modeleCible.id,
+        modeleTitre: modeleCible.titre,
+        projetId: projetCible.id,
+        projetNom: projetCible.nom,
+      })
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Erreur inattendue.', { tone: 'danger' })
     } finally {
@@ -420,9 +571,15 @@ function OngletDocument({ dispo }: { dispo: boolean }) {
   }
 
   const telecharger = async () => {
-    if (!reponse || !modele) return
-    const blob = await texteVersDocx(`${modele.titre}${projet ? ` — ${projet.nom}` : ''}`, reponse.reponse)
-    telechargerBlob(blob, `BROUILLON_${(modele.titre + (projet ? `_${projet.id}` : '')).replace(/[^\wÀ-ÿ-]+/g, '_')}.docx`)
+    if (!reponse) return
+    const blob = await texteVersDocx(
+      `${reponse.modeleTitre} — ${reponse.projetNom}`,
+      reponse.reponse,
+    )
+    telechargerBlob(
+      blob,
+      `BROUILLON_${`${reponse.modeleTitre}_${reponse.projetId}`.replace(/[^\wÀ-ÿ-]+/g, '_')}.docx`,
+    )
     toast('DOCX brouillon téléchargé — à relire avant envoi.', { tone: 'ok' })
   }
 
@@ -445,22 +602,34 @@ function OngletDocument({ dispo }: { dispo: boolean }) {
           L’assistant suit la structure du modèle et remplit avec la fiche du projet. Ce qui manque
           est marqué « à compléter » — jamais inventé.
         </p>
+        <p className="small muted">
+          Le modèle sélectionné et la fiche du projet seront transmis au fournisseur IA configuré.
+          Les documents marqués privés restent exclus.
+        </p>
         <div className="form-row">
           <Field label="Modèle">
             <Select
               value={modeleId}
-              onChange={setModeleId}
+              onChange={(id) => {
+                setModeleId(id)
+                setReponse(null)
+              }}
               options={[{ value: '', label: '— choisir —' }, ...modeles.map((d) => ({ value: d.id, label: d.titre }))]}
+              disabled={enCours}
             />
           </Field>
           <Field label="Projet">
             <Select
               value={projetId}
-              onChange={setProjetId}
+              onChange={(id) => {
+                setProjetId(id)
+                setReponse(null)
+              }}
               options={[
                 { value: '', label: '— choisir —' },
                 ...state.projets.map((p) => ({ value: p.id, label: `${p.id} — ${p.nom}` })),
               ]}
+              disabled={enCours}
             />
           </Field>
         </div>
@@ -470,6 +639,7 @@ function OngletDocument({ dispo }: { dispo: boolean }) {
             onChange={setInstructions}
             rows={2}
             placeholder="Ex. : destinataire = le maire ; objet = retard du lot charpente ; ton ferme mais courtois."
+            disabled={enCours}
           />
         </Field>
         <Btn kind="primary" onClick={() => void generer()} disabled={!dispo || enCours || !modele || !projet}>
@@ -479,6 +649,10 @@ function OngletDocument({ dispo }: { dispo: boolean }) {
       {reponse && (
         <>
           <BlocReponse reponse={reponse.reponse} modele={reponse.modele} />
+          <p className="small muted">
+            Contexte figé : modèle {reponse.modeleTitre} · projet {reponse.projetId} —{' '}
+            {reponse.projetNom}.
+          </p>
           <div style={{ marginTop: 10 }}>
             <Btn onClick={() => void telecharger()}>Télécharger en DOCX (brouillon)</Btn>
           </div>
@@ -627,8 +801,8 @@ function CarteImportPrive() {
       <p className="muted" style={{ marginTop: 0 }}>
         L’agence a acheté ses DTU : importez les PDF ici. Le texte est extrait dans le
         navigateur, découpé, stocké dans votre Cockpit et marqué <Badge tone="warn">privé</Badge>{' '}
-        — il ne sort jamais de l’agence (ni packs, ni partage), conformément à la licence
-        d’achat. Ne collez jamais un texte protégé que vous n’avez pas acquis.
+        — il reste uniquement sur ce navigateur : ni synchronisation Supabase, ni envoi à
+        l’assistant IA, ni pack partagé. Ne collez jamais un texte protégé que vous n’avez pas acquis.
       </p>
       <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end', flexWrap: 'wrap' }}>
         <Field label="Thème (pour cocher par thème dans les questions)">
@@ -850,7 +1024,7 @@ function OngletCorpus() {
                 {d.prive && (
                   <>
                     {' '}
-                    <Badge tone="warn">privé</Badge>
+                    <Badge tone="warn">privé · local uniquement</Badge>
                   </>
                 )}
               </td>

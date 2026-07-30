@@ -3,10 +3,21 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "engines": {
+    "node": "^20.19.0 || ^22.13.0 || >=24"
+  },
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint \"api/**/*.js\" \"scripts/**/*.cjs\"",
+    "build": "npm run typecheck && vite build",
     "preview": "vite preview",
+    "test": "npm run test:assistant && npm run test:relais && npm run test:edge-security && npm run test:sync-state && npm run test:facture-invariants && npm run test:finance",
+    "test:assistant": "node scripts/test-assistant.cjs",
+    "test:relais": "node scripts/test-relais.cjs",
+    "test:edge-security": "node scripts/test-edge-functions-security.cjs",
+    "test:sync-state": "node scripts/test-sync-state.cjs",
+    "test:facture-invariants": "node scripts/test-facture-invariants.cjs",
     "test:finance": "node scripts/test-finance.cjs"
   },
   "dependencies": {
@@ -17,13 +28,15 @@
     "pdfjs-dist": "^6.1.200",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "xlsx": "^0.18.5"
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },
   "devDependencies": {
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
-    "@vitejs/plugin-react": "^4.3.4",
+    "@vitejs/plugin-react": "^5.2.0",
+    "eslint": "^10.8.0",
+    "playwright": "^1.47.0",
     "typescript": "~5.6.2",
-    "vite": "^5.4.11"
+    "vite": "^8.1.5"
   }
 }

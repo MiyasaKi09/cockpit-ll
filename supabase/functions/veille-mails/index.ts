@@ -21,7 +21,7 @@
 // Accès : x-cron-secret (planificateur horaire) OU jeton agence.
 // ============================================================
 
-import { createClient, type SupabaseClient } from 'jsr:@supabase/supabase-js@2'
+import { createClient, type SupabaseClient } from 'jsr:@supabase/supabase-js@2.110.0'
 
 const VERSION_PARSEUR = 'mails-2.0'
 const AGENCE = ['julenglet@gmail.com', 'zoefhebert@gmail.com']
@@ -410,6 +410,7 @@ async function identiteSignal(item: ExtraitAlerte): Promise<string> {
 
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS })
+  if (req.method !== 'POST') return json({ erreur: 'Méthode non prise en charge.' }, 405)
 
   const sb = admin()
   const { data: cfg } = await sb.from('ingestion_config').select('*').eq('id', 'google').maybeSingle()

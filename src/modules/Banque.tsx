@@ -40,9 +40,13 @@ import {
   soldeBancaire,
   suggestionsPourCredit,
 } from '../banque'
-import { contratsPourDebit, suggestionsAchatPourDebit } from '../achats'
+import {
+  contratsPourDebit,
+  erreurRapprochementAchat,
+  suggestionsAchatPourDebit,
+} from '../achats'
 import { prevision13Semaines, type Prevision13, type Scenario } from '../tresorerie'
-import { nouveauPaiement, soldeFacture } from '../facture'
+import { nouveauPaiement, soldeFacture, validerPaiement } from '../facture'
 import { nomProjet } from '../derive'
 import { fmtDate, fmtMoney, uid } from '../util'
 
@@ -211,64 +215,129 @@ function LigneMouvement({ t }: { t: TransactionBancaire }) {
   const today = useToday()
   const [ouvert, setOuvert] = useState(false)
 
-  const validerPaiementClient = (factures: Facture[], montants: number[]) => {
+  const validerPaiementClient = async (factures: Facture[], montants: number[]) => {
     // calculé AVANT la mutation (producteur rejouable)
-    const p = nouveauPaiement(
-      t.date,
-      t.montant,
-      factures.map((f, i) => ({ factureId: f.id, montant: montants[i] })),
-      t.libelle.slice(0, 60),
-      'virement',
-    )
-    update((d) => {
-      d.paiements.push(p)
-      for (const f of factures) {
-        const x = d.factures.find((y) => y.id === f.id)
-        if (!x) continue
-        const solde = soldeFacture(d, x)
-        if (solde <= 0.01) {
-          x.statut = 'encaissee'
-          x.encaissementReel = t.date
+    let p: ReturnType<typeof nouveauPaiement>
+    try {
+      p = nouveauPaiement(
+        state,
+        t.date,
+        t.montant,
+        factures.map((f, i) => ({ factureId: f.id, montant: montants[i] })),
+        t.libelle.slice(0, 60),
+        'virement',
+      )
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Ce rapprochement créerait un paiement invalide.', { tone: 'danger' })
+      return
+    }
+    const resultat = await new Promise<{ ok: boolean; erreur?: string }>((resolve) => {
+      update((d) => {
+        const tx = d.transactionsBancaires.find((y) => y.id === t.id)
+        if (!tx || tx.rapprochement) {
+          resolve({ ok: false, erreur: 'Ce mouvement bancaire a déjà été rapproché.' })
+          return
         }
-        x.evenements = [...(x.evenements || []), { date: t.date, type: 'paiement', detail: `Rapproché du relevé — ${t.libelle.slice(0, 60)}` }]
-      }
-      const tx = d.transactionsBancaires.find((y) => y.id === t.id)
-      if (tx) tx.rapprochement = { type: 'paiement_client', paiementId: p.id, valideLe: today }
+        const controle = validerPaiement(d, p.montant, p.affectations)
+        if (!controle.valide) {
+          resolve({ ok: false, erreur: controle.erreurs[0] })
+          return
+        }
+        d.paiements.push(p)
+        for (const f of factures) {
+          const x = d.factures.find((y) => y.id === f.id)
+          if (!x) continue
+          const solde = soldeFacture(d, x)
+          if (solde <= 0.01) {
+            x.statut = 'encaissee'
+            x.encaissementReel = t.date
+          }
+          x.evenements = [...(x.evenements || []), { date: t.date, type: 'paiement', detail: `Rapproché du relevé — ${t.libelle.slice(0, 60)}` }]
+        }
+        tx.rapprochement = { type: 'paiement_client', paiementId: p.id, valideLe: today }
+        resolve({ ok: true })
+      })
     })
+    if (!resultat.ok) {
+      toast(resultat.erreur || 'Ce rapprochement n’a pas pu être enregistré.', { tone: 'danger' })
+      return
+    }
     toast('Encaissement rapproché — paiement créé, statut dérivé du solde.', { tone: 'ok' })
   }
 
-  const payerAchat = (achatId: string) => {
-    update((d) => {
-      const f = d.facturesAchat.find((y) => y.id === achatId)
-      if (f) {
+  const payerAchat = async (achatId: string) => {
+    const resultat = await new Promise<{ ok: boolean; erreur?: string }>((resolve) => {
+      update((d) => {
+        // La garde est dans la même mutation que les deux écritures : deux
+        // clics concurrents ne peuvent jamais consommer le même mouvement.
+        const erreur = erreurRapprochementAchat(d, t.id, achatId)
+        if (erreur) {
+          resolve({ ok: false, erreur })
+          return
+        }
+        const tx = d.transactionsBancaires.find((y) => y.id === t.id)!
+        const f = d.facturesAchat.find((y) => y.id === achatId)!
         f.payeLe = t.date
         f.transactionId = t.id
         // le rapprochement bancaire est la PREUVE du paiement (audit F6)
         f.paiementAConfirmer = false
         f.evenements = [...(f.evenements || []), { date: t.date, type: 'paiement', detail: `Rapproché du relevé (${fmtMoney(Math.abs(t.montant), true)}).` }]
-      }
-      const tx = d.transactionsBancaires.find((y) => y.id === t.id)
-      if (tx) tx.rapprochement = { type: 'facture_achat', factureAchatId: achatId, valideLe: today }
+        tx.rapprochement = { type: 'facture_achat', factureAchatId: achatId, valideLe: today }
+        resolve({ ok: true })
+      })
     })
+    if (!resultat.ok) {
+      toast(resultat.erreur || 'Ce rapprochement n’a pas pu être enregistré.', { tone: 'danger' })
+      return
+    }
     toast('Débit rapproché de la facture fournisseur.', { tone: 'ok' })
   }
 
-  const rembourserNoteFrais = (noteId: string) => {
-    update((d) => {
-      const n = d.notesFrais.find((y) => y.id === noteId)
-      if (n) n.statut = 'remboursee'
-      const tx = d.transactionsBancaires.find((y) => y.id === t.id)
-      if (tx) tx.rapprochement = { type: 'note_frais', noteFraisId: noteId, valideLe: today }
+  const rembourserNoteFrais = async (noteId: string) => {
+    const resultat = await new Promise<{ ok: boolean; erreur?: string }>((resolve) => {
+      update((d) => {
+        const tx = d.transactionsBancaires.find((y) => y.id === t.id)
+        if (!tx || tx.rapprochement) {
+          resolve({ ok: false, erreur: 'Ce mouvement bancaire a déjà été rapproché.' })
+          return
+        }
+        const n = d.notesFrais.find((y) => y.id === noteId)
+        if (!n) {
+          resolve({ ok: false, erreur: 'La note de frais est introuvable.' })
+          return
+        }
+        if (n.statut === 'remboursee') {
+          resolve({ ok: false, erreur: 'Cette note de frais est déjà remboursée.' })
+          return
+        }
+        n.statut = 'remboursee'
+        tx.rapprochement = { type: 'note_frais', noteFraisId: noteId, valideLe: today }
+        resolve({ ok: true })
+      })
     })
+    if (!resultat.ok) {
+      toast(resultat.erreur || 'Ce rapprochement n’a pas pu être enregistré.', { tone: 'danger' })
+      return
+    }
     toast('Débit rapproché du remboursement de note de frais.', { tone: 'ok' })
   }
 
-  const justifier = (type: 'interne' | 'justifie', detail?: string) =>
-    update((d) => {
-      const tx = d.transactionsBancaires.find((y) => y.id === t.id)
-      if (tx) tx.rapprochement = { type, detail, valideLe: today }
+  const justifier = async (type: 'interne' | 'justifie', detail?: string) => {
+    const resultat = await new Promise<{ ok: boolean; erreur?: string }>((resolve) => {
+      update((d) => {
+        const tx = d.transactionsBancaires.find((y) => y.id === t.id)
+        if (!tx || tx.rapprochement) {
+          resolve({ ok: false, erreur: 'Ce mouvement bancaire a déjà été rapproché.' })
+          return
+        }
+        tx.rapprochement = { type, detail, valideLe: today }
+        resolve({ ok: true })
+      })
     })
+    if (!resultat.ok) {
+      toast(resultat.erreur || 'Ce rapprochement n’a pas pu être enregistré.', { tone: 'danger' })
+    }
+  }
 
   const suggestionsCredit = t.montant > 0 && !t.rapprochement ? suggestionsPourCredit(state, t) : []
   const suggestionsDebit = t.montant < 0 && !t.rapprochement ? suggestionsAchatPourDebit(state, t) : []
@@ -288,17 +357,17 @@ function LigneMouvement({ t }: { t: TransactionBancaire }) {
         {ouvert && !t.rapprochement && (
           <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 6 }}>
             {suggestionsCredit.map((s, i) => (
-              <Btn key={i} small kind={i === 0 ? 'primary' : 'default'} onClick={() => validerPaiementClient(s.factures, s.montants)} title={s.raisons.join(' · ')}>
+              <Btn key={i} small kind={i === 0 ? 'primary' : 'default'} onClick={() => void validerPaiementClient(s.factures, s.montants)} title={s.raisons.join(' · ')}>
                 Paiement {s.factures.map((f) => f.numero || f.id).join(' + ')} — {s.raisons[0]}
               </Btn>
             ))}
             {suggestionsDebit.map((s, i) => (
-              <Btn key={i} small kind={i === 0 ? 'primary' : 'default'} onClick={() => payerAchat(s.f.id)} title={s.raisons.join(' · ')}>
+              <Btn key={i} small kind={i === 0 ? 'primary' : 'default'} onClick={() => void payerAchat(s.f.id)} title={s.raisons.join(' · ')}>
                 Fournisseur {s.f.fournisseur}{s.f.numeroFournisseur ? ` (${s.f.numeroFournisseur})` : ''} — {s.raisons[0]}
               </Btn>
             ))}
             {notesCandidates.map((n) => (
-              <Btn key={n.id} small onClick={() => rembourserNoteFrais(n.id)}>
+              <Btn key={n.id} small onClick={() => void rembourserNoteFrais(n.id)}>
                 Remboursement note de frais {n.personne} ({fmtMoney(n.montantTTC, true)})
               </Btn>
             ))}
@@ -308,14 +377,14 @@ function LigneMouvement({ t }: { t: TransactionBancaire }) {
               </span>
             ))}
             <span style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-              <Btn small onClick={() => justifier('interne', 'virement interne / mouvement d’épargne')}>
+              <Btn small onClick={() => void justifier('interne', 'virement interne / mouvement d’épargne')}>
                 Mouvement interne
               </Btn>
               <Btn
                 small
                 onClick={() => {
                   const motif = window.prompt('Justification (sans pièce) :')
-                  if (motif) justifier('justifie', motif)
+                  if (motif) void justifier('justifie', motif)
                 }}
               >
                 Justifier sans pièce…

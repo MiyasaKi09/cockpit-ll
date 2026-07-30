@@ -6,62 +6,216 @@
 // l'agence, partagé entre les 2 postes en temps réel.
 //
 // Local-first préservé : si non connecté / hors-ligne, tout continue
-// en localStorage (les échecs de push sont avalés, jamais bloquants).
+// en localStorage. Les échecs restent visibles et rejouables, sans bloquer
+// les saisies locales.
 // ============================================================
 
 import type { RealtimeChannel, Session, SupabaseClient } from '@supabase/supabase-js'
 import type { AppState } from './types'
+import {
+  cibleSynchronisation,
+  etatPartageable,
+  namespaceSynchronisation,
+  type ConfigSyncMinimale,
+} from './syncState'
+import {
+  MESSAGE_RECUPERATION_LOCALE,
+  marquerRecuperationLocaleRequise,
+  recuperationLocaleRequise,
+} from './syncSafety'
 
 const TABLE = 'workspace'
 
 // ----- état module (aucun état React ici) -----
 let clientPromise: Promise<SupabaseClient> | null = null
 let client: SupabaseClient | null = null
+let clientConfig = ''
 let session: Session | null = null
 let workspaceId = ''
+let namespaceLocale = ''
 let channel: RealtimeChannel | null = null
-let onRemoteCourant: ((s: AppState) => void) | null = null
-let authListenerAttache = false
+let onRemoteCourant: ((s: AppState) => boolean | void) | null = null
+let authSubscription: { unsubscribe: () => void } | null = null
+let revisionCourante: number | null = null
 let derniereSync: string | null = null
 let derniereErreur: string | null = null
 let envoiEnCours = false
+let generationConnexion = 0
+let generationConfiguration = 0
+let configurationSync = ''
+let refetchRealtimeEnCours: Promise<void> | null = null
+let refetchRealtimeARejouer = false
+let onStatutCourant: ((erreur: string | null) => void) | null = null
+let deconnexionEnCours: Promise<void> | null = null
 
-/** identifiant stable de CE poste — clé anti-écho (on ignore nos propres écritures) */
-const CLE_CLIENT = 'cockpit-ll-sync-client'
-const MON_ID = (() => {
+/** identifiant de CETTE instance de page — deux onglets doivent rester distincts. */
+const CLE_CONFLIT = 'cockpit-ll-sync-conflit'
+const CLE_EN_ATTENTE = 'cockpit-ll-sync-en-attente'
+const CLE_REVISION = 'cockpit-ll-sync-revision'
+const MESSAGE_CONFLIT =
+  'Conflit de synchronisation : un autre poste a modifié les données. Vos changements restent locaux ; exportez-les avant de choisir une version.'
+const MON_ID =
+  crypto.randomUUID?.() ?? `c-${Date.now()}-${Math.floor(Math.random() * 1e9)}`
+
+function cleConflitCourante(): string {
+  return cleLocale(CLE_CONFLIT)
+}
+
+function cleLocale(prefixe: string): string {
+  return `${prefixe}:${namespaceLocale || 'inconnu'}`
+}
+
+function cleLocalePour(prefixe: string, config: ConfigSyncMinimale): string | null {
+  const espace = namespaceSynchronisation(config)
+  return espace ? `${prefixe}:${espace}` : null
+}
+
+function lireRevisionLocale(): number | null {
+  if (!workspaceId) return null
   try {
-    let v = localStorage.getItem(CLE_CLIENT)
-    if (!v) {
-      v = (crypto.randomUUID?.() ?? `c-${Date.now()}-${Math.floor(Math.random() * 1e9)}`)
-      localStorage.setItem(CLE_CLIENT, v)
-    }
-    return v
+    const brute = localStorage.getItem(cleLocale(CLE_REVISION))
+    if (brute === null) return null
+    const valeur = Number(brute)
+    return Number.isSafeInteger(valeur) && valeur >= 0 ? valeur : null
   } catch {
-    return `c-${Date.now()}`
+    return null
   }
-})()
+}
+
+function ecrireRevisionLocale(revision: number | null): void {
+  try {
+    if (revision === null) localStorage.removeItem(cleLocale(CLE_REVISION))
+    else localStorage.setItem(cleLocale(CLE_REVISION), String(revision))
+  } catch {
+    /* la révision reste au moins disponible en mémoire */
+  }
+}
+
+function etatLocalEnAttente(): boolean {
+  if (!workspaceId) return false
+  try {
+    return localStorage.getItem(cleLocale(CLE_EN_ATTENTE)) !== null
+  } catch {
+    return false
+  }
+}
+
+export function marquerEtatLocalEnAttente(config?: ConfigSyncMinimale | null): void {
+  const cle = config ? cleLocalePour(CLE_EN_ATTENTE, config) : cleLocale(CLE_EN_ATTENTE)
+  if (!cle || (!config && !workspaceId)) return
+  try {
+    localStorage.setItem(cle, new Date().toISOString())
+  } catch {
+    /* le statut en mémoire signalera encore l'échec de push */
+  }
+}
+
+export function etatLocalEnAttentePour(config: ConfigSyncMinimale | null | undefined): boolean {
+  if (!config) return false
+  const cle = cleLocalePour(CLE_EN_ATTENTE, config)
+  if (!cle) return false
+  try {
+    return localStorage.getItem(cle) !== null
+  } catch {
+    return false
+  }
+}
+
+function effacerEtatLocalEnAttente(): void {
+  try {
+    localStorage.removeItem(cleLocale(CLE_EN_ATTENTE))
+  } catch {
+    /* rien d'autre à effacer */
+  }
+}
+
+function conflitSyncPersistant(): boolean {
+  if (!workspaceId) return false
+  try {
+    return localStorage.getItem(cleConflitCourante()) !== null
+  } catch {
+    return false
+  }
+}
+
+function marquerConflitSync(): void {
+  try {
+    localStorage.setItem(cleConflitCourante(), new Date().toISOString())
+  } catch {
+    /* la bannière en mémoire reste active même si le marqueur local échoue */
+  }
+}
+
+export function effacerConflitSync(): void {
+  try {
+    localStorage.removeItem(cleConflitCourante())
+  } catch {
+    /* rien d'autre à effacer */
+  }
+  derniereErreur = null
+}
+
+export function signalerConflitSync(): string {
+  marquerEtatLocalEnAttente()
+  marquerConflitSync()
+  derniereErreur = MESSAGE_CONFLIT
+  return MESSAGE_CONFLIT
+}
+
+export function signalerRecuperationLocaleRequise(): string {
+  marquerRecuperationLocaleRequise()
+  marquerEtatLocalEnAttente()
+  marquerConflitSync()
+  derniereErreur = MESSAGE_RECUPERATION_LOCALE
+  return MESSAGE_RECUPERATION_LOCALE
+}
 
 // ----- helpers -----
 
-/** client Supabase mémoïsé (import dynamique, comme xlsx) — rejoue si l'import échoue */
+/** client Supabase mémoïsé (import dynamique, comme xlsx) — rejoue si l'import échoue.
+ *  La mémoïsation tient compte du projet : changer URL ou clé ne doit jamais
+ *  réutiliser silencieusement la session du projet précédent. */
 async function obtenirClient(url: string, anonKey: string): Promise<SupabaseClient> {
+  const config = `${url}\u0000${anonKey}`
+  if (clientPromise && clientConfig !== config) {
+    try {
+      if (channel && client) await client.removeChannel(channel)
+    } catch {
+      /* l'ancien canal peut déjà être fermé */
+    }
+    authSubscription?.unsubscribe()
+    clientPromise = null
+    client = null
+    session = null
+    channel = null
+    authSubscription = null
+    workspaceId = ''
+    namespaceLocale = ''
+    revisionCourante = null
+  }
   if (!clientPromise) {
-    clientPromise = import('@supabase/supabase-js').then(({ createClient }) =>
+    clientConfig = config
+    const promesse = import('@supabase/supabase-js').then(({ createClient }) =>
       createClient(url, anonKey, {
         auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
       }),
     )
-    clientPromise.catch(() => {
-      clientPromise = null // permet une nouvelle tentative
+    clientPromise = promesse
+    promesse.catch(() => {
+      if (clientPromise === promesse) {
+        clientPromise = null // permet une nouvelle tentative
+        clientConfig = ''
+      }
     })
   }
   return clientPromise
 }
 
-/** retire la config machine-locale (settings.sync) du document partagé */
-function sansConfigLocale(state: AppState): AppState {
-  const { sync: _local, ...restSettings } = state.settings
-  return { ...state, settings: restSettings }
+export interface ResultatPush {
+  ok: boolean
+  conflit?: boolean
+  erreur?: string
+  revision?: number
 }
 
 // ----- API exportée -----
@@ -82,13 +236,42 @@ export function syncEtat(): {
   email: string | null
   derniereSync: string | null
   erreur: string | null
+  conflit: boolean
+  localEnAttente: boolean
+  recuperationLocaleRequise: boolean
 } {
   return {
     connecte: syncActif(),
     email: session?.user?.email ?? null,
     derniereSync,
     erreur: derniereErreur,
+    conflit: conflitSyncPersistant(),
+    localEnAttente: etatLocalEnAttente(),
+    recuperationLocaleRequise: recuperationLocaleRequise(),
   }
+}
+
+export function cibleSyncCourante(): string | null {
+  return configurationSync || null
+}
+
+export function adopterRevisionDistante(
+  revision: number | null,
+  updatedAt?: string | null,
+): void {
+  memoriserRevision(revision, updatedAt)
+  effacerEtatLocalEnAttente()
+  derniereErreur = null
+}
+
+/** Avance le verrou local sans déclarer que le dernier état métier est envoyé.
+ *  C'est notamment nécessaire quand l'accusé d'un push arrive alors qu'une
+ *  seconde modification locale attend encore dans la file. */
+function memoriserRevision(revision: number | null, updatedAt?: string | null): void {
+  revisionCourante =
+    revision !== null && Number.isSafeInteger(revision) && revision >= 0 ? revision : null
+  ecrireRevisionLocale(revisionCourante)
+  if (updatedAt) derniereSync = updatedAt
 }
 
 /** crée le client, restaure une session existante (reprise après reload) et
@@ -97,24 +280,73 @@ export async function connecterSync(url: string, anonKey: string, ws: string): P
   if (!url.trim() || !anonKey.trim() || !ws.trim()) {
     throw new Error('Renseignez l’URL du projet, la clé publique et l’identifiant d’espace.')
   }
+  if (deconnexionEnCours) await deconnexionEnCours
   derniereErreur = null
+  const configDemandee = {
+    url: url.trim(),
+    anonKey: anonKey.trim(),
+    workspaceId: ws.trim(),
+  }
+  const configurationDemandee = cibleSynchronisation(configDemandee)
+  if (!configurationDemandee)
+    throw new Error('La configuration Supabase est incomplète.')
+  if (configurationDemandee !== configurationSync) {
+    configurationSync = configurationDemandee
+    generationConfiguration++
+  }
+  const generationConfig = generationConfiguration
+  const generation = ++generationConnexion
+  const prochainWorkspace = ws.trim()
+  let nouveauClient: SupabaseClient
   try {
-    client = await obtenirClient(url.trim(), anonKey.trim())
+    nouveauClient = await obtenirClient(url.trim(), anonKey.trim())
   } catch {
     throw new Error('Impossible de charger le client Supabase (connexion ?).')
   }
-  workspaceId = ws.trim()
+  if (
+    generation !== generationConnexion ||
+    generationConfig !== generationConfiguration
+  )
+    throw new Error('La configuration Supabase a changé pendant la connexion.')
 
-  const { data } = await client.auth.getSession()
+  if (workspaceId && workspaceId !== prochainWorkspace) {
+    try {
+      if (channel && client) await client.removeChannel(channel)
+    } catch {
+      /* le canal peut déjà être fermé */
+    }
+    channel = null
+  }
+  client = nouveauClient
+  workspaceId = prochainWorkspace
+  // Les révisions/conflits appartiennent à un projet Supabase précis, pas
+  // seulement au libellé d'espace qui peut être réutilisé ailleurs.
+  namespaceLocale = namespaceSynchronisation(configDemandee) || ''
+  revisionCourante = lireRevisionLocale()
+
+  const { data, error } = await nouveauClient.auth.getSession()
+  if (
+    generation !== generationConnexion ||
+    generationConfig !== generationConfiguration
+  )
+    throw new Error('La configuration Supabase a changé pendant la connexion.')
+  if (error) throw new Error(`Session Supabase illisible : ${error.message}`)
   session = data.session
 
-  if (!authListenerAttache) {
-    authListenerAttache = true
-    client.auth.onAuthStateChange((_evt, s) => {
+  if (!authSubscription) {
+    const generationAbonnement = generationConfiguration
+    const clientAbonne = nouveauClient
+    const { data: abonnement } = nouveauClient.auth.onAuthStateChange((_evt, s) => {
+      if (
+        generationAbonnement !== generationConfiguration ||
+        client !== clientAbonne
+      )
+        return
       session = s
       // au retour du lien magique (SIGNED_IN), on (re)branche le temps réel
       if (s && onRemoteCourant && !channel) souscrire()
     })
+    authSubscription = abonnement.subscription
   }
 }
 
@@ -136,21 +368,95 @@ export async function envoyerLienMagique(email: string): Promise<void> {
 }
 
 export async function deconnecterSync(): Promise<void> {
-  try {
-    if (channel && client) await client.removeChannel(channel)
-  } catch {
-    /* ignore */
-  }
+  if (deconnexionEnCours) return deconnexionEnCours
+  const ancienClient = client
+  const ancienCanal = channel
+  generationConnexion++
+  generationConfiguration++
   channel = null
-  onRemoteCourant = null
-  if (client) {
+  client = null
+  session = null
+  revisionCourante = null
+  refetchRealtimeARejouer = false
+  authSubscription?.unsubscribe()
+  authSubscription = null
+
+  const travail = (async () => {
     try {
-      await client.auth.signOut()
+      if (ancienCanal && ancienClient) await ancienClient.removeChannel(ancienCanal)
     } catch {
       /* ignore */
     }
+    if (ancienClient) {
+      try {
+        await ancienClient.auth.signOut()
+      } catch {
+        /* ignore */
+      }
+    }
+  })()
+  deconnexionEnCours = travail
+  try {
+    await travail
+  } finally {
+    if (deconnexionEnCours === travail) deconnexionEnCours = null
   }
-  session = null
+}
+
+/** Jeton de la session courante, destiné uniquement aux routes serveur du Cockpit.
+ *  Le serveur le revalide auprès de Supabase avant chaque appel sensible. */
+export async function jetonAccesSync(): Promise<string | null> {
+  if (!client) return null
+  const clientAuDepart = client
+  const generationAuDepart = generationConfiguration
+  const { data, error } = await clientAuDepart.auth.getSession()
+  if (
+    generationAuDepart !== generationConfiguration ||
+    client !== clientAuDepart
+  )
+    return null
+  if (error || !data.session) {
+    session = null
+    return null
+  }
+  session = data.session
+  return data.session.access_token
+}
+
+function demanderRefetchRealtime(): void {
+  if (refetchRealtimeEnCours) {
+    refetchRealtimeARejouer = true
+    return
+  }
+  const generation = generationConfiguration
+  const espace = workspaceId
+  refetchRealtimeEnCours = (async () => {
+    do {
+      refetchRealtimeARejouer = false
+      const resultat = await tirerEtat(false)
+      if (generation !== generationConfiguration || espace !== workspaceId || !resultat) return
+      const revision = Number(resultat.revision)
+      if (
+        !Number.isSafeInteger(revision) ||
+        revision < 0 ||
+        (revisionCourante !== null && revision <= revisionCourante)
+      )
+        continue
+      const recevoir = onRemoteCourant
+      if (!recevoir) return
+      const accepte = recevoir(resultat.data)
+      if (accepte !== false) adopterRevisionDistante(revision, resultat.updated_at)
+    } while (refetchRealtimeARejouer)
+  })()
+    .catch((e) => {
+      const erreur = e instanceof Error ? e.message : String(e)
+      derniereErreur = erreur
+      onStatutCourant?.(erreur)
+    })
+    .finally(() => {
+      refetchRealtimeEnCours = null
+      if (refetchRealtimeARejouer && onRemoteCourant) demanderRefetchRealtime()
+    })
 }
 
 /** (ré)abonnement temps réel à la ligne de l'espace partagé */
@@ -161,75 +467,209 @@ function souscrire(): void {
     client.removeChannel(channel)
     channel = null
   }
+  const generationAbonnement = generationConfiguration
+  const espaceAbonnement = workspaceId
   channel = client
-    .channel(`ws-${workspaceId}`)
+    .channel(`ws-${espaceAbonnement}`)
     .on(
       'postgres_changes',
-      { event: '*', schema: 'public', table: TABLE, filter: `id=eq.${workspaceId}` },
+      { event: '*', schema: 'public', table: TABLE, filter: `id=eq.${espaceAbonnement}` },
       (payload) => {
-        const row = payload.new as { data?: AppState; updated_by?: string } | null
+        if (
+          generationAbonnement !== generationConfiguration ||
+          espaceAbonnement !== workspaceId
+        )
+          return
+        const row = payload.new as { data?: AppState; updated_by?: string; revision?: number } | null
         if (!row) return
+        const revision = Number(row.revision)
+        if (!Number.isSafeInteger(revision) || revision < 0) {
+          demanderRefetchRealtime()
+          return
+        }
         // anti-écho A : on ignore NOS propres écritures (comparé au contenu, robuste)
-        if (row.updated_by === MON_ID) return
-        derniereSync = new Date().toISOString()
+        if (row.updated_by === MON_ID) {
+          if (revisionCourante === null || revision > revisionCourante)
+            memoriserRevision(revision, new Date().toISOString())
+          return
+        }
+        // Une livraison tardive ne doit jamais faire régresser l'état accepté.
+        if (revisionCourante !== null && revision <= revisionCourante) return
         if (row.data) {
-          onRemoteCourant?.(row.data)
+          const recevoir = onRemoteCourant
+          if (!recevoir) return
+          const accepte = recevoir(row.data)
+          if (accepte !== false) {
+            adopterRevisionDistante(revision, new Date().toISOString())
+          }
         } else {
           // payload tronqué (blob volumineux) → on refait un tirage complet
-          void tirerEtat().then((r) => r && onRemoteCourant?.(r.data))
+          demanderRefetchRealtime()
         }
       },
     )
-    .subscribe()
+    .subscribe((statut) => {
+      if (
+        generationAbonnement !== generationConfiguration ||
+        espaceAbonnement !== workspaceId
+      )
+        return
+      if (statut === 'SUBSCRIBED') {
+        derniereErreur = null
+        onStatutCourant?.(null)
+        // Rattrape les changements survenus pendant une coupure Realtime.
+        demanderRefetchRealtime()
+        return
+      }
+      if (statut === 'CHANNEL_ERROR' || statut === 'TIMED_OUT') {
+        const erreur = `Synchronisation temps réel indisponible (${statut}).`
+        derniereErreur = erreur
+        onStatutCourant?.(erreur)
+      }
+    })
 }
 
 /** démarre le temps réel ; retourne la fonction d'arrêt (cleanup d'effet) */
-export function demarrerRealtime(onRemote: (s: AppState) => void): () => void {
+export function demarrerRealtime(
+  onRemote: (s: AppState) => boolean | void,
+  onStatut?: (erreur: string | null) => void,
+): () => void {
   onRemoteCourant = onRemote
+  onStatutCourant = onStatut ?? null
   if (session) souscrire()
   // sinon : le listener onAuthStateChange s'en chargera à la connexion
   return () => {
+    onRemoteCourant = null
+    onStatutCourant = null
+    refetchRealtimeARejouer = false
     if (channel && client) client.removeChannel(channel)
     channel = null
-    onRemoteCourant = null
   }
 }
 
-/** pousse l'état complet (débounce côté appelant). N'échoue JAMAIS : les
- *  erreurs deviennent un statut doux, la prochaine écriture rattrapera. */
-export async function pousserEtat(state: AppState): Promise<void> {
-  if (!client || !session) return
+/** Réactive le canal après une reconnexion manuelle, une fois la
+ *  réconciliation pull/CAS terminée. */
+export function relancerRealtime(): void {
+  if (session && onRemoteCourant) souscrire()
+}
+
+/** Pousse l'état complet avec verrou optimiste. Une révision distante plus
+ *  récente provoque un conflit explicite au lieu d'être écrasée. */
+export async function pousserEtat(
+  state: AppState,
+  cibleAttendue: string,
+): Promise<ResultatPush> {
+  if (recuperationLocaleRequise()) {
+    const erreur = signalerRecuperationLocaleRequise()
+    return { ok: false, conflit: true, erreur }
+  }
+  if (
+    !cibleAttendue ||
+    cibleAttendue !== configurationSync ||
+    cibleSynchronisation(state.settings.sync) !== cibleAttendue
+  ) {
+    const erreur =
+      'La cible de synchronisation a changé : cet envoi local a été annulé pour protéger les deux espaces.'
+    derniereErreur = erreur
+    return { ok: false, erreur }
+  }
+  if (!client || !session) {
+    const erreur = 'Aucune session Supabase active.'
+    derniereErreur = erreur
+    return { ok: false, erreur }
+  }
+  marquerEtatLocalEnAttente(state.settings.sync)
+  const clientAuDepart = client
+  const espaceAuDepart = workspaceId
+  const generationAuDepart = generationConfiguration
+  const revisionAttendue = revisionCourante ?? -1
   try {
-    const { error } = await client.from(TABLE).upsert({
-      id: workspaceId,
-      data: sansConfigLocale(state),
-      version: state.version,
-      updated_at: new Date().toISOString(),
-      updated_by: MON_ID,
+    const { data, error } = await clientAuDepart.rpc('enregistrer_workspace', {
+      p_id: espaceAuDepart,
+      p_data: etatPartageable(state),
+      p_version: state.version,
+      p_updated_by: MON_ID,
+      p_expected_revision: revisionAttendue,
     })
+    if (
+      generationAuDepart !== generationConfiguration ||
+      espaceAuDepart !== workspaceId ||
+      cibleAttendue !== configurationSync
+    ) {
+      const erreur = 'La configuration de synchronisation a changé pendant l’envoi.'
+      derniereErreur = erreur
+      return { ok: false, erreur }
+    }
     if (error) {
       derniereErreur = error.message
-      return
+      return { ok: false, erreur: error.message }
     }
-    derniereSync = new Date().toISOString()
+    const ligne = Array.isArray(data) ? data[0] : data
+    if (!ligne) {
+      const erreur = signalerConflitSync()
+      return { ok: false, conflit: true, erreur }
+    }
+    const revision = Number(ligne.revision)
+    if (!Number.isSafeInteger(revision) || revision < 0) {
+      const erreur = 'Révision de synchronisation invalide renvoyée par le serveur.'
+      derniereErreur = erreur
+      return { ok: false, erreur }
+    }
+    memoriserRevision(
+      revision,
+      typeof ligne.updated_at === 'string' ? ligne.updated_at : new Date().toISOString(),
+    )
+    effacerConflitSync()
     derniereErreur = null
+    return { ok: true, revision: revisionCourante ?? undefined }
   } catch (e) {
-    derniereErreur = e instanceof Error ? e.message : String(e)
+    const erreur = e instanceof Error ? e.message : String(e)
+    derniereErreur = erreur
+    return { ok: false, erreur }
   }
 }
 
-/** lit la ligne partagée courante (null si absente ou erreur) */
-export async function tirerEtat(): Promise<{ data: AppState; version: number; updated_at: string } | null> {
-  if (!client) return null
+/** lit la ligne partagée courante (null uniquement si elle n'existe pas). */
+export async function tirerEtat(memoriserRevision = true): Promise<{
+  data: AppState
+  version: number
+  updated_at: string
+  revision: number
+} | null> {
+  if (!client || !session) throw new Error('Aucune session Supabase active.')
+  const clientAuDepart = client
+  const espaceAuDepart = workspaceId
+  const generationAuDepart = generationConfiguration
   try {
-    const { data, error } = await client
+    const { data, error } = await clientAuDepart
       .from(TABLE)
-      .select('data,version,updated_at')
-      .eq('id', workspaceId)
+      .select('data,version,updated_at,revision')
+      .eq('id', espaceAuDepart)
       .maybeSingle()
-    if (error || !data) return null
-    return data as { data: AppState; version: number; updated_at: string }
-  } catch {
-    return null
+    if (generationAuDepart !== generationConfiguration || espaceAuDepart !== workspaceId)
+      throw new Error('La configuration de synchronisation a changé pendant la lecture.')
+    if (error) {
+      derniereErreur = error.message
+      throw new Error(`Lecture Supabase impossible : ${error.message}`)
+    }
+    if (!data) {
+      if (memoriserRevision) adopterRevisionDistante(null)
+      return null
+    }
+    const resultat = data as {
+      data: AppState
+      version: number
+      updated_at: string
+      revision: number
+    }
+    if (memoriserRevision)
+      adopterRevisionDistante(Number(resultat.revision), resultat.updated_at)
+    derniereErreur = null
+    return resultat
+  } catch (e) {
+    if (e instanceof Error && e.message.startsWith('Lecture Supabase impossible')) throw e
+    const erreur = e instanceof Error ? e.message : String(e)
+    derniereErreur = erreur
+    throw new Error(`Lecture Supabase impossible : ${erreur}`)
   }
 }

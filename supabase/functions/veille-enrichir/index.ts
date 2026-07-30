@@ -19,17 +19,20 @@
 // soumission. Accès : x-cron-secret (cron 10 min) OU jeton agence.
 // ============================================================
 
-import { createClient, type SupabaseClient } from 'jsr:@supabase/supabase-js@2'
+import { createClient, type SupabaseClient } from 'jsr:@supabase/supabase-js@2.110.0'
 
 const VERSION_PARSEUR = 'enrichir-1.0'
 const AGENCE = ['julenglet@gmail.com', 'zoefhebert@gmail.com']
 const UA = 'CockpitLL-Veille/1.0 (agence architecture ; contact : julenglet@gmail.com)'
-const JOBS_PAR_RUN = 6
+// Quatre lectures au pire à 25 s laissent une marge réelle à la fonction
+// (écritures, stockage et réponse) sous le plafond de la plateforme.
+const JOBS_PAR_RUN = 4
 const TAILLE_MAX_PAGE = 2 * 1024 * 1024 // 2 Mo de HTML
 const TAILLE_MAX_DCE = 40 * 1024 * 1024 // 40 Mo
+const DELAI_CHARGEMENT_MS = 25_000 // redirections et lecture du corps comprises
 
-/** seuls domaines FINAUX autorisés (les redirections de suivi des mails
- *  peuvent transiter ailleurs, mais la destination doit être ici) */
+/** Domaines autorisés pour chaque requête, y compris chaque saut
+ *  de redirection : aucun intermédiaire hors liste n'est contacté. */
 const DOMAINES_AUTORISES = [
   'marches-publics.info',
   'aws-france.com',
@@ -71,12 +74,41 @@ async function sha256Hex(donnees: ArrayBuffer | string): Promise<string> {
   return [...new Uint8Array(h)].map((b) => b.toString(16).padStart(2, '0')).join('')
 }
 
-function domaineAutorise(url: string): boolean {
+function urlAutorisee(url: string): URL | null {
   try {
-    const h = new URL(url).hostname.toLowerCase()
-    return DOMAINES_AUTORISES.some((d) => h === d || h.endsWith(`.${d}`))
+    const candidate = new URL(url)
+    const h = candidate.hostname.toLowerCase()
+    if (
+      candidate.protocol !== 'https:' ||
+      candidate.port !== '' ||
+      candidate.username ||
+      candidate.password ||
+      h.length > 253 ||
+      !/^[a-z0-9.-]+$/.test(h) ||
+      h.startsWith('.') ||
+      h.endsWith('.') ||
+      h.includes('..') ||
+      !DOMAINES_AUTORISES.some((d) => h === d || h.endsWith(`.${d}`))
+    ) {
+      return null
+    }
+    // Le fragment n'est jamais envoyé au serveur et ne doit pas créer
+    // artificiellement plusieurs URLs pour la même ressource.
+    candidate.hash = ''
+    return candidate
   } catch {
-    return false
+    return null
+  }
+}
+
+function domaineAutorise(url: string): boolean {
+  return urlAutorisee(url) !== null
+}
+
+class UrlNonAutoriseeError extends Error {
+  constructor(readonly url: string) {
+    super(`URL HTTPS hors liste blanche : ${url}`)
+    this.name = 'UrlNonAutoriseeError'
   }
 }
 
@@ -316,38 +348,104 @@ interface PageChargee {
   binaire?: ArrayBuffer
 }
 
+async function lireCorpsLimite(
+  reponse: Response,
+  limite: number,
+  tronquer: boolean,
+): Promise<Uint8Array> {
+  const longueurAnnoncee = Number(reponse.headers.get('content-length'))
+  if (!tronquer && Number.isFinite(longueurAnnoncee) && longueurAnnoncee > limite) {
+    await reponse.body?.cancel()
+    throw new Error(`Fichier trop volumineux (${longueurAnnoncee} octets).`)
+  }
+  if (!reponse.body) return new Uint8Array()
+
+  const lecteur = reponse.body.getReader()
+  const morceaux: Uint8Array[] = []
+  let taille = 0
+  try {
+    while (true) {
+      const { done, value } = await lecteur.read()
+      if (done) break
+      if (!value?.byteLength) continue
+
+      const restante = limite - taille
+      if (value.byteLength > restante) {
+        if (!tronquer) {
+          await lecteur.cancel()
+          throw new Error(`Fichier trop volumineux (plus de ${limite} octets).`)
+        }
+        if (restante > 0) morceaux.push(value.subarray(0, restante))
+        taille = limite
+        await lecteur.cancel()
+        break
+      }
+      morceaux.push(value)
+      taille += value.byteLength
+      if (tronquer && taille === limite) {
+        await lecteur.cancel()
+        break
+      }
+    }
+  } finally {
+    lecteur.releaseLock()
+  }
+
+  const resultat = new Uint8Array(taille)
+  let position = 0
+  for (const morceau of morceaux) {
+    resultat.set(morceau, position)
+    position += morceau.byteLength
+  }
+  return resultat
+}
+
 async function chargerUrl(url: string, binaire = false): Promise<PageChargee> {
   let courante = url
-  for (let saut = 0; saut < 6; saut++) {
-    const ctl = new AbortController()
-    const chrono = setTimeout(() => ctl.abort(), 25000)
-    let r: Response
-    try {
-      r = await fetch(courante, {
+  const ctl = new AbortController()
+  const chronoGlobal = setTimeout(() => ctl.abort(), DELAI_CHARGEMENT_MS)
+  try {
+    for (let saut = 0; saut < 6; saut++) {
+      const cible = urlAutorisee(courante)
+      if (!cible) throw new UrlNonAutoriseeError(courante)
+
+      const r = await fetch(cible, {
         redirect: 'manual',
         signal: ctl.signal,
         headers: { 'User-Agent': UA, Accept: binaire ? '*/*' : 'text/html,application/xhtml+xml' },
       })
-    } finally {
-      clearTimeout(chrono)
+      if ([301, 302, 303, 307, 308].includes(r.status)) {
+        const suivante = r.headers.get('location')
+        await r.body?.cancel()
+        if (!suivante) return { urlFinale: cible.href, status: r.status, contentType: '', corps: '' }
+        const redirection = new URL(suivante, cible)
+        if (!urlAutorisee(redirection.href)) throw new UrlNonAutoriseeError(redirection.href)
+        courante = redirection.href
+        continue
+      }
+      const contentType = r.headers.get('content-type') || ''
+      if (binaire) {
+        const donnees = await lireCorpsLimite(r, TAILLE_MAX_DCE, false)
+        return {
+          urlFinale: cible.href,
+          status: r.status,
+          contentType,
+          corps: '',
+          binaire: donnees.buffer,
+        }
+      }
+      const donnees = await lireCorpsLimite(r, TAILLE_MAX_PAGE, true)
+      return {
+        urlFinale: cible.href,
+        status: r.status,
+        contentType,
+        corps: new TextDecoder().decode(donnees),
+      }
     }
-    if ([301, 302, 303, 307, 308].includes(r.status)) {
-      const suivante = r.headers.get('location')
-      await r.body?.cancel()
-      if (!suivante) return { urlFinale: courante, status: r.status, contentType: '', corps: '' }
-      courante = new URL(suivante, courante).href
-      continue
-    }
-    const contentType = r.headers.get('content-type') || ''
-    if (binaire) {
-      const buf = await r.arrayBuffer()
-      if (buf.byteLength > TAILLE_MAX_DCE) throw new Error(`Fichier trop volumineux (${buf.byteLength} octets).`)
-      return { urlFinale: courante, status: r.status, contentType, corps: '', binaire: buf }
-    }
-    const texte = (await r.text()).slice(0, TAILLE_MAX_PAGE)
-    return { urlFinale: courante, status: r.status, contentType, corps: texte }
+    throw new Error('Trop de redirections.')
+  } finally {
+    clearTimeout(chronoGlobal)
   }
-  throw new Error('Trop de redirections.')
 }
 
 // ---------- traitement des jobs ----------
@@ -369,9 +467,35 @@ interface ResultatJob {
   error_detail?: string
 }
 
+interface ResultatEcriture {
+  error: { message?: string; code?: string } | null
+}
+
+class ErreurEcriture extends Error {
+  constructor(readonly operation: string, readonly code?: string) {
+    super(operation)
+    this.name = 'ErreurEcriture'
+  }
+}
+
+function exigerEcriture(resultat: ResultatEcriture, operation: string): void {
+  if (!resultat.error) return
+  throw new ErreurEcriture(
+    `${operation} : ${resultat.error.message || 'erreur Supabase inconnue'}`,
+    resultat.error.code,
+  )
+}
+
+function exigerEcritureOuDoublon(resultat: ResultatEcriture, operation: string): boolean {
+  if (!resultat.error) return true
+  if (resultat.error.code === '23505') return false
+  exigerEcriture(resultat, operation)
+  return false
+}
+
 async function finirJob(sb: SupabaseClient, job: Job, r: ResultatJob): Promise<void> {
   if (r.status === 'requeue') {
-    await sb
+    const resultat = await sb
       .from('veille_jobs')
       .update({
         status: job.attempts >= job.max_attempts ? 'failed' : 'queued',
@@ -381,9 +505,13 @@ async function finirJob(sb: SupabaseClient, job: Job, r: ResultatJob): Promise<v
         parser_version: VERSION_PARSEUR,
       })
       .eq('id', job.id)
+      .select('id')
+      .maybeSingle()
+    exigerEcriture(resultat, `Impossible de remettre le job ${job.id} en file`)
+    if (!resultat.data) throw new ErreurEcriture(`Le job ${job.id} a disparu avant sa remise en file.`)
     return
   }
-  await sb
+  const resultat = await sb
     .from('veille_jobs')
     .update({
       status: r.status,
@@ -393,6 +521,10 @@ async function finirJob(sb: SupabaseClient, job: Job, r: ResultatJob): Promise<v
       parser_version: VERSION_PARSEUR,
     })
     .eq('id', job.id)
+    .select('id')
+    .maybeSingle()
+  exigerEcriture(resultat, `Impossible de finaliser le job ${job.id}`)
+  if (!resultat.data) throw new ErreurEcriture(`Le job ${job.id} a disparu avant sa finalisation.`)
 }
 
 /** enregistre la page + son empreinte (brut au bucket, best effort) */
@@ -405,11 +537,11 @@ async function memoriserPage(
 ): Promise<string> {
   const empreinte = await sha256Hex(page.corps)
   const chemin = `pages/${empreinte.slice(0, 2)}/${empreinte}.html`
-  await sb.storage
+  const depot = await sb.storage
     .from('veille')
     .upload(chemin, new Blob([page.corps], { type: 'text/html' }), { upsert: true })
-    .catch(() => undefined)
-  await sb.from('veille_pages').insert({
+  exigerEcriture(depot, `Archivage de la page ${page.urlFinale} impossible`)
+  const indexation = await sb.from('veille_pages').insert({
     job_id: jobId,
     canonical_url: page.urlFinale,
     http_status: page.status,
@@ -420,17 +552,19 @@ async function memoriserPage(
     parse_completeness: completude,
     parse_status: statut,
   })
+  exigerEcriture(indexation, `Indexation de la page ${page.urlFinale} impossible`)
   return empreinte
 }
 
 /** champs déjà VALIDÉS à la main — jamais écrasés (audit §5.4) */
 async function champsValides(sb: SupabaseClient, source: string, sourceId: string): Promise<Set<string>> {
-  const { data } = await sb
+  const { data, error } = await sb
     .from('veille_field_evidence')
     .select('field_name')
     .eq('signal_source', source)
     .eq('signal_source_id', sourceId)
     .eq('validation_status', 'validee')
+  exigerEcriture({ error }, `Lecture des champs valides de ${source}:${sourceId} impossible`)
   return new Set((data || []).map((x) => x.field_name as string))
 }
 
@@ -464,7 +598,10 @@ async function enregistrerPreuves(
       // une valeur qui CONTREDIT un champ validé passe « à vérifier »
       validation_status: valides.has(champ) ? 'a_verifier' : 'automatique',
     }))
-  if (inserts.length > 0) await sb.from('veille_field_evidence').insert(inserts)
+  if (inserts.length > 0) {
+    const resultat = await sb.from('veille_field_evidence').insert(inserts)
+    exigerEcriture(resultat, `Enregistrement des preuves de ${source}:${sourceId} impossible`)
+  }
 }
 
 /** applique la fiche au signal SANS écraser les champs validés ;
@@ -476,12 +613,13 @@ async function appliquerFiche(
   fiche: FicheExtraite,
   urlFinale: string,
 ): Promise<{ dateAvant: string | null; dateApres: string | null } | null> {
-  const { data: signal } = await sb
+  const { data: signal, error: erreurSignal } = await sb
     .from('veille_signaux')
     .select('objet,acheteur,date_limite,procedure,departements,reference,detail')
     .eq('source', source)
     .eq('source_id', sourceId)
     .maybeSingle()
+  exigerEcriture({ error: erreurSignal }, `Lecture du signal ${source}:${sourceId} impossible`)
   if (!signal) return null
 
   const valides = await champsValides(sb, source, sourceId)
@@ -515,7 +653,12 @@ async function appliquerFiche(
     patch.date_limite = fiche.dateLimite
     dateApres = fiche.dateLimite
   }
-  await sb.from('veille_signaux').update(patch).eq('source', source).eq('source_id', sourceId)
+  const miseAJour = await sb
+    .from('veille_signaux')
+    .update(patch)
+    .eq('source', source)
+    .eq('source_id', sourceId)
+  exigerEcriture(miseAJour, `Mise à jour du signal ${source}:${sourceId} impossible`)
   return { dateAvant, dateApres }
 }
 
@@ -528,14 +671,15 @@ async function signalerChangementDate(
   nouvelleDate: string,
 ): Promise<void> {
   const idRect = `${sourceId}-rect-${nouvelleDate}`
-  const { data: deja } = await sb
+  const { data: deja, error: erreurRectificatif } = await sb
     .from('veille_signaux')
     .select('source_id')
     .eq('source', source)
     .eq('source_id', idRect)
     .maybeSingle()
+  exigerEcriture({ error: erreurRectificatif }, `Lecture du rectificatif ${source}:${idRect} impossible`)
   if (deja) return
-  await sb.from('veille_signaux').insert({
+  const insertion = await sb.from('veille_signaux').insert({
     source,
     source_id: idRect,
     type: 'rectificatif',
@@ -550,6 +694,7 @@ async function signalerChangementDate(
     url: null,
     niveau_analyse: 'fiche',
   })
+  exigerEcritureOuDoublon(insertion, `Création du rectificatif ${source}:${idRect} impossible`)
 }
 
 /** fetch_detail / resolve_link / check_updates : lire la fiche publique */
@@ -560,6 +705,9 @@ async function traiterFiche(sb: SupabaseClient, job: Job): Promise<ResultatJob> 
   try {
     page = await chargerUrl(job.url)
   } catch (e) {
+    if (e instanceof UrlNonAutoriseeError) {
+      return { status: 'blocked', error_code: 'domaine_hors_liste', error_detail: e.url }
+    }
     return { status: 'requeue', error_code: 'reseau', error_detail: e instanceof Error ? e.message : String(e) }
   }
   if (!domaineAutorise(page.urlFinale)) {
@@ -591,13 +739,14 @@ async function traiterFiche(sb: SupabaseClient, job: Job): Promise<ResultatJob> 
   // check_updates : ne re-parser que si le contenu a bougé
   if (job.kind === 'check_updates') {
     const empreinte = await sha256Hex(page.corps)
-    const { data: derniere } = await sb
+    const { data: derniere, error: erreurDernierePage } = await sb
       .from('veille_pages')
       .select('content_hash')
       .eq('canonical_url', page.urlFinale)
       .order('fetched_at', { ascending: false })
       .limit(1)
       .maybeSingle()
+    exigerEcriture({ error: erreurDernierePage }, `Lecture de la derniere page ${page.urlFinale} impossible`)
     if (derniere && derniere.content_hash === empreinte) {
       return { status: 'complete' } // rien n'a changé — pas de bruit
     }
@@ -630,12 +779,13 @@ async function traiterDce(sb: SupabaseClient, job: Job): Promise<ResultatJob> {
   const sourceId = job.signal_source_id
   if (!sourceId) return { status: 'failed', error_code: 'sans_signal' }
 
-  const { data: signal } = await sb
+  const { data: signal, error: erreurSignal } = await sb
     .from('veille_signaux')
     .select('objet,detail,url_canonique,url')
     .eq('source', source)
     .eq('source_id', sourceId)
     .maybeSingle()
+  exigerEcriture({ error: erreurSignal }, `Lecture du signal ${source}:${sourceId} impossible`)
   if (!signal) return { status: 'failed', error_code: 'signal_inconnu' }
 
   const detail = (signal.detail as Record<string, unknown>) || {}
@@ -644,18 +794,19 @@ async function traiterDce(sb: SupabaseClient, job: Job): Promise<ResultatJob> {
 
   if (!dceUrl) {
     // pas de lien DCE connu → action humaine (retrait sur la plateforme)
-    await sb.from('veille_documents').insert({
+    const indexation = await sb.from('veille_documents').insert({
       signal_source: source,
       signal_source_id: sourceId,
       source_url: (signal.url_canonique as string) || (signal.url as string) || null,
       access_mode: 'unknown',
       last_checked_at: new Date().toISOString(),
     })
+    exigerEcritureOuDoublon(indexation, `Indexation du retrait manuel ${source}:${sourceId} impossible`)
     return { status: 'needs_login', error_code: 'retrait_manuel', error_detail: 'Lien DCE non publié — retirer sur la plateforme puis déposer le ZIP.' }
   }
   if (!domaineAutorise(dceUrl)) return { status: 'blocked', error_code: 'domaine_hors_liste' }
   if (dceAccess !== 'public') {
-    await sb.from('veille_documents').insert({
+    const indexation = await sb.from('veille_documents').insert({
       signal_source: source,
       signal_source_id: sourceId,
       source_url: (signal.url_canonique as string) || null,
@@ -663,6 +814,7 @@ async function traiterDce(sb: SupabaseClient, job: Job): Promise<ResultatJob> {
       access_mode: dceAccess === 'login' ? 'login' : 'form',
       last_checked_at: new Date().toISOString(),
     })
+    exigerEcritureOuDoublon(indexation, `Indexation du retrait authentifie ${source}:${sourceId} impossible`)
     return {
       status: 'needs_login',
       error_code: 'retrait_identifie_ou_compte',
@@ -674,6 +826,9 @@ async function traiterDce(sb: SupabaseClient, job: Job): Promise<ResultatJob> {
   try {
     fichier = await chargerUrl(dceUrl, true)
   } catch (e) {
+    if (e instanceof UrlNonAutoriseeError) {
+      return { status: 'blocked', error_code: 'domaine_hors_liste', error_detail: e.url }
+    }
     return { status: 'requeue', error_code: 'reseau', error_detail: e instanceof Error ? e.message : String(e) }
   }
   if (fichier.status !== 200 || !fichier.binaire) {
@@ -682,34 +837,65 @@ async function traiterDce(sb: SupabaseClient, job: Job): Promise<ResultatJob> {
   const empreinte = await sha256Hex(fichier.binaire)
 
   // versions : même empreinte = rien de neuf ; sinon version suivante
-  const { data: versions } = await sb
+  const { data: versions, error: erreurVersions } = await sb
     .from('veille_documents')
-    .select('content_hash,version')
+    .select('content_hash,version,file_name,mime_type,storage_path')
     .eq('signal_source', source)
     .eq('signal_source_id', sourceId)
     .order('version', { ascending: false })
+  exigerEcriture({ error: erreurVersions }, `Lecture des versions DCE ${source}:${sourceId} impossible`)
   const derniere = (versions || [])[0]
   if (derniere && derniere.content_hash === empreinte) {
-    await sb
+    const verification = await sb
       .from('veille_documents')
       .update({ last_checked_at: new Date().toISOString() })
       .eq('signal_source', source)
       .eq('signal_source_id', sourceId)
       .eq('version', derniere.version)
+    exigerEcriture(verification, `Actualisation du DCE ${source}:${sourceId} v${derniere.version} impossible`)
+    if (derniere.storage_path && derniere.file_name) {
+      const entrant = await sb.from('entrants').insert({
+        source: 'plateforme',
+        source_id: `${source}:${sourceId}`,
+        piece_index: Number(derniere.version),
+        expediteur: source,
+        objet: `DCE - ${(signal.objet as string) || sourceId}${Number(derniere.version) > 1 ? ` (version ${derniere.version})` : ''}`,
+        recu_le: new Date().toISOString(),
+        nom_fichier: derniere.file_name,
+        type_mime: derniere.mime_type,
+        taille: fichier.binaire.byteLength,
+        empreinte_sha256: empreinte,
+        chemin_storage: derniere.storage_path,
+        categorie_proposee: 'DCE',
+        confiance: 0.9,
+        raisons: [`DCE telecharge automatiquement (retrait public) - ${dceUrl}`, `version ${derniere.version}`],
+        statut: 'a_valider',
+      })
+      exigerEcritureOuDoublon(
+        entrant,
+        `Indexation du DCE entrant ${source}:${sourceId} v${derniere.version} impossible`,
+      )
+    }
+    const signalDce = await sb
+      .from('veille_signaux')
+      .update({ niveau_analyse: 'dce' })
+      .eq('source', source)
+      .eq('source_id', sourceId)
+    exigerEcriture(signalDce, `Marquage DCE du signal ${source}:${sourceId} impossible`)
     return { status: 'complete' }
   }
   const version = derniere ? Number(derniere.version) + 1 : 1
 
   const nomFichier = decodeURIComponent((new URL(dceUrl).pathname.split('/').pop() || 'dce.zip').slice(-80)) || 'dce.zip'
   const chemin = `plateformes/${source}-${sourceId}/v${version}-${nomFichier}`
-  const { error: eUpload } = await sb.storage
+  const depot = await sb.storage
     .from('entrants')
     .upload(chemin, new Blob([fichier.binaire], { type: fichier.contentType || 'application/octet-stream' }), {
       upsert: true,
     })
-  if (eUpload) return { status: 'failed', error_code: 'stockage', error_detail: eUpload.message }
+  exigerEcriture(depot, `Archivage du DCE ${source}:${sourceId} v${version} impossible`)
 
-  await sb.from('veille_documents').insert({
+  const document = await sb.from('veille_documents').insert({
     signal_source: source,
     signal_source_id: sourceId,
     source_url: (signal.url_canonique as string) || null,
@@ -723,10 +909,13 @@ async function traiterDce(sb: SupabaseClient, job: Job): Promise<ResultatJob> {
     fetched_at: new Date().toISOString(),
     last_checked_at: new Date().toISOString(),
   })
+  exigerEcritureOuDoublon(document, `Indexation du DCE ${source}:${sourceId} v${version} impossible`)
 
   // le DCE arrive dans la boîte « Arrivées serveur » de l'app (table entrants)
-  await sb.from('entrants').insert({
+  const entrant = await sb.from('entrants').insert({
     source: 'plateforme',
+    source_id: `${source}:${sourceId}`,
+    piece_index: version,
     expediteur: source,
     objet: `DCE — ${(signal.objet as string) || sourceId}${version > 1 ? ` (version ${version})` : ''}`,
     recu_le: new Date().toISOString(),
@@ -740,16 +929,27 @@ async function traiterDce(sb: SupabaseClient, job: Job): Promise<ResultatJob> {
     raisons: [`DCE téléchargé automatiquement (retrait public) — ${dceUrl}`, `version ${version}`],
     statut: 'a_valider',
   })
+  exigerEcritureOuDoublon(entrant, `Indexation du DCE entrant ${source}:${sourceId} v${version} impossible`)
 
-  await sb.from('veille_signaux').update({ niveau_analyse: 'dce' }).eq('source', source).eq('source_id', sourceId)
+  const signalDce = await sb
+    .from('veille_signaux')
+    .update({ niveau_analyse: 'dce' })
+    .eq('source', source)
+    .eq('source_id', sourceId)
+  exigerEcriture(signalDce, `Marquage DCE du signal ${source}:${sourceId} impossible`)
   return { status: 'complete' }
 }
 
 /** planifie check_updates pour les consultations SUIVIES (validées / Go)
  *  d'après l'état partagé de l'agence — une fois par ~20 h et par fiche */
-async function planifierSurveillance(sb: SupabaseClient): Promise<number> {
-  const { data: espaces } = await sb.from('workspace').select('data').limit(1)
-  const etat = (espaces || [])[0]?.data as
+async function planifierSurveillance(sb: SupabaseClient, workspaceId: string): Promise<number> {
+  const { data: espace, error: erreurEspace } = await sb
+    .from('workspace')
+    .select('data')
+    .eq('id', workspaceId)
+    .maybeSingle()
+  exigerEcriture({ error: erreurEspace }, `Lecture du workspace ${workspaceId} impossible`)
+  const etat = espace?.data as
     | { consultations?: { statut?: string; sourceId?: string; sourceUrl?: string; intitule?: string }[] }
     | undefined
   if (!etat?.consultations) return 0
@@ -759,7 +959,7 @@ async function planifierSurveillance(sb: SupabaseClient): Promise<number> {
   let crees = 0
   for (const c of suivies) {
     if (!domaineAutorise(c.sourceUrl!) ) continue // BOAMP/TED gérés par veille-collecte
-    const { data: dernier } = await sb
+    const { data: dernier, error: erreurDernierJob } = await sb
       .from('veille_jobs')
       .select('finished_at,status')
       .eq('kind', 'check_updates')
@@ -767,15 +967,17 @@ async function planifierSurveillance(sb: SupabaseClient): Promise<number> {
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle()
+    exigerEcriture({ error: erreurDernierJob }, `Lecture de la surveillance ${c.sourceId} impossible`)
     if (dernier && ['queued', 'fetching'].includes(dernier.status as string)) continue
     if (dernier?.finished_at && Date.now() - new Date(dernier.finished_at as string).getTime() < 20 * 3600_000) continue
-    const { data: signal } = await sb
+    const { data: signal, error: erreurSignal } = await sb
       .from('veille_signaux')
       .select('source,url_canonique,url')
       .eq('source_id', c.sourceId!)
       .limit(1)
       .maybeSingle()
-    const { error } = await sb.from('veille_jobs').insert({
+    exigerEcriture({ error: erreurSignal }, `Lecture du signal suivi ${c.sourceId} impossible`)
+    const insertion = await sb.from('veille_jobs').insert({
       signal_source: signal?.source || 'suivi',
       signal_source_id: c.sourceId,
       source: signal?.source || 'suivi',
@@ -783,7 +985,9 @@ async function planifierSurveillance(sb: SupabaseClient): Promise<number> {
       url: (signal?.url_canonique as string) || (signal?.url as string) || c.sourceUrl,
       parser_version: VERSION_PARSEUR,
     })
-    if (!error) crees++
+    if (exigerEcritureOuDoublon(insertion, `Planification de la surveillance ${c.sourceId} impossible`)) {
+      crees++
+    }
   }
   return crees
 }
@@ -792,9 +996,15 @@ async function planifierSurveillance(sb: SupabaseClient): Promise<number> {
 
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS })
+  if (req.method !== 'POST') return json({ erreur: 'Méthode non prise en charge.' }, 405)
 
   const sb = admin()
-  const { data: cfg } = await sb.from('ingestion_config').select('cron_secret').eq('id', 'google').maybeSingle()
+  const { data: cfg, error: erreurConfig } = await sb
+    .from('ingestion_config')
+    .select('cron_secret,workspace_id')
+    .eq('id', 'google')
+    .maybeSingle()
+  if (erreurConfig) return json({ erreur: `Configuration illisible : ${erreurConfig.message}` }, 500)
   const secretRecu = req.headers.get('x-cron-secret')
   let autorise = Boolean(secretRecu && cfg?.cron_secret && secretRecu === cfg.cron_secret)
   if (!autorise) {
@@ -806,7 +1016,7 @@ Deno.serve(async (req: Request) => {
   }
   if (!autorise) return json({ erreur: 'Accès refusé.' }, 401)
 
-  const surveillance = await planifierSurveillance(sb).catch(() => 0)
+  const surveillance = await planifierSurveillance(sb, cfg?.workspace_id || 'agence-ll')
 
   const { data: jobs, error: eClaim } = await sb.rpc('reclamer_veille_jobs', { nb: JOBS_PAR_RUN })
   if (eClaim) return json({ erreur: `File illisible : ${eClaim.message}` }, 500)
@@ -817,7 +1027,12 @@ Deno.serve(async (req: Request) => {
     try {
       r = job.kind === 'fetch_dce' ? await traiterDce(sb, job) : await traiterFiche(sb, job)
     } catch (e) {
-      r = { status: 'failed', error_code: 'exception', error_detail: e instanceof Error ? e.message : String(e) }
+      const erreurEcriture = e instanceof ErreurEcriture
+      r = {
+        status: erreurEcriture ? 'requeue' : 'failed',
+        error_code: erreurEcriture ? 'ecriture_supabase' : 'exception',
+        error_detail: e instanceof Error ? e.message : String(e),
+      }
     }
     await finirJob(sb, job, r)
     resultats[r.status] = (resultats[r.status] || 0) + 1

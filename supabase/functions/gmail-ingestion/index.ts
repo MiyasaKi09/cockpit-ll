@@ -11,7 +11,7 @@
 // personne de l'agence (bouton « Scanner maintenant »).
 // ============================================================
 
-import { createClient, type SupabaseClient } from 'jsr:@supabase/supabase-js@2'
+import { createClient, type SupabaseClient } from 'jsr:@supabase/supabase-js@2.110.0'
 
 const AGENCE = ['julenglet@gmail.com', 'zoefhebert@gmail.com']
 
@@ -148,9 +148,15 @@ async function sha256Hex(octets: Uint8Array): Promise<string> {
 
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS })
+  if (req.method !== 'POST') return json({ erreur: 'Méthode non prise en charge.' }, 405)
 
   const sb = admin()
-  const { data: cfg } = await sb.from('ingestion_config').select('*').eq('id', 'google').maybeSingle()
+  const { data: cfg, error: erreurConfig } = await sb
+    .from('ingestion_config')
+    .select('*')
+    .eq('id', 'google')
+    .maybeSingle()
+  if (erreurConfig) return json({ erreur: `Configuration illisible : ${erreurConfig.message}` }, 500)
   if (!cfg) return json({ erreur: 'Configuration absente.' }, 500)
 
   // --- accès : planificateur (secret) ou personne de l'agence (jeton) ---
@@ -201,7 +207,12 @@ Deno.serve(async (req: Request) => {
   const jetonGmail = acces.access_token
 
   // --- repères de classement : l'état partagé du Cockpit ---
-  const { data: ws } = await sb.from('workspace').select('data').limit(1).maybeSingle()
+  const { data: ws, error: erreurWorkspace } = await sb
+    .from('workspace')
+    .select('data')
+    .eq('id', cfg.workspace_id || 'agence-ll')
+    .maybeSingle()
+  if (erreurWorkspace) return json({ erreur: `Workspace illisible : ${erreurWorkspace.message}` }, 500)
   const etat = (ws?.data ?? {}) as {
     projets?: { id: string; nom: string }[]
     entreprises?: { raisonSociale: string; domaines?: string[] }[]

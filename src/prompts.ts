@@ -59,7 +59,7 @@ export function contexteProjet(state: AppState, p: Projet): Record<string, strin
     (ph) => ph.debut && ph.fin && ph.debut <= auj && auj <= ph.fin,
   )
   const impayees = state.factures.filter(
-    (f) => f.projetId === p.id && retardFacture(f, auj) > 0,
+    (f) => f.projetId === p.id && retardFacture(state, f, auj) > 0,
   )
   const marches = state.marches.filter((m) => m.projetId === p.id)
 
@@ -144,7 +144,7 @@ export function contexteMarche(
 export function contexteFacture(state: AppState, f: Facture): Record<string, string> {
   const p = state.projets.find((x) => x.id === f.projetId)
   const base = p ? contexteProjet(state, p) : { fiche: '', date: fmtDate(todayISO()) }
-  const retard = retardFacture(f, todayISO())
+  const retard = retardFacture(state, f, todayISO())
   const delaiMoyen = p ? delaiMoyenPaiement(state, p.typeMO) : null
   return {
     ...base,

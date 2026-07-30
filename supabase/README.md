@@ -155,6 +155,13 @@ npx supabase functions deploy veille-mails
 npx supabase functions deploy veille-enrichir
 ```
 
+Sur un projet **déjà en service**, l’ordre de bascule compte : la migration
+`20260729170200` retire le chemin d’écriture direct sur `public.workspace`, que
+le front précédent utilise encore. Suivez
+[`docs/MISE_EN_PRODUCTION.md`](../docs/MISE_EN_PRODUCTION.md), qui encadre cette
+fenêtre avec les deux scripts de
+[`supabase/operations/`](operations/README.md).
+
 Configurez ensuite les identifiants Google depuis **Paramètres →
 Branchements**, puis accordez le consentement Gmail. Ne placez jamais la clé
 `service_role`, le secret OAuth Google ou un refresh token dans Git.

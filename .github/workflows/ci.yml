@@ -45,6 +45,9 @@ jobs:
       - name: Edge Functions security tests
         run: npm run test:edge-security
 
+      - name: Production rollout consistency
+        run: npm run test:mise-en-production
+
       - name: Sync privacy tests
         run: npm run test:sync-state
 

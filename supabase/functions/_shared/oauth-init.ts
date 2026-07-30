@@ -19,7 +19,14 @@ function depuisBase64Url(valeur: string): Uint8Array {
   if (!/^[A-Za-z0-9_-]+$/.test(valeur)) throw new Error('Base64url invalide.')
   const complete = valeur.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(valeur.length / 4) * 4, '=')
   const binaire = atob(complete)
-  return Uint8Array.from(binaire, (caractere) => caractere.charCodeAt(0))
+  const octets = Uint8Array.from(binaire, (caractere) => caractere.charCodeAt(0))
+  // Le dernier caractère d'un base64url ne porte pas que des bits utiles : une
+  // signature de 32 octets tient sur 43 caractères, dont 2 bits ignorés au
+  // décodage. Quatre textes distincts donnent donc les mêmes octets. Sans ce
+  // contrôle de forme canonique, un jeton altéré sur son dernier caractère
+  // reste accepté.
+  if (versBase64Url(octets) !== valeur) throw new Error('Base64url non canonique.')
+  return octets
 }
 
 async function signer(message: string, secret: string): Promise<Uint8Array> {

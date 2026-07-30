@@ -163,6 +163,11 @@ Edge Functions et planification. Les identifiants OAuth Gmail sont saisis dans
 le Cockpit et stockés côté serveur ; ils ne doivent pas rejoindre l’état
 partagé ni les fichiers d’environnement du front.
 
+La procédure ordonnée de bascule d’un projet déjà en service — variables,
+migrations, fonctions, déploiement du front, puis révocation des anciennes
+écritures directes — est décrite dans
+[`docs/MISE_EN_PRODUCTION.md`](docs/MISE_EN_PRODUCTION.md).
+
 Le worker Playwright de veille est optionnel et ne doit être activé que si les
 mesures montrent des pages réellement impossibles à traiter en HTTP simple.
 Voir [`scraper-worker/README.md`](scraper-worker/README.md).

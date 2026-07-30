@@ -188,16 +188,28 @@ async function testerJetonSigne() {
     ),
     false,
   )
-  const jetonAltere = `${jeton.slice(0, -1)}${jeton.endsWith('a') ? 'b' : 'a'}`
-  assert.equal(
-    await oauthInit.verifierJetonInitiationOAuth(
-      jetonAltere,
-      'agence@example.com',
-      secret,
-      maintenant + 1000,
-    ),
-    false,
-  )
+  // Une altération est testée à trois endroits : le corps, le premier
+  // caractère de la signature, et le dernier — dont les bits de bourrage
+  // rendaient autrefois la falsification indétectable une fois sur seize.
+  const alterer = (source, index) =>
+    `${source.slice(0, index)}${source[index] === 'a' ? 'b' : 'a'}${source.slice(index + 1)}`
+  const debutSignature = jeton.indexOf('.') + 1
+  for (const [endroit, jetonAltere] of [
+    ['le corps', alterer(jeton, 0)],
+    ['le premier caractère de la signature', alterer(jeton, debutSignature)],
+    ['le dernier caractère de la signature', alterer(jeton, jeton.length - 1)],
+  ]) {
+    assert.equal(
+      await oauthInit.verifierJetonInitiationOAuth(
+        jetonAltere,
+        'agence@example.com',
+        secret,
+        maintenant + 1000,
+      ),
+      false,
+      `un jeton altéré sur ${endroit} doit être refusé`,
+    )
+  }
   assert.equal(
     await oauthInit.verifierJetonInitiationOAuth(
       jeton,

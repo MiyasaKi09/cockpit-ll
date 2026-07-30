@@ -5,6 +5,12 @@
 // import JSON, toujours avec statut « à vérifier ».
 // ============================================================
 
+// Les trois axes de catégorisation des échanges (CDC §5.2) vivent dans
+// leur propre module : `PhaseEchange` est un superset SÉPARÉ de
+// `PhaseCode`, qui ne bouge pas (il porte la chaîne d'honoraires).
+// Import de types seul — aucune dépendance à l'exécution.
+import type { NiveauImportance, PhaseEchange, TypeEchange } from './categorisation'
+
 export type TypeMO = 'Public' | 'Privé pro' | 'Particulier'
 
 export type StatutProjet = 'Prospect' | 'Offre remise' | 'Signé' | 'En cours' | 'Livré' | 'Perdu'
@@ -134,7 +140,9 @@ export interface Courrier {
   de: string
   objet: string
   resume: string
-  /** question / document / administratif / commercial / autre */
+  /** question / document / administratif / commercial / autre — texte
+   *  libre historique. CONSERVÉ tel quel : c'est la trace de ce qui a
+   *  été écrit, et donc la source dont `typeEchange` se re-dérive. */
   type: string
   actionProposee?: string
   urgence?: 1 | 2 | 3
@@ -142,6 +150,17 @@ export interface Courrier {
   statut: 'a_traiter' | 'traite'
   dateReception: string // ISO
   source?: string
+  // --- axes de catégorisation du CDC §5.2 (src/categorisation.ts) ---
+  // Optionnels et nullables : `null` veut dire « non renseigné, à
+  // choisir », jamais « sans importance ». Renseignés une fois par le
+  // palier v19 depuis `type` et `urgence`, corrigeables ensuite.
+  // Ils ne portent PAS la séparation proposé / validé du §3.14 : dans
+  // le document JSONB il n'y a pas de GRANT au niveau colonne pour la
+  // tenir. La table `communications` (A.2) la portera ; ici, la garantie
+  // est plus faible et se limite à la re-dérivabilité depuis `type`.
+  phaseEchange?: PhaseEchange | null
+  typeEchange?: TypeEchange | null
+  importance?: NiveauImportance | null
 }
 
 export type StatutReunion = 'a_preparer' | 'cr_a_generer' | 'cr_a_relire' | 'diffuse'

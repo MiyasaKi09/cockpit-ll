@@ -29,7 +29,8 @@ Ce qui ne change pas, et qui est le cœur du contrat :
 - Un module = un fichier `src/modules/X.tsx`, export default d'un composant sans props.
 - **Les fichiers partagés se modifient, mais jamais en passant** (`types.ts`, `store.tsx`,
   `ui.tsx`, `util.ts`, `miqcp.ts`, `alerts.ts`, `derive.ts`, `prompts.ts`, `seed.ts`,
-  `routines.ts`, `importRoutines.ts`, `personnes.ts`, `moi.ts`, `styles.css`, `App.tsx`). L'interdiction
+  `routines.ts`, `importRoutines.ts`, `personnes.ts`, `moi.ts`, `categorisation.ts`,
+  `styles.css`, `App.tsx`). L'interdiction
   absolue précédente avait un motif réel — un module qui bricole `ui.tsx` casse les 42 autres —
   mais elle produisait l'inverse de son intention : des composants locaux dupliqués, des styles
   en ligne, et un repli mobile qui s'est dégradé module par module. La règle est donc :
@@ -112,6 +113,17 @@ choixPoste)` (règle pure, testable), `normaliserEmail`.
 
 `alerts.ts` : `computeAlertes(state, today)`, `alertesActives(state, today)` (snoozes filtrés).
 Snooze = `d.settings.snoozes[alerte.id] = dateISO` (jusqu'à cette date).
+
+`categorisation.ts` : référentiel FERMÉ des trois axes de classement des échanges (CDC §5.2) —
+`PhaseEchange` (superset **séparé** de `PhaseCode`, qui ne bouge pas : il porte la chaîne
+d'honoraires) avec `PHASES_ECHANGE` / `LIBELLES_PHASE_ECHANGE` / `estPhaseDeMission`,
+`TypeEchange` (15) avec `TYPES_ECHANGE` / `LIBELLES_TYPE_ECHANGE`, `NiveauImportance` (6) avec
+`NIVEAUX_IMPORTANCE` / `LIBELLES_IMPORTANCE`, et `graviteDe(niveau): 1|2|3` — projection sur
+l'échelle de `Alerte.gravite`. `normaliserPhaseEchange` / `normaliserTypeEchange` /
+`normaliserImportance` (tolérantes en entrée, `null` en sortie si rien n'est certain),
+`importanceDepuisUrgence`, `reprendreAxes(source)`. **Une valeur d'axe ne se déclare qu'ici** :
+recopiée ailleurs (écran, CHECK SQL, Edge Function) elle divergerait sans bruit.
+`scripts/test-categorisation.cjs` le vérifie.
 
 `prompts.ts` : `assemble(corps, ctx)`, `copier(texte)`, `contexteProjet(state, p)`,
 `contexteMarche(state, m, situation?)`, `contexteFacture(state, f)`,

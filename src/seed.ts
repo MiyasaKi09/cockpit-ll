@@ -15,7 +15,13 @@ import { amorcerFinance } from './amorceFinance'
 // `auteur`). Tous optionnels et saisis à la main : un état v17 s'ouvre
 // tel quel, sans champ à reconstruire. Le palier de `migrate()` ne fait
 // donc que NORMALISER ce qui a été saisi ou importé (voir src/store.tsx).
-export const STATE_VERSION = 18
+// v19 : les trois axes de catégorisation des échanges (CDC §5.2,
+// src/categorisation.ts) posés sur `Courrier` — `phaseEchange`,
+// `typeEchange`, `importance`. Optionnels et nullables. Le palier les
+// DÉRIVE une fois de `type` et `urgence`, qui restent la source ; il ne
+// supprime ni ne réécrit aucun champ existant, et un état v18 rouvert
+// sur une version antérieure garde tout ce qu'il avait.
+export const STATE_VERSION = 19
 
 const P = (v: number) => Math.round(v * 100) / 100
 
@@ -952,6 +958,11 @@ export function seedState(): AppState {
         statut: 'a_traiter',
         dateReception: '2026-07-02',
         source: 'EXEMPLE — routine tri du matin du 02/07/2026',
+        // axes du §5.2 : la phase ne se dérive de rien (un courrier n'en
+        // porte pas), elle se choisit — l'exemple le montre renseigné.
+        phaseEchange: 'DIAG',
+        typeEchange: 'client',
+        importance: 'important',
       },
     ],
 

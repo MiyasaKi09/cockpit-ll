@@ -7,6 +7,7 @@ import type { AppState, DocumentCorpus, Entreprise, Personne } from './types'
 import { fold, uid } from './util'
 import { seedState, STATE_VERSION } from './seed'
 import { PHASES_ORDRE } from './miqcp'
+import { reprendreAxes } from './categorisation'
 import { amorcerFinance } from './amorceFinance'
 import { DEPARTEMENTS_DEFAUT } from './boamp'
 import {
@@ -58,7 +59,19 @@ function migrate(parsed: AppState): AppState {
     version: STATE_VERSION,
   }
   etat.reunions = Array.isArray(parsed.reunions) ? parsed.reunions : []
-  etat.courriers = Array.isArray(parsed.courriers) ? parsed.courriers : []
+  // v18 → v19 : les trois axes du §5.2 (src/categorisation.ts). Le palier
+  // REPREND les courriers existants sans rien inventer : le type d'échange
+  // et l'importance se dérivent de `type` et `urgence`, qui restent la
+  // source ; ce qui n'est pas déductible reste vide — un axe faux ne se
+  // voit pas, contrairement à un axe à choisir. Une valeur hors liste
+  // fermée (import JSON, futur producteur) est ramenée à null : elle
+  // ferait disparaître le courrier des filtres par axe, sans erreur.
+  // `...c` d'abord : une reconstruction champ par champ effacerait en
+  // silence tout champ non listé ici.
+  etat.courriers = (Array.isArray(parsed.courriers) ? parsed.courriers : []).map((c) => ({
+    ...c,
+    ...reprendreAxes(c),
+  }))
   etat.tempsHorsProjet = Array.isArray(parsed.tempsHorsProjet) ? parsed.tempsHorsProjet : []
   // v7 → v8 : congés / absences par personne (plan de charge)
   etat.absences = Array.isArray(parsed.absences) ? parsed.absences : []

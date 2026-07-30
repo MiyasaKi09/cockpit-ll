@@ -14,7 +14,7 @@
 // (bouton « Collecter maintenant »).
 // ============================================================
 
-import { createClient, type SupabaseClient } from 'jsr:@supabase/supabase-js@2'
+import { createClient, type SupabaseClient } from 'jsr:@supabase/supabase-js@2.110.0'
 
 const AGENCE = ['julenglet@gmail.com', 'zoefhebert@gmail.com']
 
@@ -314,9 +314,15 @@ async function enregistrer(sb: SupabaseClient, source: 'boamp' | 'ted', signaux:
 
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS })
+  if (req.method !== 'POST') return json({ erreur: 'Méthode non prise en charge.' }, 405)
 
   const sb = admin()
-  const { data: cfg } = await sb.from('ingestion_config').select('cron_secret').eq('id', 'google').maybeSingle()
+  const { data: cfg, error: erreurConfig } = await sb
+    .from('ingestion_config')
+    .select('cron_secret,workspace_id')
+    .eq('id', 'google')
+    .maybeSingle()
+  if (erreurConfig) return json({ erreur: `Configuration illisible : ${erreurConfig.message}` }, 500)
 
   const secretRecu = req.headers.get('x-cron-secret')
   let autorise = Boolean(secretRecu && cfg?.cron_secret && secretRecu === cfg.cron_secret)
@@ -330,7 +336,12 @@ Deno.serve(async (req: Request) => {
   if (!autorise) return json({ erreur: 'Accès refusé.' }, 401)
 
   // critères de l'agence — les mêmes que la recherche manuelle du Radar
-  const { data: ws } = await sb.from('workspace').select('data').limit(1).maybeSingle()
+  const { data: ws, error: erreurWorkspace } = await sb
+    .from('workspace')
+    .select('data')
+    .eq('id', cfg?.workspace_id || 'agence-ll')
+    .maybeSingle()
+  if (erreurWorkspace) return json({ erreur: `Workspace illisible : ${erreurWorkspace.message}` }, 500)
   const criteres: Criteres = {
     ...CRITERES_DEFAUT,
     ...(((ws?.data as { settings?: { veilleBoamp?: Partial<Criteres> } })?.settings?.veilleBoamp) || {}),

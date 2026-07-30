@@ -157,13 +157,13 @@ export function revueDirection(state: AppState, today: string): SectionRevue[] {
 
   // 2 — retards clients
   const retards = state.factures
-    .filter((f) => f.type !== 'avoir' && retardFacture(f, today) > 0)
-    .sort((a, b) => retardFacture(b, today) - retardFacture(a, today))
+    .filter((f) => f.type !== 'avoir' && retardFacture(state, f, today) > 0)
+    .sort((a, b) => retardFacture(state, b, today) - retardFacture(state, a, today))
   sections.push({
     cle: 'retards',
     titre: `2 · Retards clients (${retards.length})`,
     lignes: retards.length
-      ? retards.slice(0, 6).map((f) => ({ texte: `${f.numero || f.id} — ${nomProjet(state, f.projetId)} · ${retardFacture(f, today)} j de retard`, lien: '#/facturation', tone: 'danger' as const }))
+      ? retards.slice(0, 6).map((f) => ({ texte: `${f.numero || f.id} — ${nomProjet(state, f.projetId)} · ${retardFacture(state, f, today)} j de retard`, lien: '#/facturation', tone: 'danger' as const }))
       : [{ texte: 'Aucun retard client.', tone: 'ok' as const }],
   })
 

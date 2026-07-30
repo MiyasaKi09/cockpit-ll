@@ -64,7 +64,7 @@ export function computeAlertes(state: AppState, today: string): Alerte[] {
     })
   }
   for (const f of state.factures) {
-    const retard = retardFacture(f, today)
+    const retard = retardFacture(state, f, today)
     if (retard > 0) {
       alertes.push({
         id: `retard:${f.id}`,

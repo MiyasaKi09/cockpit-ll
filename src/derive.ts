@@ -3,7 +3,13 @@
 
 import type { AppState, Consultation, EcheanceFacturation, Facture, MarcheTravaux, PhaseCode, Projet, Situation, StatutConsultation } from './types'
 import { calculHonoraires } from './miqcp'
-import { regleSurFacture, ttcFacture } from './facture'
+import {
+  creanceFactureTTC,
+  montantRestantAnnulableHT,
+  regleSurFacture,
+  soldeFacture,
+  ttcFacture,
+} from './facture'
 import { addDays, diffDays, fmtMoney, fold } from './util'
 
 export function projetById(state: AppState, id: string): Projet | undefined {
@@ -29,12 +35,12 @@ export function factureHT(state: AppState, projetId: string, phase?: PhaseCode):
 
 /** HT encaissé pour un projet — dérivé des PAIEMENTS (audit F0) :
  *  part HT de chaque facture au prorata de ce qui est réellement réglé */
-export function encaisseHT(state: AppState, projetId: string): number {
+export function encaisseHT(state: AppState, projetId: string, phase?: PhaseCode): number {
   let total = 0
   for (const f of state.factures) {
-    if (f.projetId !== projetId) continue
+    if (f.projetId !== projetId || (phase !== undefined && f.phase !== phase)) continue
     const t = ttcFacture(f)
-    if (t === 0) continue
+    if (t <= 0) continue
     const regle = regleSurFacture(state, f.id)
     total += f.montantHT * Math.min(1, regle / t)
   }
@@ -84,8 +90,8 @@ export function encaissementPrevuEcheance(e: EcheanceFacturation): string {
 }
 
 /** jours de retard d'une facture émise non encaissée (0 si pas en retard) */
-export function retardFacture(f: Facture, today: string): number {
-  if (f.statut !== 'emise') return 0
+export function retardFacture(state: AppState, f: Facture, today: string): number {
+  if (f.type === 'avoir' || f.statut !== 'emise' || soldeFacture(state, f) <= 0.01) return 0
   const r = diffDays(encaissementPrevu(f), today)
   return Math.max(0, r)
 }
@@ -103,7 +109,7 @@ export interface Meteo {
   /** trésorerie disponible (saisie Paramètres / relevé) */
   tresorerie: number | null
   tresorerieMajLe: string | null
-  /** HT des factures à émettre ou en attente d'encaissement sous 90 jours */
+  /** HT restant à encaisser ou à facturer sous 90 jours */
   facturable90j: number
   /** carnet de commandes : honoraires restant à facturer, projets signés/en cours */
   carnetHT: number
@@ -111,11 +117,18 @@ export interface Meteo {
 
 export function meteoFinanciere(state: AppState, today: string): Meteo {
   const horizon = addDays(today, 90)
-  // factures émises non encaissées + échéances à facturer sous 90 j
+  // Créances nettes des paiements et avoirs + échéances à facturer sous 90 j.
+  const aEncaisserHT = state.factures
+    .filter((f) => f.type !== 'avoir' && f.statut !== 'prevue' && f.emission <= horizon)
+    .reduce((somme, facture) => {
+      const creanceTTC = creanceFactureTTC(state, facture)
+      const soldeTTC = soldeFacture(state, facture)
+      if (creanceTTC <= 0.01 || soldeTTC <= 0.01) return somme
+      const creanceHT = montantRestantAnnulableHT(state, facture)
+      return somme + creanceHT * Math.min(1, soldeTTC / creanceTTC)
+    }, 0)
   const facturable90j =
-    state.factures
-      .filter((f) => f.statut !== 'encaissee' && f.emission <= horizon)
-      .reduce((s, f) => s + f.montantHT, 0) +
+    aEncaisserHT +
     state.echeancesFacturation
       .filter((e) => e.datePrevue <= horizon)
       .reduce((s, e) => s + e.montantHT, 0)

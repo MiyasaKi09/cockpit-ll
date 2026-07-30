@@ -317,18 +317,52 @@ export function achatsProjetPeriode(state: AppState, projetId: string, debut: st
 
 /** rapproche une transaction débit d'un achat : suggestions triées (jamais
  *  appliquées sans validation humaine — audit §10.3) */
+export function erreurRapprochementAchat(
+  state: AppState,
+  transactionId: string,
+  factureAchatId: string,
+): string | null {
+  const transaction = state.transactionsBancaires.find((item) => item.id === transactionId)
+  if (!transaction) return 'Ce mouvement bancaire est introuvable.'
+  if (transaction.rapprochement) return 'Ce mouvement bancaire a déjà été rapproché.'
+  if (!Number.isFinite(transaction.montant) || transaction.montant >= 0) {
+    return 'Une facture fournisseur doit être rapprochée d’un débit bancaire.'
+  }
+  const facture = state.facturesAchat.find((item) => item.id === factureAchatId)
+  if (!facture) return 'La facture fournisseur est introuvable.'
+  if (facture.statut !== 'validee') {
+    return 'Seule une facture fournisseur validée peut être rapprochée.'
+  }
+  if (facture.payeLe) return 'Cette facture fournisseur est déjà marquée comme payée.'
+  if (facture.transactionId && facture.transactionId !== transaction.id) {
+    return 'Cette facture fournisseur est déjà liée à un autre mouvement.'
+  }
+  const debitCentimes = Math.round(Math.abs(transaction.montant) * 100)
+  const factureCentimes = Math.round(facture.montantTTC * 100)
+  if (
+    !Number.isFinite(facture.montantTTC) ||
+    facture.montantTTC <= 0 ||
+    debitCentimes !== factureCentimes
+  ) {
+    return (
+      `Le débit (${(debitCentimes / 100).toFixed(2)} €) doit être égal au TTC ` +
+      `de la facture (${(factureCentimes / 100).toFixed(2)} €).`
+    )
+  }
+  return null
+}
+
 export function suggestionsAchatPourDebit(state: AppState, t: TransactionBancaire): { f: FactureAchat; raisons: string[] }[] {
+  if (t.montant >= 0) return []
   const montant = Math.abs(t.montant)
   const libelle = fold(t.libelle)
   const res: { f: FactureAchat; raisons: string[]; score: number }[] = []
   for (const f of state.facturesAchat) {
     if (f.statut !== 'validee' || f.payeLe) continue
+    if (Math.round(f.montantTTC * 100) !== Math.round(montant * 100)) continue
     const raisons: string[] = []
-    let score = 0
-    if (Math.abs(f.montantTTC - montant) < 0.01) {
-      raisons.push(`montant exact ${montant.toFixed(2)} €`)
-      score += 2
-    }
+    let score = 2
+    raisons.push(`montant exact ${montant.toFixed(2)} €`)
     if (f.fournisseur && libelle.includes(fold(f.fournisseur).slice(0, 8))) {
       raisons.push(`« ${f.fournisseur} » dans le libellé`)
       score += 2

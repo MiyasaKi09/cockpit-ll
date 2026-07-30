@@ -1,118 +1,182 @@
-# Cockpit L&L — intranet v2 « sans API », en local
+# Cockpit L&L
 
-Outil de pilotage de l'agence d'architecture L&L, conforme à l'architecture v2 :
-**aucun appel API vers un modèle d'IA**. L'intranet est 100 % déterministe (calculs
-de dates, seuils, barème MIQCP, rapprochements) ; l'intelligence passe par Claude
-*en tant que produit* — Projets, pré-prompts assemblés par le Cockpit, routines
-programmées — avec un humain dans la boucle à chaque étape.
+Cockpit L&L est l’intranet de pilotage d’une agence d’architecture : projets,
+contrats et honoraires, facturation, trésorerie, temps, chantier, DCE,
+documents, CRM, références et veille des appels d’offres.
 
-Cette version tourne **entièrement en local** : pas de Supabase, pas de Vercel,
-pas de compte. Les données vivent dans le navigateur (localStorage) avec
-export/import JSON pour la sauvegarde. Le jour où l'agence bascule sur
-l'intranet hébergé (React + Supabase + Vercel), le modèle de données et les
-règles ne changent pas.
+L’application est **local-first**, mais elle n’est plus « 100 % locale » :
 
-## Lancer le site
+- l’interface React fonctionne dans le navigateur et conserve un état local ;
+- Supabase peut authentifier l’équipe, synchroniser l’espace de travail et
+  exécuter les ingestions/collectes en arrière-plan ;
+- les fonctions Vercel exposent le relais de veille et, si elle est configurée,
+  l’intégration Anthropic de l’assistant.
+
+Les sorties automatiques restent des brouillons à relire. Les décisions
+financières, contractuelles et les envois externes nécessitent une validation
+humaine.
+
+## Démarrage
+
+Prérequis : une version LTS de Node.js compatible (`20.19+`, `22.13+` ou
+`24+`) et npm.
 
 ```bash
-npm install
+npm ci
 npm run dev
 ```
 
-puis ouvrir http://localhost:5173. (Build de production : `npm run build`,
-servi depuis `dist/` par `npm run preview`.)
+Vite sert l’interface sur <http://localhost:5173>. Pour vérifier une version de
+production :
 
-Au premier lancement, le Cockpit est pré-rempli avec les données d'exemple de
-l'Excel maître (`Pilotage_Agence_LL.xlsx`) : projets P01/P02, échéancier de
-factures, barème MIQCP actualisé BT01, obligations réglementaires. Tout ce qui
-est marqué **EXEMPLE** est à écraser par vos vraies données.
+```bash
+npm run build
+npm run preview
+```
 
-## Ce qu'il y a dedans
+Au premier lancement, des données marquées **EXEMPLE** permettent de parcourir
+les modules. Elles doivent être remplacées avant tout usage réel.
 
-| Module | Contenu |
+### Commandes de qualité
+
+```bash
+npm run typecheck   # contrôle TypeScript
+npm run lint        # contrôles statiques des fonctions et scripts Node
+npm run build       # typecheck puis bundle Vite
+npm run test        # API, Edge Functions, sync, invariants facture et recette finance Chromium
+```
+
+Le test navigateur a besoin du binaire Chromium une fois par machine :
+
+```bash
+npx playwright install chromium
+npm run build
+npm test
+```
+
+La CI GitHub exécute `npm ci`, le lint, le build, les tests Node puis la
+recette navigateur sur chaque pull request et chaque push sur `main`.
+
+## Architecture
+
+| Zone | Rôle |
 |---|---|
-| **Cockpit** | Météo financière + boîte **« À traiter »** (courriers triés par la routine mail, situations, consultations, factures à émettre, CR en attente — filtrable par personne) + fil d'urgences en règles codées |
-| **Recherche** | Les liens dans tous les sens : un matériau, une entreprise, un mot d'une note → tous les projets où ils apparaissent |
-| **Bien démarrer** | Le parcours de prise en main en 1 h : 8 étapes cochables, puis un rituel quotidien en 3 gestes |
-| **Espace projet** | Un hub par projet, à onglets : pilotage MIQCP (barème 1994 actualisé BT01, 27 critères), **DCE & CCTP** (le site lit les CCTP — PDF analysé dans le navigateur ou depuis le dossier Drive 04_PRO-DCE — en extrait les lots et les éléments d'ouvrage, et pose **chaque élément prévu au DCE sur le planning travaux avec une date**), **chantier & CR** (marchés, réunions, assistant CR avec **transcription audio dans le navigateur**), **ressources** (matériaux, artisans, liens rattachés), **journal** (notes datées + tags, export Markdown/Obsidian), **documents** (rangement réel dans le Drive local + suivi d'avancement), **factures & temps** (PDF et e-mail Gmail pré-rempli). Création guidée en 3 étapes : phases datées et **échéancier de facturation générés automatiquement** (modèles Public / Privé pro / Particulier) |
-| **Situations de travaux** | Le « Secrétaire ++ » : import du JSON produit par la routine quotidienne situations@, délais contractuels de vérification calculés en dur, validation humaine, relances |
-| **Honoraires & relances** | Échéancier de facturation par phase, alertes d'impayés, relances graduées (courtoise → ferme → mise en demeure), délai moyen de paiement par client |
-| **Saisie des temps** | Grille hebdomadaire projets × phases, alerte de dérive contre le budget d'heures — calibre les futurs devis |
-| **Veille AO & Go/No-Go** | Import des consultations filtrées par la routine hebdo, avis Go/No-Go, résultats tracés |
-| **Base de références** | Les 35 ans de références structurées : carburant des candidatures |
-| **Bibliothèque de prompts** | La pièce maîtresse : gabarits versionnés, assemblés avec les données de la base, copiés en un clic vers le bon Projet Claude |
-| **Routines & imports** | Les prompts des routines Claude à configurer une fois + l'import universel de leurs retours JSON |
-| **Classement** | Renommage selon la nomenclature de l'agence + pré-prompt batch hebdomadaire |
-| **Matériaux & artisans** | Fiches en dur : décennales surveillées, liens FDES (INIES) |
-| **Réglementaire & CRM** | Obligations de l'agence avec rappels, contacts avec prochaine action, **export .ics** des échéances vers Google Agenda |
-| **Paramètres & données** | Import mensuel des totaux de l'Excel maître, export/import JSON, réglages |
+| `src/` | SPA React 18 + TypeScript + Vite et règles métier |
+| `api/` | fonctions serverless Vercel (`assistant`, relais HTTP de veille) |
+| `supabase/` | schéma, RLS, stockage, temps réel et Edge Functions |
+| `scraper-worker/` | worker Playwright optionnel pour les seules pages de veille nécessitant JavaScript |
+| `public/corpus/` | corpus réglementaire livré avec l’application |
+| `scripts/` | collecte de corpus et recette navigateur finance |
 
-## Le circuit « sans API » (et la logique de hook)
+Les calculs métier sont réalisés dans des modules TypeScript dédiés. Les
+imports Excel utilisent la distribution officielle SheetJS 0.20.3, verrouillée
+dans `package-lock.json`.
 
-Le principe : **on ne colle plus jamais le contexte, seulement les résultats.**
+## Configuration
 
-1. **Une fois** : créer les Projets Claude (« CR de chantier », « Analyse AO »,
-   « Secrétariat », « Matériauthèque ») avec leurs instructions permanentes, et
-   les **routines programmées** avec les prompts fournis page *Routines* (accès
-   Gmail/Drive/web, exécution à heure fixe).
-2. **Au quotidien** :
-   - les boutons d'action des fiches assemblent le pré-prompt complet (gabarit +
-     montants, contacts, historique, dates) → presse-papier → coller dans le bon
-     Projet Claude ;
-   - les routines tournent seules et terminent leur réponse par un **bloc JSON
-     au contrat du Cockpit** → coller dans *Routines → Import* (ou le module
-     concerné) → les lignes arrivent **« à vérifier »**, jamais validées seules.
-3. **Règle d'or** : Claude propose, l'humain valide. Tout ce qui est financier,
-   contractuel ou sortant reste brouillon jusqu'à relecture.
+Copiez `.env.example` vers `.env.local` pour un environnement local compatible
+avec `vercel dev`. Ne commitez jamais `.env.local`.
 
-Limites assumées : pas d'automatisation de fond hors routines planifiées, un
-geste de copier-coller subsiste. À deux, c'est un avantage déguisé — chaque
-sortie est relue.
+### Assistant Vercel / Anthropic
 
-## Données
+Configurez dans Vercel :
 
-- Stockage : `localStorage` du navigateur (clé `cockpit-ll-v1`). **Exportez
-  régulièrement** (Paramètres → Exporter JSON).
-- L'Excel de pilotage reste la **source maître** côté finances la première
-  année : le Cockpit lit ses totaux par import mensuel (Paramètres), sans
-  double saisie.
-- Minimisation : ne coller dans Claude que le nécessaire (pas de données
-  personnelles inutiles).
+- `ANTHROPIC_API_KEY` : secret serveur obligatoire pour activer l’assistant ;
+- `ASSISTANT_MODELE` : modèle standard, facultatif ;
+- `ASSISTANT_MODELE_DIFFICILE` : modèle d’escalade, facultatif ;
+- `SUPABASE_URL` et `SUPABASE_PUBLISHABLE_KEY` : vérification de la session
+  Supabase ; `SUPABASE_ANON_KEY` reste accepté comme fallback pour les anciens
+  projets ;
+- `AGENCE_EMAILS` : liste des adresses autorisées, séparées par des virgules ;
+- `APP_ORIGIN` : origine exacte autorisée du Cockpit, sans barre finale
+  (HTTPS en production ; plusieurs origines peuvent être séparées par des
+  virgules).
 
-## Stack
+La clé Anthropic ne doit jamais porter le préfixe `VITE_`, sans quoi Vite
+l’intégrerait au code envoyé au navigateur. `npm run dev` ne lance que Vite ;
+utilisez `vercel dev` si vous devez aussi tester localement les routes `api/`.
+L’assistant refuse l’accès si la session ne peut pas être vérifiée ou si
+`AGENCE_EMAILS` est absent : ne contournez pas ce comportement en production.
 
-React 18 + Vite + TypeScript, zéro backend, une seule dépendance runtime
-au-delà de React : `xlsx` (lecture de l'Excel maître dans le navigateur).
-Le code des règles métier est isolé et testable : `src/miqcp.ts` (barème),
-`src/echeancier.ts` (génération automatique des factures et des dates de
-phases), `src/alerts.ts` (fil d'urgences), `src/derive.ts` (dérivés
-financiers), `src/importRoutines.ts` (contrats JSON des routines).
+### Supabase
 
-## CR de chantier (réunion de 1–2 h → CR au style de l'agence)
+La synchronisation est facultative. Dans **Paramètres → Synchronisation**,
+renseignez la Project URL, la clé `anon`/`publishable`, le même identifiant
+d’espace sur chaque poste, puis connectez-vous par lien magique. Cette clé
+publique peut être utilisée dans le navigateur ; la protection réelle repose
+sur l’authentification et les politiques RLS.
 
-Onglet **Chantier & CR** de chaque projet : « Nouvelle réunion » ouvre
-l'assistant en 4 étapes — capturer (enregistrement audio), **transcrire
-dans le site** (Whisper open source via transformers.js : WebGPU/WASM,
-gratuit, l'audio ne quitte jamais la machine ; modèle mis en cache après
-le premier usage), générer (le bouton copie le prompt complet : contexte
-projet + convoqués pré-remplis depuis les marchés + transcription →
-Projet Claude « CR de chantier »), relire & diffuser. Un CR qui traîne
-plus de 3 jours remonte dans le fil d'urgences.
+Les Edge Functions utilisent `SUPABASE_URL` et
+`SUPABASE_SERVICE_ROLE_KEY`. La plateforme les injecte côté serveur lors du
+déploiement. La clé `service_role` contourne les RLS : ne la placez jamais dans
+l’interface, une variable `VITE_*`, un journal, une capture d’écran ou le
+dépôt. Le worker optionnel reçoit ces deux variables dans son propre
+environnement.
 
-## Mails, Drive, Agenda — les ponts sans API payante
+Le guide d’installation actuellement disponible se trouve dans
+[`supabase/README.md`](supabase/README.md). Avant un déploiement neuf, vérifiez
+que le schéma, les tables, les buckets privés, les politiques RLS, les grants,
+les fonctions et les tâches planifiées nécessaires sont tous versionnés et
+appliqués.
 
-- **Entrant (mails)** : la routine « tri du matin » range la boîte Gmail
-  (libellés par projet, archivage du bruit, brouillons de réponse) ET
-  produit un bloc JSON `courriers` : chaque mail actionnable arrive dans
-  la boîte « À traiter », rattaché à son projet, avec l'action proposée
-  et la personne concernée.
-- **Sortant (mails)** : boutons « E-mail » (factures) et « Gmail »
-  (relances) — le message part pré-rempli dans Gmail, l'envoi reste un
-  clic humain après relecture.
-- **Drive** : l'onglet Documents écrit réellement dans le dossier
-  « Google Drive pour ordinateur » via l'API File System du navigateur
-  (Chrome/Edge) : arborescence normalisée par projet, renommage
-  automatique à la nomenclature, et lecture de l'état des dossiers pour
-  situer l'avancement — sans API Google.
-- **Agenda** : export `.ics` (Réglementaire & CRM) importable dans
-  Google Agenda.
+## Données, confidentialité et sauvegardes
+
+Sans Supabase, l’état principal vit dans le `localStorage` du profil navigateur
+(clé `cockpit-ll-v1`). Ce stockage peut être effacé, corrompu ou atteindre son
+quota : **ce n’est pas une sauvegarde**. Exportez régulièrement le JSON depuis
+**Paramètres → Données**, conservez plusieurs versions datées sur un support
+protégé et testez périodiquement une restauration.
+
+Quand la synchronisation Supabase est activée, l’état partagé est envoyé comme
+un document d’espace de travail. La synchronisation améliore la disponibilité,
+mais ne remplace ni l’historique de sauvegardes ni une stratégie de reprise.
+Les écritures utilisent une révision compare-and-swap : une modification
+concurrente n’écrase pas silencieusement l’autre poste et reste signalée jusqu’à
+réconciliation. Ce contrôle de conflit ne remplace pas une sauvegarde datée.
+
+Les documents de corpus marqués **privés** restent sur le navigateur : ils sont
+exclus de la synchronisation et des sélecteurs de l’assistant. En revanche, les
+autres textes, modèles, comptes-rendus ou contextes **sélectionnés comme source
+de l’assistant** sont transmis à la fonction Vercel puis au fournisseur IA pour
+produire la réponse. N’envoyez que les données nécessaires, vérifiez les droits
+et le consentement applicables, et excluez par défaut les documents clients,
+personnels, contractuels ou confidentiels.
+
+Mesures minimales d’exploitation :
+
+- dépôt GitHub privé si le code ou sa configuration révèle l’organisation de
+  l’agence ;
+- secrets uniquement dans les gestionnaires Vercel/Supabase ;
+- comptes nominatifs, MFA et liste d’accès RLS tenue à jour ;
+- export avant migration, import massif ou opération sensible ;
+- relecture humaine de tout document, conseil ou montant généré.
+
+## Déploiement
+
+Le front et `api/` sont prévus pour Vercel. Le build de production est
+`npm run build` et le répertoire publié est `dist/`. Ajoutez les variables de
+l’assistant dans chaque environnement Vercel concerné, puis contrôlez les
+limites de dépense et les journaux de la fonction.
+
+Supabase doit être déployé séparément : base, Auth, RLS, Storage, Realtime,
+Edge Functions et planification. Les identifiants OAuth Gmail sont saisis dans
+le Cockpit et stockés côté serveur ; ils ne doivent pas rejoindre l’état
+partagé ni les fichiers d’environnement du front.
+
+Le worker Playwright de veille est optionnel et ne doit être activé que si les
+mesures montrent des pages réellement impossibles à traiter en HTTP simple.
+Voir [`scraper-worker/README.md`](scraper-worker/README.md).
+
+## Dépendances et mises à jour
+
+Utilisez `npm ci` en CI et pour reproduire exactement le verrou
+`package-lock.json`. SheetJS est installé depuis son CDN officiel parce que la
+version npm publique `xlsx@0.18.5` est ancienne ; ne remplacez pas cette URL
+par cette version du registre npm.
+
+Avant une mise à jour de dépendances :
+
+1. examinez le diff de `package-lock.json` ;
+2. lancez lint, build et recette navigateur ;
+3. vérifiez les imports Excel et PDF avec des fichiers non sensibles ;
+4. contrôlez les avis de sécurité et les notes de version des éditeurs.

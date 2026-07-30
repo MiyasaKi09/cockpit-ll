@@ -28,7 +28,13 @@ import {
 import { download, fmtDate, fmtMoney, fmtPct, fold, todayISO, uid } from '../util'
 import { coefSuggere, coutAgenceAnnuel, coutAnnuelPersonne, coutHorairePersonne, coutHoraireMoyen, coutJourObjectif, objectifCA, tauxVente, tauxVenteObjectif } from '../derive'
 import { connecterGoogle, deconnecter, estConnecte } from '../google'
-import { connecterSync, deconnecterSync, envoyerLienMagique, pousserEtat, syncActif, syncEtat, tirerEtat } from '../sync'
+import {
+  connecterSync,
+  deconnecterSync,
+  envoyerLienMagique,
+  syncActif,
+  syncEtat,
+} from '../sync'
 import { deconnecterIngestion, lireStatutIngestion, majConfigIngestion, type StatutIngestion } from '../entrants'
 import { SanteContenu } from './Sante'
 import { BienDemarrerContenu } from './BienDemarrer'
@@ -296,12 +302,14 @@ function CarteSurveillance() {
  *  Les identifiants OAuth vivent dans une table privée côté serveur :
  *  ils ne passent ici qu'au moment de l'enregistrement, jamais relus. */
 function CarteIngestionServeur() {
+  const { state } = useStore()
   const [statut, setStatut] = useState<StatutIngestion | null>(null)
   const [message, setMessage] = useState('')
   const [clientId, setClientId] = useState('')
   const [clientSecret, setClientSecret] = useState('')
   const [compteEmail, setCompteEmail] = useState('')
   const [occupe, setOccupe] = useState(false)
+  const workspaceId = state.settings.sync?.workspaceId?.trim() || 'agence-ll'
 
   const charger = async () => {
     if (!syncActif()) {
@@ -328,7 +336,12 @@ function CarteIngestionServeur() {
     setOccupe(true)
     setMessage('')
     try {
-      await majConfigIngestion({ clientId: clientId.trim(), clientSecret: clientSecret.trim(), compteEmail: compteEmail.trim() })
+      await majConfigIngestion({
+        ...(clientId.trim() ? { clientId: clientId.trim() } : {}),
+        ...(clientSecret.trim() ? { clientSecret: clientSecret.trim() } : {}),
+        compteEmail: compteEmail.trim(),
+        workspaceId,
+      })
       setClientSecret('')
       setMessage('Identifiants enregistrés côté serveur — cliquez « Connecter Gmail ».')
       await charger()
@@ -373,9 +386,13 @@ function CarteIngestionServeur() {
             ) : statut.configure ? (
               <>
                 <Badge tone="warn">identifiants en place</Badge>
-                <a className="btn btn-small btn-primary" href={statut.urlOauth} target="_blank" rel="noreferrer">
-                  Connecter Gmail
-                </a>
+                {statut.urlConnexion ? (
+                  <a className="btn btn-small btn-primary" href={statut.urlConnexion} target="_blank" rel="noreferrer">
+                    Connecter Gmail
+                  </a>
+                ) : (
+                  <span className="muted">actualisez pour générer un lien sécurisé</span>
+                )}
               </>
             ) : (
               <Badge tone="muted">pas encore configuré</Badge>
@@ -402,8 +419,8 @@ function CarteIngestionServeur() {
             <Btn small kind="primary" disabled={occupe || !compteEmail.trim() || (!statut.configure && (!clientId.trim() || !clientSecret.trim()))} onClick={() => void enregistrer()}>
               Enregistrer côté serveur
             </Btn>
-            {statut.configure && (
-              <a className="btn btn-small" href={statut.urlOauth} target="_blank" rel="noreferrer">
+            {statut.configure && statut.urlConnexion && (
+              <a className="btn btn-small" href={statut.urlConnexion} target="_blank" rel="noreferrer">
                 {statut.connecte ? 'Reconnecter Gmail' : 'Connecter Gmail'}
               </a>
             )}
@@ -433,7 +450,12 @@ function CarteIngestionServeur() {
 
 /** Synchronisation 2 postes via Supabase (offre gratuite) — opt-in, local-first préservé */
 function CarteSync() {
-  const { state, replace } = useStore()
+  const {
+    state,
+    replace,
+    synchroniserMaintenant,
+    pousserMaintenant: pousserDepuisStore,
+  } = useStore()
   const cfg = state.settings.sync || { url: '', anonKey: '', workspaceId: 'agence-ll', email: '' }
   const [message, setMessage] = useState('')
   const [occupe, setOccupe] = useState(false)
@@ -447,26 +469,32 @@ function CarteSync() {
         ...state.settings,
         sync: { ...(state.settings.sync || { url: '', anonKey: '', workspaceId: 'agence-ll' }), [champ]: v },
       },
-    })
+    }, { localSeulement: true })
 
   const connecterEtReconcilier = async () => {
     setMessage('')
     setOccupe(true)
     try {
-      await connecterSync(cfg.url, cfg.anonKey, cfg.workspaceId)
-      if (!syncEtat().connecte) {
+      const resultat = await synchroniserMaintenant(cfg)
+      if (!resultat.ok && resultat.action === 'authentification') {
         setMessage('Projet relié. Envoyez le lien magique, ouvrez-le sur ce poste, puis revenez « Synchroniser ».')
         forcer((x) => x + 1)
         return
       }
-      const remote = await tirerEtat()
-      if (remote) {
-        // l'espace partagé fait foi à la connexion (on garde la config locale)
-        replace({ ...remote.data, settings: { ...remote.data.settings, sync: state.settings.sync } })
+      if (!resultat.ok && syncEtat().conflit) {
+        setMessage(
+          'Conflit conservé sur ce poste : exportez d’abord vos données JSON, puis choisissez explicitement de récupérer la version partagée.',
+        )
+        forcer((x) => x + 1)
+        return
+      }
+      if (!resultat.ok) throw new Error(resultat.erreur || 'Synchronisation impossible.')
+      if (resultat.action === 'recupere') {
         setMessage('Données de l’espace partagé récupérées — les 2 postes sont alignés.')
-      } else {
-        await pousserEtat(state)
+      } else if (resultat.action === 'initialise') {
         setMessage('Espace partagé vide : vos données locales viennent de l’initialiser.')
+      } else {
+        setMessage('Vos modifications locales ont été synchronisées sans écraser l’autre poste.')
       }
       forcer((x) => x + 1)
     } catch (e) {
@@ -494,9 +522,38 @@ function CarteSync() {
   const pousserMaintenant = async () => {
     setOccupe(true)
     try {
-      await pousserEtat(state)
-      setMessage('Vos données locales ont été poussées vers l’espace partagé (elles font foi).')
+      const resultat = await pousserDepuisStore()
+      if (!resultat.ok) {
+        setMessage(resultat.erreur || 'Synchronisation impossible.')
+        return
+      }
+      setMessage('Vos données locales ont été poussées sans écraser de modification plus récente.')
       forcer((x) => x + 1)
+    } catch (e) {
+      setMessage(`Impossible : ${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setOccupe(false)
+    }
+  }
+
+  const recupererApresConflit = async () => {
+    if (
+      !(await confirmer({
+        message:
+          'Remplacer les changements locaux en conflit par la version de l’espace partagé ? Exportez d’abord une sauvegarde JSON : cette opération abandonne les modifications locales non synchronisées.',
+        danger: true,
+        confirmerLabel: 'Récupérer la version partagée',
+      }))
+    )
+      return
+    setOccupe(true)
+    try {
+      const resultat = await synchroniserMaintenant(cfg, { recupererConflit: true })
+      if (!resultat.ok) throw new Error(resultat.erreur || 'Récupération impossible.')
+      setMessage('Version partagée récupérée. La copie JSON exportée reste votre sauvegarde de recours.')
+      forcer((x) => x + 1)
+    } catch (e) {
+      setMessage(`Impossible : ${e instanceof Error ? e.message : String(e)}`)
     } finally {
       setOccupe(false)
     }
@@ -551,7 +608,12 @@ function CarteSync() {
           <>
             <Badge tone="ok">connecté{etat.email ? ` — ${etat.email}` : ''}</Badge>
             <Btn small kind="primary" onClick={connecterEtReconcilier} disabled={occupe}>Synchroniser maintenant</Btn>
-            <Btn small onClick={pousserMaintenant} disabled={occupe} title="Écrase l’espace partagé avec les données de CE poste">Pousser mes données</Btn>
+            <Btn small onClick={pousserMaintenant} disabled={occupe} title="Refuse l’envoi si un autre poste a modifié l’espace">Pousser mes données</Btn>
+            {etat.conflit && (
+              <Btn small kind="danger" onClick={recupererApresConflit} disabled={occupe}>
+                Récupérer la version partagée
+              </Btn>
+            )}
             <Btn small onClick={deconnecter}>Déconnecter</Btn>
           </>
         ) : (
@@ -680,16 +742,33 @@ export default function Parametres({ ongletInitial = 'agence' }: { ongletInitial
         }))
       )
         return
-      replace(data)
-      setMessageJSON('Sauvegarde restaurée.')
+      const restauree = replace(data, { restaurationSure: true })
+      setMessageJSON(
+        restauree
+          ? 'Sauvegarde restaurée.'
+          : 'Restauration refusée ou non enregistrée : consultez l’alerte affichée et conservez ce fichier.',
+      )
     } catch (e) {
       setMessageJSON(`Échec : ${e instanceof Error ? e.message : String(e)}`)
     }
   }
 
   const reinitialiser = async () => {
-    if (await confirmer({ message: 'Réinitialiser sur les données d’exemple ? Toutes les données actuelles seront perdues (pensez à exporter avant).', danger: true }))
-      replace(seedState())
+    if (
+      await confirmer({
+        message:
+          'Réinitialiser sur les données d’exemple ? Toutes les données actuelles seront perdues (pensez à exporter avant).',
+        danger: true,
+      })
+    ) {
+      const reinitialise = replace(seedState(), { restaurationSure: true })
+      if (!reinitialise) {
+        toast(
+          'Réinitialisation refusée ou non enregistrée : consultez l’alerte et conservez votre export.',
+          { tone: 'danger' },
+        )
+      }
+    }
   }
 
   // ---------- snoozes ----------

@@ -1,12 +1,4 @@
--- ============================================================
--- Cockpit L&L — schéma de synchronisation Supabase
--- À exécuter dans SQL Editor. Idempotent et ré-exécutable.
---
--- Le document partagé reste protégé par RLS. Chaque écriture passe
--- par enregistrer_workspace(), qui compare une révision : un poste
--- en retard ne peut plus écraser silencieusement l'autre.
--- ============================================================
-
+-- Ajoute le verrou optimiste et explicite les privilèges de la table partagée.
 create table if not exists public.workspace (
   id          text primary key,
   data        jsonb not null,
@@ -29,7 +21,6 @@ create policy "agence lecture" on public.workspace
   for select to authenticated
   using ((auth.jwt() ->> 'email') in ('julenglet@gmail.com', 'zoefhebert@gmail.com'));
 
--- Les privilèges SQL et les politiques RLS sont deux verrous distincts.
 revoke all on table public.workspace from anon;
 revoke all on table public.workspace from authenticated;
 grant select on table public.workspace to authenticated;

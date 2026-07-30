@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useStore } from './store'
-import { ConfirmHost, Icon, ToastHost, useRoute, useToday } from './ui'
+import { Btn, ConfirmHost, Icon, ToastHost, useRoute, useToday } from './ui'
 import { alertesActives } from './alerts'
 import { badgeFinance } from './financeActions'
 import { basculerTheme, themeCourant } from './theme'
@@ -97,7 +97,7 @@ function statutCompact(state: AppState, today: string): { texte: string; titre: 
 
 export default function App() {
   const route = useRoute()
-  const { state, update } = useStore()
+  const { state, update, persistenceError, clearPersistenceError, syncError } = useStore()
   const today = useToday()
   // INT-02 : la surveillance Gmail/Agenda tourne à la racine — elle continue
   // de capter les mails quel que soit l'écran affiché (le Cockpit ne fait que lire)
@@ -329,7 +329,30 @@ export default function App() {
           </button>
         </div>
       </aside>
-      <main className="main">{page}</main>
+      <main className="main">
+        {persistenceError && (
+          <div
+            className="pill-note danger-text"
+            role="alert"
+            style={{ marginBottom: 12, borderColor: 'var(--danger)' }}
+          >
+            <strong>Stockage local en échec.</strong> {persistenceError}{' '}
+            <Btn small kind="ghost" onClick={clearPersistenceError}>
+              Masquer
+            </Btn>
+          </div>
+        )}
+        {syncError && (
+          <div
+            className="pill-note danger-text"
+            role="alert"
+            style={{ marginBottom: 12, borderColor: 'var(--danger)' }}
+          >
+            <strong>Synchronisation suspendue.</strong> {syncError}
+          </div>
+        )}
+        {page}
+      </main>
     </div>
     {rechercheOuverte && <RechercheOverlay onClose={() => setRechercheOuverte(false)} />}
     <ToastHost />

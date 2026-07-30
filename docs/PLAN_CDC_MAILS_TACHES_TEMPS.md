@@ -323,6 +323,12 @@ Les estimations sont des **ordres de grandeur en jours-homme de développeur exp
 
 ### Lot 0 — Prérequis
 
+> **Domaine retenu par l'agence : `agence-ll.fr`.** Les adresses personnelles seront de la forme
+> `prenom@agence-ll.fr` et les adresses projet `[code-projet]@agence-ll.fr`, conformément au §3.2.
+> Ce choix ne débloque rien avant le Lot 3, mais il fige le format que 0.2 et 0.7 doivent accepter
+> dès maintenant, pour que la bascule d'identité (3.2) n'ait pas à réécrire ce qu'ils produisent.
+
+
 > **Objectif :** poser l'identité, découpler les adresses en dur, rendre les critères déjà satisfaits **opposables**, et livrer les corrections à coût quasi nul, pour qu'aucun lot suivant ne construise sur du sable.
 
 | # | Livrable | §CDC | Effort |

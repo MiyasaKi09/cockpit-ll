@@ -112,6 +112,50 @@ export function slugProjet(p: Projet): string {
   return `${p.id}_${fold(p.nom).replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40)}`
 }
 
+/** compte rendu d'une création d'arborescence — de quoi dire ce qui a été
+ *  fait sans relire le disque, et distinguer « créé » de « déjà là » */
+export interface ResultatArborescence {
+  /** nom du dossier projet à la racine (= `slugProjet(p)`) */
+  dossierProjet: string
+  /** sous-dossiers créés par CET appel */
+  crees: string[]
+  /** sous-dossiers déjà présents, laissés intacts avec leur contenu */
+  existants: string[]
+}
+
+/** crée `<racine>/<slugProjet(p)>/` puis les sous-dossiers d'`ARBORESCENCE`
+ *  (CDC §12.1, points 6 « créer le dossier Drive » et 7 « créer
+ *  l'arborescence »).
+ *
+ *  Idempotente et non destructive : un dossier déjà là est laissé tel quel
+ *  avec son contenu, rien n'est renommé ni supprimé — c'est ce qui autorise
+ *  à la rejouer sur un projet ancien pour le compléter.
+ *
+ *  Elle LÈVE sur permission refusée ou écriture impossible, et c'est
+ *  l'appelant qui décide du sens de l'échec : blocage pour le bouton manuel
+ *  de l'onglet Documents, simple signalement à la fin de l'assistant
+ *  « Nouveau projet », où le projet est déjà enregistré.
+ *
+ *  Point d'entrée UNIQUE : dupliquer la boucle ailleurs ferait diverger
+ *  l'arborescence réelle de celle que lit l'onglet Documents.
+ *  `scripts/test-arborescence-projet.cjs` le vérifie. */
+export async function creerArborescenceProjet(racine: FSDirHandle, p: Projet): Promise<ResultatArborescence> {
+  if (!(await verifierPermission(racine))) throw new Error('Accès au dossier refusé.')
+  const dossierProjet = slugProjet(p)
+  const dossier = await racine.getDirectoryHandle(dossierProjet, { create: true })
+  const crees: string[] = []
+  const existants: string[] = []
+  for (const a of ARBORESCENCE) {
+    const dejaLa = await dossier
+      .getDirectoryHandle(a.dossier, { create: false })
+      .then(() => true)
+      .catch(() => false)
+    await dossier.getDirectoryHandle(a.dossier, { create: true })
+    ;(dejaLa ? existants : crees).push(a.dossier)
+  }
+  return { dossierProjet, crees, existants }
+}
+
 export function nomConforme(p: Projet, type: string, objet: string, nomFichier: string): string {
   const date = todayISO().replaceAll('-', '')
   const o = fold(objet || nomFichier.replace(/\.[^.]+$/, ''))

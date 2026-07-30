@@ -1,16 +1,25 @@
 // Assistant « Nouveau projet » — 3 étapes, 2 minutes :
 // 1. le projet · 2. les honoraires (calculés seuls) · 3. le planning.
-// À la fin : phases datées + échéancier de facturation générés
-// automatiquement, tout reste ajustable dans la fiche.
+// À la fin : phases datées + échéancier de facturation + arborescence
+// documentaire dans le Drive, tout reste ajustable dans la fiche.
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { Projet, StatutProjet, TypeMO } from '../types'
 import { useStore } from '../store'
 import { OUVRAGES, calculHonoraires, phasesParDefaut, seuilPlancherActualise } from '../miqcp'
 import { baselineDepuisPhases, tauxVente } from '../derive'
 import { useMoi } from '../moi'
 import { daterPhases, echeancesParDefaut } from '../echeancier'
-import { Badge, Btn, Field, Modal, NumInput, PctInput, Select, TextInput, navigate } from '../ui'
+import {
+  ARBORESCENCE,
+  choisirRacine as choisirRacineFS,
+  creerArborescenceProjet,
+  lireRacine,
+  slugProjet,
+  supporteFS,
+  type FSDirHandle,
+} from '../fsdrive'
+import { Badge, Btn, Field, Modal, NumInput, PctInput, Select, TextInput, navigate, toast } from '../ui'
 import { addDays, fmtMoney, fmtPct, todayISO, uid } from '../util'
 
 const TYPES_MO: TypeMO[] = ['Public', 'Privé pro', 'Particulier']
@@ -48,6 +57,15 @@ export default function ProjetNouveau({ onClose }: { onClose: () => void }) {
   const [dureeEtudes, setDureeEtudes] = useState<number | null>(8)
   const [dureeChantier, setDureeChantier] = useState<number | null>(12)
   const [genererFactures, setGenererFactures] = useState(true)
+  const [creerDossiers, setCreerDossiers] = useState(true)
+
+  // dossier Drive déjà choisi sur ce poste (mémorisé dans IndexedDB par
+  // l'onglet Documents) : l'arborescence n'est proposée que s'il existe —
+  // l'assistant ne réclame pas un réglage de poste au milieu d'une saisie.
+  const [racineDrive, setRacineDrive] = useState<FSDirHandle | null>(null)
+  useEffect(() => {
+    if (supporteFS) void lireRacine().then(setRacineDrive)
+  }, [])
 
   const id = prochainId(state.projets.map((p) => p.id))
 
@@ -108,6 +126,32 @@ export default function ProjetNouveau({ onClose }: { onClose: () => void }) {
       d.projets.push(projet)
       d.echeancesFacturation.push(...echeances)
     })
+
+    // §12.1 points 6 et 7 : le dossier Drive du projet et son arborescence.
+    // Lancé APRÈS l'enregistrement et jamais attendu : le Drive peut être
+    // absent, la permission refusée, le disque plein. Aucun de ces échecs ne
+    // doit empêcher la création du projet ni faire reperdre trois écrans de
+    // saisie — il se signale, et le bouton de l'onglet Documents rattrape.
+    if (racineDrive && creerDossiers) {
+      void creerArborescenceProjet(racineDrive, projet)
+        .then((r) =>
+          toast(
+            r.crees.length === 0
+              ? `Dossier ${r.dossierProjet} déjà en place dans le Drive.`
+              : `Arborescence créée dans le Drive : ${r.dossierProjet} (${r.crees.length} dossiers).`,
+            { tone: 'ok' },
+          ),
+        )
+        .catch((e: unknown) =>
+          toast(
+            `Projet créé, mais l'arborescence Drive n'a pas pu l'être : ${
+              e instanceof Error ? e.message : String(e)
+            } — à relancer depuis l'onglet Documents du projet.`,
+            { tone: 'danger' },
+          ),
+        )
+    }
+
     onClose()
     navigate(`/projets/${projet.id}`)
   }
@@ -227,6 +271,31 @@ export default function ProjetNouveau({ onClose }: { onClose: () => void }) {
             <input type="checkbox" checked={genererFactures} onChange={(e) => setGenererFactures(e.target.checked)} />
             Générer l'échéancier de facturation automatiquement (recommandé)
           </label>
+
+          {supporteFS ? (
+            racineDrive ? (
+              <label className="small" style={{ display: 'flex', gap: 8, alignItems: 'baseline', marginTop: 8, cursor: 'pointer' }}>
+                <input type="checkbox" checked={creerDossiers} onChange={(e) => setCreerDossiers(e.target.checked)} />
+                <span>
+                  Créer l'arborescence documentaire dans <strong>{racineDrive.name}</strong> —{' '}
+                  {ARBORESCENCE.length} dossiers sous <code>{slugProjet(brouillon)}</code>
+                </span>
+              </label>
+            ) : (
+              <p className="small muted" style={{ marginTop: 10 }}>
+                Aucun dossier Drive choisi sur ce poste : l'arborescence documentaire ne sera pas créée
+                (elle reste disponible dans l'onglet Documents du projet).{' '}
+                <Btn small onClick={() => void choisirRacineFS().then(setRacineDrive)}>
+                  Choisir le dossier Drive
+                </Btn>
+              </p>
+            )
+          ) : (
+            <p className="small muted" style={{ marginTop: 10 }}>
+              Le rangement dans le Drive demande Chrome ou Edge sur ordinateur : l'arborescence
+              documentaire ne sera pas créée depuis ce navigateur.
+            </p>
+          )}
         </>
       )}
 

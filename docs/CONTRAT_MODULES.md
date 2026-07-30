@@ -118,6 +118,27 @@ prévu et réel passe par `ecartHeures` — jamais par une soustraction locale �
 `baselineHeures` que sur un geste humain explicite (signature, figeage, redéfinition).
 `scripts/test-baseline-heures.cjs` le vérifie, et il porte le critère 15 du §22.
 
+`fsdrive.ts` : accès au dossier Drive local (File System Access) — `supporteFS`,
+`choisirRacine` / `lireRacine` / `sauverRacine` (poignée mémorisée en IndexedDB),
+`verifierPermission`, `slugProjet(p)`, `nomConforme`, `rangerFichier`,
+`listerFichiersProjet` / `listerFichiersRacine`, `DOSSIER_ENTRANTS`, `ARBORESCENCE`,
+`phaseDuDossier` ; **arborescence documentaire** (CDC §12.1 pts 6 et 7) :
+`creerArborescenceProjet(racine, p): ResultatArborescence` (`{dossierProjet, crees,
+existants}`).
+
+**Aucun module ne crée de dossier dans le Drive en direct** : la liste des dossiers se
+déclare dans `ARBORESCENCE` et se crée par `creerArborescenceProjet`, point d'entrée
+unique du bouton « Créer / compléter l'arborescence » (onglet Documents du projet) comme
+de la fin de l'assistant « Nouveau projet ». Une boucle de création recopiée dans un
+module ferait diverger la forme des dossiers selon la porte par laquelle le projet est né
+— le jour où `ARBORESCENCE` gagne une entrée, les fichiers continueraient de se ranger,
+simplement plus au même endroit. La fonction est **idempotente et non destructive** (un
+dossier déjà là garde son contenu) et elle **lève** : c'est l'appelant qui décide du sens
+de l'échec. À la création d'un projet, cet échec (Drive absent, permission refusée,
+navigateur sans File System Access) **se signale et n'empêche rien** — le projet est
+enregistré avant, et la saisie n'est jamais reperdue.
+`scripts/test-arborescence-projet.cjs` le vérifie.
+
 `moi.ts` : `useMoi(): Moi` (`{personne, nom, source: 'session'|'poste'|'aucune', emailSession,
 sessionOrpheline, choisir(nom|null)}`), `useSessionSupabase()` (session Supabase **réactive** :
 le composant se re-rend à la connexion comme à la déconnexion), `useIdentitePoste()`,

@@ -14,6 +14,7 @@ import { fmtDate, todayISO } from '../util'
 import {
   ARBORESCENCE,
   choisirRacine as choisirRacineFS,
+  creerArborescenceProjet,
   lireRacine,
   nomConforme as nomConformeFS,
   rangerFichier,
@@ -98,12 +99,17 @@ export default function ProjetDocuments({ projet: p }: { projet: Projet }) {
     }
   }
 
+  // même fonction que celle appelée à la fin de l'assistant « Nouveau
+  // projet » : l'arborescence ne se crée qu'à un seul endroit du code.
   const creerArborescence = async () => {
     if (!racine) return
     try {
-      const dossierProjet = await racine.getDirectoryHandle(slugProjet(p), { create: true })
-      for (const a of ARBORESCENCE) await dossierProjet.getDirectoryHandle(a.dossier, { create: true })
-      setMessage(`Arborescence créée dans ${racine.name}/${slugProjet(p)}.`)
+      const r = await creerArborescenceProjet(racine, p)
+      setMessage(
+        r.crees.length === 0
+          ? `Arborescence déjà complète dans ${racine.name}/${r.dossierProjet} — rien à créer.`
+          : `Arborescence complétée dans ${racine.name}/${r.dossierProjet} : ${r.crees.length} dossier(s) ajouté(s).`,
+      )
       await scanner(racine)
     } catch (e) {
       setMessage(`Création impossible : ${e instanceof Error ? e.message : String(e)}`)

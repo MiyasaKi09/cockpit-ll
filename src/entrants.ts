@@ -20,6 +20,9 @@ export interface EntrantDistant {
   typeMime: string
   taille: number
   empreinte: string
+  /** identifiant du message Gmail d'origine — permet de rouvrir l'échange
+   *  qui a apporté la pièce (§7.3 double traçabilité, critère 10) */
+  sourceMessageId: string | null
   cheminStorage: string | null
   projetIdPropose: string | null
   categorieProposee: string | null
@@ -37,6 +40,7 @@ interface LigneEntrant {
   type_mime: string | null
   taille: number | null
   empreinte_sha256: string | null
+  source_id: string | null
   chemin_storage: string | null
   projet_id_propose: string | null
   categorie_proposee: string | null
@@ -51,7 +55,7 @@ export async function listerEntrantsDistants(): Promise<EntrantDistant[]> {
   const { data, error } = await sb
     .from('entrants')
     .select(
-      'id,source,expediteur,objet,recu_le,nom_fichier,type_mime,taille,empreinte_sha256,chemin_storage,projet_id_propose,categorie_proposee,confiance,raisons',
+      'id,source,source_id,expediteur,objet,recu_le,nom_fichier,type_mime,taille,empreinte_sha256,chemin_storage,projet_id_propose,categorie_proposee,confiance,raisons',
     )
     .eq('statut', 'a_valider')
     .order('recu_le', { ascending: false })
@@ -67,6 +71,7 @@ export async function listerEntrantsDistants(): Promise<EntrantDistant[]> {
     typeMime: l.type_mime || '',
     taille: l.taille || 0,
     empreinte: l.empreinte_sha256 || '',
+    sourceMessageId: l.source_id,
     cheminStorage: l.chemin_storage,
     projetIdPropose: l.projet_id_propose,
     categorieProposee: l.categorie_proposee,

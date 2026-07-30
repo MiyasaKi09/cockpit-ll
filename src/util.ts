@@ -126,3 +126,15 @@ export function gmailComposeUrl(to: string, sujet: string, corps: string): strin
 export function ouvrirGmail(to: string, sujet: string, corps: string): void {
   window.open(gmailComposeUrl(to, sujet, corps), '_blank', 'noopener')
 }
+
+/** URL qui rouvre un message dans Gmail à partir de son identifiant d'API.
+ *  `#all/` plutôt que `#inbox/` : la pièce peut avoir été archivée depuis.
+ *  C'est ce lien qui rend le critère 10 vérifiable — une pièce jointe classée
+ *  conserve le chemin de retour vers l'échange qui l'a apportée. */
+export function gmailMessageUrl(messageId: string): string | null {
+  const id = (messageId || '').trim()
+  // les identifiants Gmail sont hexadécimaux ; tout le reste viendrait
+  // d'une autre source et produirait un lien mort
+  if (!/^[0-9a-f]{6,}$/i.test(id)) return null
+  return `https://mail.google.com/mail/u/0/#all/${id}`
+}

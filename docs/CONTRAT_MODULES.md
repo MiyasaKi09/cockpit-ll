@@ -1,20 +1,43 @@
 # Contrat des modules — Cockpit L&L (intranet v2 « sans API »)
 
-Contexte produit : intranet 100 % déterministe pour une agence d'architecture de 2 personnes
-(Julien & Zoé). AUCUN appel API vers un modèle d'IA. L'intelligence passe par Claude *en tant
-que produit* : l'intranet assemble des pré-prompts complets (gabarit + données de la base) et
-les copie dans le presse-papier ; des routines Claude programmées produisent du JSON que
-l'utilisateur colle dans le Cockpit (import). Règle d'or partout : **Claude propose, l'humain
-valide** — tout ce qui est financier, contractuel ou sortant reste brouillon jusqu'à relecture.
-Toute alerte/extraction est **traçable jusqu'à sa source**.
+Contexte produit : intranet déterministe pour une agence d'architecture de 2 personnes
+(Julien & Zoé).
+
+**L'appel serveur à un modèle d'IA est autorisé, et il existe déjà** : `api/assistant.js`
+interroge l'API Anthropic depuis une fonction Vercel, derrière une session Supabase vérifiée et
+une liste d'adresses autorisées. La rédaction précédente — « AUCUN appel API vers un modèle
+d'IA » — décrivait un état dépassé et interdisait des livrables désormais au plan
+(`docs/PLAN_CDC_MAILS_TACHES_TEMPS.md`) : résumé automatique des messages, propositions de
+tâches et d'échéances. La voie du presse-papier reste valable et reste la règle pour tout ce
+qui est volumineux ou ponctuel : l'intranet assemble des pré-prompts complets (gabarit +
+données de la base) et les copie ; des routines Claude produisent du JSON que l'utilisateur
+colle dans le Cockpit.
+
+Ce qui ne change pas, et qui est le cœur du contrat :
+
+- **Claude propose, l'humain valide** — tout ce qui est financier, contractuel ou sortant reste
+  brouillon jusqu'à relecture. Une proposition de l'IA porte toujours un statut distinct de
+  l'objet métier qu'elle propose de créer ; elle ne devient jamais cet objet par expiration de
+  délai ou par défaut.
+- Toute alerte, extraction ou proposition est **traçable jusqu'à sa source** — l'e-mail, le
+  document, la ligne de relevé. Une réponse sans source est un défaut, pas une approximation.
+- Aucune action irréversible ni sortante n'est déclenchée par un modèle : les périmètres OAuth
+  restent en lecture seule et l'envoi passe par un brouillon Gmail ouvert à l'écran.
 
 ## Règles générales (tous modules)
 
 - Un module = un fichier `src/modules/X.tsx`, export default d'un composant sans props.
-- **Ne modifier AUCUN fichier partagé** (`types.ts`, `store.tsx`, `ui.tsx`, `util.ts`,
-  `miqcp.ts`, `alerts.ts`, `derive.ts`, `prompts.ts`, `seed.ts`, `routines.ts`,
-  `importRoutines.ts`, `styles.css`, `App.tsx`). Si un manque bloque, contourner localement
-  (petit composant local, style inline) et le signaler dans la réponse finale.
+- **Les fichiers partagés se modifient, mais jamais en passant** (`types.ts`, `store.tsx`,
+  `ui.tsx`, `util.ts`, `miqcp.ts`, `alerts.ts`, `derive.ts`, `prompts.ts`, `seed.ts`,
+  `routines.ts`, `importRoutines.ts`, `personnes.ts`, `styles.css`, `App.tsx`). L'interdiction
+  absolue précédente avait un motif réel — un module qui bricole `ui.tsx` casse les 42 autres —
+  mais elle produisait l'inverse de son intention : des composants locaux dupliqués, des styles
+  en ligne, et un repli mobile qui s'est dégradé module par module. La règle est donc :
+  - une modification de fichier partagé est un livrable **en soi**, pas un effet de bord d'un
+    module ; elle s'annonce et se justifie ;
+  - elle est **rétrocompatible** : on ajoute un paramètre optionnel, on ne change pas une
+    signature existante ;
+  - si elle porte une invariante, elle vient avec son test statique dans `scripts/`.
 - Lire les fichiers partagés avant d'écrire : les signatures ci-dessous sont un résumé.
 - UI en **français**, ton professionnel sobre. Dates via `fmtDate`, montants via
   `fmtMoney`/`<Money>`, heures via `fmtHeures`. Pas d'emoji décoratifs.
@@ -29,6 +52,20 @@ Toute alerte/extraction est **traçable jusqu'à sa source**.
   `TextArea`, `Field`, `Modal`, `Btn`). Création/édition dans un `Modal`.
 - Suppression : `confirm()` natif suffit.
 - Listes : `Table` + lignes ; état vide : `EmptyState`.
+- **Tout tableau affiché passe par `Table`**, jamais par une balise `<table>` écrite à la main.
+  C'est `Table` qui porte le repli en cartes empilées sous 700 px : une table brute est
+  illisible sur un téléphone, et c'est ainsi que le responsive s'est perdu dans sept modules.
+  Les gabarits d'impression (`src/pdf.ts`, les fenêtres `window.print()`) sont hors de cette
+  règle : ils ne sont jamais montés dans le navigateur.
+- **L'accueil n'invente aucun calcul.** Le Cockpit et les vues personnelles n'affichent que des
+  valeurs déjà produites par `derive.ts`, `economie.ts`, `alerts.ts` ou `financeActions.ts`. Un
+  chiffre recalculé sur place diverge tôt ou tard de celui du module qui fait autorité, et
+  l'écart se découvre en réunion. Si la valeur n'existe pas, elle s'ajoute au module de calcul,
+  pas à l'écran qui l'affiche.
+- **Une personne se référence par son nom, partout** — et donc `src/personnes.ts` tient
+  l'inventaire des endroits qui la citent. Toute nouvelle collection portant un nom de personne
+  s'y ajoute, sinon un renommage dans les Paramètres orpheline ses données en silence.
+  `scripts/test-renommage-personne.cjs` le vérifie.
 - Pré-prompts : TOUJOURS via `CopyBtn` (feedback « Copié ! ») ; texte assemblé par
   `assemble(corps, contexte)` de `prompts.ts` avec les constructeurs de contexte fournis.
 

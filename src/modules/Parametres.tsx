@@ -7,6 +7,7 @@ import type { AppState, ModeRemu, StatutRemu, TypeMO } from '../types'
 import { useStore } from '../store'
 import { seedState } from '../seed'
 import { computeAlertes } from '../alerts'
+import { renommerPersonne } from '../personnes'
 import {
   Badge,
   Btn,
@@ -124,6 +125,57 @@ function CarteEquipe() {
       d.settings.personnes = d.settings.equipe.map((x) => x.nom).filter(Boolean)
     })
 
+  /** nom porté par les références au moment où l'on a pris le champ.
+   *  On ne renomme pas à chaque frappe : effacer le nom pour le retaper
+   *  orphelinerait tout l'historique entre deux touches. */
+  const nomAvantSaisie = useRef<Record<string, string>>({})
+
+  /** valide un renommage : réécrit les douze sites de l'état qui citent une
+   *  personne par son nom (heures, absences, responsabilités, destinataires).
+   *  Sans cela, un simple renommage fait disparaître les heures pointées du
+   *  Pilotage et de la marge, sans le moindre message. */
+  const validerNom = (id: string, saisi: string) => {
+    const ancien = (nomAvantSaisie.current[id] ?? '').trim()
+    const nouveau = saisi.trim()
+    if (!ancien || ancien === nouveau) return
+
+    // un nom vide rendrait toutes ses références introuvables
+    if (!nouveau) {
+      update((d) => {
+        const p = d.settings.equipe.find((x) => x.id === id)
+        if (p) p.nom = ancien
+        d.settings.personnes = d.settings.equipe.map((x) => x.nom).filter(Boolean)
+      })
+      toast('Le nom ne peut pas être vide — nom précédent rétabli.')
+      return
+    }
+
+    // renommer vers un homonyme fusionnerait deux historiques sans retour
+    const homonyme = eq.some((x) => x.id !== id && x.nom.trim() === nouveau)
+    if (homonyme) {
+      update((d) => {
+        const p = d.settings.equipe.find((x) => x.id === id)
+        if (p) p.nom = ancien
+        d.settings.personnes = d.settings.equipe.map((x) => x.nom).filter(Boolean)
+      })
+      toast(`« ${nouveau} » est déjà dans l'équipe — renommage annulé pour ne pas fusionner deux historiques.`)
+      return
+    }
+
+    const snap = state
+    let reecrites = 0
+    update((d) => {
+      reecrites = renommerPersonne(d, ancien, nouveau)
+      d.settings.personnes = d.settings.equipe.map((x) => x.nom).filter(Boolean)
+    })
+    nomAvantSaisie.current[id] = nouveau
+    if (reecrites > 0) {
+      toast(`${ancien} renommé·e en ${nouveau} — ${reecrites} référence${reecrites > 1 ? 's' : ''} mise${reecrites > 1 ? 's' : ''} à jour.`, {
+        undo: () => replace(snap),
+      })
+    }
+  }
+
   /** changer Net/Brut ou le statut recale le coefficient sur la
    *  suggestion SAS — sinon le coût serait silencieusement faux */
   const majProfil = (id: string, champ: 'modeRemu' | 'statut', v: string) =>
@@ -163,7 +215,18 @@ function CarteEquipe() {
       <Table compact head={['Personne', 'Statut (SAS)', 'Saisie', <span key="b" className="right">€ / mois</span>, <span key="c" className="right">Coef. charges</span>, <span key="h" className="right">Heures / an</span>, <span key="f" className="right">% facturable</span>, <span key="ch" className="right">Coût horaire</span>, <span key="ca" className="right">Coût annuel chargé</span>, '']}>
         {eq.map((p) => (
           <tr key={p.id}>
-            <td><TextInput value={p.nom} onChange={(v) => majPersonne(p.id, 'nom', v)} style={{ width: 100 }} /></td>
+            <td>
+              <TextInput
+                value={p.nom}
+                onChange={(v) => majPersonne(p.id, 'nom', v)}
+                onFocus={(v) => {
+                  nomAvantSaisie.current[p.id] = v
+                }}
+                onCommit={(v) => validerNom(p.id, v)}
+                style={{ width: 100 }}
+                ariaLabel={`Nom de ${p.nom || 'la personne'}`}
+              />
+            </td>
             <td>
               <Select
                 value={p.statut}

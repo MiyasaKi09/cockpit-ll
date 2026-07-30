@@ -25,7 +25,7 @@ import {
   toast,
   useRoute,
 } from '../ui'
-import { fmtDate, fold, todayISO } from '../util'
+import { fmtDate, fold, gmailMessageUrl, todayISO } from '../util'
 import {
   CATEGORIES_DOC,
   DOSSIER_PAR_CATEGORIE,
@@ -139,6 +139,9 @@ function CarteArriveesServeur() {
         nomOriginal: e.nomFichier,
         source: 'gmail',
         sourceId: e.id,
+        // le chemin de retour vers l'échange d'origine (critère 10) : sans lui,
+        // une pièce classée perd le contexte qui explique pourquoi elle existe
+        sourceUrl: gmailMessageUrl(e.sourceMessageId || '') || undefined,
         categorie: c.categorie,
         typeMime: e.typeMime || undefined,
         taille: e.taille || undefined,
@@ -297,10 +300,13 @@ function CarteArriveesServeur() {
 
 /** journalise la provenance mail sur le document (dans le producteur) */
 function ajouterEvenementMail(doc: DocumentRecord, e: EntrantDistant): void {
+  const lien = gmailMessageUrl(e.sourceMessageId || '')
   doc.evenements.push({
     date: todayISO(),
     type: 'source',
-    detail: `Pièce jointe Gmail — de ${e.expediteur}, objet « ${e.objet} ».`,
+    detail:
+      `Pièce jointe Gmail — de ${e.expediteur}, objet « ${e.objet} ».` +
+      (lien ? '' : ' Message d’origine non identifié : pas de lien de retour.'),
   })
 }
 
@@ -785,6 +791,14 @@ function ModalDocument({ doc, onClose }: { doc: DocumentRecord; onClose: () => v
           </tr>
         ))}
       </Table>
+      {doc.sourceUrl && (
+        <p className="small" style={{ margin: '8px 0' }}>
+          <a href={doc.sourceUrl} target="_blank" rel="noreferrer">
+            Ouvrir dans Gmail
+          </a>{' '}
+          <span className="muted">— l’e-mail qui a apporté cette pièce reste la source de vérité.</span>
+        </p>
+      )}
       {(remplace || remplacePar) && (
         <p className="small" style={{ margin: '8px 0' }}>
           {remplace && <>Remplace : <strong>{remplace.titre}</strong> (v{remplace.version}). </>}

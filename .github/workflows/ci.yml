@@ -48,6 +48,12 @@ jobs:
       - name: Production rollout consistency
         run: npm run test:mise-en-production
 
+      - name: Person rename integrity
+        run: npm run test:renommage
+
+      - name: Gmail backlink on attachments
+        run: npm run test:lien-gmail
+
       - name: Sync privacy tests
         run: npm run test:sync-state
 

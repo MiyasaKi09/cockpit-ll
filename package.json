@@ -12,7 +12,7 @@
     "lint": "eslint \"api/**/*.js\" \"scripts/**/*.cjs\"",
     "build": "npm run typecheck && vite build",
     "preview": "vite preview",
-    "test": "npm run test:assistant && npm run test:relais && npm run test:edge-security && npm run test:mise-en-production && npm run test:renommage && npm run test:lien-gmail && npm run test:sync-state && npm run test:facture-invariants && npm run test:identite && npm run test:finance",
+    "test": "npm run test:assistant && npm run test:relais && npm run test:edge-security && npm run test:mise-en-production && npm run test:renommage && npm run test:lien-gmail && npm run test:sync-state && npm run test:facture-invariants && npm run test:identite && npm run test:champs && npm run test:finance",
     "test:assistant": "node scripts/test-assistant.cjs",
     "test:relais": "node scripts/test-relais.cjs",
     "test:edge-security": "node scripts/test-edge-functions-security.cjs",
@@ -22,6 +22,7 @@
     "test:sync-state": "node scripts/test-sync-state.cjs",
     "test:facture-invariants": "node scripts/test-facture-invariants.cjs",
     "test:identite": "node scripts/test-identite.cjs",
+    "test:champs": "node scripts/test-champs-projet-document.cjs",
     "test:finance": "node scripts/test-finance.cjs"
   },
   "dependencies": {

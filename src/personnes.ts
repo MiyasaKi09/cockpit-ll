@@ -71,7 +71,7 @@ function champListe<T>(
   }
 }
 
-/** l'inventaire exhaustif — treize sites au 31 juillet 2026 */
+/** l'inventaire exhaustif — quatorze sites au 30 juillet 2026 */
 export const REFERENCES_PERSONNE: Reference[] = [
   {
     // la fiche de l'équipe elle-même : l'appelant de l'interface l'a en général
@@ -167,6 +167,18 @@ export const REFERENCES_PERSONNE: Reference[] = [
     (d) => d.responsable,
     (d, v) => {
       d.responsable = v
+    },
+  ),
+  champTexte<{ auteur?: string }>(
+    // qui a déposé le document — la personne, pas un geste daté : c'est sur
+    // ce nom que se filtrera « mes documents ». Les traces datées du même
+    // registre (`validePar`, `evenements[].auteur`) ne sont volontairement
+    // PAS réécrites ici : elles disent qui a agi à une date, pas qui est là.
+    'documents déposés',
+    (s) => s.registreDocuments,
+    (d) => d.auteur,
+    (d, v) => {
+      d.auteur = v
     },
   ),
   {

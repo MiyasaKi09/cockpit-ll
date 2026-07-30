@@ -10,7 +10,12 @@ import { amorcerFinance } from './amorceFinance'
 // v17 : `Personne.email` — pont entre un compte de connexion et une
 // personne (identité à deux étages, src/moi.ts). Palier additif : le
 // champ est optionnel, aucun état existant ne perd quoi que ce soit.
-export const STATE_VERSION = 17
+// v18 : ancrages externes du projet (`codeExterne`, `adresseProjet`,
+// `driveFolderId`, `calendarId`) et du document (`phase`, `driveFileId`,
+// `auteur`). Tous optionnels et saisis à la main : un état v17 s'ouvre
+// tel quel, sans champ à reconstruire. Le palier de `migrate()` ne fait
+// donc que NORMALISER ce qui a été saisi ou importé (voir src/store.tsx).
+export const STATE_VERSION = 18
 
 const P = (v: number) => Math.round(v * 100) / 100
 

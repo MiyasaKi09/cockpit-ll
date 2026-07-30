@@ -108,6 +108,23 @@ export interface Projet {
   surfaceExterieure?: number | null
   /** trajet aller agence → site (repère logistique) */
   trajetAller?: string
+  // --- ancrages externes (CDC §3.10, §12.1, §18) — TOUS optionnels et
+  // saisis à la main : `id` (P01) reste la clé interne, rien ne dépend de
+  // ces valeurs, et rien ne les produit automatiquement à ce stade.
+  /** code lisible côté client, porté par les échanges (ex. « 2026-034 ») —
+   *  l'identifiant interne P01 ne bouge pas : renommer casserait les liens,
+   *  les journaux et `entrants.projet_id_propose` déjà en base */
+  codeExterne?: string
+  /** adresse dédiée du projet, format [code-projet]@agence-ll.fr — le
+   *  domaine n'est pas présumé (il n'est pas acheté) : c'est une donnée
+   *  saisie, jamais une adresse créée par le Cockpit */
+  adresseProjet?: string
+  /** identifiant du dossier Drive du projet (Lot 3 — aujourd'hui saisi à
+   *  la main ; le rangement local passe toujours par `cheminDrive`) */
+  driveFolderId?: string
+  /** identifiant de l'agenda secondaire du projet (Lot 3, export .ics) —
+   *  créé à la main : le Cockpit ne demande le calendrier qu'en lecture */
+  calendarId?: string
 }
 
 /** courrier trié par la routine mail du matin — rangé au bon projet */
@@ -1274,9 +1291,22 @@ export interface DocumentRecord {
   factureAchatId?: string | null
   noteFraisId?: string | null
   lotComptableId?: string | null
+  /** identifiant du fichier côté Google Drive (Lot 4) — distinct de
+   *  `sourceId`, qui garde l'identifiant de la source d'ORIGINE (pièce
+   *  jointe Gmail…) : les deux traces coexistent (CDC §7.3) */
+  driveFileId?: string
   /** catégorie contrôlée (CCTP, DPGF, CR, SITU, PLAN, ADM, PHOTO…) */
   categorie: string
   sousType?: string
+  /** phase de la mission à laquelle le document se rattache (CDC §7.3).
+   *  Même référentiel que `Phase.code` — aucune nomenclature nouvelle : le
+   *  sous-dossier du Drive en porte déjà la correspondance
+   *  (`ARBORESCENCE[].phases`, src/fsdrive.ts), qui sert de proposition. */
+  phase?: PhaseCode | null
+  /** qui a déposé / produit le document (nom d'un membre de l'équipe).
+   *  Distinct de `validePar` (qui a contrôlé le classement) et de
+   *  l'auteur des `evenements` (qui a fait ce geste-là). */
+  auteur?: string
   /** date portée par le document (quand elle est fiable) */
   dateDocument?: string | null
   recuLe: string // ISO

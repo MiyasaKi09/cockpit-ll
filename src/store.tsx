@@ -6,6 +6,7 @@ import type { ReactNode } from 'react'
 import type { AppState, DocumentCorpus, Entreprise, Personne } from './types'
 import { fold, uid } from './util'
 import { seedState, STATE_VERSION } from './seed'
+import { PHASES_ORDRE } from './miqcp'
 import { amorcerFinance } from './amorceFinance'
 import { DEPARTEMENTS_DEFAUT } from './boamp'
 import {
@@ -40,6 +41,13 @@ import {
 const STORAGE_KEY = 'cockpit-ll-v1'
 let erreurPersistanceInitiale: string | null = null
 
+/** texte saisi ramené à sa forme utile : rogné, et vide → absent (un « »
+ *  stocké se propage en placeholder vide et en faux « renseigné ») */
+function texteNormalise(v: string | undefined): string | undefined {
+  const t = (v || '').trim()
+  return t || undefined
+}
+
 /** migration sans perte : complète les champs apparus depuis la v1 */
 function migrate(parsed: AppState): AppState {
   const base = seedState()
@@ -68,7 +76,15 @@ function migrate(parsed: AppState): AppState {
     : Array.isArray((parsed as AppState & { documents?: DocumentCorpus[] }).documents)
       ? (parsed as AppState & { documents?: DocumentCorpus[] }).documents!
       : []
-  etat.registreDocuments = Array.isArray(parsed.registreDocuments) ? parsed.registreDocuments : []
+  // v17 → v18 : `DocumentRecord.phase` (CDC §7.3). Le champ est optionnel et
+  // n'existait pas : rien à reconstruire. En revanche une phase inconnue —
+  // venue d'un import JSON ou d'un futur producteur — ferait disparaître le
+  // document des filtres par phase sans lever la moindre erreur. On la
+  // ramène donc à null, et on ne touche à rien d'autre (l'objet n'est
+  // recopié que s'il est effectivement en cause).
+  etat.registreDocuments = (Array.isArray(parsed.registreDocuments) ? parsed.registreDocuments : []).map(
+    (doc) => (doc.phase && !PHASES_ORDRE.includes(doc.phase) ? { ...doc, phase: null } : doc),
+  )
   etat.entreprises = Array.isArray(parsed.entreprises) ? parsed.entreprises : []
   // v12 → v13 : CRM organisations (clients & acheteurs, audit V3 Lot 5)
   etat.organisations = Array.isArray(parsed.organisations) ? parsed.organisations : []
@@ -152,6 +168,15 @@ function migrate(parsed: AppState): AppState {
     materiauxIds: Array.isArray(p.materiauxIds) ? p.materiauxIds : [],
     artisanIds: Array.isArray(p.artisanIds) ? p.artisanIds : [],
     journal: Array.isArray(p.journal) ? p.journal : [],
+    // v17 → v18 : ancrages externes (CDC §3.10, §12.1, §18). Purement
+    // additifs : absents d'un état v17, ils restent absents. Ils sont
+    // seulement NORMALISÉS — une adresse projet saisie « P01@Agence-LL.fr »
+    // sur un poste et « p01@agence-ll.fr » sur l'autre décrirait deux
+    // boîtes différentes au premier rapprochement de mails.
+    codeExterne: texteNormalise(p.codeExterne),
+    adresseProjet: texteNormalise(p.adresseProjet)?.toLowerCase(),
+    driveFolderId: texteNormalise(p.driveFolderId),
+    calendarId: texteNormalise(p.calendarId),
   }))
   // v6 → v7 : facturation & situations pro (révision/RG sur les situations,
   // lien situation↔facture DET, suivi des relances). Uniquement des champs

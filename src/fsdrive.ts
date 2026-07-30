@@ -1,7 +1,7 @@
 // Accès au dossier Drive local (File System Access API) — partagé
 // entre l'onglet Documents et le Journal (rangement des photos).
 
-import type { Projet } from './types'
+import type { PhaseCode, Projet } from './types'
 import { empreinteSha256 } from './registre'
 import { fold, todayISO } from './util'
 
@@ -32,7 +32,7 @@ export const DOSSIER_ENTRANTS = '_A_CLASSER'
 
 /** arborescence normalisée d'un dossier projet (partagée par l'onglet
  *  Documents du projet et la page Documents globale) */
-export const ARBORESCENCE: { dossier: string; description: string; phases?: string[] }[] = [
+export const ARBORESCENCE: { dossier: string; description: string; phases?: PhaseCode[] }[] = [
   { dossier: '00_ADMIN', description: 'contrat, assurances, courriers officiels' },
   { dossier: '01_DIAG', description: 'diagnostics, relevés, existant', phases: ['DIAG'] },
   { dossier: '02_ESQ', description: 'esquisse', phases: ['ESQ'] },
@@ -45,6 +45,16 @@ export const ARBORESCENCE: { dossier: string; description: string; phases?: stri
   { dossier: '09_FACTURES', description: 'factures émises et justificatifs' },
   { dossier: '10_PHOTOS', description: 'photos chantier et références' },
 ]
+
+/** phase de la mission déduite du sous-dossier de rangement — la
+ *  correspondance existe depuis l'origine dans `ARBORESCENCE`, on se
+ *  contente de la lire. Retourne `null` dès qu'elle est AMBIGUË
+ *  (03_APS-APD_PC couvre APS et APD) ou absente : une phase proposée au
+ *  hasard vaudrait moins que pas de phase du tout. */
+export function phaseDuDossier(dossier: string): PhaseCode | null {
+  const entree = ARBORESCENCE.find((a) => a.dossier === dossier)
+  return entree?.phases?.length === 1 ? entree.phases[0] : null
+}
 
 const DB = 'cockpit-ll-fs'
 

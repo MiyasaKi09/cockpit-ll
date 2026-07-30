@@ -118,6 +118,8 @@ export default function ProjetJournal({ projet: p }: { projet: Projet }) {
         empreinteSha256: rangement?.empreinte || (await empreinteSha256(file)) || undefined,
         cheminDrive: chemin,
         projetId: p.id,
+        // l'auteur choisi pour la note vaut pour la photo qu'elle porte
+        auteur: auteur || undefined,
         statut: 'classe',
       })
       const noteId = uid('note')

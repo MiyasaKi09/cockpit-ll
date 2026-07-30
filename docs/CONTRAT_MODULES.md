@@ -84,7 +84,10 @@ Alerte, Settings, AppState…).
 
 `util.ts` : `uid`, `todayISO`, `addDays`, `diffDays`, `mondayOf`, `monthKey`, `addMonths`,
 `fmtMoney(v, cents?)`, `fmtPct(v, digits?)`, `fmtDate`, `fmtMois('AAAA-MM')`, `fmtHeures`,
-`parseNum`, `clamp`, `fold` (normalisation accents/casse), `download(nom, contenu, type?)`.
+`parseNum`, `clamp`, `fold` (normalisation accents/casse), `download(nom, contenu, type?)`,
+`DOMAINE_AGENCE` (`agence-ll.fr` — non acheté : il ne sert qu'à *proposer*, rien ne doit
+dépendre de son existence), `adresseProjetProposee(codeExterne, domaine?)`,
+`adresseProjetValide(adresse)` (aucun domaine présumé ; le champ vide est valide).
 
 `miqcp.ts` : `BAREME_1994`, `OUVRAGES` (`{code, bas, haut}`), `CRITERES_COMPLEXITE`
 (3 groupes × critères), `TOUS_CRITERES`, `REPARTITION_PHASES`, `PHASES_ORDRE`,

@@ -36,7 +36,7 @@ import { ligneActivable,
   useToday,
 } from '../ui'
 import type { Tone } from '../ui'
-import { fmtHeures, fmtMoney, fmtPct, fold, todayISO, uid } from '../util'
+import { adresseProjetProposee, adresseProjetValide, fmtHeures, fmtMoney, fmtPct, fold, todayISO, uid } from '../util'
 import {
   CRITERES_COMPLEXITE,
   LIBELLES_PHASES,
@@ -508,6 +508,18 @@ function BandeauProjet({ projet: p }: { projet: Projet }) {
 /** ligne « carte d'identité » sous le bandeau (dates, équipe, accès commande…) */
 function LigneIdentite({ projet: p }: { projet: Projet }) {
   const items: ReactNode[] = []
+  if (p.codeExterne)
+    items.push(
+      <span key="code" title="code du projet côté client">
+        n° {p.codeExterne}
+      </span>,
+    )
+  if (p.adresseProjet)
+    items.push(
+      <span key="adresse" className="mono" title="adresse dédiée du projet">
+        {p.adresseProjet}
+      </span>,
+    )
   if (p.dateLancement || p.dateCloture)
     items.push(
       <span key="dates">
@@ -1202,6 +1214,12 @@ function ModalEditionProjet({ projet, onClose }: { projet: Projet; onClose: () =
   const [typologie, setTypologie] = useState(projet.typologie || '')
   const [typeConstruction, setTypeConstruction] = useState(projet.typeConstruction || '')
   const [trajetAller, setTrajetAller] = useState(projet.trajetAller || '')
+  // ancrages externes — saisis à la main, jamais fabriqués par le Cockpit
+  const [codeExterne, setCodeExterne] = useState(projet.codeExterne || '')
+  const [adresseProjet, setAdresseProjet] = useState(projet.adresseProjet || '')
+  const [driveFolderId, setDriveFolderId] = useState(projet.driveFolderId || '')
+  const [calendarId, setCalendarId] = useState(projet.calendarId || '')
+  const adresseDouteuse = !adresseProjetValide(adresseProjet)
 
   const enregistrer = () => {
     if (nom.trim() === '') return
@@ -1234,6 +1252,12 @@ function ModalEditionProjet({ projet, onClose }: { projet: Projet; onClose: () =
       pr.typologie = typologie.trim() || undefined
       pr.typeConstruction = typeConstruction || undefined
       pr.trajetAller = trajetAller.trim() || undefined
+      pr.codeExterne = codeExterne.trim() || undefined
+      // une adresse ne se distingue pas par la casse (même règle que
+      // normaliserEmail, src/moi.ts) : on range la forme comparable
+      pr.adresseProjet = adresseProjet.trim().toLowerCase() || undefined
+      pr.driveFolderId = driveFolderId.trim() || undefined
+      pr.calendarId = calendarId.trim() || undefined
 
       // à la livraison, le projet devient automatiquement une référence
       if (livraison && !d.references.some((r) => fold(r.nom) === fold(pr.nom))) {
@@ -1405,6 +1429,40 @@ function ModalEditionProjet({ projet, onClose }: { projet: Projet; onClose: () =
         </Field>
         <Field label="Trajet aller" hint="repère logistique">
           <TextInput value={trajetAller} onChange={setTrajetAller} placeholder="ex. 1 h 10 — A16" />
+        </Field>
+      </div>
+
+      <Section titre="Ancrages externes" />
+      <p className="small muted" style={{ margin: '0 0 8px' }}>
+        Ce que le projet porte HORS du Cockpit : le code qu'en connaît le client, son adresse
+        dédiée, son dossier Drive, son agenda. Tout se saisit ici, rien n'est créé automatiquement —
+        l'identifiant interne <strong>{projet.id}</strong> ne change jamais.
+      </p>
+      <div className="form-row">
+        <Field label="Code projet (côté client)" hint="celui qui circule dans les échanges — ex. 2026-034">
+          <TextInput value={codeExterne} onChange={setCodeExterne} placeholder="2026-034" />
+        </Field>
+        <Field
+          label="Adresse dédiée du projet"
+          hint={
+            adresseDouteuse
+              ? 'Format attendu : code@domaine — vérifiez la saisie.'
+              : 'boîte à créer à la main, format [code-projet]@agence-ll.fr'
+          }
+        >
+          <TextInput
+            value={adresseProjet}
+            onChange={setAdresseProjet}
+            placeholder={adresseProjetProposee(codeExterne) || 'code-projet@agence-ll.fr'}
+          />
+        </Field>
+      </div>
+      <div className="form-row">
+        <Field label="Dossier Drive (identifiant)" hint="renseigné à la main ; le rangement local suit son propre chemin">
+          <TextInput value={driveFolderId} onChange={setDriveFolderId} />
+        </Field>
+        <Field label="Agenda du projet (identifiant)" hint="agenda secondaire créé à la main — le Cockpit ne lit que le calendrier">
+          <TextInput value={calendarId} onChange={setCalendarId} />
         </Field>
       </div>
 

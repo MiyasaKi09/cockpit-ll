@@ -56,9 +56,24 @@ function charger(chemin) {
 }
 
 const alerts = charger('src/alerts.ts')
+const categorisation = charger('src/categorisation.ts')
 
 const { computeAlertes, alertesActives } = alerts
 const AUJOURDHUI = '2026-07-31'
+
+// Les niveaux d'importance sont un référentiel fermé, partagé avec le
+// domaine SQL `niveau_importance`. Ce test l'a d'abord recopié à la main,
+// en majuscules — et il passait, en vert, sur un producteur qui ne pouvait
+// produire AUCUNE alerte en production : l'ensemble des niveaux alertants
+// n'intersectait jamais les valeurs réelles. Un fil d'urgences vide ne
+// ressemble pas à une panne, il ressemble à du calme.
+//
+// Les fixtures lisent donc le référentiel. Une valeur inventée ici échoue
+// tout de suite, au lieu de valider un producteur mort.
+const { NIVEAUX_IMPORTANCE } = categorisation
+const IMPORTANCE = Object.fromEntries(NIVEAUX_IMPORTANCE.map((n) => [n, n]))
+for (const attendu of ['information', 'a_traiter', 'urgent', 'bloquant', 'contractuel'])
+  assert.ok(IMPORTANCE[attendu], `« ${attendu} » doit exister dans NIVEAUX_IMPORTANCE`)
 
 // Un état minimal : toutes les collections vides, pour qu'AUCUNE alerte
 // historique ne se produise et que seules les nouvelles soient observées.
@@ -115,18 +130,23 @@ const message = (over) => ({
     moi: 'Julien',
     aTraiter: [
       message({ id: 'm1', importance: null }),
-      message({ id: 'm2', importance: 'INFORMATION' }),
-      message({ id: 'm3', importance: 'A_TRAITER' }),
-      message({ id: 'm4', importance: 'URGENT' }),
-      message({ id: 'm5', importance: 'BLOQUANT' }),
-      message({ id: 'm6', importance: 'CONTRACTUEL' }),
+      message({ id: 'm2', importance: IMPORTANCE.information }),
+      message({ id: 'm3', importance: IMPORTANCE.a_traiter }),
+      message({ id: 'm4', importance: IMPORTANCE.urgent }),
+      message({ id: 'm5', importance: IMPORTANCE.bloquant }),
+      message({ id: 'm6', importance: IMPORTANCE.contractuel }),
+      // une valeur hors référentiel — la casse d'un autre système, une
+      // colonne mal remplie : elle ne doit RIEN produire, et surtout pas
+      // planter `graviteDe` sur un niveau qu'il ne connaît pas
+      message({ id: 'm7', importance: 'URGENT' }),
     ],
   }
   const produites = computeAlertes(etat(), AUJOURDHUI, ctx).filter((a) => a.type === 'mail_a_traiter')
   assert.deepEqual(
     produites.map((a) => a.id).sort(),
     ['mail-m4', 'mail-m5', 'mail-m6'],
-    'seuls urgent, bloquant et contractuel entrent dans un fil d’URGENCES — le reste se lit dans l’accueil',
+    'seuls urgent, bloquant et contractuel entrent dans un fil d’URGENCES — le reste se lit dans l’accueil, ' +
+      'et une valeur hors référentiel n’entre nulle part',
   )
   assert.ok(
     produites.every((a) => a.pour === 'Julien' && a.projetId === 'P01'),
@@ -134,9 +154,11 @@ const message = (over) => ({
   )
   assert.equal(
     produites.find((a) => a.id === 'mail-m6').gravite,
-    3,
-    'un message contractuel est en gravité maximale : c’est le §14.3',
+    categorisation.graviteDe('contractuel'),
+    'la gravité vient de `graviteDe` — l’échelle des alertes a un seul propriétaire (§14.3)',
   )
+  for (const a of produites)
+    assert.doesNotMatch(a.titre, /[A-Z]{3,}/, 'le titre affiche le libellé humain, pas la valeur brute de la base')
 }
 
 // --- 3. l'attente de réponse a un seuil, et il est franchissable ------------
@@ -184,7 +206,7 @@ const message = (over) => ({
 // --- 5. « vu » et « en sommeil » ne se confondent pas -----------------------
 
 {
-  const ctx = { aTraiter: [message({ id: 'm4', importance: 'URGENT' })] }
+  const ctx = { aTraiter: [message({ id: 'm4', importance: IMPORTANCE.urgent })] }
 
   const neuf = alertesActives(etat(), AUJOURDHUI, ctx)
   assert.ok(neuf.some((a) => a.id === 'mail-m4'), 'sans marquage, l’alerte est visible')

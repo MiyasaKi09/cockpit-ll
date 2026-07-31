@@ -17,6 +17,7 @@ import {
   retenueGarantieMarche,
 } from './derive'
 import { addDays, diffDays, fmtDate, fmtMoney, fmtMois, monthKey } from './util'
+import { LIBELLES_IMPORTANCE, type NiveauImportance, estImportance, graviteDe } from './categorisation'
 
 // ------------------------------------------------------------
 // A.11 — notifier les personnes concernées (§12.3 pt 10)
@@ -65,8 +66,14 @@ export interface ContexteAlertes {
 /** au-delà, un fil sans réponse cesse d'être un oubli et devient un signal */
 const JOURS_AVANT_RELANCE = 3
 
-/** les niveaux du §5.2 qui ont leur place dans un fil d'URGENCES */
-const IMPORTANCES_ALERTANTES = new Set(['URGENT', 'BLOQUANT', 'CONTRACTUEL'])
+/** Les niveaux du §5.2 qui ont leur place dans un fil d'URGENCES.
+ *
+ *  Les valeurs viennent du référentiel de `src/categorisation.ts`, qui est
+ *  aussi le domaine SQL `niveau_importance` : les recopier à la main ici
+ *  produirait un ensemble qui n'intersecte jamais la réalité, et un fil
+ *  d'urgences vide ne ressemble pas à une panne — il ressemble à du calme.
+ *  `estImportance()` referme la porte à la compilation. */
+const IMPORTANCES_ALERTANTES = new Set<NiveauImportance>(['urgent', 'bloquant', 'contractuel'])
 
 function alertesDesMessages(ctx: ContexteAlertes, today: string): Alerte[] {
   const sortie: Alerte[] = []
@@ -75,12 +82,14 @@ function alertesDesMessages(ctx: ContexteAlertes, today: string): Alerte[] {
   // remplirait de tout le courrier. Seuls y entrent les niveaux que
   // l'agence a elle-même qualifiés d'urgents, bloquants ou contractuels.
   for (const m of ctx.aTraiter || []) {
-    if (!m.importance || !IMPORTANCES_ALERTANTES.has(m.importance)) continue
+    if (!estImportance(m.importance) || !IMPORTANCES_ALERTANTES.has(m.importance)) continue
     sortie.push({
       id: `mail-${m.id}`,
       type: 'mail_a_traiter',
-      gravite: m.importance === 'CONTRACTUEL' ? 3 : m.importance === 'BLOQUANT' ? 3 : 2,
-      titre: `Message ${m.importance.toLowerCase()} — ${m.objet || '(sans objet)'}`,
+      // l'échelle a un seul propriétaire : `graviteDe`. La refaire ici
+      // ferait diverger le fil d'urgences de l'axe qu'il affiche.
+      gravite: graviteDe(m.importance),
+      titre: `Message ${LIBELLES_IMPORTANCE[m.importance].toLowerCase()} — ${m.objet || '(sans objet)'}`,
       detail: `De ${m.expediteur}. Non traité.`,
       lien: `#/messages/${m.id}`,
       date: m.envoyeLe ? m.envoyeLe.slice(0, 10) : undefined,

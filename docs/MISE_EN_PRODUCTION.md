@@ -222,6 +222,35 @@ Elle se défait par un `drop table public.propositions` tant qu'aucune décision
 humaine n'y a été enregistrée — c'est-à-dire jusqu'à B.10. Après, elle porte des
 acceptations signées, comme `communications` porte des rattachements corrigés.
 
+La migration `20260731210000` pose le **journal d'audit** (livrable A.13) :
+`public.journal_audit` en ajout seul, la RPC `journaliser()` et des
+déclencheurs sur `communications`, `propositions` et `membres`. Quatre points
+opérationnels :
+
+- **elle s'applique après les trois tables qu'elle instrumente** — le contrôle
+  final refuse la migration si l'un des trois déclencheurs manque, plutôt que
+  de laisser croire à une couverture qu'elle n'aurait pas ;
+- **elle ne s'accompagne d'aucun déploiement.** Les déclencheurs écrivent seuls,
+  et le front n'a rien à appeler pour l'instant : l'écran de consultation est
+  hors MVP (2.6). En attendant, le journal se lit dans l'éditeur SQL de
+  Supabase — c'est peu pratique, et c'est suffisant pour deux personnes ;
+- **elle refuse `update` et `delete` à tout le monde, `service_role` compris.**
+  Si un futur besoin réclame une purge — une obligation de conservation bornée,
+  par exemple — ce sera une migration explicite, pas un droit dormant ;
+- **elle ne journalise pas les insertions de `communications`.** L'arrivée d'un
+  mail n'est pas une action sensible, et une mise à jour qui ne touche aucune
+  colonne de décision n'écrit rien du tout : sans cette borne, la réingestion
+  quotidienne noierait les décisions humaines sous son propre bruit.
+
+Le contenu des messages n'entre pas dans le journal : `objet`, `corps_extrait`
+et `resume` sont hors de la liste blanche. Une colonne modifiée hors liste y
+figure par son **nom** seulement. C'est délibéré — une table en ajout seul qui
+recopierait le courrier deviendrait une seconde mémoire des échanges, celle-là
+indestructible, alors que Gmail reste la source de vérité (§4.1).
+
+Elle se défait par un `drop table public.journal_audit cascade` tant qu'aucune
+décision n'y est consignée. Après, elle est ce qu'elle prétend être : une trace.
+
 La migration `20260730160000` fait estampiller l'auteur d'une écriture par le
 serveur : `workspace.updated_by` cesse de recevoir l'identifiant d'onglet envoyé
 par le navigateur et reçoit `auth.uid()`. La signature de la RPC ne change pas,

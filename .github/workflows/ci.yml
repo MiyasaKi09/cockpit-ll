@@ -120,6 +120,9 @@ jobs:
       - name: Inbox switchover keeps both memories
         run: npm run test:boite
 
+      - name: Append-only audit journal
+        run: npm run test:audit
+
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 

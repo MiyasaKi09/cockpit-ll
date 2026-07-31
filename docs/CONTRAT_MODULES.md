@@ -24,6 +24,17 @@ Ce qui ne change pas, et qui est le cœur du contrat :
 - Aucune action irréversible ni sortante n'est déclenchée par un modèle : les périmètres OAuth
   restent en lecture seule et l'envoi passe par un brouillon Gmail ouvert à l'écran.
 
+**Ces trois règles sont opposables, pas seulement écrites** — c'était le livrable 0.14, et
+c'est ce qui les sépare d'une intention. `scripts/test-oauth-lecture-seule.cjs` refuse tout
+périmètre Google autre que `gmail.readonly` / `calendar.readonly`, tout verbe d'écriture vers
+Gmail, et garde `gmailComposeUrl` (`util.ts`) comme seul constructeur d'un envoi — critères 1
+et 14 du §22. `scripts/test-propositions-modifiables.cjs` vérifie qu'un champ proposé par une
+machine a un pendant humain modifiable, que c'est le choix humain qui est enregistré, et
+qu'aucune insertion serveur ne naît validée — critère 11, périmètre `entrants` au Lot 0, la
+table `communications` viendra au MVP. `scripts/test-adresses-en-dur.cjs` interdit les deux
+adresses de connexion réelles hors du registre `public.membres` : c'est la dépendance dure de
+la bascule d'identité (livrable 3.2), qui ne démarre pas tant qu'il n'est pas vert.
+
 ## Règles générales (tous modules)
 
 - Un module = un fichier `src/modules/X.tsx`, export default d'un composant sans props.

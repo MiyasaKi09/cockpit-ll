@@ -84,6 +84,15 @@ jobs:
       - name: Home screen blocks and no recomputation
         run: npm run test:accueil
 
+      - name: Google OAuth scopes stay read-only
+        run: npm run test:oauth
+
+      - name: Machine proposals remain editable
+        run: npm run test:propositions
+
+      - name: No hardcoded sign-in addresses
+        run: npm run test:adresses
+
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 

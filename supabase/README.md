@@ -85,8 +85,8 @@ réellement utilisés par `supabase/functions/`, `src/entrants.ts` et
 
 | Objet | Rôle | Accès navigateur |
 | --- | --- | --- |
-| `ingestion_config` | secrets OAuth Gmail, secret interne du cron, état du dernier scan | aucun ; `service_role` seulement |
-| `entrants` | index des pièces Gmail et DCE à valider | lecture et marquage traité pour les comptes de l’agence |
+| `ingestion_config` | secrets OAuth Gmail, secret interne du cron, état du dernier scan, curseur de lecture incrémentale Gmail et portée de ce curseur | aucun ; `service_role` seulement |
+| `entrants` | index des pièces Gmail et DCE à valider, avec le contexte du message qui les a apportées (fil, destinataires, en-têtes RFC, libellés, date d’envoi, sens entrant/sortant, extrait du corps) | lecture et marquage traité pour les comptes de l’agence |
 | `veille_collectes` | journal de chaque collecte | lecture |
 | `veille_signaux` | opportunités normalisées, dédupliquées par source | lecture |
 | `veille_observations` | provenance des alertes e-mail | lecture |
@@ -172,7 +172,7 @@ Les quatre tâches reproduites sont :
 
 | Tâche | Fréquence UTC | Fonction |
 | --- | --- | --- |
-| `gmail-ingestion` | toutes les 10 minutes | pièces jointes Gmail |
+| `gmail-ingestion` | toutes les 10 minutes | pièces jointes Gmail, lues par tranches successives depuis un curseur `internalDate` |
 | `veille-collecte` | à `:20`, toutes les 4 heures | BOAMP et TED |
 | `veille-mails` | à `:50`, toutes les heures | alertes des plateformes |
 | `veille-enrichir` | toutes les 10 minutes | fiches publiques, preuves et DCE |

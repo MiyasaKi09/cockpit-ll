@@ -93,6 +93,9 @@ jobs:
       - name: No hardcoded sign-in addresses
         run: npm run test:adresses
 
+      - name: Enriched Gmail ingestion and incremental cursor
+        run: npm run test:ingestion-gmail
+
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 

@@ -64,3 +64,31 @@ export async function jetonDeMembreActif(
   if (error) return false
   return await estMembreActif(sb, data.user?.email)
 }
+
+/**
+ * Les adresses des membres actifs, normalisées.
+ *
+ * Ajouté pour l'ingestion Gmail (livrable A.1) : le SENS d'un message —
+ * entrant ou sortant — se décide en comparant son expéditeur à l'agence, et
+ * cette liste n'a qu'un seul endroit légitime, le registre. Une constante
+ * locale rouvrirait exactement la porte que la migration 20260730180000 a
+ * fermée.
+ *
+ * Ce n'est PAS un contrôle d'accès : le refus par défaut ne s'applique donc
+ * pas de la même façon. Registre injoignable ⇒ ensemble vide ⇒ tout message
+ * est réputé entrant. C'est la lecture la plus prudente : elle laisse un fil
+ * « en attente de réponse » de trop, elle n'en éteint aucun à tort.
+ */
+export async function adressesMembresActifs(sb: SupabaseClient): Promise<Set<string>> {
+  const { data, error } = await sb.from('membres').select('email').eq('actif', true)
+  if (error) {
+    console.error('Registre des membres illisible, direction déduite du seul libellé Gmail :', error.message)
+    return new Set<string>()
+  }
+  const adresses = new Set<string>()
+  for (const ligne of data || []) {
+    const adresse = adresseNormalisee((ligne as { email?: string }).email)
+    if (adresse) adresses.add(adresse)
+  }
+  return adresses
+}

@@ -108,6 +108,25 @@ opérationnelles :
 Après elle, ajouter ou retirer une personne, ou changer son adresse, est un
 `update` d'une ligne de `public.membres` — plus une migration.
 
+La migration `20260731103000` enrichit l'ingestion Gmail (livrable A.1) : elle
+ajoute à `public.entrants` le contexte du message qui apporte chaque pièce —
+fil de discussion, destinataires, en-têtes RFC, libellés, date d'envoi distincte
+de la réception, sens entrant/sortant, extrait du corps — et à
+`public.ingestion_config` le curseur de lecture incrémentale avec sa portée.
+Deux points opérationnels :
+
+- **elle s'applique AVANT le redéploiement de `gmail-ingestion`**, comme celle
+  du registre : la nouvelle source écrit ces colonnes, et une insertion vers
+  une colonne absente échoue à chaque passage, toutes les dix minutes, sans
+  autre trace que les journaux Supabase. La fonction déjà déployée, elle,
+  ignore ces colonnes — toutes sont nullables ou ont une valeur par défaut ;
+- **au premier passage de la nouvelle fonction, le curseur est vide** : elle
+  reprend une fenêtre de sept jours, exactement l'ancienne fenêtre fixe, puis
+  avance par tranches d'un jour au maximum jusqu'à rattraper le présent. Sur
+  une boîte chargée, le rattrapage prend donc plusieurs passages du cron ;
+  `ingestion_config.dernier_resultat` dit à chaque fois jusqu'où le curseur est
+  allé et combien de messages restent en attente.
+
 La migration `20260730160000` fait estampiller l'auteur d'une écriture par le
 serveur : `workspace.updated_by` cesse de recevoir l'identifiant d'onglet envoyé
 par le navigateur et reçoit `auth.uid()`. La signature de la RPC ne change pas,

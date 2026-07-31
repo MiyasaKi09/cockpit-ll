@@ -60,6 +60,27 @@ jobs:
       - name: Invoice invariant tests
         run: npm run test:facture-invariants
 
+      - name: Current-user identity
+        run: npm run test:identite
+
+      - name: Project and document anchoring fields
+        run: npm run test:champs
+
+      - name: Member registry and hardcoded addresses
+        run: npm run test:registre
+
+      - name: Exchange categorisation referential
+        run: npm run test:categorisation
+
+      - name: Planned-hours baseline
+        run: npm run test:baseline
+
+      - name: Project folder tree
+        run: npm run test:arborescence
+
+      - name: Project team on creation
+        run: npm run test:equipe
+
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 

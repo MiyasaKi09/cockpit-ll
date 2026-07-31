@@ -49,7 +49,7 @@ import {
   seuilPlancherActualise,
   totalPointsComplexite,
 } from '../miqcp'
-import { baselineDepuisPhases, coutHoraireMoyen, coutJourObjectif, coutReelTemps, coutsExternes, ecartHeures, encaisseHT, encaissementPrevu, enJours, factureHT, heuresBaseline, heuresPrevues, heuresReelles, retardFacture, tauxVente, ttc } from '../derive'
+import { baselineDepuisPhases, coutHoraireMoyen, coutJourObjectif, coutReelTemps, coutsExternes, ecartHeures, encaisseHT, encaissementPrevu, enJours, equipeDuProjet, factureHT, heuresBaseline, heuresPrevues, heuresReelles, retardFacture, tauxVente, ttc } from '../derive'
 import { assemble, contexteProjet, copier } from '../prompts'
 import { echeancesParDefaut } from '../echeancier'
 import { contratDuProjet, totalContratHT } from '../contrats'
@@ -605,7 +605,7 @@ function LigneIdentite({ projet: p }: { projet: Projet }) {
       </span>,
     )
   {
-    const equipe = [...new Set([p.responsable, p.coResponsable, ...(p.equipeProjet || [])].filter(Boolean))]
+    const equipe = equipeDuProjet(p)
     if (equipe.length > 0) items.push(<span key="resp">👤 {equipe.join(', ')}</span>)
   }
   if (p.chargeOperation) items.push(<span key="co">MOA : {p.chargeOperation}</span>)

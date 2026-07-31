@@ -425,7 +425,13 @@ export function enJours(state: AppState, heures: number): number {
 // sur la durée de la phase puis entre les personnes affectées.
 // ------------------------------------------------------------------
 
-/** personnes affectées à un projet (équipe explicite + responsables) */
+/** Personnes affectées à un projet (équipe explicite + responsables).
+ *  **Seule définition** de « qui travaille sur ce projet » : elle décide
+ *  à la fois du plan de charge, des lignes pré-remplies du tableau de
+ *  temps et de l'équipe montrée sur la fiche. Recopiée sur un écran, elle
+ *  divergerait sans bruit — un projet visible au planning et absent de la
+ *  feuille de temps de la personne, ou l'inverse.
+ *  `scripts/test-equipe-projet.cjs` le vérifie. */
 export function equipeDuProjet(p: Projet): string[] {
   return [...new Set([p.responsable, p.coResponsable, ...(p.equipeProjet || [])].filter(Boolean) as string[])]
 }

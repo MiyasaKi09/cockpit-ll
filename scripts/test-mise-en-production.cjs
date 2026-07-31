@@ -138,4 +138,38 @@ assert.ok(
   'la révocation finale vient après le déploiement du front',
 )
 
-console.log('Mise en production : bascule cohérente et runbook synchronisé.')
+// --- Aucun test écrit ne dort ------------------------------------------------
+
+// Un test qu'on écrit mais qu'on ne branche ni à `npm test` ni à la CI donne
+// exactement la fausse assurance qu'il était censé retirer : il existe, on le
+// cite dans une revue, et il ne s'exécute jamais. C'est arrivé deux fois de
+// suite pendant le Lot 0 — d'abord dans package.json, puis dans ci.yml.
+
+const pkg = JSON.parse(lire('package.json'))
+const ci = lire('.github/workflows/ci.yml')
+
+const fichiersTest = fs
+  .readdirSync(path.join(racine, 'scripts'))
+  .filter((f) => /^test-.*\.cjs$/.test(f))
+
+for (const fichier of fichiersTest) {
+  const script = Object.entries(pkg.scripts).find(
+    ([nom, cmd]) => nom.startsWith('test:') && cmd.includes(fichier),
+  )
+  assert.ok(
+    script,
+    `scripts/${fichier} n'a aucun script npm : un test que rien ne lance ne protège rien`,
+  )
+  assert.ok(
+    pkg.scripts.test.includes(`npm run ${script[0]}`),
+    `${script[0]} existe mais ne fait pas partie de \`npm test\``,
+  )
+  assert.ok(
+    ci.includes(`npm run ${script[0]}`),
+    `${script[0]} est dans \`npm test\` mais pas dans .github/workflows/ci.yml : il ne tournera pas en intégration`,
+  )
+}
+
+console.log(
+  `Mise en production : bascule cohérente, runbook synchronisé, ${fichiersTest.length} tests tous branchés.`,
+)

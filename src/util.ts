@@ -108,8 +108,30 @@ export function fold(s: string): string {
 }
 
 // ------------------------------------------------------------
-// Adresse dédiée d'un projet (CDC §3.4, §12.1)
+// Code projet lisible et adresse dédiée (CDC §3.4, §3.10, §12.1)
 // ------------------------------------------------------------
+
+/** Prochain code projet lisible pour l'année donnée, format `AAAA-NNN`
+ *  (CDC §3.10). C'est une PROPOSITION pré-remplie dans l'assistant, rien
+ *  de plus : le code reste modifiable à la saisie, l'identifiant interne
+ *  (`P01`) ne bouge pas, et aucun calcul ne s'appuie dessus.
+ *
+ *  La suite ne se lit que sur les codes de la MÊME année et du même
+ *  format. Un code d'un autre format est ignoré plutôt que réinterprété :
+ *  proposer un numéro déjà pris est visible à l'écran et se corrige en
+ *  deux secondes, alors qu'une numérotation maison mal comprise se
+ *  découvrirait chez le client. `annee` est passée par l'appelant (jamais
+ *  `new Date()` ici) pour que la fonction reste pure et testable. */
+export function codeExternePropose(codesExistants: readonly (string | null | undefined)[], annee: string): string {
+  const an = (annee || '').trim().slice(0, 4)
+  if (!/^\d{4}$/.test(an)) return ''
+  let dernier = 0
+  for (const code of codesExistants) {
+    const m = /^(\d{4})-(\d{1,4})$/.exec((code || '').trim())
+    if (m && m[1] === an) dernier = Math.max(dernier, Number(m[2]))
+  }
+  return `${an}-${String(dernier + 1).padStart(3, '0')}`
+}
 
 /** Domaine retenu par l'agence. Il n'est PAS acheté : il ne sert qu'à
  *  proposer une adresse dans un formulaire. Rien, nulle part, ne doit

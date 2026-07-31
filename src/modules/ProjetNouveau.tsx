@@ -1,13 +1,24 @@
 // Assistant « Nouveau projet » — 3 étapes, 2 minutes :
-// 1. le projet · 2. les honoraires (calculés seuls) · 3. le planning.
+// 1. le projet et son équipe · 2. les honoraires (calculés seuls) ·
+// 3. le planning.
 // À la fin : phases datées + échéancier de facturation + arborescence
 // documentaire dans le Drive, tout reste ajustable dans la fiche.
+//
+// L'équipe se règle ICI et pas « plus tard dans la fiche » (CDC §19.1
+// points 2 et 4). Sans responsable, un projet neuf n'appartient à
+// personne : `equipeDuProjet()` rend une liste vide, sa charge planifiée
+// vaut 0 pour tout le monde, et il n'apparaît sur aucun tableau de temps.
+// Rien ne le signale — le projet est simplement absent des écrans où on
+// l'aurait cherché. Le responsable est donc OBLIGATOIRE dès l'étape 1.
+//
+// Ce bloc désigne un responsable et une équipe ; il ne crée AUCUN droit
+// d'accès (§12.1 point 12), auquel le plan renonce explicitement.
 
 import { useEffect, useMemo, useState } from 'react'
 import type { Projet, StatutProjet, TypeMO } from '../types'
 import { useStore } from '../store'
 import { OUVRAGES, calculHonoraires, phasesParDefaut, seuilPlancherActualise } from '../miqcp'
-import { baselineDepuisPhases, tauxVente } from '../derive'
+import { baselineDepuisPhases, equipeDuProjet, tauxVente } from '../derive'
 import { useMoi } from '../moi'
 import { daterPhases, echeancesParDefaut } from '../echeancier'
 import {
@@ -20,7 +31,7 @@ import {
   type FSDirHandle,
 } from '../fsdrive'
 import { Badge, Btn, Field, Modal, NumInput, PctInput, Select, TextInput, navigate, toast } from '../ui'
-import { addDays, fmtMoney, fmtPct, todayISO, uid } from '../util'
+import { addDays, adresseProjetProposee, codeExternePropose, fmtMoney, fmtPct, todayISO, uid } from '../util'
 
 const TYPES_MO: TypeMO[] = ['Public', 'Privé pro', 'Particulier']
 const STATUTS: StatutProjet[] = ['Prospect', 'Offre remise', 'Signé', 'En cours']
@@ -47,6 +58,38 @@ export default function ProjetNouveau({ onClose }: { onClose: () => void }) {
   const [adresse, setAdresse] = useState('')
   const [ouvrage, setOuvrage] = useState('')
   const [montant, setMontant] = useState<number | null>(null)
+
+  // — étape 1 : l'équipe (CDC §19.1 pts 2 et 4)
+  const personnes = useMemo(
+    () => state.settings.personnes.map((n) => n.trim()).filter(Boolean),
+    [state.settings.personnes],
+  )
+  const [codeExterne, setCodeExterne] = useState(() =>
+    codeExternePropose(
+      state.projets.map((p) => p.codeExterne),
+      todayISO().slice(0, 4),
+    ),
+  )
+  const [responsable, setResponsable] = useState(moi.nom ?? '')
+  // l'identité peut arriver après le premier rendu (la session Supabase se
+  // résout de façon asynchrone) : sans ce rattrapage, ouvrir l'assistant
+  // trop vite laisserait le champ vide alors que le Cockpit sait qui est là.
+  // Dès que la personne y touche, l'assistant cesse de proposer.
+  const [responsableTouche, setResponsableTouche] = useState(false)
+  useEffect(() => {
+    if (!responsableTouche && moi.nom) setResponsable(moi.nom)
+  }, [moi.nom, responsableTouche])
+  const [coResponsable, setCoResponsable] = useState('')
+  const [equipeProjet, setEquipeProjet] = useState<string[]>([])
+
+  /** options d'un Select de personne — un nom hors `settings.personnes`
+   *  (identité de session non encore ajoutée à l'agence) reste visible
+   *  plutôt que de disparaître silencieusement du champ */
+  const optionsPersonne = (valeur: string) => [
+    { value: '', label: '— aucun —' },
+    ...personnes.map((n) => ({ value: n, label: n })),
+    ...(valeur && !personnes.includes(valeur) ? [{ value: valeur, label: `${valeur} (hors liste)` }] : []),
+  ]
 
   // — étape 2 : les honoraires
   const [tauxRetenu, setTauxRetenu] = useState<number | null>(null)
@@ -85,14 +128,42 @@ export default function ProjetNouveau({ onClose }: { onClose: () => void }) {
       missionsComplHT: missionsCompl ?? 0,
       dureeEtudesMois: dureeEtudes,
       dureeChantierMois: dureeChantier,
+      // l'équipe part AVEC le projet : c'est elle qui le fait exister dans
+      // le plan de charge et dans les tableaux de temps
+      codeExterne: codeExterne.trim() || undefined,
+      responsable: responsable.trim() || undefined,
+      coResponsable: coResponsable.trim() || undefined,
+      equipeProjet,
       phases: [],
       liens: [],
       materiauxIds: [],
       artisanIds: [],
       journal: [],
     }),
-    [id, nom, typeMO, statut, moa, adresse, ouvrage, montant, tauxRetenu, missionsCompl, dureeEtudes, dureeChantier],
+    [
+      id,
+      nom,
+      typeMO,
+      statut,
+      moa,
+      adresse,
+      ouvrage,
+      montant,
+      tauxRetenu,
+      missionsCompl,
+      dureeEtudes,
+      dureeChantier,
+      codeExterne,
+      responsable,
+      coResponsable,
+      equipeProjet,
+    ],
   )
+
+  // qui travaillera sur le projet, selon la règle de derive.ts et elle seule
+  // — la recopier ici ferait diverger l'aperçu de l'assistant du plan de
+  // charge le jour où la règle bouge
+  const equipe = equipeDuProjet(brouillon)
 
   const h = calculHonoraires(brouillon, state.settings)
 
@@ -156,13 +227,18 @@ export default function ProjetNouveau({ onClose }: { onClose: () => void }) {
     navigate(`/projets/${projet.id}`)
   }
 
-  const etapeValide = etape === 1 ? nom.trim() !== '' : true
+  // Le responsable est exigé — sauf si l'agence n'a aucune personne
+  // enregistrée : mieux vaut un projet sans responsable qu'un assistant
+  // qu'on ne peut plus terminer.
+  const responsableManquant = personnes.length > 0 && responsable.trim() === ''
+  const projetComplet = nom.trim() !== '' && !responsableManquant
+  const etapeValide = etape === 1 ? projetComplet : true
 
   return (
     <Modal titre={`Nouveau projet ${id} — étape ${etape}/3`} onClose={onClose} large>
       {/* fil d'ariane */}
       <div className="toolbar" style={{ marginBottom: 16 }}>
-        {['Le projet', 'Les honoraires', 'Le planning'].map((label, i) => (
+        {['Le projet & l’équipe', 'Les honoraires', 'Le planning'].map((label, i) => (
           <Badge key={label} tone={etape === i + 1 ? 'info' : etape > i + 1 ? 'ok' : 'muted'}>
             {etape > i + 1 ? '✓ ' : `${i + 1}. `}
             {label}
@@ -203,6 +279,88 @@ export default function ProjetNouveau({ onClose }: { onClose: () => void }) {
               <NumInput value={montant} onChange={setMontant} placeholder="Ex. 1 400 000" />
             </Field>
           </div>
+          <div className="form-row">
+            <Field
+              label="Code projet (côté client)"
+              hint={
+                codeExterne.trim()
+                  ? `porté par les échanges — adresse projet proposée : ${adresseProjetProposee(codeExterne)}`
+                  : 'code lisible porté par les échanges — l’identifiant interne reste ' + id
+              }
+            >
+              <TextInput value={codeExterne} onChange={setCodeExterne} placeholder="2026-034" />
+            </Field>
+          </div>
+
+          <p className="small" style={{ margin: '18px 0 2px', fontWeight: 600 }}>
+            L’équipe
+          </p>
+          <p className="small muted" style={{ marginBottom: 8 }}>
+            Sans responsable, le projet n’apparaît sur aucun plan de charge ni tableau de temps. Cela
+            désigne qui porte le projet — aucun droit d’accès n’est créé.
+          </p>
+          {personnes.length === 0 && (
+            <div className="pill-note" style={{ marginBottom: 8 }}>
+              Aucune personne enregistrée dans les Paramètres : l’équipe se réglera dans la fiche du
+              projet.
+            </div>
+          )}
+          <div className="form-row">
+            <Field
+              label="Responsable *"
+              hint={
+                responsable && responsable === moi.nom
+                  ? 'vous, par défaut — modifiable'
+                  : 'obligatoire : qui porte ce projet'
+              }
+            >
+              <Select
+                value={responsable}
+                onChange={(v) => {
+                  setResponsableTouche(true)
+                  setResponsable(v)
+                }}
+                options={optionsPersonne(responsable)}
+              />
+            </Field>
+            <Field label="Co-responsable" hint="optionnel">
+              <Select value={coResponsable} onChange={setCoResponsable} options={optionsPersonne(coResponsable)} />
+            </Field>
+          </div>
+          {personnes.length > 0 && (
+            <Field label="Travaillent aussi sur le projet" hint="pré-remplit leur tableau de temps et le plan de charge">
+              <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', paddingTop: 7 }}>
+                {personnes.map((n) => {
+                  const dOffice = n === responsable || n === coResponsable
+                  return (
+                    <label
+                      key={n}
+                      className="small"
+                      style={{ display: 'flex', gap: 5, alignItems: 'center', cursor: dOffice ? 'default' : 'pointer' }}
+                      title={dOffice ? 'compté d’office : responsable ou co-responsable' : undefined}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={dOffice || equipeProjet.includes(n)}
+                        disabled={dOffice}
+                        onChange={(e) =>
+                          setEquipeProjet(e.target.checked ? [...equipeProjet, n] : equipeProjet.filter((x) => x !== n))
+                        }
+                      />
+                      {n}
+                    </label>
+                  )
+                })}
+              </div>
+            </Field>
+          )}
+          <p className="small muted" style={{ marginTop: 6 }}>
+            {equipe.length > 0
+              ? `Équipe du projet : ${equipe.join(', ')} — la charge des phases se répartira entre ${
+                  equipe.length > 1 ? `ces ${equipe.length} personnes` : 'cette personne'
+                }.`
+              : 'Équipe du projet : personne pour l’instant.'}
+          </p>
         </>
       )}
 
@@ -308,7 +466,12 @@ export default function ProjetNouveau({ onClose }: { onClose: () => void }) {
             Continuer →
           </Btn>
         ) : (
-          <Btn kind="primary" disabled={nom.trim() === ''} onClick={creer}>
+          <Btn
+            kind="primary"
+            disabled={!projetComplet}
+            title={responsableManquant ? 'Choisissez un responsable à l’étape 1' : undefined}
+            onClick={creer}
+          >
             Créer le projet
           </Btn>
         )}

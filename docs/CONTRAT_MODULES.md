@@ -84,7 +84,12 @@ la bascule d'identité (livrable 3.2), qui ne démarre pas tant qu'il n'est pas 
 - **Une personne se référence par son nom, partout** — et donc `src/personnes.ts` tient
   l'inventaire des endroits qui la citent. Toute nouvelle collection portant un nom de personne
   s'y ajoute, sinon un renommage dans les Paramètres orpheline ses données en silence.
-  `scripts/test-renommage-personne.cjs` le vérifie.
+  `scripts/test-renommage-personne.cjs` le vérifie. **La règle qui tranche** : un champ qui
+  désigne *la personne* (`responsable`, `pour`, `auteur` d'un document ou d'une note) entre dans
+  l'inventaire ; une trace datée qui dit *qui a agi ce jour-là* (`validePar`, `evenements[].auteur`)
+  n'y entre pas. `Projet.journal[].auteur` manquait à l'inventaire alors que
+  `DocumentRecord.auteur` y figurait — or `ProjetJournal.tsx` écrit la **même** valeur dans les
+  deux : deux copies d'un seul choix divergeaient au premier renommage.
 - Pré-prompts : TOUJOURS via `CopyBtn` (feedback « Copié ! ») ; texte assemblé par
   `assemble(corps, contexte)` de `prompts.ts` avec les constructeurs de contexte fournis.
 

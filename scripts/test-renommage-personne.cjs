@@ -81,9 +81,21 @@ const etat = () => ({
   tempsHorsProjet: [{ id: 'h1', semaine: '2026-07-27', personne: ANCIEN, categorie: 'Interne', heures: 2 }],
   absences: [{ id: 'a1', personne: ANCIEN, debut: '2026-08-01', fin: '2026-08-15' }],
   projets: [
-    { id: 'P1', responsable: ANCIEN, coResponsable: 'Zoé', equipeProjet: [ANCIEN, 'Zoé'] },
-    { id: 'P2', responsable: 'Zoé', coResponsable: ANCIEN, equipeProjet: ['Zoé'] },
+    {
+      id: 'P1',
+      responsable: ANCIEN,
+      coResponsable: 'Zoé',
+      equipeProjet: [ANCIEN, 'Zoé'],
+      // même valeur que registreDocuments[].auteur : ProjetJournal écrit le nom
+      // choisi dans la note ET dans le document de la photo qu'elle porte
+      journal: [
+        { id: 'n1', date: '2026-07-28', auteur: ANCIEN, texte: 'visite', tags: [] },
+        { id: 'n2', date: '2026-07-29', auteur: 'Zoé', texte: 'relance', tags: [] },
+      ],
+    },
+    { id: 'P2', responsable: 'Zoé', coResponsable: ANCIEN, equipeProjet: ['Zoé'], journal: [] },
   ],
+  registreDocuments: [{ id: 'doc1', auteur: ANCIEN, statut: 'classe' }],
   courriers: [{ id: 'c1', pour: ANCIEN }],
   situations: [{ id: 's1', pour: ANCIEN }],
   consultations: [
@@ -95,13 +107,13 @@ const etat = () => ({
 const avant = etat()
 const trouvees = referencesDe(avant, ANCIEN)
 assert.ok(
-  trouvees.length >= 13,
-  `le jeu d'essai doit couvrir tous les sites : ${trouvees.length} familles trouvées, au moins 13 attendues`,
+  trouvees.length >= 15,
+  `le jeu d'essai doit couvrir tous les sites : ${trouvees.length} familles trouvées, au moins 15 attendues`,
 )
 
 const apres = etat()
 const reecrites = renommerPersonne(apres, ANCIEN, NOUVEAU)
-assert.ok(reecrites >= 13, `renommage incomplet : ${reecrites} références réécrites, au moins 13 attendues`)
+assert.ok(reecrites >= 15, `renommage incomplet : ${reecrites} références réécrites, au moins 15 attendues`)
 
 const restant = JSON.stringify(apres).split(`"${ANCIEN}"`).length - 1
 assert.equal(restant, 0, `${restant} référence(s) à « ${ANCIEN} » ont survécu au renommage`)
@@ -111,6 +123,13 @@ assert.equal(referencesDe(apres, ANCIEN).length, 0, 'plus aucune référence ne 
 assert.equal(apres.temps[1].personne, 'Zoé', 'renommer une personne ne doit pas toucher les autres')
 assert.deepEqual(apres.projets[1].equipeProjet, ['Zoé'], 'les équipes sans la personne sont intactes')
 assert.equal(apres.consultations[0].exigences[1].responsable, 'Zoé', 'les exigences des autres sont intactes')
+assert.equal(apres.projets[0].journal[1].auteur, 'Zoé', 'les notes de journal des autres sont intactes')
+// la note et le document que le même geste a produits doivent porter le même nom
+assert.equal(
+  apres.projets[0].journal[0].auteur,
+  apres.registreDocuments[0].auteur,
+  'la note de journal et le document de sa photo portent un seul et même auteur',
+)
 
 // --- 3. les garde-fous du renommage ----------------------------------------
 

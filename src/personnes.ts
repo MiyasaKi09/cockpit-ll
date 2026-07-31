@@ -71,7 +71,7 @@ function champListe<T>(
   }
 }
 
-/** l'inventaire exhaustif — quatorze sites au 30 juillet 2026 */
+/** l'inventaire exhaustif — quinze sites au 31 juillet 2026 */
 export const REFERENCES_PERSONNE: Reference[] = [
   {
     // la fiche de l'équipe elle-même : l'appelant de l'interface l'a en général
@@ -181,6 +181,29 @@ export const REFERENCES_PERSONNE: Reference[] = [
       d.auteur = v
     },
   ),
+  {
+    // Les notes de journal vivent DANS les projets. Leur `auteur` est la même
+    // notion que `DocumentRecord.auteur` ci-dessus — et littéralement la même
+    // valeur : `ProjetJournal.tsx` écrit le nom choisi dans la note ET dans le
+    // document de la photo qu'elle porte. Réécrire l'un sans l'autre faisait
+    // diverger deux copies d'un seul choix. Ce n'est pas une trace datée
+    // (`validePar`, `evenements[].auteur`), c'est la personne qui tient le
+    // journal, et c'est sur ce nom que se filtre « mes notes ».
+    libelle: 'notes de journal de projet',
+    compter: (state, nom) =>
+      (state.projets || []).flatMap((p) => p.journal || []).filter((n) => n.auteur === nom).length,
+    reecrire: (state, ancien, nouveau) => {
+      let touches = 0
+      for (const projet of state.projets || []) {
+        for (const note of projet.journal || []) {
+          if (note.auteur !== ancien) continue
+          note.auteur = nouveau
+          touches++
+        }
+      }
+      return touches
+    },
+  },
   {
     // les exigences vivent DANS les dossiers de poursuite : un aplatissement
     // suffit, la mutation porte sur l'objet et non sur la copie

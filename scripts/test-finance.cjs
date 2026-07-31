@@ -37,6 +37,14 @@ try {
 const BASE = 'http://localhost:4173/'
 const RACINE = path.resolve(__dirname, '..')
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'cockpit-f6f10-'))
+
+/** version de schéma attendue après migration, lue à la source */
+const VERSION_CIBLE = (() => {
+  const seed = fs.readFileSync(path.join(RACINE, 'src/seed.ts'), 'utf8')
+  const m = /export const STATE_VERSION = (\d+)/.exec(seed)
+  if (!m) throw new Error('STATE_VERSION introuvable dans src/seed.ts')
+  return Number(m[1])
+})()
 let echecs = 0
 const ok = (n) => console.log('  ✓ ' + n)
 const ko = (n, d) => {
@@ -313,8 +321,13 @@ async function attendrePort(url, essais = 60) {
       const cols = ['revisionsResteAFaire', 'pistesAvenant', 'decisionsDirection', 'simulations', 'connecteurs']
       return { version: e.version, toutesArrays: cols.every((c) => Array.isArray(e[c])), contrats: e.contrats.length }
     })
-    if (migr.version === 16 && migr.toutesArrays) ok('migration v16 · les 5 collections de pilotage sont amorcées (sans donnée inventée)')
-    else ko('migration v16', JSON.stringify(migr))
+    // La cible est lue dans src/seed.ts, jamais écrite en dur : chaque livrable
+    // qui ajoute un palier de migration ferait échouer un nombre figé, et ce
+    // test cesserait de vérifier ce qui compte — qu'un état v0 remonte jusqu'à
+    // la version courante en amorçant les cinq collections de pilotage.
+    if (migr.version === VERSION_CIBLE && migr.toutesArrays)
+      ok(`migration v0 → v${VERSION_CIBLE} · les 5 collections de pilotage sont amorcées (sans donnée inventée)`)
+    else ko(`migration v0 → v${VERSION_CIBLE}`, JSON.stringify(migr))
 
     // ========================================================
     // F9 — Prévisions & rentabilité (avant toute mutation)

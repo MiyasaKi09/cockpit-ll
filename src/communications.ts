@@ -56,7 +56,12 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { NiveauImportance, PhaseEchange, TypeEchange } from './categorisation'
-import { normaliserImportance, normaliserPhaseEchange, normaliserTypeEchange } from './categorisation'
+import {
+  PHASES_ECHANGE,
+  normaliserImportance,
+  normaliserPhaseEchange,
+  normaliserTypeEchange,
+} from './categorisation'
 import {
   ecrireCache,
   enfiler,
@@ -715,4 +720,100 @@ export function useCommunications(filtre: FiltreCommunications, taille = TAILLE_
   const recharger = useCallback(() => setGeneration((g) => g + 1), [])
 
   return { lignes, source, chargement, erreur, suite: curseur !== null, chargerSuite, recharger }
+}
+
+// ------------------------------------------------------------
+// 7. Les trois sélecteurs purs (A.12)
+// ------------------------------------------------------------
+//
+// Ce que consomment §8.1 (vue d'accueil), §8.2 (« Aujourd'hui ») et
+// §13.1 (recherche par phase). Ils ne lisent rien, n'écrivent rien et
+// ne rendent rien : on leur passe une liste de messages déjà chargée,
+// ils répondent. C'est ce qui les rend vérifiables en CI sans base.
+//
+// `mailsEnAttenteDeReponse` porte la dépendance dure au fil et au sens
+// du message, captés en A.1 : sans `gmailThreadId` et sans `direction`,
+// la question « leur a-t-on répondu ? » n'a pas de réponse — et aucune
+// heuristique posée après coup ne la reconstitue.
+
+/** normalise une adresse pour la comparaison (casse, espaces, chevrons) */
+function adresseNormalisee(valeur: string): string {
+  const brut = (valeur || '').trim().toLowerCase()
+  const entreChevrons = /<([^>]+)>/.exec(brut)
+  return (entreChevrons ? entreChevrons[1] : brut).trim()
+}
+
+/**
+ * Les messages qui attendent un geste : reçus, pas encore marqués traités.
+ *
+ * Sans adresses, la liste est celle de l'agence entière — c'est le cas
+ * quand personne n'est reconnu, et il vaut mieux tout montrer que de
+ * choisir quelqu'un au hasard. Avec des adresses, on ne garde que ce qui
+ * s'adresse réellement à la personne : destinataire ou en copie.
+ */
+export function mailsATraiter(
+  messages: Communication[],
+  adressesPersonne?: string[] | null,
+): Communication[] {
+  const miennes = new Set((adressesPersonne || []).map(adresseNormalisee).filter(Boolean))
+  return messages.filter((c) => {
+    if (c.traiteLe) return false
+    if (c.direction !== 'entrant') return false
+    if (miennes.size === 0) return true
+    return [...c.destinataires, ...c.copies].some((a) => miennes.has(adresseNormalisee(a)))
+  })
+}
+
+/**
+ * Les fils dont le DERNIER message est entrant : on nous a écrit, et rien
+ * n'est reparti depuis. C'est la définition du §8.2 (« mails nécessitant
+ * une réponse »), et c'est elle que le producteur d'alerte
+ * `reponse_attendue` d'A.11 consomme — il ne la redéfinit pas.
+ *
+ * Un message sans date d'envoi ne peut pas être ordonné dans son fil :
+ * il ne peut donc ni être élu dernier, ni empêcher un autre de l'être.
+ * Le traiter comme « très ancien » ferait dire à un fil qu'il attend une
+ * réponse alors qu'on y a répondu.
+ */
+export function mailsEnAttenteDeReponse(messages: Communication[]): Communication[] {
+  const dernierParFil = new Map<string, Communication>()
+  for (const c of messages) {
+    if (!c.gmailThreadId || !c.envoyeLe) continue
+    const connu = dernierParFil.get(c.gmailThreadId)
+    if (!connu || (connu.envoyeLe || '') < c.envoyeLe) dernierParFil.set(c.gmailThreadId, c)
+  }
+  return [...dernierParFil.values()]
+    .filter((c) => c.direction === 'entrant' && !c.traiteLe)
+    .sort((a, b) => (b.envoyeLe || '').localeCompare(a.envoyeLe || ''))
+}
+
+/** un axe du §5.2 et ce qu'il pèse dans un projet */
+export interface EchangesParPhase {
+  phase: PhaseEchange | null
+  nb: number
+  messages: Communication[]
+}
+
+/**
+ * Les échanges d'un projet, groupés par phase (§13.1 « recherche par
+ * phase »). La phase absente est un groupe à part entière, en dernier :
+ * elle dit « ces messages ne sont pas encore classés », ce qu'un total
+ * silencieux effacerait.
+ */
+export function echangesParPhase(
+  messages: Communication[],
+  projetId: string,
+): EchangesParPhase[] {
+  const groupes = new Map<PhaseEchange | null, Communication[]>()
+  for (const c of messages) {
+    if (c.projetId !== projetId) continue
+    const cle = c.phase ?? null
+    const liste = groupes.get(cle)
+    if (liste) liste.push(c)
+    else groupes.set(cle, [c])
+  }
+  const ordre = (p: PhaseEchange | null) => (p === null ? PHASES_ECHANGE.length : PHASES_ECHANGE.indexOf(p))
+  return [...groupes.entries()]
+    .map(([phase, liste]) => ({ phase, nb: liste.length, messages: liste }))
+    .sort((a, b) => ordre(a.phase) - ordre(b.phase))
 }

@@ -111,6 +111,9 @@ jobs:
       - name: Deterministic three-axis classifier and its French reasons
         run: npm run test:classement
 
+      - name: Pure message selectors
+        run: npm run test:selecteurs
+
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 

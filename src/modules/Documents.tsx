@@ -5,8 +5,9 @@
 // l'inventaire complet — cherchable, filtrable, traçable (événements).
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { DocumentRecord, Projet } from '../types'
+import type { DocumentRecord, PhaseCode, Projet } from '../types'
 import { useStore } from '../store'
+import { useMoi } from '../moi'
 import {
   Badge,
   Btn,
@@ -25,11 +26,12 @@ import {
   toast,
   useRoute,
 } from '../ui'
-import { fmtDate, fold, todayISO } from '../util'
+import { fmtDate, fold, gmailMessageUrl, todayISO } from '../util'
 import {
   CATEGORIES_DOC,
   DOSSIER_PAR_CATEGORIE,
   LIBELLES_STATUT,
+  ajouterEvenement,
   chercherDoublon,
   classerFichier,
   creerDocument,
@@ -46,11 +48,17 @@ import {
   lireRacine,
   listerFichiersRacine,
   nomConforme,
+  phaseDuDossier,
   rangerFichier,
   supprimerFichierRacine,
   supporteFS,
   type FSDirHandle,
 } from '../fsdrive'
+import { LIBELLES_PHASES, PHASES_ORDRE } from '../miqcp'
+// le triplet de statuts « en attente d'un geste humain » se déclare une
+// seule fois, dans derive.ts : recopié, il diverge du compteur du menu
+// et du bloc « validations attendues » de l'accueil
+import { documentsATraiter } from '../derive'
 import { syncActif } from '../sync'
 import {
   listerEntrantsDistants,
@@ -61,6 +69,37 @@ import {
 } from '../entrants'
 
 // ============================================================
+// Phase du document (CDC §7.3) — AUCUN référentiel nouveau : ce
+// sont les phases de la mission (miqcp.ts), et la correspondance
+// avec le sous-dossier de rangement existe depuis l'origine dans
+// ARBORESCENCE. On la lit pour PROPOSER, l'utilisateur tranche.
+// ============================================================
+
+const OPTIONS_PHASE = [
+  { value: '', label: '— aucune —' },
+  ...PHASES_ORDRE.map((c) => ({ value: c, label: `${c} — ${LIBELLES_PHASES[c]}` })),
+]
+
+function ChampPhase({
+  value,
+  onChange,
+  hint = 'proposée d’après le sous-dossier',
+}: {
+  value: string
+  onChange: (v: string) => void
+  hint?: string
+}) {
+  return (
+    <Field label="Phase" hint={hint}>
+      <Select value={value} onChange={onChange} options={OPTIONS_PHASE} />
+    </Field>
+  )
+}
+
+/** la valeur du formulaire (chaîne) rangée telle que l'état l'attend */
+const phaseChoisie = (v: string): PhaseCode | null => (v ? (v as PhaseCode) : null)
+
+// ============================================================
 // Arrivées automatiques — les pièces captées côté serveur (Gmail)
 // et proposées ici : l'index partagé « entrants » du Supabase de
 // l'agence. Validation humaine obligatoire, comme pour le dépôt.
@@ -68,8 +107,15 @@ import {
 
 function CarteArriveesServeur() {
   const { state, update } = useStore()
+  // qui signe le classement : la personne reconnue si l'application sait qui
+  // est là, et seulement à défaut le premier de la liste — le raccourci
+  // historique faisait signer toutes les validations par la même personne
+  const moi = useMoi()
+  const signataire = moi.nom ?? state.settings.personnes[0]
   const [liste, setListe] = useState<EntrantDistant[] | null>(null)
-  const [choix, setChoix] = useState<Record<string, { projetId: string; categorie: string; dossier: string }>>({})
+  const [choix, setChoix] = useState<
+    Record<string, { projetId: string; categorie: string; dossier: string; phase: string }>
+  >({})
   const [message, setMessage] = useState('')
   const [occupe, setOccupe] = useState('')
   const [racine, setRacine] = useState<FSDirHandle | null>(null)
@@ -88,10 +134,12 @@ function CarteArriveesServeur() {
         for (const e of l) {
           if (!c[e.id]) {
             const categorie = e.categorieProposee || 'AUTRE'
+            const dossier = DOSSIER_PAR_CATEGORIE[categorie] || '00_ADMIN'
             c[e.id] = {
               projetId: e.projetIdPropose || '',
               categorie,
-              dossier: DOSSIER_PAR_CATEGORIE[categorie] || '00_ADMIN',
+              dossier,
+              phase: phaseDuDossier(dossier) || '',
             }
           }
         }
@@ -111,11 +159,18 @@ function CarteArriveesServeur() {
     return () => clearTimeout(t)
   }, [charger])
 
-  const majChoix = (id: string, champs: Partial<{ projetId: string; categorie: string; dossier: string }>) =>
+  const majChoix = (
+    id: string,
+    champs: Partial<{ projetId: string; categorie: string; dossier: string; phase: string }>,
+  ) =>
     setChoix((prev) => {
       const courant = prev[id]
       const suivant = { ...courant, ...champs }
       if (champs.categorie) suivant.dossier = DOSSIER_PAR_CATEGORIE[champs.categorie] || courant.dossier
+      // le sous-dossier porte la correspondance de phase : quand il change,
+      // la proposition suit (et disparaît si le dossier est ambigu)
+      if (champs.phase === undefined && suivant.dossier !== courant.dossier)
+        suivant.phase = phaseDuDossier(suivant.dossier) || ''
       return { ...prev, [id]: suivant }
     })
 
@@ -139,12 +194,19 @@ function CarteArriveesServeur() {
         nomOriginal: e.nomFichier,
         source: 'gmail',
         sourceId: e.id,
+        // le chemin de retour vers l'échange d'origine (critère 10) : sans lui,
+        // une pièce classée perd le contexte qui explique pourquoi elle existe
+        sourceUrl: gmailMessageUrl(e.sourceMessageId || '') || undefined,
         categorie: c.categorie,
         typeMime: e.typeMime || undefined,
         taille: e.taille || undefined,
         empreinteSha256: e.empreinte || undefined,
         cheminDrive: chemin,
         projetId: projet.id,
+        phase: phaseChoisie(c.phase),
+        // qui classe la pièce ; vide si l'application ne sait pas qui est
+        // là — mieux vaut pas d'auteur qu'un auteur pris au hasard
+        auteur: moi.nom || undefined,
         confiance: e.confiance,
         raisons: e.raisons,
         statut: 'classe',
@@ -153,7 +215,7 @@ function CarteArriveesServeur() {
         const { doc } = enregistrerDocument(d, structuredClone(docPret))
         ajouterEvenementMail(doc, e)
       })
-      await marquerEntrant(e.id, 'classe', state.settings.personnes[0])
+      await marquerEntrant(e.id, 'classe', signataire)
       setListe((prev) => (prev || []).filter((x) => x.id !== e.id))
       toast(
         chemin
@@ -172,7 +234,7 @@ function CarteArriveesServeur() {
     if (!(await confirmer(`Rejeter « ${e.nomFichier} » ? La pièce reste tracée côté serveur mais ne sera plus proposée.`)))
       return
     try {
-      await marquerEntrant(e.id, 'rejete', state.settings.personnes[0])
+      await marquerEntrant(e.id, 'rejete', signataire)
       setListe((prev) => (prev || []).filter((x) => x.id !== e.id))
     } catch (err) {
       setMessage(err instanceof Error ? err.message : String(err))
@@ -227,7 +289,7 @@ function CarteArriveesServeur() {
         <EmptyState>Rien en attente côté serveur — le scan tourne toutes les 10 minutes.</EmptyState>
       ) : (
         liste.map((e) => {
-          const c = choix[e.id] || { projetId: '', categorie: 'AUTRE', dossier: '00_ADMIN' }
+          const c = choix[e.id] || { projetId: '', categorie: 'AUTRE', dossier: '00_ADMIN', phase: '' }
           const projet = state.projets.find((p) => p.id === c.projetId)
           return (
             <div key={e.id} style={{ border: '1px solid var(--line)', borderRadius: 6, padding: 10, marginBottom: 10 }}>
@@ -273,6 +335,7 @@ function CarteArriveesServeur() {
                     options={ARBORESCENCE.map((a) => ({ value: a.dossier, label: a.dossier }))}
                   />
                 </Field>
+                <ChampPhase value={c.phase} onChange={(v) => majChoix(e.id, { phase: v })} />
               </div>
               <div className="toolbar" style={{ marginTop: 6, marginBottom: 0 }}>
                 <Btn small kind="primary" disabled={!projet || occupe === e.id} onClick={() => void classer(e)}>
@@ -297,10 +360,13 @@ function CarteArriveesServeur() {
 
 /** journalise la provenance mail sur le document (dans le producteur) */
 function ajouterEvenementMail(doc: DocumentRecord, e: EntrantDistant): void {
+  const lien = gmailMessageUrl(e.sourceMessageId || '')
   doc.evenements.push({
     date: todayISO(),
     type: 'source',
-    detail: `Pièce jointe Gmail — de ${e.expediteur}, objet « ${e.objet} ».`,
+    detail:
+      `Pièce jointe Gmail — de ${e.expediteur}, objet « ${e.objet} ».` +
+      (lien ? '' : ' Message d’origine non identifié : pas de lien de retour.'),
   })
 }
 
@@ -321,6 +387,8 @@ interface Entrant {
   projetId: string
   categorie: string
   dossier: string
+  /** phase de la mission — proposée par le sous-dossier, '' = aucune */
+  phase: string
 }
 
 function BadgeConfiance({ confiance }: { confiance: number }) {
@@ -334,6 +402,8 @@ function BadgeConfiance({ confiance }: { confiance: number }) {
 
 function CarteEntrants() {
   const { state, update } = useStore()
+  // qui dépose : renseigné seulement si l'application sait qui est là
+  const moi = useMoi()
   const [racine, setRacine] = useState<FSDirHandle | null>(null)
   const [entrants, setEntrants] = useState<Entrant[]>([])
   const [message, setMessage] = useState('')
@@ -350,6 +420,7 @@ function CarteEntrants() {
     async (file: File, depuisDrive?: boolean): Promise<Entrant> => {
       const proposition = classerFichier(state, file.name, { typeMime: file.type || undefined })
       const categorie = proposition.categorie
+      const dossier = DOSSIER_PAR_CATEGORIE[categorie] || '00_ADMIN'
       return {
         cle: `${depuisDrive ? 'drive' : 'depot'}:${file.name}:${file.size}`,
         file,
@@ -358,7 +429,8 @@ function CarteEntrants() {
         proposition,
         projetId: proposition.projetId || '',
         categorie,
-        dossier: DOSSIER_PAR_CATEGORIE[categorie] || '00_ADMIN',
+        dossier,
+        phase: phaseDuDossier(dossier) || '',
       }
     },
     [state],
@@ -391,7 +463,17 @@ function CarteEntrants() {
   }
 
   const majEntrant = (cle: string, champs: Partial<Entrant>) =>
-    setEntrants((prev) => prev.map((e) => (e.cle === cle ? { ...e, ...champs } : e)))
+    setEntrants((prev) =>
+      prev.map((e) => {
+        if (e.cle !== cle) return e
+        const suivant = { ...e, ...champs }
+        // même règle qu'aux arrivées serveur : le sous-dossier propose la
+        // phase, un choix explicite de phase prime toujours
+        if (champs.phase === undefined && suivant.dossier !== e.dossier)
+          suivant.phase = phaseDuDossier(suivant.dossier) || ''
+        return suivant
+      }),
+    )
 
   const classer = async (e: Entrant) => {
     const projet = state.projets.find((p) => p.id === e.projetId)
@@ -420,6 +502,8 @@ function CarteEntrants() {
         empreinteSha256: empreinte || undefined,
         cheminDrive: chemin,
         projetId: e.projetId,
+        phase: phaseChoisie(e.phase),
+        auteur: moi.nom || undefined,
         confiance: e.proposition.confiance,
         raisons: e.proposition.raisons,
         statut: 'classe',
@@ -531,6 +615,7 @@ function CarteEntrants() {
                     options={ARBORESCENCE.map((a) => ({ value: a.dossier, label: a.dossier }))}
                   />
                 </Field>
+                <ChampPhase value={e.phase} onChange={(v) => majEntrant(e.cle, { phase: v })} />
               </div>
               <div className="toolbar" style={{ marginTop: 6, marginBottom: 0 }}>
                 <Btn small kind="primary" disabled={!e.projetId} onClick={() => void classer(e)}>
@@ -655,6 +740,7 @@ function ModalRevueEntrants({
             options={ARBORESCENCE.map((a) => ({ value: a.dossier, label: a.dossier }))}
           />
         </Field>
+        <ChampPhase value={e.phase} onChange={(v) => majEntrant(e.cle, { phase: v })} />
       </div>
       {projet && (
         <p className="small muted" style={{ margin: '4px 0 0' }}>
@@ -682,14 +768,15 @@ function ModalRevueEntrants({
 
 function CarteAVerifier() {
   const { state, update } = useStore()
-  const aVerifier = state.registreDocuments.filter((d) =>
-    ['recu', 'a_classer', 'a_valider'].includes(d.statut),
-  )
+  // même règle qu'à la boîte d'arrivée : on ne signe pas au nom d'un autre
+  const moi = useMoi()
+  const signataire = moi.nom ?? state.settings.personnes[0]
+  const aVerifier = documentsATraiter(state)
 
   const valider = (doc: DocumentRecord) =>
     update((d) => {
       const x = d.registreDocuments.find((y) => y.id === doc.id)
-      if (x) validerDocument(x, state.settings.personnes[0])
+      if (x) validerDocument(x, signataire)
     })
 
   const rejeter = async (doc: DocumentRecord) => {
@@ -757,8 +844,10 @@ function CarteAVerifier() {
 // Tous les documents — inventaire cherchable + fiche détaillée
 // ============================================================
 
-function ModalDocument({ doc, onClose }: { doc: DocumentRecord; onClose: () => void }) {
-  const { state } = useStore()
+function ModalDocument({ doc: docInitial, onClose }: { doc: DocumentRecord; onClose: () => void }) {
+  const { state, update } = useStore()
+  // relu dans l'état : la fiche doit montrer la correction faite ici même
+  const doc = state.registreDocuments.find((d) => d.id === docInitial.id) || docInitial
   const projet = state.projets.find((p) => p.id === doc.projetId)
   const entreprise = state.entreprises.find((e) => e.id === doc.entrepriseId)
   const remplace = documentParId(state, doc.remplaceDocumentId)
@@ -766,15 +855,31 @@ function ModalDocument({ doc, onClose }: { doc: DocumentRecord; onClose: () => v
   const lignes: { label: string; valeur: string }[] = [
     { label: 'Nom d’origine', valeur: doc.nomOriginal },
     { label: 'Catégorie', valeur: doc.categorie },
+    { label: 'Phase', valeur: doc.phase ? `${doc.phase} — ${LIBELLES_PHASES[doc.phase]}` : '—' },
     { label: 'Statut', valeur: LIBELLES_STATUT[doc.statut] },
     { label: 'Version', valeur: `v${doc.version}` },
     { label: 'Source', valeur: doc.source },
     { label: 'Projet', valeur: projet ? `${projet.id} — ${projet.nom}` : '—' },
     { label: 'Entreprise', valeur: entreprise?.raisonSociale || '—' },
+    { label: 'Déposé par', valeur: doc.auteur || '—' },
     { label: 'Reçu le', valeur: fmtDate(doc.recuLe) },
     { label: 'Chemin Drive', valeur: doc.cheminDrive || '— (non copié dans le Drive)' },
+    ...(doc.driveFileId ? [{ label: 'Fichier Drive', valeur: doc.driveFileId }] : []),
     { label: 'Empreinte SHA-256', valeur: doc.empreinteSha256 ? `${doc.empreinteSha256.slice(0, 16)}…` : '—' },
   ]
+
+  /** corriger la phase après coup — le classement d'un document se relit
+   *  parfois des mois plus tard, et l'événement en garde la trace */
+  const changerPhase = (v: string) =>
+    update((d) => {
+      const x = d.registreDocuments.find((y) => y.id === doc.id)
+      if (!x) return
+      const phase = phaseChoisie(v)
+      if (x.phase === phase) return
+      x.phase = phase
+      ajouterEvenement(x, 'phase', phase ? `Rattaché à la phase ${phase}.` : 'Phase retirée.')
+    })
+
   return (
     <Modal titre={doc.titre} onClose={onClose}>
       <Table compact head={['', '']}>
@@ -785,6 +890,21 @@ function ModalDocument({ doc, onClose }: { doc: DocumentRecord; onClose: () => v
           </tr>
         ))}
       </Table>
+      <div className="form-row" style={{ marginTop: 8 }}>
+        <ChampPhase
+          value={doc.phase || ''}
+          onChange={changerPhase}
+          hint="corrige le rattachement — la modification est journalisée ci-dessous"
+        />
+      </div>
+      {doc.sourceUrl && (
+        <p className="small" style={{ margin: '8px 0' }}>
+          <a href={doc.sourceUrl} target="_blank" rel="noreferrer">
+            Ouvrir dans Gmail
+          </a>{' '}
+          <span className="muted">— l’e-mail qui a apporté cette pièce reste la source de vérité.</span>
+        </p>
+      )}
       {(remplace || remplacePar) && (
         <p className="small" style={{ margin: '8px 0' }}>
           {remplace && <>Remplace : <strong>{remplace.titre}</strong> (v{remplace.version}). </>}
@@ -824,6 +944,7 @@ function CarteTous() {
   const [recherche, setRecherche] = useState('')
   const [filtreProjet, setFiltreProjet] = useState('')
   const [filtreCategorie, setFiltreCategorie] = useState('')
+  const [filtrePhase, setFiltrePhase] = useState('')
   const [ouvert, setOuvert] = useState<DocumentRecord | null>(null)
 
   const docs = useMemo(() => {
@@ -831,10 +952,11 @@ function CarteTous() {
     return state.registreDocuments
       .filter((d) => !filtreProjet || d.projetId === filtreProjet)
       .filter((d) => !filtreCategorie || d.categorie === filtreCategorie)
+      .filter((d) => !filtrePhase || d.phase === filtrePhase)
       .filter((d) => !cle || fold(`${d.titre} ${d.nomOriginal} ${d.cheminDrive || ''}`).includes(cle))
       .slice()
       .sort((a, b) => b.recuLe.localeCompare(a.recuLe) || b.id.localeCompare(a.id))
-  }, [state.registreDocuments, recherche, filtreProjet, filtreCategorie])
+  }, [state.registreDocuments, recherche, filtreProjet, filtreCategorie, filtrePhase])
 
   const projetDe = (d: DocumentRecord): Projet | undefined =>
     state.projets.find((p) => p.id === d.projetId)
@@ -862,6 +984,16 @@ function CarteTous() {
             options={[{ value: '', label: 'Toutes' }, ...CATEGORIES_DOC.map((c) => ({ value: c, label: c }))]}
           />
         </Field>
+        <Field label="Phase">
+          <Select
+            value={filtrePhase}
+            onChange={setFiltrePhase}
+            options={[
+              { value: '', label: 'Toutes' },
+              ...PHASES_ORDRE.map((c) => ({ value: c, label: `${c} — ${LIBELLES_PHASES[c]}` })),
+            ]}
+          />
+        </Field>
       </div>
       {docs.length === 0 ? (
         <EmptyState>
@@ -887,7 +1019,10 @@ function CarteTous() {
                   </a>
                   {d.cheminDrive && <div className="small muted mono">{d.cheminDrive}</div>}
                 </td>
-                <td>{d.categorie}</td>
+                <td>
+                  {d.categorie}
+                  {d.phase && <div className="small muted">{d.phase}</div>}
+                </td>
                 <td className="small">{projet ? `${projet.id} — ${projet.nom}` : '—'}</td>
                 <td>
                   <Badge
@@ -929,9 +1064,7 @@ const ONGLETS = [
 export default function Documents() {
   const route = useRoute()
   const { state } = useStore()
-  const nbAVerifier = state.registreDocuments.filter((d) =>
-    ['recu', 'a_classer', 'a_valider'].includes(d.statut),
-  ).length
+  const nbAVerifier = documentsATraiter(state).length
   const tab = ONGLETS.some((o) => o.id === route[1]) ? route[1] : 'entrants'
   return (
     <Page

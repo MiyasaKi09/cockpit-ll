@@ -48,11 +48,50 @@ jobs:
       - name: Production rollout consistency
         run: npm run test:mise-en-production
 
+      - name: Person rename integrity
+        run: npm run test:renommage
+
+      - name: Gmail backlink on attachments
+        run: npm run test:lien-gmail
+
       - name: Sync privacy tests
         run: npm run test:sync-state
 
       - name: Invoice invariant tests
         run: npm run test:facture-invariants
+
+      - name: Current-user identity
+        run: npm run test:identite
+
+      - name: Project and document anchoring fields
+        run: npm run test:champs
+
+      - name: Member registry and hardcoded addresses
+        run: npm run test:registre
+
+      - name: Exchange categorisation referential
+        run: npm run test:categorisation
+
+      - name: Planned-hours baseline
+        run: npm run test:baseline
+
+      - name: Project folder tree
+        run: npm run test:arborescence
+
+      - name: Project team on creation
+        run: npm run test:equipe
+
+      - name: Home screen blocks and no recomputation
+        run: npm run test:accueil
+
+      - name: Google OAuth scopes stay read-only
+        run: npm run test:oauth
+
+      - name: Machine proposals remain editable
+        run: npm run test:propositions
+
+      - name: No hardcoded sign-in addresses
+        run: npm run test:adresses
 
       - name: Install Chromium
         run: npx playwright install --with-deps chromium

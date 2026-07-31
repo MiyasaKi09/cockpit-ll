@@ -88,6 +88,36 @@ Dans cet ordre :
    `cron.schedule()` remplace une tâche de même nom, donc réappliquer ne crée
    pas de doublon.
 
+La migration `20260730180000` crée le **registre des membres**
+(`public.membres`) et fait appeler `est_membre_actif()` / `role_courant()` par
+toutes les politiques, à la place des adresses recopiées. Trois conséquences
+opérationnelles :
+
+- elle **amorce le registre avec les comptes en service dans la même
+  transaction** que la réécriture des politiques, et lève une exception — donc
+  annule tout — si le registre resterait vide. Une base ne peut pas se
+  retrouver avec des politiques qui interrogent un registre sans personne ;
+- elle **refuse de s'appliquer si une politique compare encore à une adresse**.
+  C'est le cas pendant l'ouverture transitoire de l'étape 4 bis : refermez-la
+  (étape 6) avant de la pousser, ou appliquez-la lors d'un `db push` ultérieur ;
+- les **Edge Functions se déploient après elle**, jamais avant : leur nouvelle
+  source interroge `public.membres` et refuse tout le monde tant que la table
+  n'existe pas. Les fonctions déjà déployées ne sont pas affectées par la
+  migration, elles passent par `service_role`.
+
+Après elle, ajouter ou retirer une personne, ou changer son adresse, est un
+`update` d'une ligne de `public.membres` — plus une migration.
+
+La migration `20260730160000` fait estampiller l'auteur d'une écriture par le
+serveur : `workspace.updated_by` cesse de recevoir l'identifiant d'onglet envoyé
+par le navigateur et reçoit `auth.uid()`. La signature de la RPC ne change pas,
+donc aucun poste ne perd son chemin d'écriture. Sur un projet **en service**,
+appliquez-la de préférence après l'étape 5 : le front de cette version reconnaît
+ses propres échos Realtime par `updated_by_client` **ou** par `updated_by`, donc
+avant comme après la bascule, tandis qu'un poste resté sur la version précédente
+perd ce filtre pendant la fenêtre — sans risque pour ses données, que le verrou
+de révision continue de protéger.
+
 ### 4 bis. Ouvrir transitoirement les écritures directes
 
 Uniquement sur un projet en service dont le front déployé écrit encore

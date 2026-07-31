@@ -26,7 +26,7 @@ import {
 import { addDays, fmtDate, fmtHeures, mondayOf, todayISO, uid } from '../util'
 import { syncActif } from '../sync'
 import { LIBELLES_PHASES, PHASES_ORDRE } from '../miqcp'
-import { STATUTS_ACTIFS, heuresPrevues, heuresReelles } from '../derive'
+import { STATUTS_ACTIFS, equipeDuProjet, heuresPrevues, heuresReelles } from '../derive'
 
 const NB_SEMAINES = 6
 
@@ -99,9 +99,7 @@ function TableauPersonne({
   const [phaseSel, setPhaseSel] = useState<PhaseCode>(() => phaseParDefaut(actifs[0], today))
 
   // projets affectés à la personne (fiche projet ou chips ci-dessous)
-  const affectes = actifs.filter(
-    (p) => p.equipeProjet?.includes(personne) || p.responsable === personne || p.coResponsable === personne,
-  )
+  const affectes = actifs.filter((p) => equipeDuProjet(p).includes(personne))
 
   // lignes affichées : projets affectés (ligne prête d'office) + couples
   // pointés dans la fenêtre + ajouts manuels
@@ -478,9 +476,7 @@ function SaisieSemaine({ today }: { today: string }) {
   const semaineCourante = mondayOf(today)
 
   const actifs = state.projets.filter((p) => STATUTS_ACTIFS.includes(p.statut))
-  const affectes = actifs.filter(
-    (p) => p.equipeProjet?.includes(personne) || p.responsable === personne || p.coResponsable === personne,
-  )
+  const affectes = actifs.filter((p) => equipeDuProjet(p).includes(personne))
 
   const couples: Couple[] = []
   const vu = new Set<string>()

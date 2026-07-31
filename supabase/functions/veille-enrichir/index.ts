@@ -20,10 +20,15 @@
 // ============================================================
 
 import { createClient, type SupabaseClient } from 'jsr:@supabase/supabase-js@2.110.0'
+import { jetonDeMembreActif } from '../_shared/membres.ts'
 
 const VERSION_PARSEUR = 'enrichir-1.0'
-const AGENCE = ['julenglet@gmail.com', 'zoefhebert@gmail.com']
-const UA = 'CockpitLL-Veille/1.0 (agence architecture ; contact : julenglet@gmail.com)'
+// La veille se présente honnêtement, mais une adresse de connexion n'a rien
+// à faire dans un en-tête envoyé à des serveurs tiers. Le contact vient donc
+// de la configuration ; à défaut, le User-Agent reste identifiable sans
+// exposer personne.
+const CONTACT_VEILLE = (Deno.env.get('VEILLE_CONTACT_EMAIL') || '').trim()
+const UA = `CockpitLL-Veille/1.0 (agence architecture${CONTACT_VEILLE ? ` ; contact : ${CONTACT_VEILLE}` : ''})`
 // Quatre lectures au pire à 25 s laissent une marge réelle à la fonction
 // (écritures, stockage et réponse) sous le plafond de la plateforme.
 const JOBS_PAR_RUN = 4
@@ -1009,10 +1014,7 @@ Deno.serve(async (req: Request) => {
   let autorise = Boolean(secretRecu && cfg?.cron_secret && secretRecu === cfg.cron_secret)
   if (!autorise) {
     const jeton = req.headers.get('authorization')?.replace(/^Bearer\s+/i, '')
-    if (jeton) {
-      const { data } = await sb.auth.getUser(jeton)
-      autorise = AGENCE.includes(data.user?.email?.toLowerCase() || '')
-    }
+    autorise = await jetonDeMembreActif(sb, jeton)
   }
   if (!autorise) return json({ erreur: 'Accès refusé.' }, 401)
 

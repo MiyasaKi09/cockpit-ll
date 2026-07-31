@@ -7,145 +7,15 @@
 // ============================================================
 
 import { useMemo, useState } from 'react'
-import type { AppState } from '../types'
 import { useStore } from '../store'
 import { Badge, Btn, Card, Icon, useToday } from '../ui'
-import type { IconName } from '../ui'
 import { addDays, mondayOf, todayISO } from '../util'
-import { STATUTS_ACTIFS, encaissementPrevu } from '../derive'
-
-interface EvtCal {
-  date: string // ISO
-  label: string
-  lien: string
-  /** couleur de la pastille */
-  couleur: string
-  titreLong: string
-  /** icône optionnelle (sinon, une pastille ronde) */
-  icon?: IconName
-}
-
-const COULEURS = {
-  rendu: 'var(--danger)',
-  facture: 'var(--warn)',
-  encaissement: 'var(--ok)',
-  ao: 'var(--cat-purple)',
-  reunion: 'var(--accent)',
-  obligation: 'var(--cat-amber)',
-  crm: 'var(--ink-3)',
-  projet: 'var(--cat-teal)',
-}
-
-/** tous les événements datés de l'état — calculé, jamais stocké */
-function evenements(state: AppState): EvtCal[] {
-  const evts: EvtCal[] = []
-
-  for (const p of state.projets) {
-    if (STATUTS_ACTIFS.includes(p.statut)) {
-      for (const ph of p.phases) {
-        if (ph.fin && ph.montantHT > 0)
-          evts.push({
-            date: ph.fin,
-            label: `◀ ${p.id} ${ph.code}`,
-            lien: `#/projets/${p.id}`,
-            couleur: COULEURS.rendu,
-            titreLong: `Rendu ${ph.code} — ${p.nom}`,
-          })
-        if (ph.debut && ph.montantHT > 0)
-          evts.push({
-            date: ph.debut,
-            label: `▶ ${p.id} ${ph.code}`,
-            lien: `#/projets/${p.id}`,
-            couleur: COULEURS.projet,
-            titreLong: `Début ${ph.code} — ${p.nom}`,
-          })
-      }
-    }
-    if (p.dateLancement)
-      evts.push({ date: p.dateLancement, label: p.id, icon: 'rocket', lien: `#/projets/${p.id}`, couleur: COULEURS.projet, titreLong: `Lancement — ${p.nom}` })
-    if (p.dateCloture)
-      evts.push({ date: p.dateCloture, label: p.id, icon: 'flag', lien: `#/projets/${p.id}`, couleur: COULEURS.projet, titreLong: `Clôture — ${p.nom}` })
-  }
-
-  for (const e of state.echeancesFacturation) {
-    evts.push({
-      date: e.datePrevue,
-      label: `€ ${e.projetId}`,
-      lien: '#/facturation',
-      couleur: COULEURS.facture,
-      titreLong: `Facture à émettre — ${e.libelle}`,
-    })
-  }
-  for (const f of state.factures) {
-    if (f.statut === 'emise')
-      evts.push({
-        date: encaissementPrevu(f),
-        label: `⬇ ${f.projetId}`,
-        lien: '#/facturation',
-        couleur: COULEURS.encaissement,
-        titreLong: `Encaissement attendu — ${f.numero || f.id} · ${f.libelle}`,
-      })
-  }
-
-  for (const c of state.consultations) {
-    if (c.dateLimite && ['a_etudier', 'go'].includes(c.statut))
-      evts.push({
-        date: c.dateLimite,
-        label: `AO remise`,
-        lien: '#/ao',
-        couleur: COULEURS.ao,
-        titreLong: `Remise des offres — ${c.intitule}`,
-      })
-  }
-
-  for (const r of state.reunions) {
-    evts.push({
-      date: r.date,
-      label: r.projetId,
-      icon: 'hardhat',
-      lien: `#/projets/${r.projetId}/chantier`,
-      couleur: COULEURS.reunion,
-      titreLong: `Réunion — ${r.titre}`,
-    })
-  }
-
-  for (const o of state.obligations) {
-    evts.push({
-      date: o.echeance,
-      label: `${o.libelle.slice(0, 14)}${o.libelle.length > 14 ? '…' : ''}`,
-      icon: 'scale',
-      lien: '#/agenda',
-      couleur: COULEURS.obligation,
-      titreLong: `Obligation — ${o.libelle}${o.organisme ? ` (${o.organisme})` : ''}`,
-    })
-  }
-
-  for (const c of state.contacts) {
-    if (c.dateProchaineAction)
-      evts.push({
-        date: c.dateProchaineAction,
-        label: c.nom.split(' ')[0],
-        icon: 'user',
-        lien: '#/agenda',
-        couleur: COULEURS.crm,
-        titreLong: `CRM — ${c.nom} : ${c.prochaineAction || 'action prévue'}`,
-      })
-  }
-
-  for (const a of state.artisans) {
-    if (a.decennaleFin)
-      evts.push({
-        date: a.decennaleFin,
-        label: a.nom.slice(0, 12),
-        icon: 'shield',
-        lien: '#/ressources',
-        couleur: COULEURS.crm,
-        titreLong: `Décennale expire — ${a.nom}`,
-      })
-  }
-
-  return evts
-}
+// `evenements()` vivait ici, où il ne servait qu'à la grille mensuelle.
+// L'accueil en a besoin pour ses « prochaines échéances » (CDC §8.1) :
+// la fonction est remontée dans derive.ts — un seul inventaire des dates
+// qui comptent, deux écrans qui le lisent.
+import { evenements } from '../derive'
+import type { EvtCal } from '../derive'
 
 const NOMS_MOIS = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre']
 const JOURS = ['lun.', 'mar.', 'mer.', 'jeu.', 'ven.', 'sam.', 'dim.']
@@ -277,8 +147,9 @@ export function EcheancesContenu() {
           })}
         </div>
         <p className="muted small" style={{ marginTop: 10 }}>
-          Les rendez-vous Google Agenda restent visibles sur le Cockpit (72 h, en direct) — ce
-          calendrier montre les échéances issues de vos données de pilotage.
+          Les rendez-vous Google Agenda du jour restent visibles sur l'accueil, avec les
+          réunions de chantier — ce calendrier montre les échéances issues de vos données de
+          pilotage, dont l'accueil reprend les quatorze prochains jours.
         </p>
       </Card>
     </>

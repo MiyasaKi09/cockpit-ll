@@ -628,16 +628,25 @@ export function Field({ label, children, hint }: { label: string; children: Reac
 export function TextInput({
   value,
   onChange,
+  onCommit,
+  onFocus,
   placeholder,
   style,
   type,
+  ariaLabel,
 }: {
   value: string
   onChange: (v: string) => void
+  /** appelé quand la saisie est VALIDÉE : perte de focus ou touche Entrée.
+   *  À utiliser pour les effets qu'on ne veut pas déclencher à chaque frappe
+   *  — par exemple réécrire toutes les références à une personne renommée. */
+  onCommit?: (v: string) => void
+  onFocus?: (v: string) => void
   placeholder?: string
   style?: CSSProperties
   /** 'password' pour les champs secrets (défaut : texte) */
   type?: string
+  ariaLabel?: string
 }) {
   return (
     <input
@@ -645,8 +654,18 @@ export function TextInput({
       type={type || 'text'}
       value={value}
       onChange={(e) => onChange(e.target.value)}
+      onFocus={onFocus ? (e) => onFocus(e.target.value) : undefined}
+      onBlur={onCommit ? (e) => onCommit(e.target.value) : undefined}
+      onKeyDown={
+        onCommit
+          ? (e) => {
+              if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+            }
+          : undefined
+      }
       placeholder={placeholder}
       style={style}
+      aria-label={ariaLabel}
     />
   )
 }

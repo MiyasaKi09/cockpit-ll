@@ -1,20 +1,55 @@
 # Contrat des modules — Cockpit L&L (intranet v2 « sans API »)
 
-Contexte produit : intranet 100 % déterministe pour une agence d'architecture de 2 personnes
-(Julien & Zoé). AUCUN appel API vers un modèle d'IA. L'intelligence passe par Claude *en tant
-que produit* : l'intranet assemble des pré-prompts complets (gabarit + données de la base) et
-les copie dans le presse-papier ; des routines Claude programmées produisent du JSON que
-l'utilisateur colle dans le Cockpit (import). Règle d'or partout : **Claude propose, l'humain
-valide** — tout ce qui est financier, contractuel ou sortant reste brouillon jusqu'à relecture.
-Toute alerte/extraction est **traçable jusqu'à sa source**.
+Contexte produit : intranet déterministe pour une agence d'architecture de 2 personnes
+(Julien & Zoé).
+
+**L'appel serveur à un modèle d'IA est autorisé, et il existe déjà** : `api/assistant.js`
+interroge l'API Anthropic depuis une fonction Vercel, derrière une session Supabase vérifiée et
+une liste d'adresses autorisées. La rédaction précédente — « AUCUN appel API vers un modèle
+d'IA » — décrivait un état dépassé et interdisait des livrables désormais au plan
+(`docs/PLAN_CDC_MAILS_TACHES_TEMPS.md`) : résumé automatique des messages, propositions de
+tâches et d'échéances. La voie du presse-papier reste valable et reste la règle pour tout ce
+qui est volumineux ou ponctuel : l'intranet assemble des pré-prompts complets (gabarit +
+données de la base) et les copie ; des routines Claude produisent du JSON que l'utilisateur
+colle dans le Cockpit.
+
+Ce qui ne change pas, et qui est le cœur du contrat :
+
+- **Claude propose, l'humain valide** — tout ce qui est financier, contractuel ou sortant reste
+  brouillon jusqu'à relecture. Une proposition de l'IA porte toujours un statut distinct de
+  l'objet métier qu'elle propose de créer ; elle ne devient jamais cet objet par expiration de
+  délai ou par défaut.
+- Toute alerte, extraction ou proposition est **traçable jusqu'à sa source** — l'e-mail, le
+  document, la ligne de relevé. Une réponse sans source est un défaut, pas une approximation.
+- Aucune action irréversible ni sortante n'est déclenchée par un modèle : les périmètres OAuth
+  restent en lecture seule et l'envoi passe par un brouillon Gmail ouvert à l'écran.
+
+**Ces trois règles sont opposables, pas seulement écrites** — c'était le livrable 0.14, et
+c'est ce qui les sépare d'une intention. `scripts/test-oauth-lecture-seule.cjs` refuse tout
+périmètre Google autre que `gmail.readonly` / `calendar.readonly`, tout verbe d'écriture vers
+Gmail, et garde `gmailComposeUrl` (`util.ts`) comme seul constructeur d'un envoi — critères 1
+et 14 du §22. `scripts/test-propositions-modifiables.cjs` vérifie qu'un champ proposé par une
+machine a un pendant humain modifiable, que c'est le choix humain qui est enregistré, et
+qu'aucune insertion serveur ne naît validée — critère 11, périmètre `entrants` au Lot 0, la
+table `communications` viendra au MVP. `scripts/test-adresses-en-dur.cjs` interdit les deux
+adresses de connexion réelles hors du registre `public.membres` : c'est la dépendance dure de
+la bascule d'identité (livrable 3.2), qui ne démarre pas tant qu'il n'est pas vert.
 
 ## Règles générales (tous modules)
 
 - Un module = un fichier `src/modules/X.tsx`, export default d'un composant sans props.
-- **Ne modifier AUCUN fichier partagé** (`types.ts`, `store.tsx`, `ui.tsx`, `util.ts`,
-  `miqcp.ts`, `alerts.ts`, `derive.ts`, `prompts.ts`, `seed.ts`, `routines.ts`,
-  `importRoutines.ts`, `styles.css`, `App.tsx`). Si un manque bloque, contourner localement
-  (petit composant local, style inline) et le signaler dans la réponse finale.
+- **Les fichiers partagés se modifient, mais jamais en passant** (`types.ts`, `store.tsx`,
+  `ui.tsx`, `util.ts`, `miqcp.ts`, `alerts.ts`, `derive.ts`, `prompts.ts`, `seed.ts`,
+  `routines.ts`, `importRoutines.ts`, `personnes.ts`, `moi.ts`, `categorisation.ts`,
+  `styles.css`, `App.tsx`). L'interdiction
+  absolue précédente avait un motif réel — un module qui bricole `ui.tsx` casse les 42 autres —
+  mais elle produisait l'inverse de son intention : des composants locaux dupliqués, des styles
+  en ligne, et un repli mobile qui s'est dégradé module par module. La règle est donc :
+  - une modification de fichier partagé est un livrable **en soi**, pas un effet de bord d'un
+    module ; elle s'annonce et se justifie ;
+  - elle est **rétrocompatible** : on ajoute un paramètre optionnel, on ne change pas une
+    signature existante ;
+  - si elle porte une invariante, elle vient avec son test statique dans `scripts/`.
 - Lire les fichiers partagés avant d'écrire : les signatures ci-dessous sont un résumé.
 - UI en **français**, ton professionnel sobre. Dates via `fmtDate`, montants via
   `fmtMoney`/`<Money>`, heures via `fmtHeures`. Pas d'emoji décoratifs.
@@ -29,6 +64,32 @@ Toute alerte/extraction est **traçable jusqu'à sa source**.
   `TextArea`, `Field`, `Modal`, `Btn`). Création/édition dans un `Modal`.
 - Suppression : `confirm()` natif suffit.
 - Listes : `Table` + lignes ; état vide : `EmptyState`.
+- **Tout tableau affiché passe par `Table`**, jamais par une balise `<table>` écrite à la main.
+  C'est `Table` qui porte le repli en cartes empilées sous 700 px : une table brute est
+  illisible sur un téléphone, et c'est ainsi que le responsive s'est perdu dans sept modules.
+  Les gabarits d'impression (`src/pdf.ts`, les fenêtres `window.print()`) sont hors de cette
+  règle : ils ne sont jamais montés dans le navigateur.
+- **L'accueil n'invente aucun calcul.** Le Cockpit et les vues personnelles n'affichent que des
+  valeurs déjà produites par `derive.ts`, `economie.ts`, `alerts.ts` ou `financeActions.ts`. Un
+  chiffre recalculé sur place diverge tôt ou tard de celui du module qui fait autorité, et
+  l'écart se découvre en réunion. Si la valeur n'existe pas, elle s'ajoute au module de calcul,
+  pas à l'écran qui l'affiche.
+- **L'utilisateur courant se lit par `useMoi()`** (`src/moi.ts`), jamais par
+  `settings.personnes[0]`. L'identité a deux étages : la session Supabase quand elle existe
+  (la personne dont `Personne.email` correspond), sinon le choix « je suis X » mémorisé sur
+  le poste, sinon `null` — et `null` veut dire `null` : un écran qui ne sait pas qui est là
+  ne doit rien signer, pas désigner le premier de la liste. Le choix par poste vit dans le
+  `localStorage`, jamais dans `settings` : `settings` est synchronisé, et les deux postes
+  s'écraseraient. `scripts/test-identite.cjs` le vérifie.
+- **Une personne se référence par son nom, partout** — et donc `src/personnes.ts` tient
+  l'inventaire des endroits qui la citent. Toute nouvelle collection portant un nom de personne
+  s'y ajoute, sinon un renommage dans les Paramètres orpheline ses données en silence.
+  `scripts/test-renommage-personne.cjs` le vérifie. **La règle qui tranche** : un champ qui
+  désigne *la personne* (`responsable`, `pour`, `auteur` d'un document ou d'une note) entre dans
+  l'inventaire ; une trace datée qui dit *qui a agi ce jour-là* (`validePar`, `evenements[].auteur`)
+  n'y entre pas. `Projet.journal[].auteur` manquait à l'inventaire alors que
+  `DocumentRecord.auteur` y figurait — or `ProjetJournal.tsx` écrit la **même** valeur dans les
+  deux : deux copies d'un seul choix divergeaient au premier renommage.
 - Pré-prompts : TOUJOURS via `CopyBtn` (feedback « Copié ! ») ; texte assemblé par
   `assemble(corps, contexte)` de `prompts.ts` avec les constructeurs de contexte fournis.
 
@@ -40,7 +101,10 @@ Alerte, Settings, AppState…).
 
 `util.ts` : `uid`, `todayISO`, `addDays`, `diffDays`, `mondayOf`, `monthKey`, `addMonths`,
 `fmtMoney(v, cents?)`, `fmtPct(v, digits?)`, `fmtDate`, `fmtMois('AAAA-MM')`, `fmtHeures`,
-`parseNum`, `clamp`, `fold` (normalisation accents/casse), `download(nom, contenu, type?)`.
+`parseNum`, `clamp`, `fold` (normalisation accents/casse), `download(nom, contenu, type?)`,
+`DOMAINE_AGENCE` (`agence-ll.fr` — non acheté : il ne sert qu'à *proposer*, rien ne doit
+dépendre de son existence), `adresseProjetProposee(codeExterne, domaine?)`,
+`adresseProjetValide(adresse)` (aucun domaine présumé ; le champ vide est valide).
 
 `miqcp.ts` : `BAREME_1994`, `OUVRAGES` (`{code, bas, haut}`), `CRITERES_COMPLEXITE`
 (3 groupes × critères), `TOUS_CRITERES`, `REPARTITION_PHASES`, `PHASES_ORDRE`,
@@ -55,10 +119,67 @@ honorairesTotauxHT, sousPlancher}`), `phasesParDefaut(honorairesBaseHT, tauxHora
 `coutEngage`, `encaissementPrevu(f)`, `retardFacture(f, today)`, `ttc(f)`,
 `STATUTS_ACTIFS`, `meteoFinanciere(state, today): {tresorerie, tresorerieMajLe,
 facturable90j, carnetHT}`, `dateLimiteVerif(state, situation)`,
-`delaiMoyenPaiement(state, typeMO?)`.
+`delaiMoyenPaiement(state, typeMO?)` ; **baseline des heures** (CDC §11.3) :
+`heuresBaseline(projet, phase?)` (`null`, jamais `0`, quand il n'y a pas de
+référence), `ecartHeures(state, projet, phase?): EcartHeuresPhase`
+(`{baseline, prevu, reel, reference, ecart, surBaseline, derivePrevision}` — l'écart
+signé du §11.3), `baselineDepuisPhases(phases, meta)`, `normaliserBaselineHeures`,
+`baselineApresMigration(projet, reprendre, le)` ; **accueil du §8.1** :
+`documentsATraiter(state)` (+ `STATUTS_DOCUMENT_A_TRAITER`), `situationsAVerifier(state)`,
+`validationsAttendues(state, today, actionsFinance, entrantsDistants?): GroupeValidation[]`,
+`reunionsDuJour(state, today, agenda?): ReunionDuJour[]`, `evenements(state): EvtCal[]`
+(+ `COULEURS_ECHEANCE`) et `prochainesEcheances(state, today, jours = 14)`,
+`phasesEnCours(state, today)`, `semaineParPersonne(state, lundi, personnes?):
+LigneSemainePersonne[]` (temps pointé, charge planifiée et capacité en regard).
+
+**La prévision d'heures figée ne vit jamais dans `Phase`.** `Projet.baselineHeures` est
+un champ à part parce que « Recalculer la répartition » remplace `projet.phases` en
+entier : une référence rangée dans une phase disparaîtrait avec elle, sans erreur, et
+l'écart prévu / réel se reconstituerait faux la semaine suivante. Un écran qui compare
+prévu et réel passe par `ecartHeures` — jamais par une soustraction locale — et n'écrit
+`baselineHeures` que sur un geste humain explicite (signature, figeage, redéfinition).
+`scripts/test-baseline-heures.cjs` le vérifie, et il porte le critère 15 du §22.
+
+`fsdrive.ts` : accès au dossier Drive local (File System Access) — `supporteFS`,
+`choisirRacine` / `lireRacine` / `sauverRacine` (poignée mémorisée en IndexedDB),
+`verifierPermission`, `slugProjet(p)`, `nomConforme`, `rangerFichier`,
+`listerFichiersProjet` / `listerFichiersRacine`, `DOSSIER_ENTRANTS`, `ARBORESCENCE`,
+`phaseDuDossier` ; **arborescence documentaire** (CDC §12.1 pts 6 et 7) :
+`creerArborescenceProjet(racine, p): ResultatArborescence` (`{dossierProjet, crees,
+existants}`).
+
+**Aucun module ne crée de dossier dans le Drive en direct** : la liste des dossiers se
+déclare dans `ARBORESCENCE` et se crée par `creerArborescenceProjet`, point d'entrée
+unique du bouton « Créer / compléter l'arborescence » (onglet Documents du projet) comme
+de la fin de l'assistant « Nouveau projet ». Une boucle de création recopiée dans un
+module ferait diverger la forme des dossiers selon la porte par laquelle le projet est né
+— le jour où `ARBORESCENCE` gagne une entrée, les fichiers continueraient de se ranger,
+simplement plus au même endroit. La fonction est **idempotente et non destructive** (un
+dossier déjà là garde son contenu) et elle **lève** : c'est l'appelant qui décide du sens
+de l'échec. À la création d'un projet, cet échec (Drive absent, permission refusée,
+navigateur sans File System Access) **se signale et n'empêche rien** — le projet est
+enregistré avant, et la saisie n'est jamais reperdue.
+`scripts/test-arborescence-projet.cjs` le vérifie.
+
+`moi.ts` : `useMoi(): Moi` (`{personne, nom, source: 'session'|'poste'|'aucune', emailSession,
+sessionOrpheline, choisir(nom|null)}`), `useSessionSupabase()` (session Supabase **réactive** :
+le composant se re-rend à la connexion comme à la déconnexion), `useIdentitePoste()`,
+`identitePoste()` / `definirIdentitePoste(nom|null)` hors React, `resoudreMoi(equipe, email,
+choixPoste)` (règle pure, testable), `normaliserEmail`.
 
 `alerts.ts` : `computeAlertes(state, today)`, `alertesActives(state, today)` (snoozes filtrés).
 Snooze = `d.settings.snoozes[alerte.id] = dateISO` (jusqu'à cette date).
+
+`categorisation.ts` : référentiel FERMÉ des trois axes de classement des échanges (CDC §5.2) —
+`PhaseEchange` (superset **séparé** de `PhaseCode`, qui ne bouge pas : il porte la chaîne
+d'honoraires) avec `PHASES_ECHANGE` / `LIBELLES_PHASE_ECHANGE` / `estPhaseDeMission`,
+`TypeEchange` (15) avec `TYPES_ECHANGE` / `LIBELLES_TYPE_ECHANGE`, `NiveauImportance` (6) avec
+`NIVEAUX_IMPORTANCE` / `LIBELLES_IMPORTANCE`, et `graviteDe(niveau): 1|2|3` — projection sur
+l'échelle de `Alerte.gravite`. `normaliserPhaseEchange` / `normaliserTypeEchange` /
+`normaliserImportance` (tolérantes en entrée, `null` en sortie si rien n'est certain),
+`importanceDepuisUrgence`, `reprendreAxes(source)`. **Une valeur d'axe ne se déclare qu'ici** :
+recopiée ailleurs (écran, CHECK SQL, Edge Function) elle divergerait sans bruit.
+`scripts/test-categorisation.cjs` le vérifie.
 
 `prompts.ts` : `assemble(corps, ctx)`, `copier(texte)`, `contexteProjet(state, p)`,
 `contexteMarche(state, m, situation?)`, `contexteFacture(state, f)`,
@@ -94,9 +215,33 @@ alert-actions`, `form-row form-foot`, `empty`.
   classes `alert-item alert-{gravite}` ; chaque alerte : dot, titre, détail, lien « ouvrir »
   vers `a.lien`, bouton « Sommeil 7 j » (snooze via update) et « 30 j ». Grouper visuellement :
   gravité 3 d'abord (l'ordre est déjà trié). État vide : « Rien d'urgent — le fil est calme. »
-- **Repères du jour** : carte avec la date du jour formatée, phases en cours (projets actifs
-  dont une phase encadre today, avec fin), 3 prochaines factures à émettre (statut prevue,
-  émission ≥ today, triées), 3 prochaines obligations. Liens vers les modules.
+- **Validations attendues** (CDC §8.1) : un groupe du centre d'actions qui agrège les quatre
+  familles en attente d'une signature — factures fournisseurs `a_valider`, documents du registre
+  `recu`/`a_classer`/`a_valider`, situations `a_verifier`, pièces arrivées dans la boîte
+  partagée. Une ligne par famille : compte, détail traçable, lien. La source est
+  `derive.validationsAttendues(state, today, actionsATraiter(…), nbEntrants)` — les factures
+  fournisseurs **ne sont pas refiltrées** ici, elles arrivent par `financeActions`.
+- **Repères du jour** (rail latéral) : réunions du jour (`reunionsDuJour` — `ReunionChantier`
+  du jour + agenda Google **borné à la journée**, avec un repli explicite quand la session
+  Google est fermée : seul le navigateur porte la portée calendrier, le jeton serveur ne
+  l'a pas) ; prochaines échéances sur 14 jours (`prochainesEcheances`, qui remplace et
+  contient les anciennes listes « prochaines factures à émettre » et « prochaines
+  obligations ») ; phases en cours (`phasesEnCours`). Liens vers les modules.
+  **[corrigé]** La rédaction précédente décrivait trois listes calculées sur place dans
+  `Cockpit.tsx` ; elles refaisaient, moins bien, l'inventaire de `evenements()`.
+- **Ma semaine** : `Table` du temps enregistré et de la charge prévisionnelle de la semaine,
+  via `derive.semaineParPersonne` (qui met en regard `tempsParPersonne`,
+  `chargePlanifieeSemaine` et `capacitePersonneSemaine`). Aucun seuil de couleur inventé :
+  la charge dépasse la capacité, ou elle ne la dépasse pas.
+- **Filtre par personne** : un `segmente` dans l'en-tête de page qui gouverne toute la page.
+  Il part de `useMoi()` et **retombe sur « Tout » quand l'identité est inconnue** ; un choix
+  explicite de l'utilisateur l'emporte ensuite.
+- **Les factures à émettre n'ont qu'un seul constructeur** : `financeActions.actionsATraiter`.
+  Le Cockpit sélectionne `kind === 'emettre_facture'` dans cette liste et en réaffiche le
+  titre, le détail, le lien, la date et la gravité — il ne les réécrit pas. La version
+  précédente les construisait des deux côtés, avec deux gravités identiques par coïncidence
+  entretenue à la main. `scripts/test-accueil.cjs` le vérifie, comme il vérifie qu'aucune
+  balise `<table>` brute n'est réintroduite dans les écrans de l'accueil.
 - Sous-titre de page : rappel « Claude propose, l'humain valide — intranet 100 % déterministe ».
 
 ### Projets.tsx — projets & marchés (le plus gros module)
@@ -124,7 +269,10 @@ Routage interne : `useRoute()` → `['projets']` = liste ; `['projets', id]` = f
     colonnes calculées : facturé HT (`factureHT(state, id, code)`), reste, heures réelles
     (`heuresReelles`), écart heures (badge warn/danger si > seuil). Ligne total.
     Bouton « Recalculer la répartition » (phasesParDefaut sur les honoraires base actuels,
-    confirm car écrase).
+    confirm car écrase) — il **ne touche pas** `baselineHeures`, et le confirm le dit.
+    Bouton « Figer / Redéfinir la référence » à côté : c'est le seul chemin d'écriture
+    manuel de la prévision figée. Colonne « H. référence » (`heuresBaseline`) et écart de
+    la répartition courante à la référence.
   - Carte **Marchés de travaux** : liste des `state.marches` du projet (lot, entreprise,
     montant+avenants, RG, révision, actif ✓), CRUD en Modal, lien vers `#/situations`.
   - Boutons pré-prompts de la fiche (via gabarits `state.prompts` avec `contexte === 'projet'`,

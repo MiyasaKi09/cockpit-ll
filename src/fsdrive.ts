@@ -1,7 +1,7 @@
 // Accès au dossier Drive local (File System Access API) — partagé
 // entre l'onglet Documents et le Journal (rangement des photos).
 
-import type { Projet } from './types'
+import type { PhaseCode, Projet } from './types'
 import { empreinteSha256 } from './registre'
 import { fold, todayISO } from './util'
 
@@ -32,7 +32,7 @@ export const DOSSIER_ENTRANTS = '_A_CLASSER'
 
 /** arborescence normalisée d'un dossier projet (partagée par l'onglet
  *  Documents du projet et la page Documents globale) */
-export const ARBORESCENCE: { dossier: string; description: string; phases?: string[] }[] = [
+export const ARBORESCENCE: { dossier: string; description: string; phases?: PhaseCode[] }[] = [
   { dossier: '00_ADMIN', description: 'contrat, assurances, courriers officiels' },
   { dossier: '01_DIAG', description: 'diagnostics, relevés, existant', phases: ['DIAG'] },
   { dossier: '02_ESQ', description: 'esquisse', phases: ['ESQ'] },
@@ -45,6 +45,16 @@ export const ARBORESCENCE: { dossier: string; description: string; phases?: stri
   { dossier: '09_FACTURES', description: 'factures émises et justificatifs' },
   { dossier: '10_PHOTOS', description: 'photos chantier et références' },
 ]
+
+/** phase de la mission déduite du sous-dossier de rangement — la
+ *  correspondance existe depuis l'origine dans `ARBORESCENCE`, on se
+ *  contente de la lire. Retourne `null` dès qu'elle est AMBIGUË
+ *  (03_APS-APD_PC couvre APS et APD) ou absente : une phase proposée au
+ *  hasard vaudrait moins que pas de phase du tout. */
+export function phaseDuDossier(dossier: string): PhaseCode | null {
+  const entree = ARBORESCENCE.find((a) => a.dossier === dossier)
+  return entree?.phases?.length === 1 ? entree.phases[0] : null
+}
 
 const DB = 'cockpit-ll-fs'
 
@@ -100,6 +110,50 @@ export async function verifierPermission(h: FSDirHandle): Promise<boolean> {
 
 export function slugProjet(p: Projet): string {
   return `${p.id}_${fold(p.nom).replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40)}`
+}
+
+/** compte rendu d'une création d'arborescence — de quoi dire ce qui a été
+ *  fait sans relire le disque, et distinguer « créé » de « déjà là » */
+export interface ResultatArborescence {
+  /** nom du dossier projet à la racine (= `slugProjet(p)`) */
+  dossierProjet: string
+  /** sous-dossiers créés par CET appel */
+  crees: string[]
+  /** sous-dossiers déjà présents, laissés intacts avec leur contenu */
+  existants: string[]
+}
+
+/** crée `<racine>/<slugProjet(p)>/` puis les sous-dossiers d'`ARBORESCENCE`
+ *  (CDC §12.1, points 6 « créer le dossier Drive » et 7 « créer
+ *  l'arborescence »).
+ *
+ *  Idempotente et non destructive : un dossier déjà là est laissé tel quel
+ *  avec son contenu, rien n'est renommé ni supprimé — c'est ce qui autorise
+ *  à la rejouer sur un projet ancien pour le compléter.
+ *
+ *  Elle LÈVE sur permission refusée ou écriture impossible, et c'est
+ *  l'appelant qui décide du sens de l'échec : blocage pour le bouton manuel
+ *  de l'onglet Documents, simple signalement à la fin de l'assistant
+ *  « Nouveau projet », où le projet est déjà enregistré.
+ *
+ *  Point d'entrée UNIQUE : dupliquer la boucle ailleurs ferait diverger
+ *  l'arborescence réelle de celle que lit l'onglet Documents.
+ *  `scripts/test-arborescence-projet.cjs` le vérifie. */
+export async function creerArborescenceProjet(racine: FSDirHandle, p: Projet): Promise<ResultatArborescence> {
+  if (!(await verifierPermission(racine))) throw new Error('Accès au dossier refusé.')
+  const dossierProjet = slugProjet(p)
+  const dossier = await racine.getDirectoryHandle(dossierProjet, { create: true })
+  const crees: string[] = []
+  const existants: string[] = []
+  for (const a of ARBORESCENCE) {
+    const dejaLa = await dossier
+      .getDirectoryHandle(a.dossier, { create: false })
+      .then(() => true)
+      .catch(() => false)
+    await dossier.getDirectoryHandle(a.dossier, { create: true })
+    ;(dejaLa ? existants : crees).push(a.dossier)
+  }
+  return { dossierProjet, crees, existants }
 }
 
 export function nomConforme(p: Projet, type: string, objet: string, nomFichier: string): string {

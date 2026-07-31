@@ -6,22 +6,34 @@ en local dans le navigateur ; un export JSON régulier demeure indispensable.
 ## Installation
 
 1. Créez un projet Supabase dans une région UE.
-2. Dans `supabase/schema.sql`, remplacez les deux adresses des politiques RLS
-   par les comptes réels autorisés si nécessaire.
+2. Activez le fournisseur Auth **Email** et désactivez les inscriptions libres :
+   seuls les comptes de l’agence doivent pouvoir se connecter. Créez les
+   comptes (lien magique) **avant** l’étape suivante.
 3. Exécutez `schema.sql` dans le SQL Editor, ou appliquez les migrations
-   versionnées avec la CLI Supabase.
-4. Activez le fournisseur Auth **Email** et désactivez les inscriptions libres
-   si seuls les comptes de l’agence doivent pouvoir se connecter.
-5. Copiez la Project URL et la clé publique `publishable`/`anon`.
+   versionnées avec la CLI Supabase. Plus aucune adresse n’est à remplacer à la
+   main : `schema.sql` inscrit au registre les comptes déjà présents dans Auth,
+   et il est rejouable — si aucun compte n’existait encore, il le dit
+   (`WARNING : registre des membres vide`) et il suffit de le rejouer après.
+4. Copiez la Project URL et la clé publique `publishable`/`anon`.
 
 Le schéma crée :
 
+- la table `public.membres`, **registre des comptes autorisés** (compte ↔
+  personne ↔ rôle ↔ actif) et seule autorité de contrôle d’accès, avec les
+  fonctions `est_membre_actif()` et `role_courant()` en `security definer` que
+  toutes les politiques appellent ;
 - la table `public.workspace`, protégée par RLS ;
 - des privilèges SQL explicites pour `authenticated` et aucun accès pour
   `anon` ;
 - la fonction `enregistrer_workspace`, seul chemin d’écriture, exécutée en
-  `security definer` avec un `search_path` verrouillé et un contrôle explicite
-  du compte connecté ;
+  `security definer` avec un `search_path` verrouillé et un contrôle du compte
+  connecté fait sur le registre — un membre en `lecture_seule` lit le document
+  partagé mais ne l’écrit pas ;
+- l’estampille de l’auteur : la fonction renseigne elle-même `updated_by` depuis
+  `auth.uid()`. Le paramètre `p_updated_by` reste accepté — la signature ne
+  bouge pas — mais il n’est plus qu’une annonce du navigateur, rangée dans
+  `updated_by_client`, où elle sert au filtre anti-écho Realtime et à rien
+  d’autre : un client peut annoncer n’importe qui, une session non ;
 - une colonne `revision` utilisée comme verrou optimiste ;
 - la publication Realtime de la table.
 
@@ -97,11 +109,40 @@ La migration crée également :
   lectures et écritures du code ;
 - des `GRANT` explicites, distincts des politiques RLS.
 
-Les adresses autorisées figurent à la fois dans les politiques SQL et dans la
-constante `AGENCE` des Edge Functions. Avant de provisionner une autre agence,
-remplacez-les dans les migrations **et** dans
-`gmail-ingestion`, `gmail-oauth`, `ingestion-config`, `veille-collecte`,
-`veille-enrichir` et `veille-mails`, en conservant exactement la même liste.
+## Qui a le droit — le registre des membres
+
+Les adresses autorisées ne sont plus écrites nulle part dans le code. La table
+`public.membres` fait autorité, pour les politiques RLS comme pour les Edge
+Functions. Elle est amorcée par la migration `20260730180000` avec les comptes
+en service, dans la même transaction que la réécriture des politiques : une
+migration qui laisserait le registre vide échoue et s’annule, plutôt que de
+verrouiller l’agence hors de son propre outil.
+
+| Geste | Avant | Maintenant |
+| --- | --- | --- |
+| Ajouter une personne | migration SQL, 23 endroits | `insert into public.membres (email, personne, role) values (…)` |
+| Retirer une personne | migration SQL, 23 endroits | `update public.membres set actif = false where email = …` |
+| Changer une adresse | migration SQL, 23 endroits + 5 Edge Functions | `update public.membres set email = … where compte_id = …` |
+
+Le registre se lit depuis le navigateur (les membres voient qui est autorisé)
+mais ne s’écrit **que** côté serveur : un compte compromis ne peut pas s’ajouter
+un complice. Les rôles reconnus sont ceux du §14.1 du cahier des charges ;
+aujourd’hui seul `lecture_seule` a un effet — il retire les droits d’écriture,
+y compris sur le document partagé.
+
+**Ordre d’intervention, à ne pas inverser :** appliquez d’abord la migration,
+**ensuite** seulement redéployez les Edge Functions. Leur source interroge
+`public.membres` et refuse tout le monde tant que la table n’existe pas
+(refuser, jamais autoriser) ; l’ordre inverse coupe l’ingestion. Les fonctions
+déjà déployées, elles, ne sont pas affectées par la migration : elles passent
+par `service_role`, que la RLS n’atteint pas.
+
+**Reste hors du registre, à traiter lors d’une bascule d’adresse :** la variable
+d’environnement Vercel `AGENCE_EMAILS`, lue par `api/assistant.js`. Elle ne
+contient aucune adresse dans le dépôt, mais elle constitue une seconde liste :
+mettez-la à jour en même temps que le registre. Même remarque pour
+`VEILLE_CONTACT_EMAIL`, l’adresse de contact du User-Agent de la veille
+(`veille-enrichir`, `scraper-worker`), vide par défaut.
 
 ## Secrets Vault et tâches planifiées
 

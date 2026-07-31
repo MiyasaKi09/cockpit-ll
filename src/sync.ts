@@ -48,7 +48,60 @@ let refetchRealtimeARejouer = false
 let onStatutCourant: ((erreur: string | null) => void) | null = null
 let deconnexionEnCours: Promise<void> | null = null
 
-/** identifiant de CETTE instance de page — deux onglets doivent rester distincts. */
+// ----- session observable -----
+// La session existait déjà, mais seulement en lecture ponctuelle : une
+// connexion par lien magique ne re-rendait aucun écran. On publie donc un
+// instantané immuable, et tout écrivain de `session` passe par
+// `definirSession` — sinon l'interface cesse d'être avertie, en silence.
+export interface InstantaneSession {
+  connecte: boolean
+  email: string | null
+}
+/** l'objet est remplacé, jamais muté : `useSyncExternalStore` compare
+ *  les références et bouclerait à l'infini sur un objet neuf à chaque appel */
+let instantaneCourant: InstantaneSession = { connecte: false, email: null }
+const abonnesSession = new Set<() => void>()
+
+/** unique point d'écriture de la session — publie l'instantané et prévient */
+function definirSession(s: Session | null): void {
+  session = s
+  publierSession()
+}
+
+/** recalcule l'instantané (la session ET le client comptent) et notifie */
+function publierSession(): void {
+  const connecte = client !== null && session !== null
+  const email = session?.user?.email ?? null
+  if (connecte === instantaneCourant.connecte && email === instantaneCourant.email) return
+  instantaneCourant = { connecte, email }
+  for (const abonne of [...abonnesSession]) {
+    try {
+      abonne()
+    } catch {
+      /* un abonné en échec ne doit pas priver les autres de la notification */
+    }
+  }
+}
+
+/** état de session pour les composants — référence stable entre deux changements */
+export function instantaneSession(): InstantaneSession {
+  return instantaneCourant
+}
+
+/** s'abonner aux changements de session (connexion, déconnexion, expiration).
+ *  Renvoie la fonction de désabonnement. */
+export function abonnerSession(ecouteur: () => void): () => void {
+  abonnesSession.add(ecouteur)
+  return () => {
+    abonnesSession.delete(ecouteur)
+  }
+}
+
+/** identifiant de CETTE instance de page — deux onglets doivent rester distincts.
+ *  Ce n'est PAS une identité d'auteur : il est régénéré à chaque onglet et à
+ *  chaque profil de navigateur. Qui a écrit est estampillé par le serveur dans
+ *  `workspace.updated_by` (auth.uid(), migration 20260730160000) ; `MON_ID` ne
+ *  sert qu'à reconnaître ses propres échos Realtime. */
 const CLE_CONFLIT = 'cockpit-ll-sync-conflit'
 const CLE_EN_ATTENTE = 'cockpit-ll-sync-en-attente'
 const CLE_REVISION = 'cockpit-ll-sync-revision'
@@ -186,7 +239,7 @@ async function obtenirClient(url: string, anonKey: string): Promise<SupabaseClie
     authSubscription?.unsubscribe()
     clientPromise = null
     client = null
-    session = null
+    definirSession(null)
     channel = null
     authSubscription = null
     workspaceId = ''
@@ -221,7 +274,7 @@ export interface ResultatPush {
 // ----- API exportée -----
 
 export function syncActif(): boolean {
-  return client !== null && session !== null
+  return instantaneCourant.connecte
 }
 
 /** client Supabase courant (null tant que la session n'est pas ouverte) —
@@ -242,7 +295,7 @@ export function syncEtat(): {
 } {
   return {
     connecte: syncActif(),
-    email: session?.user?.email ?? null,
+    email: instantaneCourant.email,
     derniereSync,
     erreur: derniereErreur,
     conflit: conflitSyncPersistant(),
@@ -318,6 +371,9 @@ export async function connecterSync(url: string, anonKey: string, ws: string): P
     channel = null
   }
   client = nouveauClient
+  // le client compte dans « connecté » : republier tout de suite, sinon
+  // l'instantané resterait faux jusqu'au prochain changement de session
+  publierSession()
   workspaceId = prochainWorkspace
   // Les révisions/conflits appartiennent à un projet Supabase précis, pas
   // seulement au libellé d'espace qui peut être réutilisé ailleurs.
@@ -331,7 +387,7 @@ export async function connecterSync(url: string, anonKey: string, ws: string): P
   )
     throw new Error('La configuration Supabase a changé pendant la connexion.')
   if (error) throw new Error(`Session Supabase illisible : ${error.message}`)
-  session = data.session
+  definirSession(data.session)
 
   if (!authSubscription) {
     const generationAbonnement = generationConfiguration
@@ -342,7 +398,7 @@ export async function connecterSync(url: string, anonKey: string, ws: string): P
         client !== clientAbonne
       )
         return
-      session = s
+      definirSession(s)
       // au retour du lien magique (SIGNED_IN), on (re)branche le temps réel
       if (s && onRemoteCourant && !channel) souscrire()
     })
@@ -375,7 +431,7 @@ export async function deconnecterSync(): Promise<void> {
   generationConfiguration++
   channel = null
   client = null
-  session = null
+  definirSession(null)
   revisionCourante = null
   refetchRealtimeARejouer = false
   authSubscription?.unsubscribe()
@@ -416,10 +472,10 @@ export async function jetonAccesSync(): Promise<string | null> {
   )
     return null
   if (error || !data.session) {
-    session = null
+    definirSession(null)
     return null
   }
-  session = data.session
+  definirSession(data.session)
   return data.session.access_token
 }
 
@@ -480,15 +536,25 @@ function souscrire(): void {
           espaceAbonnement !== workspaceId
         )
           return
-        const row = payload.new as { data?: AppState; updated_by?: string; revision?: number } | null
+        const row = payload.new as {
+          data?: AppState
+          updated_by?: string
+          updated_by_client?: string
+          revision?: number
+        } | null
         if (!row) return
         const revision = Number(row.revision)
         if (!Number.isSafeInteger(revision) || revision < 0) {
           demanderRefetchRealtime()
           return
         }
-        // anti-écho A : on ignore NOS propres écritures (comparé au contenu, robuste)
-        if (row.updated_by === MON_ID) {
+        // anti-écho A : on ignore NOS propres écritures (comparé au contenu, robuste).
+        // L'onglet émetteur est annoncé dans `updated_by_client` depuis la
+        // migration 20260730160000 ; avant elle, il occupait `updated_by`, qui
+        // porte désormais l'identité du compte. Comparer les deux colonnes garde
+        // le filtre valide des deux côtés de la bascule, quel que soit l'ordre
+        // entre le déploiement du front et l'application de la migration.
+        if (row.updated_by_client === MON_ID || row.updated_by === MON_ID) {
           if (revisionCourante === null || revision > revisionCourante)
             memoriserRevision(revision, new Date().toISOString())
           return
@@ -588,6 +654,8 @@ export async function pousserEtat(
       p_id: espaceAuDepart,
       p_data: etatPartageable(state),
       p_version: state.version,
+      // annonce de l'onglet émetteur, pas une identité : le serveur l'ignore
+      // pour `updated_by` et le range dans `updated_by_client`
       p_updated_by: MON_ID,
       p_expected_revision: revisionAttendue,
     })

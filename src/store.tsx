@@ -4,8 +4,11 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { AppState, DocumentCorpus, Entreprise, Personne } from './types'
-import { fold, uid } from './util'
+import { fold, todayISO, uid } from './util'
 import { seedState, STATE_VERSION } from './seed'
+import { PHASES_ORDRE } from './miqcp'
+import { baselineApresMigration } from './derive'
+import { reprendreAxes } from './categorisation'
 import { amorcerFinance } from './amorceFinance'
 import { DEPARTEMENTS_DEFAUT } from './boamp'
 import {
@@ -40,6 +43,13 @@ import {
 const STORAGE_KEY = 'cockpit-ll-v1'
 let erreurPersistanceInitiale: string | null = null
 
+/** texte saisi ramené à sa forme utile : rogné, et vide → absent (un « »
+ *  stocké se propage en placeholder vide et en faux « renseigné ») */
+function texteNormalise(v: string | undefined): string | undefined {
+  const t = (v || '').trim()
+  return t || undefined
+}
+
 /** migration sans perte : complète les champs apparus depuis la v1 */
 function migrate(parsed: AppState): AppState {
   const base = seedState()
@@ -49,8 +59,27 @@ function migrate(parsed: AppState): AppState {
     settings: { ...base.settings, ...(parsed.settings || {}) },
     version: STATE_VERSION,
   }
+  // v19 → v20 : la baseline des heures se REPREND une seule fois, au
+  // franchissement du palier. `migrate()` s'exécute à chaque chargement (et
+  // sur tout état distant reçu) : une reprise inconditionnelle repose(rait)
+  // la référence la nuit suivant sa redéfinition, sans erreur ni trace.
+  const versionAncienne = typeof parsed.version === 'number' ? parsed.version : 0
+  const reprendreBaselines = versionAncienne < 20
+  const aujourdhui = todayISO()
   etat.reunions = Array.isArray(parsed.reunions) ? parsed.reunions : []
-  etat.courriers = Array.isArray(parsed.courriers) ? parsed.courriers : []
+  // v18 → v19 : les trois axes du §5.2 (src/categorisation.ts). Le palier
+  // REPREND les courriers existants sans rien inventer : le type d'échange
+  // et l'importance se dérivent de `type` et `urgence`, qui restent la
+  // source ; ce qui n'est pas déductible reste vide — un axe faux ne se
+  // voit pas, contrairement à un axe à choisir. Une valeur hors liste
+  // fermée (import JSON, futur producteur) est ramenée à null : elle
+  // ferait disparaître le courrier des filtres par axe, sans erreur.
+  // `...c` d'abord : une reconstruction champ par champ effacerait en
+  // silence tout champ non listé ici.
+  etat.courriers = (Array.isArray(parsed.courriers) ? parsed.courriers : []).map((c) => ({
+    ...c,
+    ...reprendreAxes(c),
+  }))
   etat.tempsHorsProjet = Array.isArray(parsed.tempsHorsProjet) ? parsed.tempsHorsProjet : []
   // v7 → v8 : congés / absences par personne (plan de charge)
   etat.absences = Array.isArray(parsed.absences) ? parsed.absences : []
@@ -68,7 +97,15 @@ function migrate(parsed: AppState): AppState {
     : Array.isArray((parsed as AppState & { documents?: DocumentCorpus[] }).documents)
       ? (parsed as AppState & { documents?: DocumentCorpus[] }).documents!
       : []
-  etat.registreDocuments = Array.isArray(parsed.registreDocuments) ? parsed.registreDocuments : []
+  // v17 → v18 : `DocumentRecord.phase` (CDC §7.3). Le champ est optionnel et
+  // n'existait pas : rien à reconstruire. En revanche une phase inconnue —
+  // venue d'un import JSON ou d'un futur producteur — ferait disparaître le
+  // document des filtres par phase sans lever la moindre erreur. On la
+  // ramène donc à null, et on ne touche à rien d'autre (l'objet n'est
+  // recopié que s'il est effectivement en cause).
+  etat.registreDocuments = (Array.isArray(parsed.registreDocuments) ? parsed.registreDocuments : []).map(
+    (doc) => (doc.phase && !PHASES_ORDRE.includes(doc.phase) ? { ...doc, phase: null } : doc),
+  )
   etat.entreprises = Array.isArray(parsed.entreprises) ? parsed.entreprises : []
   // v12 → v13 : CRM organisations (clients & acheteurs, audit V3 Lot 5)
   etat.organisations = Array.isArray(parsed.organisations) ? parsed.organisations : []
@@ -129,6 +166,10 @@ function migrate(parsed: AppState): AppState {
     return {
       id: p.id,
       nom: p.nom,
+      // v16 → v17 : l'adresse de connexion (pont compte ↔ personne, useMoi).
+      // Cette reconstruction champ par champ efface tout champ non listé :
+      // l'oublier ici viderait l'adresse à chaque rechargement, sans erreur.
+      email: typeof p.email === 'string' && p.email.trim() ? p.email.trim() : undefined,
       remuMensuelle: typeof p.remuMensuelle === 'number' ? p.remuMensuelle : ancien.brutMensuel ?? 0,
       modeRemu: p.modeRemu === 'net' ? 'net' : 'brut',
       statut: p.statut === 'salarie' ? 'salarie' : 'dirigeant',
@@ -148,6 +189,22 @@ function migrate(parsed: AppState): AppState {
     materiauxIds: Array.isArray(p.materiauxIds) ? p.materiauxIds : [],
     artisanIds: Array.isArray(p.artisanIds) ? p.artisanIds : [],
     journal: Array.isArray(p.journal) ? p.journal : [],
+    // v17 → v18 : ancrages externes (CDC §3.10, §12.1, §18). Purement
+    // additifs : absents d'un état v17, ils restent absents. Ils sont
+    // seulement NORMALISÉS — une adresse projet saisie « P01@Agence-LL.fr »
+    // sur un poste et « p01@agence-ll.fr » sur l'autre décrirait deux
+    // boîtes différentes au premier rapprochement de mails.
+    codeExterne: texteNormalise(p.codeExterne),
+    adresseProjet: texteNormalise(p.adresseProjet)?.toLowerCase(),
+    driveFolderId: texteNormalise(p.driveFolderId),
+    calendarId: texteNormalise(p.calendarId),
+    // v19 → v20 : prévision d'heures figée (CDC §11.3, critère 15). Sur un
+    // état antérieur, la répartition en place tient lieu de référence — c'est
+    // la seule encore disponible, et chaque « Recalculer la répartition » qui
+    // passe en détruit un peu plus. Elle est étiquetée « reprise » et pas
+    // « signature » : l'écran ne doit jamais la présenter comme la prévision
+    // du contrat. Aucune donnée n'est remplacée, aucun calcul ne change.
+    baselineHeures: baselineApresMigration(p, reprendreBaselines, aujourdhui),
   }))
   // v6 → v7 : facturation & situations pro (révision/RG sur les situations,
   // lien situation↔facture DET, suivi des relances). Uniquement des champs

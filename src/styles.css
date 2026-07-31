@@ -363,6 +363,23 @@ pre {
 
 .sidebar-foot { margin-top: auto; padding: 8px 6px 0; }
 
+/* « qui est devant l'écran » — session Supabase, ou choix mémorisé sur le poste */
+.nav-moi {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+  color: var(--sidebar-ink);
+}
+.nav-moi-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  opacity: 0.65;
+}
+.nav-moi .input { font-size: 12px; padding: 5px 7px; }
+
 .theme-toggle {
   font: inherit;
   font-family: var(--font-mono);

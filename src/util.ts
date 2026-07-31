@@ -107,6 +107,58 @@ export function fold(s: string): string {
     .trim()
 }
 
+// ------------------------------------------------------------
+// Code projet lisible et adresse dédiée (CDC §3.4, §3.10, §12.1)
+// ------------------------------------------------------------
+
+/** Prochain code projet lisible pour l'année donnée, format `AAAA-NNN`
+ *  (CDC §3.10). C'est une PROPOSITION pré-remplie dans l'assistant, rien
+ *  de plus : le code reste modifiable à la saisie, l'identifiant interne
+ *  (`P01`) ne bouge pas, et aucun calcul ne s'appuie dessus.
+ *
+ *  La suite ne se lit que sur les codes de la MÊME année et du même
+ *  format. Un code d'un autre format est ignoré plutôt que réinterprété :
+ *  proposer un numéro déjà pris est visible à l'écran et se corrige en
+ *  deux secondes, alors qu'une numérotation maison mal comprise se
+ *  découvrirait chez le client. `annee` est passée par l'appelant (jamais
+ *  `new Date()` ici) pour que la fonction reste pure et testable. */
+export function codeExternePropose(codesExistants: readonly (string | null | undefined)[], annee: string): string {
+  const an = (annee || '').trim().slice(0, 4)
+  if (!/^\d{4}$/.test(an)) return ''
+  let dernier = 0
+  for (const code of codesExistants) {
+    const m = /^(\d{4})-(\d{1,4})$/.exec((code || '').trim())
+    if (m && m[1] === an) dernier = Math.max(dernier, Number(m[2]))
+  }
+  return `${an}-${String(dernier + 1).padStart(3, '0')}`
+}
+
+/** Domaine retenu par l'agence. Il n'est PAS acheté : il ne sert qu'à
+ *  proposer une adresse dans un formulaire. Rien, nulle part, ne doit
+ *  dépendre de son existence — la validation ci-dessous accepte d'ailleurs
+ *  n'importe quel domaine. */
+export const DOMAINE_AGENCE = 'agence-ll.fr'
+
+/** Adresse projet proposée à la saisie : `[code-projet]@domaine`.
+ *  Simple suggestion affichée en placeholder — le Cockpit ne crée aucune
+ *  boîte et n'écrit jamais cette valeur tout seul. */
+export function adresseProjetProposee(codeExterne: string | null | undefined, domaine = DOMAINE_AGENCE): string {
+  const code = fold(codeExterne || '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+  return code ? `${code}@${domaine}` : ''
+}
+
+/** L'adresse saisie ressemble-t-elle à une adresse exploitable ?
+ *  Aucun domaine n'est présumé (même règle que `normaliserEmail`, moi.ts) :
+ *  `2026-034@agence-ll.fr` comme `situations@autre-domaine.fr` passent. La
+ *  saisie vide est valide — le champ est optionnel. */
+export function adresseProjetValide(adresse: string | null | undefined): boolean {
+  const v = (adresse || '').trim().toLowerCase()
+  if (!v) return true
+  return /^[a-z0-9](?:[a-z0-9._+-]*[a-z0-9])?@[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/.test(v)
+}
+
 export function download(nomFichier: string, contenu: string, type = 'application/json'): void {
   const blob = new Blob([contenu], { type })
   const url = URL.createObjectURL(blob)
@@ -125,4 +177,16 @@ export function gmailComposeUrl(to: string, sujet: string, corps: string): strin
 
 export function ouvrirGmail(to: string, sujet: string, corps: string): void {
   window.open(gmailComposeUrl(to, sujet, corps), '_blank', 'noopener')
+}
+
+/** URL qui rouvre un message dans Gmail à partir de son identifiant d'API.
+ *  `#all/` plutôt que `#inbox/` : la pièce peut avoir été archivée depuis.
+ *  C'est ce lien qui rend le critère 10 vérifiable — une pièce jointe classée
+ *  conserve le chemin de retour vers l'échange qui l'a apportée. */
+export function gmailMessageUrl(messageId: string): string | null {
+  const id = (messageId || '').trim()
+  // les identifiants Gmail sont hexadécimaux ; tout le reste viendrait
+  // d'une autre source et produirait un lien mort
+  if (!/^[0-9a-f]{6,}$/i.test(id)) return null
+  return `https://mail.google.com/mail/u/0/#all/${id}`
 }

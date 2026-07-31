@@ -1,16 +1,15 @@
 // ============================================================
 // ingestion-config — configuration de l'ingestion Gmail côté
 // serveur, PILOTÉE DEPUIS LE COCKPIT (Paramètres → Branchements).
-// JWT vérifié par la plateforme + liste blanche des e-mails de
-// l'agence. Les identifiants OAuth vivent dans la table privée
+// JWT vérifié par la plateforme + registre des membres (table
+// public.membres). Les identifiants OAuth vivent dans la table privée
 // ingestion_config (RLS sans policy : service role uniquement) —
 // jamais dans l'état partagé, jamais renvoyés au client.
 // ============================================================
 
 import { createClient } from 'jsr:@supabase/supabase-js@2.110.0'
+import { estMembreActif } from '../_shared/membres.ts'
 import { creerJetonInitiationOAuth } from '../_shared/oauth-init.ts'
-
-const AGENCE = ['julenglet@gmail.com', 'zoefhebert@gmail.com']
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -27,10 +26,10 @@ function secretInitiationOAuth(): string {
 }
 
 /** e-mail du jeton utilisateur (vérifié par la plateforme, relu ici) */
-async function emailAppelant(req: Request): Promise<string | null> {
+async function emailAppelant(sb: ReturnType<typeof admin>, req: Request): Promise<string | null> {
   const jeton = req.headers.get('authorization')?.replace(/^Bearer\s+/i, '')
   if (!jeton) return null
-  const { data } = await admin().auth.getUser(jeton)
+  const { data } = await sb.auth.getUser(jeton)
   return data.user?.email?.toLowerCase() ?? null
 }
 
@@ -49,12 +48,15 @@ function json(corps: unknown, status = 200): Response {
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS })
 
-  const email = await emailAppelant(req)
-  if (!email || !AGENCE.includes(email)) {
+  const sb = admin()
+
+  // Le registre des membres fait autorité : plus aucune liste d'adresses
+  // n'est recopiée ici. Registre injoignable = accès refusé.
+  const email = await emailAppelant(sb, req)
+  if (!email || !(await estMembreActif(sb, email))) {
     return json({ erreur: 'Accès réservé à l’agence.' }, 403)
   }
 
-  const sb = admin()
   const { data: cfg, error: erreurConfig } = await sb
     .from('ingestion_config')
     .select('*')

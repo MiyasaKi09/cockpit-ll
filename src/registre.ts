@@ -6,7 +6,7 @@
 // Le moteur PROPOSE, l'utilisateur CONFIRME.
 // ============================================================
 
-import type { AppState, DocumentRecord, SourceDocument } from './types'
+import type { AppState, DocumentRecord, PhaseCode, SourceDocument } from './types'
 import { fold, todayISO, uid } from './util'
 
 /** catégories contrôlées — partagées par le dépôt manuel et la boîte d'arrivée */
@@ -183,16 +183,21 @@ export function creerDocument(base: {
   cheminDrive?: string
   sourceId?: string
   sourceUrl?: string
+  driveFileId?: string
   projetId?: string | null
   entrepriseId?: string | null
   marcheId?: string | null
   lotDceId?: string | null
   reunionId?: string | null
   sousType?: string
+  phase?: PhaseCode | null
   dateDocument?: string | null
   confiance?: number | null
   raisons?: string[]
   statut?: DocumentRecordStatut
+  /** qui dépose / produit le document — porté par le document ET par son
+   *  premier événement : le champ répond « de qui vient ce document ? »
+   *  sans obliger à relire tout le journal */
   auteur?: string
 }): DocumentRecord {
   const doc: DocumentRecord = {
@@ -207,12 +212,15 @@ export function creerDocument(base: {
     cheminDrive: base.cheminDrive,
     sourceId: base.sourceId,
     sourceUrl: base.sourceUrl,
+    driveFileId: base.driveFileId,
     projetId: base.projetId ?? null,
     entrepriseId: base.entrepriseId ?? null,
     marcheId: base.marcheId ?? null,
     lotDceId: base.lotDceId ?? null,
     reunionId: base.reunionId ?? null,
     sousType: base.sousType,
+    phase: base.phase ?? null,
+    auteur: base.auteur,
     dateDocument: base.dateDocument ?? null,
     recuLe: todayISO(),
     version: 1,

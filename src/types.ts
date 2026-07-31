@@ -5,6 +5,12 @@
 // import JSON, toujours avec statut « à vérifier ».
 // ============================================================
 
+// Les trois axes de catégorisation des échanges (CDC §5.2) vivent dans
+// leur propre module : `PhaseEchange` est un superset SÉPARÉ de
+// `PhaseCode`, qui ne bouge pas (il porte la chaîne d'honoraires).
+// Import de types seul — aucune dépendance à l'exécution.
+import type { NiveauImportance, PhaseEchange, TypeEchange } from './categorisation'
+
 export type TypeMO = 'Public' | 'Privé pro' | 'Particulier'
 
 export type StatutProjet = 'Prospect' | 'Offre remise' | 'Signé' | 'En cours' | 'Livré' | 'Perdu'
@@ -22,6 +28,40 @@ export interface Phase {
   heuresPrevues: number
   /** coûts externes de la phase (BET cotraitants, sous-traitance, débours) */
   coutExterneHT?: number
+}
+
+/** Prévision d'heures FIGÉE — la référence de la comparaison prévu / réel
+ *  (CDC §11.3, critère 15).
+ *
+ *  Elle vit à côté de `Projet.phases`, jamais DEDANS, et c'est là toute la
+ *  garantie : « Recalculer la répartition » remplace le tableau `phases` en
+ *  entier (`pr.phases = phasesParDefaut(…)`), donc une baseline rangée dans
+ *  une `Phase` disparaîtrait avec lui — silencieusement, et sans que l'écart
+ *  mesuré la semaine suivante puisse être reconstitué. La séparation
+ *  structurelle vaut mieux qu'une précaution dans le bouton : un futur
+ *  producteur de phases n'a rien à savoir de la baseline pour la respecter.
+ *  `scripts/test-baseline-heures.cjs` le vérifie.
+ *
+ *  Elle ne se réécrit que par une action humaine explicite (figer à la
+ *  signature, redéfinir depuis la fiche projet). */
+export interface BaselineHeures {
+  /** date ISO du figeage */
+  le: string
+  /** qui l'a figée. Trace DATÉE, au sens de `DocumentRecord.validePar` : elle
+   *  dit qui a agi ce jour-là, pas qui travaille sur le projet aujourd'hui —
+   *  elle n'entre donc pas dans l'inventaire de src/personnes.ts et un
+   *  renommage ne la réécrit pas (même doctrine, même motif). */
+  par?: string
+  /** d'où viennent ces heures. Une REPRISE (répartition trouvée en place au
+   *  franchissement du palier v20) n'est pas une signature : l'écran doit le
+   *  dire, sinon le chiffre se lit comme un engagement contractuel. */
+  origine: 'signature' | 'creation' | 'reprise' | 'revision'
+  /** heures prévues par phase à cet instant (code de phase → heures).
+   *  Une phase absente n'existait pas au figeage — ce n'est pas 0 h. */
+  parPhase: Partial<Record<PhaseCode, number>>
+  /** honoraires de base HT qui justifiaient cette répartition : la source du
+   *  chiffre, pas seulement le chiffre */
+  honorairesBaseHT?: number | null
 }
 
 /** lien utile rattaché au projet (Drive, plateforme, DCE…) */
@@ -70,6 +110,11 @@ export interface Projet {
   missionsComplHT: number
   notes?: string
   phases: Phase[]
+  /** prévision d'heures figée à la signature (CDC §11.3). Trois états, et le
+   *  troisième compte : `undefined` = jamais figée (la reprise du palier v20
+   *  peut la poser) ; `null` = délibérément sans référence, la reprise n'y
+   *  touche pas ; un objet = la référence. */
+  baselineHeures?: BaselineHeures | null
   /** rattachements de l'espace projet — tout s'ajoute au fil de l'eau */
   liens: LienProjet[]
   materiauxIds: string[]
@@ -108,6 +153,23 @@ export interface Projet {
   surfaceExterieure?: number | null
   /** trajet aller agence → site (repère logistique) */
   trajetAller?: string
+  // --- ancrages externes (CDC §3.10, §12.1, §18) — TOUS optionnels et
+  // saisis à la main : `id` (P01) reste la clé interne, rien ne dépend de
+  // ces valeurs, et rien ne les produit automatiquement à ce stade.
+  /** code lisible côté client, porté par les échanges (ex. « 2026-034 ») —
+   *  l'identifiant interne P01 ne bouge pas : renommer casserait les liens,
+   *  les journaux et `entrants.projet_id_propose` déjà en base */
+  codeExterne?: string
+  /** adresse dédiée du projet, format [code-projet]@agence-ll.fr — le
+   *  domaine n'est pas présumé (il n'est pas acheté) : c'est une donnée
+   *  saisie, jamais une adresse créée par le Cockpit */
+  adresseProjet?: string
+  /** identifiant du dossier Drive du projet (Lot 3 — aujourd'hui saisi à
+   *  la main ; le rangement local passe toujours par `cheminDrive`) */
+  driveFolderId?: string
+  /** identifiant de l'agenda secondaire du projet (Lot 3, export .ics) —
+   *  créé à la main : le Cockpit ne demande le calendrier qu'en lecture */
+  calendarId?: string
 }
 
 /** courrier trié par la routine mail du matin — rangé au bon projet */
@@ -117,7 +179,9 @@ export interface Courrier {
   de: string
   objet: string
   resume: string
-  /** question / document / administratif / commercial / autre */
+  /** question / document / administratif / commercial / autre — texte
+   *  libre historique. CONSERVÉ tel quel : c'est la trace de ce qui a
+   *  été écrit, et donc la source dont `typeEchange` se re-dérive. */
   type: string
   actionProposee?: string
   urgence?: 1 | 2 | 3
@@ -125,6 +189,17 @@ export interface Courrier {
   statut: 'a_traiter' | 'traite'
   dateReception: string // ISO
   source?: string
+  // --- axes de catégorisation du CDC §5.2 (src/categorisation.ts) ---
+  // Optionnels et nullables : `null` veut dire « non renseigné, à
+  // choisir », jamais « sans importance ». Renseignés une fois par le
+  // palier v19 depuis `type` et `urgence`, corrigeables ensuite.
+  // Ils ne portent PAS la séparation proposé / validé du §3.14 : dans
+  // le document JSONB il n'y a pas de GRANT au niveau colonne pour la
+  // tenir. La table `communications` (A.2) la portera ; ici, la garantie
+  // est plus faible et se limite à la re-dérivabilité depuis `type`.
+  phaseEchange?: PhaseEchange | null
+  typeEchange?: TypeEchange | null
+  importance?: NiveauImportance | null
 }
 
 export type StatutReunion = 'a_preparer' | 'cr_a_generer' | 'cr_a_relire' | 'diffuse'
@@ -832,6 +907,12 @@ export type StatutRemu = 'dirigeant' | 'salarie'
 export interface Personne {
   id: string
   nom: string
+  /** adresse de connexion de la personne — le pont entre un compte
+   *  (session Supabase) et la personne référencée par son nom dans tout
+   *  l'état. Optionnelle : le Cockpit s'utilise hors ligne et sans session,
+   *  et l'agence n'a pas encore son domaine. Comparée sans tenir compte de
+   *  la casse (voir `normaliserEmail` dans src/moi.ts). */
+  email?: string
   /** montant mensuel saisi — brut ou net selon modeRemu */
   remuMensuelle: number
   /** ce que représente le montant saisi */
@@ -1268,9 +1349,22 @@ export interface DocumentRecord {
   factureAchatId?: string | null
   noteFraisId?: string | null
   lotComptableId?: string | null
+  /** identifiant du fichier côté Google Drive (Lot 4) — distinct de
+   *  `sourceId`, qui garde l'identifiant de la source d'ORIGINE (pièce
+   *  jointe Gmail…) : les deux traces coexistent (CDC §7.3) */
+  driveFileId?: string
   /** catégorie contrôlée (CCTP, DPGF, CR, SITU, PLAN, ADM, PHOTO…) */
   categorie: string
   sousType?: string
+  /** phase de la mission à laquelle le document se rattache (CDC §7.3).
+   *  Même référentiel que `Phase.code` — aucune nomenclature nouvelle : le
+   *  sous-dossier du Drive en porte déjà la correspondance
+   *  (`ARBORESCENCE[].phases`, src/fsdrive.ts), qui sert de proposition. */
+  phase?: PhaseCode | null
+  /** qui a déposé / produit le document (nom d'un membre de l'équipe).
+   *  Distinct de `validePar` (qui a contrôlé le classement) et de
+   *  l'auteur des `evenements` (qui a fait ce geste-là). */
+  auteur?: string
   /** date portée par le document (quand elle est fiable) */
   dateDocument?: string | null
   recuLe: string // ISO

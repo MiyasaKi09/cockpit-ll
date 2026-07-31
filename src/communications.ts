@@ -44,7 +44,11 @@
 //     `mailsEnAttenteDeReponse()` et `echangesParPhase(projetId)` sont
 //     le livrable A.12, et leur définition est du domaine, pas de
 //     l'accès. Ici il n'y a que des primitives de requête ;
-//   * il ne classe rien : le classifieur des trois axes est A.8 ;
+//   * il ne classe rien : le classifieur déterministe des trois axes
+//     (A.8) vit côté serveur, dans
+//     `supabase/functions/_shared/classement-echanges.ts`, et n'écrit
+//     que les colonnes proposées. Ici on lit les colonnes effectives et
+//     on signe une correction — jamais l'inverse ;
 //   * il ne construit pas d'URL de source : `gmailMessageUrl()`
 //     (`src/util.ts`) est le seul constructeur du dépôt, et il refuse
 //     les identifiants malformés (critère 10).

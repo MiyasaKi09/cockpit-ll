@@ -223,6 +223,38 @@ choixPoste)` (règle pure, testable), `normaliserEmail`.
 `alerts.ts` : `computeAlertes(state, today)`, `alertesActives(state, today)` (snoozes filtrés).
 Snooze = `d.settings.snoozes[alerte.id] = dateISO` (jusqu'à cette date).
 
+**Les trois axes du §5.2 sont PROPOSÉS par un lexique, jamais par un modèle.** Le classifieur
+déterministe vit dans `supabase/functions/_shared/classement-echanges.ts` (livrable A.8, §3.14
+décision 5) : un lexique par axe, des raisons en français, un plafond de confiance commun avec la
+cascade, et un **repli explicite** — sous le seuil, ou quand deux lectures s'équivalent, l'axe reste
+VIDE et le dit. Il ne recopie **aucune** des trois listes fermées : il en émet des valeurs, et
+`scripts/test-classement-echanges.cjs` compare chacune à `src/categorisation.ts`. Une valeur
+inventée serait refusée par le domaine SQL à l'insertion, et le message ne serait jamais indexé —
+sans autre trace que les journaux Supabase. Le type d'échange part de ce que l'agence sait déjà
+(`Projet.emailMOA`, `Contact.type`, `MarcheTravaux.contactEmail`, `Entreprise.domaines`, le registre
+`public.membres`) avant de regarder le domaine puis l'objet, dans cet ordre ; le désaccord entre
+deux étages est **écrit dans les raisons**, jamais arbitré en silence. Contrairement à
+`_shared/rattachement.ts`, ce module **importe** (la cascade, pour `fold` et la normalisation des
+adresses) : il ne tourne que dans Deno et dans le test, parce que le navigateur ne classe rien — il
+affiche et corrige. **Aucun fichier de `src/` ne doit l'importer**, l'extension `.ts` explicite y
+casserait le build ; le test le refuse. L'ingestion n'écrit que `phase_proposee`,
+`type_echange_propose`, `importance_proposee`, `confiance_categorisation` et
+`raisons_categorisation` : la colonne humaine et `categorise_par` restent hors de toute écriture
+machine.
+
+**Le classement du §5.2 n'a qu'un afficheur : `AxesMessage` (`ui.tsx`).** Il rend les trois axes
+effectifs en français (les libellés viennent de `categorisation.ts`, la couleur de l'importance de
+`graviteDe` — l'échelle 1-3 des alertes a un seul propriétaire) et il rend TOUJOURS avec eux le
+« Voir pourquoi ce classement ». Un axe vide ne s'affiche pas : le lexique préfère se taire, et
+trois badges « — » répétés sur une file seraient du bruit ; ce qui manque se lit dans les raisons.
+Tant que `categorise_par` est nul, la confiance de la machine s'affiche ; dès qu'un humain a signé,
+c'est son nom qui s'affiche et la confiance disparaît — elle ne veut plus rien dire. **Tout écran
+qui lit `Communication.propose.raisonsCategorisation` doit monter ce composant** ;
+`scripts/test-classement-echanges.cjs` le vérifie fichier par fichier, rend le composant en HTML et
+refuse une seconde définition. La correction, elle, passe par `corrigerAxes` (`communications.ts`)
+et écrit les **trois** axes à la fois — `ChoixAxes` (`Documents.tsx`) est aujourd'hui le seul écran
+qui l'appelle.
+
 `categorisation.ts` : référentiel FERMÉ des trois axes de classement des échanges (CDC §5.2) —
 `PhaseEchange` (superset **séparé** de `PhaseCode`, qui ne bouge pas : il porte la chaîne
 d'honoraires) avec `PHASES_ECHANGE` / `LIBELLES_PHASE_ECHANGE` / `estPhaseDeMission`,
@@ -310,7 +342,9 @@ actions?})`, `Card({titre?, actions?, className?})`, `Badge({tone})` (`ok|warn|d
 `Stat({label, value, sub?, tone?})`, `Money`, `DateF`, `EmptyState`, `Btn({kind, small,
 disabled, title})` (`default|primary|ghost|danger`), `CopyBtn({text: string | () => string,
 label?, kind?, small?})`, `LienGmail({source, bouton?, muet?})`,
-`ResumeMessage({resume, le?})`, `Field({label, hint?})`, `TextInput`, `TextArea({mono?})`,
+`ResumeMessage({resume, le?})`,
+`AxesMessage({phase?, typeEchange?, importance?, confiance?, raisons?, signePar?})`,
+`Field({label, hint?})`, `TextInput`, `TextArea({mono?})`,
 `NumInput({value: number|null})`, `DateInput({value: string|null})`, `Select({options})`,
 `Modal({titre, onClose, large?})`, `Tabs({tabs, actif, onSelect})`, `Table({head, compact?})`.
 

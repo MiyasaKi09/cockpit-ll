@@ -163,10 +163,16 @@ Quatre points opérationnels :
   sans pièce jointe sont ouverts en `format=metadata` (§3.6) : même coût de
   quota, réponse dix à cinquante fois plus légère, et le `snippet` de Gmail
   sert d'extrait de corps ;
-- **les trois axes du §5.2 restent vides au premier jour.** Leur classifieur
-  déterministe est le livrable A.8 ; la table les porte dès maintenant parce
-  que les ajouter après coup imposerait de rouvrir dans Gmail, une par une,
-  toutes les lignes déjà ingérées.
+- **les trois axes du §5.2 sont remplis depuis le livrable A.8**, par un
+  lexique déterministe embarqué dans `gmail-ingestion` (aucun appel de modèle,
+  donc aucun coût et aucune clé à poser). **Aucune migration ne l'accompagne** :
+  les dix colonnes sont là depuis celle-ci, ce qui était tout l'objet de les
+  livrer ensemble. Conséquence opérationnelle unique : **redéployer
+  `gmail-ingestion`**. Les messages déjà indexés ne sont pas reclassés — ils
+  gardent leurs axes vides jusqu'à ce que le curseur repasse ou qu'un humain
+  les renseigne (Documents → « À rattacher » → « Corriger le classement ») ;
+  aucune correction humaine n'est écrasée, l'`upsert` ne touche que les
+  colonnes proposées.
 
 Cette migration ne se défait pas d'un `drop table` sans perdre les corrections
 humaines qu'elle aura accumulées : rattachements, axes choisis, messages

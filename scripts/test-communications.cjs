@@ -411,12 +411,16 @@ for (const colonne of ecrivables) {
     `ligneCommunication() écrit ${colonne} : un re-scan effacerait la correction humaine, en silence`,
   )
 }
-// Les trois axes proposés restent vides : leur classifieur est le livrable A.8.
+// Les trois axes proposés sont renseignés depuis A.8 — et c'est la COLONNE
+// PROPOSÉE, jamais la colonne humaine, qui les reçoit (la boucle ci-dessus sur
+// `ecrivables` le vérifie déjà, celle-ci vérifie la réciproque : qu'ils ne
+// soient pas restés vides). Le détail du classifieur est exercé par
+// `scripts/test-classement-echanges.cjs`, qui l'exécute.
 for (const { propose } of TRIADES) {
   if (propose === 'projet_id_propose') continue
   assert.ok(
-    !new RegExp(`\\b${propose}:`).test(ligne[0]),
-    `ligneCommunication() renseigne ${propose} : le classifieur des trois axes est le livrable A.8, et un axe faux ne se voit pas`,
+    new RegExp(`\\b${propose}:`).test(ligne[0]),
+    `ligneCommunication() n’écrit plus ${propose} : la table porte l’axe depuis A.2 et son classifieur existe depuis A.8 — une colonne vide ne se voit pas`,
   )
 }
 

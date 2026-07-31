@@ -144,6 +144,12 @@ const ui = charger('src/ui.tsx', {
   'react/jsx-runtime': require('react/jsx-runtime'),
   './prompts': { copier: async () => true },
   './util': util,
+  // A.8 : `AxesMessage` (kit UI) lit les libellés des trois axes du §5.2 dans
+  // le référentiel fermé, plutôt que d'en recopier une seconde table
+  './categorisation': charger('src/categorisation.ts', {
+    './util': util,
+    './miqcp': charger('src/miqcp.ts'),
+  }),
 })
 const { LienGmail } = ui
 assert.ok(LienGmail, 'src/ui.tsx doit exporter LienGmail — le seul « Ouvrir dans Gmail » du dépôt')

@@ -101,6 +101,31 @@
 //    colonne humaine et `rattache_par` restent hors de toute écriture
 //    machine, et le GRANT au niveau colonne d'A.2 le garantit.
 //
+// LIVRABLE A.8 — CE QUI A CHANGÉ, ET POURQUOI
+// -------------------------------------------
+// 10. LES TROIS AXES DU §5.2 NE SONT PLUS VIDES. A.2 les avait laissés en
+//     blanc en écrivant pourquoi : « un axe faux coûte plus cher qu'un axe
+//     à choisir ». Le classifieur DÉTERMINISTE de `../_shared/
+//     classement-echanges.ts` les remplit désormais — un lexique par axe,
+//     des raisons en français, un repli explicite qui laisse l'axe VIDE
+//     plutôt que de deviner. Aucun modèle n'est appelé (§3.14, décision 5).
+//     Comme pour le rattachement, seules les colonnes PROPOSÉES sont
+//     écrites : `phase_proposee`, `type_echange_propose`,
+//     `importance_proposee`, plus `confiance_categorisation` et
+//     `raisons_categorisation`. Les colonnes humaines et `categorise_par`
+//     restent hors de toute écriture machine — le GRANT au niveau colonne
+//     et le trigger de refus d'A.2 le garantissent, l'`upsert` ne les
+//     nomme même pas.
+// 11. LE TYPE D'ÉCHANGE PART DE CE QUE L'AGENCE SAIT DÉJÀ. Le plan tranche
+//     « par l'expéditeur d'abord » : `reperesDepuisEtat` produit désormais
+//     DEUX jeux de repères depuis le même `workspace.data` — ceux de la
+//     cascade de rattachement, inchangés, et ceux du classement (qui est
+//     maître d'ouvrage, qui est BET, quel domaine appartient à quelle
+//     entreprise, quelles adresses sont celles de l'agence). Les seconds
+//     n'inventent rien : ce sont `Projet.emailMOA`, `Contact.email` avec
+//     son type, `MarcheTravaux.contactEmail`, `Entreprise.domaines` et le
+//     registre `public.membres`.
+//
 // Accès : en-tête x-cron-secret (planificateur) OU jeton d'une
 // personne de l'agence (bouton « Scanner maintenant »).
 //
@@ -113,6 +138,13 @@
 
 import { createClient, type SupabaseClient } from 'jsr:@supabase/supabase-js@2.110.0'
 import { adressesMembresActifs, adresseNormalisee, jetonDeMembreActif } from '../_shared/membres.ts'
+import {
+  classerAxes,
+  genreDepuisTypeContact,
+  type ClassementAxes,
+  type CorrespondantRepere,
+  type ReperesClassement,
+} from '../_shared/classement-echanges.ts'
 import {
   fold,
   normaliserAdresse,
@@ -231,7 +263,9 @@ interface EtatPartage {
     adresseProjet?: string
     emailMOA?: string
   }[]
-  contacts?: { nom?: string; email?: string; projetsIds?: string[] }[]
+  /** `type` (A.8) : `TypeContact` de src/types.ts — MOA / BET / Entreprise…
+   *  C'est lui qui dit ce qu'EST le correspondant, donc le type d'échange. */
+  contacts?: { nom?: string; email?: string; type?: string; projetsIds?: string[] }[]
   marches?: { projetId: string; lot?: string; entreprise?: string; entrepriseId?: string | null; contactEmail?: string }[]
   entreprises?: { id: string; raisonSociale: string; domaines?: string[] }[]
   settings?: {
@@ -239,6 +273,62 @@ interface EtatPartage {
     surveillance?: { email?: string }
     reglesRattachement?: ReperesRattachement['regles']
   }
+}
+
+/**
+ * A.8 — les repères du CLASSEMENT, tirés du même état partagé.
+ *
+ * Ils répondent à une autre question que ceux de la cascade : celle-ci demande
+ * « de quel projet parle ce message ? », celui-là « qui est en face ? ». D'où
+ * deux jeux, construits ensemble à partir de la même lecture de
+ * `workspace.data`, et jamais mélangés : une adresse de contact sans
+ * `projetsIds` n'apprend rien à la cascade (elle ne désigne aucun projet) mais
+ * apprend tout au classement (elle dit que l'interlocuteur est un BET).
+ *
+ * `adressesAgence` vient du registre `public.membres` — jamais d'une adresse
+ * écrite ici, c'est le livrable 0.2 et `scripts/test-adresses-en-dur.cjs` le
+ * refuse.
+ */
+function correspondantsDepuisEtat(etat: EtatPartage, adressesAgence: Set<string>): ReperesClassement {
+  const correspondants: CorrespondantRepere[] = []
+  const vues = new Set<string>()
+  const ajouter = (
+    brut: string | undefined,
+    surDomaine: boolean,
+    genre: CorrespondantRepere['genre'],
+    origine: string,
+  ) => {
+    const valeur = surDomaine ? (brut || '').trim().toLowerCase() : normaliserAdresse(brut)
+    if (!valeur) return
+    // premier arrivé, premier servi : les internes sont ajoutés d'abord, et
+    // une adresse de l'agence ne doit jamais être reclassée en « client »
+    // parce qu'elle traîne aussi dans un champ de contact
+    const cle = `${surDomaine ? 'd' : 'a'}:${valeur}`
+    if (vues.has(cle)) return
+    vues.add(cle)
+    correspondants.push({ valeur, surDomaine, genre, origine })
+  }
+
+  for (const email of adressesAgence) ajouter(email, false, 'interne', 'Adresse de l’agence (registre des membres)')
+  for (const p of etat.settings?.equipe || []) ajouter(p.email, false, 'interne', 'Adresse de l’équipe (Paramètres)')
+  ajouter(etat.settings?.surveillance?.email, false, 'interne', 'Boîte surveillée par l’agence')
+
+  const nomProjet = (id: string, nom: string) => `La maîtrise d’ouvrage du projet ${id} (${nom})`
+  for (const p of etat.projets || []) ajouter(p.emailMOA, false, 'maitrise_ouvrage', nomProjet(p.id, p.nom))
+
+  for (const c of etat.contacts || []) {
+    const genre = genreDepuisTypeContact(c.type)
+    if (genre) ajouter(c.email, false, genre, `Le contact ${c.nom || ''} (${c.type})`.replace('  ', ' '))
+  }
+
+  for (const m of etat.marches || [])
+    ajouter(m.contactEmail, false, 'entreprise', `Le contact du marché « ${m.lot || ''} »`)
+
+  for (const e of etat.entreprises || [])
+    for (const domaine of e.domaines || [])
+      ajouter(domaine, true, 'entreprise', `Le domaine déclaré de « ${e.raisonSociale} »`)
+
+  return { correspondants }
 }
 
 function reperesDepuisEtat(etat: EtatPartage): ReperesRattachement {
@@ -392,12 +482,21 @@ function contexteMessage(msg: MessageEnrichi) {
  *
  *  Ce qu'elle n'écrit PAS est aussi important que ce qu'elle écrit. Les
  *  colonnes humaines (`projet_id_valide`, `phase`, `type_echange`,
- *  `importance`, `traite_le`…) sont absentes : l'`upsert` ne les touche donc
- *  jamais, et un re-scan ne peut pas effacer une correction. Les trois axes
- *  PROPOSÉS restent vides — leur classifieur est le livrable A.8 ; les
- *  remplir à l'aveugle ici donnerait un classement faux, c'est-à-dire un
- *  classement qui ne se voit pas. */
-function ligneCommunication(msg: MessageEnrichi, projet: Rattachement, nbPieces: number) {
+ *  `importance`, `categorise_par`, `traite_le`…) sont absentes : l'`upsert` ne
+ *  les touche donc jamais, et un re-scan ne peut pas effacer une correction.
+ *
+ *  A.8 remplit les trois axes PROPOSÉS, que A.2 avait laissés vides en
+ *  attendant leur classifieur. Ils restent des propositions au sens fort : la
+ *  colonne générée `phase_effective` bascule sur `categorise_par`, que cette
+ *  fonction n'écrit pas et n'a pas le droit d'écrire. Une valeur nulle est
+ *  écrite telle quelle — c'est le repli explicite du §3.14 : l'axe reste à
+ *  choisir, et il le dit dans `raisons_categorisation`. */
+function ligneCommunication(
+  msg: MessageEnrichi,
+  projet: Rattachement,
+  axes: ClassementAxes,
+  nbPieces: number,
+) {
   return {
     gmail_message_id: msg.id,
     gmail_thread_id: msg.threadId,
@@ -418,6 +517,15 @@ function ligneCommunication(msg: MessageEnrichi, projet: Rattachement, nbPieces:
     projet_id_propose: projet.projetId,
     confiance_rattachement: projet.projetId ? projet.confiance : null,
     raisons_rattachement: projet.raisons,
+    phase_proposee: axes.phase,
+    type_echange_propose: axes.typeEchange,
+    importance_proposee: axes.importance,
+    // `null` plutôt que `0` quand rien n'a été proposé : un badge « 0 % » se
+    // lit « la machine a essayé et n'a rien trouvé de sûr », alors que la
+    // vérité est « il n'y a pas de proposition ». C'est la règle déjà tenue
+    // par `confiance_rattachement` juste au-dessus.
+    confiance_categorisation: axes.confiance > 0 ? axes.confiance : null,
+    raisons_categorisation: axes.raisons,
   }
 }
 
@@ -516,12 +624,17 @@ Deno.serve(async (req: Request) => {
     .eq('id', cfg.workspace_id || 'agence-ll')
     .maybeSingle()
   if (erreurWorkspace) return json({ erreur: `Workspace illisible : ${erreurWorkspace.message}` }, 500)
-  const reperes = reperesDepuisEtat((ws?.data ?? {}) as EtatPartage)
+  const etatPartage = (ws?.data ?? {}) as EtatPartage
+  const reperes = reperesDepuisEtat(etatPartage)
 
   // --- qui est « l'agence » ? le registre, jamais une adresse écrite ici ---
   const adressesAgence = await adressesMembresActifs(sb)
   const compte = adresseNormalisee(cfg.compte_email)
   if (compte) adressesAgence.add(compte)
+
+  // --- A.8 : les repères du CLASSEMENT, après le registre parce qu'ils en
+  // dépendent (« qui est l'agence » commande le type d'échange « interne ») ---
+  const reperesAxes = correspondantsDepuisEtat(etatPartage, adressesAgence)
 
   // --- la tranche de temps à traiter ---
   const maintenant = Date.now()
@@ -659,9 +772,21 @@ Deno.serve(async (req: Request) => {
       destinataires: [...msg.destinataires, ...msg.copies].map((d) => d.adresse),
       projetDuFil: filRattacheA,
     })
+    // A.8 — les trois axes du §5.2. Le corps entre ici, contrairement au
+    // rattachement : « merci de valider avant vendredi » ne s'écrit jamais en
+    // objet, et une importance fausse se corrige sur un message quand un
+    // rattachement faux contamine tout un fil (voir le module partagé).
+    const axes = classerAxes(reperesAxes, {
+      objet: msg.objet,
+      corpsExtrait: msg.corpsExtrait,
+      expediteur: msg.expediteurAdresse || msg.expediteur,
+      destinataires: msg.destinataires.map((d) => d.adresse),
+      copies: msg.copies.map((d) => d.adresse),
+      direction: msg.direction,
+    })
     const { error: erreurIndex } = await sb
       .from('communications')
-      .upsert(ligneCommunication(msg, projet, pieces.length), { onConflict: 'gmail_message_id' })
+      .upsert(ligneCommunication(msg, projet, axes, pieces.length), { onConflict: 'gmail_message_id' })
     if (!erreurIndex) messagesIndexes++
     // ce que ce message vient d'apprendre au fil sert aux suivants du même
     // passage — un fil neuf se rattache d'un coup, pas message par message

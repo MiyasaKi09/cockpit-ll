@@ -2,6 +2,13 @@
 
 import { Children, Fragment, cloneElement, isValidElement, useEffect, useRef, useState } from 'react'
 import type { CSSProperties, ReactElement, ReactNode } from 'react'
+import type { NiveauImportance, PhaseEchange, TypeEchange } from './categorisation'
+import {
+  LIBELLES_IMPORTANCE,
+  LIBELLES_PHASE_ECHANGE,
+  LIBELLES_TYPE_ECHANGE,
+  graviteDe,
+} from './categorisation'
 import { copier } from './prompts'
 import { fmtDate, fmtMoney, lienGmail, parseNum, todayISO } from './util'
 
@@ -724,6 +731,86 @@ export function ResumeMessage({
         </p>
       ))}
     </div>
+  )
+}
+
+/**
+ * Les trois axes du §5.2 d'un message — et POURQUOI ils sont là (livrable A.8).
+ *
+ * Le classement est produit par un lexique déterministe côté serveur
+ * (`supabase/functions/_shared/classement-echanges.ts`) : aucun modèle n'est
+ * appelé. Il n'en reste pas moins une PROPOSITION, et le contrat des modules
+ * est explicite — « une réponse sans source est un défaut, pas une
+ * approximation ». D'où les deux choses que ce composant rend toujours
+ * ensemble : les axes, et le « Voir pourquoi » qui les explique en français.
+ *
+ * Un axe VIDE ne s'affiche pas comme un axe. C'est le repli explicite du plan :
+ * le lexique préfère ne rien dire à dire faux, et un badge « phase : — » répété
+ * sur toute une file ne serait que du bruit. Ce qui se voit, c'est ce qui a été
+ * proposé ; ce qui manque se lit dans les raisons, une par axe.
+ *
+ * `signePar` est `communications.categorise_par`. Tant qu'il est nul, la
+ * proposition de la machine s'affiche avec sa confiance ; dès qu'un humain a
+ * signé, c'est SON classement qui est montré, et la confiance disparaît — elle
+ * ne veut plus rien dire. C'est la bascule de la colonne générée
+ * `phase_effective`, rendue visible plutôt que réécrite (aucun écran ne
+ * recalcule la règle : `scripts/test-communications.cjs` l'interdit).
+ */
+export function AxesMessage({
+  phase,
+  typeEchange,
+  importance,
+  confiance,
+  raisons,
+  signePar,
+}: {
+  /** `communications.phase_effective`, déjà normalisée par `src/communications.ts` */
+  phase?: PhaseEchange | null
+  typeEchange?: TypeEchange | null
+  importance?: NiveauImportance | null
+  /** `confiance_categorisation` — `null` quand la machine n'a rien proposé */
+  confiance?: number | null
+  /** `raisons_categorisation` — le « Voir pourquoi » du dépôt */
+  raisons?: string[]
+  /** `categorise_par` — non nul dès qu'un humain a tranché */
+  signePar?: string | null
+}) {
+  const motifs = raisons || []
+  if (!phase && !typeEchange && !importance && motifs.length === 0) return null
+  // la gravité vient de `graviteDe` (src/categorisation.ts) et de nulle part
+  // ailleurs : l'échelle 1-3 des alertes a un seul propriétaire
+  const gravite = importance ? graviteDe(importance) : 1
+  return (
+    <>
+      <p className="small" style={{ margin: '0 0 4px' }}>
+        {phase && <Badge tone="info">{LIBELLES_PHASE_ECHANGE[phase]}</Badge>}{' '}
+        {typeEchange && <Badge tone="muted">{LIBELLES_TYPE_ECHANGE[typeEchange]}</Badge>}{' '}
+        {importance && (
+          <Badge tone={gravite === 3 ? 'danger' : gravite === 2 ? 'warn' : 'muted'}>
+            {LIBELLES_IMPORTANCE[importance]}
+          </Badge>
+        )}{' '}
+        {signePar ? (
+          <span className="muted">classé par {signePar}</span>
+        ) : (
+          confiance != null && (
+            <Badge tone={confiance >= 0.6 ? 'ok' : confiance >= 0.3 ? 'warn' : 'muted'}>
+              classement proposé {Math.round(confiance * 100)} %
+            </Badge>
+          )
+        )}
+      </p>
+      {motifs.length > 0 && (
+        <details className="small" style={{ marginBottom: 6 }}>
+          <summary>Voir pourquoi ce classement</summary>
+          <ul style={{ margin: '4px 0 0 18px' }}>
+            {motifs.map((r, i) => (
+              <li key={i}>{r}</li>
+            ))}
+          </ul>
+        </details>
+      )}
+    </>
   )
 }
 

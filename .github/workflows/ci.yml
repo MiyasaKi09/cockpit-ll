@@ -108,6 +108,9 @@ jobs:
       - name: Draft summaries stay attached, bounded and labelled
         run: npm run test:resume
 
+      - name: Deterministic three-axis classifier and its French reasons
+        run: npm run test:classement
+
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 

@@ -17,6 +17,7 @@ import {
   LienGmail,
   Modal,
   Page,
+  AxesMessage,
   ResumeMessage,
   Select,
   Table,
@@ -69,7 +70,23 @@ import {
   telechargerEntrant,
   type EntrantDistant,
 } from '../entrants'
-import { corrigerRattachement, useCommunications, type Communication } from '../communications'
+import {
+  corrigerAxes,
+  corrigerRattachement,
+  useCommunications,
+  type Communication,
+} from '../communications'
+import {
+  LIBELLES_IMPORTANCE,
+  LIBELLES_PHASE_ECHANGE,
+  LIBELLES_TYPE_ECHANGE,
+  NIVEAUX_IMPORTANCE,
+  PHASES_ECHANGE,
+  TYPES_ECHANGE,
+  normaliserImportance,
+  normaliserPhaseEchange,
+  normaliserTypeEchange,
+} from '../categorisation'
 import {
   basculerRegle,
   courriersARattacher,
@@ -1144,6 +1161,96 @@ function ChoixRattachement({
   )
 }
 
+/**
+ * Corriger à la main les trois axes du §5.2 d'un message (livrable A.8).
+ *
+ * Le classifieur PROPOSE ; c'est ici que l'humain tranche, et le §5.1 comme le
+ * critère 11 l'exigent — « acceptées, MODIFIÉES ou refusées ». Trois `Select`
+ * pré-remplis par la valeur effective, et l'option vide qui rend le refus
+ * possible : vider un axe est une réponse, pas une absence de réponse.
+ *
+ * Les trois axes partent ENSEMBLE, par `corrigerAxes`, parce que
+ * `categorise_par` les commande tous les trois à la fois : signer en n'écrivant
+ * qu'une colonne viderait les deux autres, sans erreur ni trace. C'est écrit
+ * dans l'en-tête de `src/communications.ts`, et cela ne se devine pas.
+ */
+function ChoixAxes({ message, onCorrige }: { message: Communication; onCorrige: () => void }) {
+  const moi = useMoi()
+  const [phase, setPhase] = useState(message.phase || '')
+  const [type, setType] = useState(message.typeEchange || '')
+  const [importance, setImportance] = useState(message.importance || '')
+  const [occupe, setOccupe] = useState(false)
+  const [erreur, setErreur] = useState('')
+
+  const enregistrer = async () => {
+    setOccupe(true)
+    setErreur('')
+    try {
+      await corrigerAxes(
+        message,
+        {
+          phase: normaliserPhaseEchange(phase),
+          typeEchange: normaliserTypeEchange(type),
+          importance: normaliserImportance(importance),
+        },
+        moi.nom || '',
+      )
+      toast('Classement enregistré.', { tone: 'ok' })
+      onCorrige()
+    } catch (e) {
+      setErreur(e instanceof Error ? e.message : String(e))
+    } finally {
+      setOccupe(false)
+    }
+  }
+
+  return (
+    <details className="small" style={{ marginBottom: 6 }}>
+      <summary>Corriger le classement</summary>
+      <div className="grid3" style={{ marginTop: 6 }}>
+        <Field label="Phase de l'échange">
+          <Select
+            value={phase}
+            onChange={setPhase}
+            options={[
+              { value: '', label: '— à choisir —' },
+              ...PHASES_ECHANGE.map((p) => ({ value: p, label: LIBELLES_PHASE_ECHANGE[p] })),
+            ]}
+          />
+        </Field>
+        <Field label="Type d'échange">
+          <Select
+            value={type}
+            onChange={setType}
+            options={[
+              { value: '', label: '— à choisir —' },
+              ...TYPES_ECHANGE.map((t) => ({ value: t, label: LIBELLES_TYPE_ECHANGE[t] })),
+            ]}
+          />
+        </Field>
+        <Field label="Importance">
+          <Select
+            value={importance}
+            onChange={setImportance}
+            options={[
+              { value: '', label: '— à choisir —' },
+              ...NIVEAUX_IMPORTANCE.map((n) => ({ value: n, label: LIBELLES_IMPORTANCE[n] })),
+            ]}
+          />
+        </Field>
+      </div>
+      <p className="small muted" style={{ margin: '0 0 6px' }}>
+        Le classement porte sur ce message, pas sur tout le fil : l'importance d'une réponse n'est
+        pas celle de la question. Enregistrer signe les trois axes à la fois.
+      </p>
+      <Btn small disabled={occupe} onClick={() => void enregistrer()}>
+        {occupe ? 'Enregistrement…' : 'Enregistrer le classement'}
+      </Btn>
+      {erreur && <p className="small danger-text" style={{ marginBottom: 0 }}>{erreur}</p>}
+    </details>
+  )
+}
+
 function CarteMessagesARattacher() {
   const { state, update } = useStore()
   const moi = useMoi()
@@ -1266,6 +1373,20 @@ function CarteMessagesARattacher() {
                     même composant dans `LigneCourrier`, où il servira tous
                     les jours. */}
                 <ResumeMessage resume={tete.resume} le={tete.resumeLe} />
+                {/* Les trois axes du §5.2 (A.8) : proposés par le lexique
+                    déterministe du serveur, corrigeables ici même. Ils sont
+                    montrés AVANT le rattachement parce qu'ils aident à le
+                    choisir — savoir qu'un message vient d'un BET en phase VISA
+                    dit souvent de quel projet il parle. */}
+                <AxesMessage
+                  phase={tete.phase}
+                  typeEchange={tete.typeEchange}
+                  importance={tete.importance}
+                  confiance={tete.propose.confianceCategorisation}
+                  raisons={tete.propose.raisonsCategorisation}
+                  signePar={tete.categorisePar}
+                />
+                <ChoixAxes message={tete} onCorrige={recharger} />
                 <ChoixRattachement
                   adresse={tete.expediteurAdresse}
                   valeur={c.projetId}

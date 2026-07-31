@@ -68,7 +68,23 @@ export const CONTRAT_COURRIERS = `{
       "actionProposee": "Répondre avec le planning mis à jour — brouillon préparé dans Gmail.",
       "urgence": 2,
       "pour": "Julien",
-      "source": "mail du 02/07/2026 08:41"
+      "source": "mail du 02/07/2026 08:41",
+      "detections": [
+        {
+          "genre": "tache",
+          "extrait": "Pouvez-vous nous confirmer le planning mis à jour avant le 15 septembre ?",
+          "confiance": 0.8,
+          "raisons": ["Demande adressée explicitement.", "Une date de remise est donnée."],
+          "chargeUtile": { "titre": "Confirmer le planning mis à jour", "echeance": "2026-09-15" }
+        },
+        {
+          "genre": "risque",
+          "extrait": "Contrairement au calendrier validé en APS, le vote du budget avance le DIAG.",
+          "confiance": 0.6,
+          "raisons": ["La demande contredit un calendrier déjà validé."],
+          "chargeUtile": { "nature": "demande_contradictoire", "detail": "Calendrier APS remis en cause" }
+        }
+      ]
     }
   ]
 }`
@@ -140,6 +156,13 @@ Chaque matin :
 3. Pour les demandes récurrentes simples, prépare un PROJET DE RÉPONSE en brouillon Gmail — ne jamais envoyer : l'envoi reste une décision humaine.
 4. Produis un court digest lisible : priorités du jour, à suivre, bruit ignoré.
 5. Termine par UN SEUL bloc de code json au format ci-dessous : chaque mail qui demande une action devient une ligne, rattachée au projet (champ "projet" : l'ID Pxx si tu le connais, sinon le nom du projet tel qu'écrit dans le mail), avec "pour" = la personne concernée (Julien ou Zoé) et "urgence" de 1 à 3. Ce bloc sera importé dans le Cockpit (boîte « À traiter »).
+6. Dans chaque ligne, remplis "detections" avec ce que le mail contient d'ACTIONNABLE OU D'ENGAGEANT, un objet par élément. Quatre genres, et quatre seulement : "tache", "echeance", "decision", "risque".
+   - "extrait" est OBLIGATOIRE : la phrase du mail, recopiée mot pour mot. Ne la reformule pas, ne la résume pas. C'est ce que l'humain relira pour décider — sans elle, la détection est inutilisable et sera rejetée.
+   - "confiance" va de 0 à 0,95. N'écris jamais 1 : une lecture certaine à 100 % n'existe pas, et l'afficher pousse à accepter sans lire. Sous 0,4, ne propose rien plutôt que de proposer un doute.
+   - "raisons" est une liste de phrases FRANÇAISES et vérifiables, qui disent ce qui, dans le texte, t'a fait conclure. « Le modèle a estimé » n'est pas une raison.
+   - Pour "risque", "chargeUtile.nature" ne peut valoir que : demande_contradictoire, modification_de_programme, reserve_technique, responsabilite_non_attribuee. Les autres natures (retard, budget dépassé, échéance imminente, absence de validation, dépendance à un tiers) sont DÉJÀ suivies ailleurs par le Cockpit : les proposer les afficherait deux fois.
+   - Pour "echeance", "chargeUtile.date" est en AAAA-MM-JJ, résolue par rapport à la DATE D'ENVOI du mail, jamais par rapport à aujourd'hui. Une date que tu ne peux pas résoudre : n'invente pas, omets la détection.
+   - Ne propose RIEN d'autre. Tu ne crées ni tâche, ni décision, ni échéance : tout ce que tu produis ici est une proposition qu'un humain accepte, modifie ou ignore. Si le mail ne contient rien de tel, omets "detections".
 
 Format de sortie :
 \`\`\`json

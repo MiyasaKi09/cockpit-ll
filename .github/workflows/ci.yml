@@ -93,6 +93,39 @@ jobs:
       - name: No hardcoded sign-in addresses
         run: npm run test:adresses
 
+      - name: Enriched Gmail ingestion and incremental cursor
+        run: npm run test:ingestion-gmail
+
+      - name: Message index, closed axes and machine proposals
+        run: npm run test:communications
+
+      - name: Offline cache, idempotent write queue and message access layer
+        run: npm run test:hors-ligne
+
+      - name: Unified project attachment cascade and learned corrections
+        run: npm run test:rattachement
+
+      - name: Draft summaries stay attached, bounded and labelled
+        run: npm run test:resume
+
+      - name: Deterministic three-axis classifier and its French reasons
+        run: npm run test:classement
+
+      - name: Pure message selectors
+        run: npm run test:selecteurs
+
+      - name: On-screen notifications stay bounded
+        run: npm run test:notifications
+
+      - name: Inbox switchover keeps both memories
+        run: npm run test:boite
+
+      - name: Append-only audit journal
+        run: npm run test:audit
+
+      - name: Two-stage detectors and their false positives
+        run: npm run test:detecteurs
+
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 

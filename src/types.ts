@@ -10,6 +10,10 @@
 // `PhaseCode`, qui ne bouge pas (il porte la chaîne d'honoraires).
 // Import de types seul — aucune dépendance à l'exécution.
 import type { NiveauImportance, PhaseEchange, TypeEchange } from './categorisation'
+// La règle de rattachement mémorisée (CDC §5.1 pt 5) est déclarée avec LA
+// cascade qui l'applique, dans le module partagé avec l'ingestion serveur :
+// deux déclarations divergeraient, et c'est ce que le livrable A.4 referme.
+import type { RegleRattachement } from '../supabase/functions/_shared/rattachement'
 
 export type TypeMO = 'Public' | 'Privé pro' | 'Particulier'
 
@@ -84,6 +88,11 @@ export interface NoteJournal {
   fichier?: string
   /** documents du registre rattachés à la note */
   documentIds?: string[]
+  /** trace du message d'origine quand la note vient d'un mail archivé
+   *  (« → Journal » du Cockpit) — même forme que `Courrier.source`, lue par
+   *  `lienGmail` (`src/util.ts`). CDC §4.2 : l'objet issu d'un e-mail garde
+   *  le chemin de retour vers l'e-mail. */
+  source?: string
 }
 
 export interface Projet {
@@ -1164,6 +1173,13 @@ export type TypeAlerte =
   | 'cr_en_attente'
   | 'sauvegarde'
   | 'rg_a_liberer'
+  // A.11 — les trois producteurs de la mémoire des échanges (§12.3 pt 10).
+  // Ils ne sortent rien de l'application : ni e-mail, ni notification
+  // poussée. Notifier, ici, c'est faire apparaître dans le fil de la
+  // personne concernée (divergence déclarée, plan §3.15).
+  | 'mail_a_traiter'
+  | 'reponse_attendue'
+  | 'proposition_ia'
 
 /** Alerte du fil d'urgences — calculée, jamais stockée (hors snooze) */
 /** action rapide attachée à une alerte, réalisable depuis le fil */
@@ -1184,6 +1200,12 @@ export interface Alerte {
   date?: string
   /** action rapide contextuelle (émettre, valider, cocher…) */
   action?: ActionAlerte
+  /** à qui elle s'adresse — vide = à l'agence. Le fil se filtre dessus,
+   *  il ne se scinde pas : une alerte non attribuée reste visible de tous. */
+  pour?: string
+  /** le projet concerné, quand il y en a un : permet de rassembler le fil
+   *  d'un projet sans redécouper chaque titre à la recherche d'un code */
+  projetId?: string
 }
 
 export interface ImportExcelMeta {
@@ -1253,6 +1275,11 @@ export interface Settings {
   mentionTVA?: string
   /** alerteId → ISO « en sommeil jusqu'au » */
   snoozes: Record<string, string>
+  /** jumeau de `snoozes` : identifiant d'alerte → date où on l'a VUE.
+   *  Mettre en sommeil, c'est dire « pas maintenant » ; marquer vu, c'est
+   *  dire « j'ai lu ». Confondre les deux ferait réapparaître ce qu'on a
+   *  lu, ou disparaître ce qu'on a seulement reporté. */
+  vus: Record<string, string>
   dernierImportExcel?: ImportExcelMeta | null
   /** étapes cochées du guide « Bien démarrer » */
   onboarding?: Record<string, boolean>
@@ -1266,6 +1293,15 @@ export interface Settings {
   /** décisions du Radar par identifiant d'avis : écartée ou surveillée
    *  (partagées entre les 2 postes — l'un écarte, l'autre ne revoit pas) */
   veilleDecisions?: Record<string, 'ignoree' | 'surveillee'>
+  /** corrections de rattachement mémorisées (CDC §5.1 pt 5, livrable A.4) :
+   *  adresse ou domaine → projet. Elles vivent dans les réglages PARTAGÉS,
+   *  et pas dans une table : l'ingestion serveur lit déjà `workspace.data`,
+   *  donc les deux moteurs apprennent de la même correction sans qu'on
+   *  ouvre une seconde source. Une règle PROPOSE (`projet_id_propose`) ;
+   *  elle ne signe jamais à la place d'un humain. Le type vit dans
+   *  `supabase/functions/_shared/rattachement.ts`, avec la cascade qui
+   *  l'applique — il doit rester lisible du Deno de l'ingestion. */
+  reglesRattachement?: RegleRattachement[]
   /** critères de la veille BOAMP intégrée (API DILA gratuite) */
   veilleBoamp?: {
     motsCles: string

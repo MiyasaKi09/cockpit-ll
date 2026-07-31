@@ -225,6 +225,15 @@ export function graviteDe(niveau: NiveauImportance): 1 | 2 | 3 {
   return GRAVITES[niveau]
 }
 
+/** Vrai si la valeur est un niveau du référentiel. À utiliser sur tout ce
+ *  qui vient de la base : `importance_effective` est un `text` contraint
+ *  par un domaine, donc du texte pour TypeScript. Sans ce filtre, une
+ *  comparaison sur une valeur mal orthographiée est simplement fausse,
+ *  en silence. */
+export function estImportance(valeur: unknown): valeur is NiveauImportance {
+  return typeof valeur === 'string' && (NIVEAUX_IMPORTANCE as string[]).includes(valeur)
+}
+
 // ------------------------------------------------------------
 // Normalisation — tolérante en entrée, fermée en sortie
 // ------------------------------------------------------------

@@ -41,6 +41,7 @@ la bascule d'identité (livrable 3.2), qui ne démarre pas tant qu'il n'est pas 
 - **Les fichiers partagés se modifient, mais jamais en passant** (`types.ts`, `store.tsx`,
   `ui.tsx`, `util.ts`, `miqcp.ts`, `alerts.ts`, `derive.ts`, `prompts.ts`, `seed.ts`,
   `routines.ts`, `importRoutines.ts`, `personnes.ts`, `moi.ts`, `categorisation.ts`,
+  `horsLigne.ts`, `communications.ts`, `propositions.ts`, `rattachement.ts`,
   `styles.css`, `App.tsx`). L'interdiction
   absolue précédente avait un motif réel — un module qui bricole `ui.tsx` casse les 42 autres —
   mais elle produisait l'inverse de son intention : des composants locaux dupliqués, des styles
@@ -104,7 +105,10 @@ Alerte, Settings, AppState…).
 `parseNum`, `clamp`, `fold` (normalisation accents/casse), `download(nom, contenu, type?)`,
 `DOMAINE_AGENCE` (`agence-ll.fr` — non acheté : il ne sert qu'à *proposer*, rien ne doit
 dépendre de son existence), `adresseProjetProposee(codeExterne, domaine?)`,
-`adresseProjetValide(adresse)` (aucun domaine présumé ; le champ vide est valide).
+`adresseProjetValide(adresse)` (aucun domaine présumé ; le champ vide est valide),
+`gmailComposeUrl` / `ouvrirGmail` (le seul chemin sortant, §22 critère 14),
+`gmailMessageUrl(id)` (le seul constructeur d'URL Gmail) et `lienGmail(source)`, qui lit les
+quatre formes sous lesquelles le dépôt garde la trace d'un message — voir `LienGmail` ci-dessous.
 
 `miqcp.ts` : `BAREME_1994`, `OUVRAGES` (`{code, bas, haut}`), `CRITERES_COMPLEXITE`
 (3 groupes × critères), `TOUS_CRITERES`, `REPARTITION_PHASES`, `PHASES_ORDRE`,
@@ -140,6 +144,55 @@ prévu et réel passe par `ecartHeures` — jamais par une soustraction locale �
 `baselineHeures` que sur un geste humain explicite (signature, figeage, redéfinition).
 `scripts/test-baseline-heures.cjs` le vérifie, et il porte le critère 15 du §22.
 
+**« Ouvrir dans Gmail » n'a qu'un composant : `LienGmail` (`ui.tsx`).** Le CDC §4.2 exige le
+bouton sur *chaque* e-mail affiché et sur *chaque* objet qui en est issu — pièce jointe classée,
+document du registre, note de journal archivée depuis un mail. Il existait deux fois, avec deux
+libellés pour le même geste, avant que la seconde copie n'oublie `rel="noreferrer"`. Le composant
+prend une `source` sous n'importe laquelle des quatre formes du dépôt (identifiant nu de
+`EntrantDistant.sourceMessageId` ou `Communication.gmailMessageId`, `gmail:<id>` de
+`Courrier.source`, URL figée de `DocumentRecord.sourceUrl` / `NoteJournal.source`, ou du texte qui
+ne désigne aucun message) et les ramène à une URL par `lienGmail` (`util.ts`) — `gmailMessageUrl`
+restant le seul constructeur d'URL Gmail du dépôt. **Quand la source n'identifie aucun message, il
+le dit** au lieu de ne rien afficher : une absence muette se lit « ce message n'existe plus »,
+alors qu'il est dans Gmail et que c'est le Cockpit qui ne sait pas lequel ; `muet` supprime cette
+mention là où elle serait du bruit, jamais là où l'utilisateur décide à partir du message.
+`scripts/test-lien-gmail.cjs` rend le composant en HTML, vérifie sur l'arbre syntaxique qu'il est
+monté dans chacune des sept surfaces d'affichage, et refuse qu'un autre fichier prononce
+« Ouvrir dans Gmail » — c'était la leçon du 0.6, dont le test ne regardait que le stockage : un
+lien rangé et jamais montré ne ramène personne à son e-mail. Il porte les critères 3 et 10 du §22.
+Le critère 2, lui, ne tient pas au lien de retour mais à ce que le message soit **indexé** (A.2)
+et **affiché** (A.7, puis B.15) : tant que la file quotidienne lit `state.courriers`, un courrier
+importé par une routine n'a pas d'identifiant Gmail et le composant le dit.
+
+**Le résumé automatique du §5.3 n'a qu'un composant : `ResumeMessage` (`ui.tsx`).**
+Il rend `communications.resume` — les trois phrases qu'une machine a écrites — et il
+rend TOUJOURS avec elles la mention « brouillon » et la phrase du §5.3 : le résumé ne
+remplace jamais le message d'origine. C'est là toute sa raison d'être : le texte, seul,
+est indiscernable de ce que l'expéditeur a écrit, et un écran qui l'afficherait sans sa
+mention transformerait une aide de lecture en source. Sans résumé il n'affiche rien —
+la plupart des messages n'en ont pas, et le dire partout serait du bruit. Il ne porte pas
+le lien de retour : `LienGmail` est monté à côté, sur la même surface. **Tout écran qui
+lit `Communication.resumeLe` doit monter ce composant** ; `scripts/test-resume-messages.cjs`
+le vérifie fichier par fichier, rend le composant en HTML et refuse une seconde
+définition. Il est monté aujourd'hui dans `CarteMessagesARattacher` (`Documents.tsx`) —
+le seul écran où un message déjà résumé peut réapparaître, puisqu'il a fallu le détacher
+à la main pour l'y ramener ; A.7 le montera dans `LigneCourrier`, où il servira chaque
+matin.
+
+**Le résumé est produit côté serveur, jamais dans le navigateur.** L'Edge Function
+`supabase/functions/resume-messages` (livrable A.6, §3.8) est la seule à appeler un
+modèle pour cet usage, avec **sa propre clé Anthropic** (secret Supabase
+`RESUME_ANTHROPIC_API_KEY`, jamais celle de Vercel), **son propre secret de
+planification** (`ingestion_config.resume_cron_secret`, distinct de celui des quatre
+autres tâches : c'est la seule qui dépense de l'argent à chaque passage) et **sa propre
+limitation de débit** à trois bornes — huit appels par passage, quarante par heure, deux
+cents par jour, comptés dans `resume_le`, c'est-à-dire dans ce qui a réellement été
+facturé. Elle ne résume que les messages **rattachés à un projet** (colonne générée
+`projet_id`), et elle n'écrit que `resume` et `resume_le` : ni le corps, ni l'objet, ni un
+axe, ni un rattachement. Elle ne détecte **ni tâche, ni échéance, ni décision, ni
+risque** — c'est A.9 (la table `propositions`) et A.10 (les détecteurs), et sa consigne
+le lui interdit nommément.
+
 `fsdrive.ts` : accès au dossier Drive local (File System Access) — `supporteFS`,
 `choisirRacine` / `lireRacine` / `sauverRacine` (poignée mémorisée en IndexedDB),
 `verifierPermission`, `slugProjet(p)`, `nomConforme`, `rangerFichier`,
@@ -170,6 +223,38 @@ choixPoste)` (règle pure, testable), `normaliserEmail`.
 `alerts.ts` : `computeAlertes(state, today)`, `alertesActives(state, today)` (snoozes filtrés).
 Snooze = `d.settings.snoozes[alerte.id] = dateISO` (jusqu'à cette date).
 
+**Les trois axes du §5.2 sont PROPOSÉS par un lexique, jamais par un modèle.** Le classifieur
+déterministe vit dans `supabase/functions/_shared/classement-echanges.ts` (livrable A.8, §3.14
+décision 5) : un lexique par axe, des raisons en français, un plafond de confiance commun avec la
+cascade, et un **repli explicite** — sous le seuil, ou quand deux lectures s'équivalent, l'axe reste
+VIDE et le dit. Il ne recopie **aucune** des trois listes fermées : il en émet des valeurs, et
+`scripts/test-classement-echanges.cjs` compare chacune à `src/categorisation.ts`. Une valeur
+inventée serait refusée par le domaine SQL à l'insertion, et le message ne serait jamais indexé —
+sans autre trace que les journaux Supabase. Le type d'échange part de ce que l'agence sait déjà
+(`Projet.emailMOA`, `Contact.type`, `MarcheTravaux.contactEmail`, `Entreprise.domaines`, le registre
+`public.membres`) avant de regarder le domaine puis l'objet, dans cet ordre ; le désaccord entre
+deux étages est **écrit dans les raisons**, jamais arbitré en silence. Contrairement à
+`_shared/rattachement.ts`, ce module **importe** (la cascade, pour `fold` et la normalisation des
+adresses) : il ne tourne que dans Deno et dans le test, parce que le navigateur ne classe rien — il
+affiche et corrige. **Aucun fichier de `src/` ne doit l'importer**, l'extension `.ts` explicite y
+casserait le build ; le test le refuse. L'ingestion n'écrit que `phase_proposee`,
+`type_echange_propose`, `importance_proposee`, `confiance_categorisation` et
+`raisons_categorisation` : la colonne humaine et `categorise_par` restent hors de toute écriture
+machine.
+
+**Le classement du §5.2 n'a qu'un afficheur : `AxesMessage` (`ui.tsx`).** Il rend les trois axes
+effectifs en français (les libellés viennent de `categorisation.ts`, la couleur de l'importance de
+`graviteDe` — l'échelle 1-3 des alertes a un seul propriétaire) et il rend TOUJOURS avec eux le
+« Voir pourquoi ce classement ». Un axe vide ne s'affiche pas : le lexique préfère se taire, et
+trois badges « — » répétés sur une file seraient du bruit ; ce qui manque se lit dans les raisons.
+Tant que `categorise_par` est nul, la confiance de la machine s'affiche ; dès qu'un humain a signé,
+c'est son nom qui s'affiche et la confiance disparaît — elle ne veut plus rien dire. **Tout écran
+qui lit `Communication.propose.raisonsCategorisation` doit monter ce composant** ;
+`scripts/test-classement-echanges.cjs` le vérifie fichier par fichier, rend le composant en HTML et
+refuse une seconde définition. La correction, elle, passe par `corrigerAxes` (`communications.ts`)
+et écrit les **trois** axes à la fois — `ChoixAxes` (`Documents.tsx`) est aujourd'hui le seul écran
+qui l'appelle.
+
 `categorisation.ts` : référentiel FERMÉ des trois axes de classement des échanges (CDC §5.2) —
 `PhaseEchange` (superset **séparé** de `PhaseCode`, qui ne bouge pas : il porte la chaîne
 d'honoraires) avec `PHASES_ECHANGE` / `LIBELLES_PHASE_ECHANGE` / `estPhaseDeMission`,
@@ -180,6 +265,106 @@ l'échelle de `Alerte.gravite`. `normaliserPhaseEchange` / `normaliserTypeEchang
 `importanceDepuisUrgence`, `reprendreAxes(source)`. **Une valeur d'axe ne se déclare qu'ici** :
 recopiée ailleurs (écran, CHECK SQL, Edge Function) elle divergerait sans bruit.
 `scripts/test-categorisation.cjs` le vérifie.
+
+`horsLigne.ts` : le hors-ligne des entités **sorties du document JSONB** (plan §3.3) —
+cache IndexedDB borné à `FENETRE_CACHE_JOURS` (90 j) et file d'écritures idempotentes.
+Règles pures et testables : `dansLaFenetre`, `elaguer`, `nouvelleEcriture`, `fusionnerFile`,
+`rejouer(file, cible, executeurDe)`. Persistance et réarmement : `lireCache` / `ecrireCache` /
+`patcherCache` / `viderCache`, `enfiler`, `rejouerFile`, `enregistrerExecuteur`,
+`reprendreEcriture` / `oublierEcriture`, `useFileEcritures()`. **Ce module ne connaît aucune
+table** : chaque table déclare son exécuteur. `propositions` (A.9) et `pointages` (B.4) s'y
+branchent — un second cache écrit pour la deuxième table serait un doublon, et le test le refuse.
+
+**Deux règles y sont opposables, pas seulement écrites.** Une lecture sans session rend `null`
+— « on ne sait pas » — et jamais `[]`, qui s'affiche « aucun message » : c'est déjà la
+distinction que tient `useNbEntrantsDistants`. Et une écriture en file porte des **valeurs
+absolues** avec l'horodatage **du geste humain**, figé à l'enfilement : c'est ce qui rend le
+rejeu idempotent (§24) sans rien demander au schéma. Une file préparée pour un projet Supabase
+ne se rejoue jamais sur un autre. `scripts/test-hors-ligne.cjs` le vérifie, et il refuse
+désormais qu'une **seconde base IndexedDB** soit ouverte : `propositions` (A.9) est branchée
+sur ce cache et sur cette file, `pointages` (B.4) le sera.
+
+`exigerSignataire(par)` y vit aussi, et c'est délibéré : **aucune écriture enfilée n'est
+anonyme**, et la règle vaut pour toutes les tables, pas pour une. Elle était locale à
+`communications.ts` tant qu'il n'y avait qu'une couche d'accès ; deux copies auraient fini par
+diverger sur le seul détail qui compte — l'une aurait accepté un espace. La conséquence est
+mécanique et non morale : sur `communications`, c'est la signature qui fait basculer les
+colonnes générées ; sur `propositions`, une contrainte refuse qu'une proposition quitte l'état
+« proposée » sans nom. Dans les deux cas, une écriture non signée paraîtrait faite.
+
+`communications.ts` : la couche d'accès à `public.communications` (index des messages, A.2),
+sur le modèle de `veille.ts` — `listerCommunications(options): PageCommunications | null`
+(paginée **par curseur**, jamais par décalage : le cron ingère toutes les 10 minutes),
+`useCommunications(filtre, taille)`, `correspondAuFiltre`, et les trois écritures signées
+`marquerTraite`, `corrigerRattachement`, `corrigerAxes`. Elle lit les colonnes **générées**
+(`projet_id`, `phase_effective`, `type_echange_effectif`, `importance_effective`) et jamais un
+`coalesce` refait sur place. `corrigerAxes` prend **la ligne entière** : `categorise_par`
+commande les trois axes à la fois, et signer en n'écrivant qu'une colonne humaine viderait les
+deux autres. Aucune signature vide n'est acceptée — sans signataire, la colonne générée ne
+bascule pas et la correction serait perdue en paraissant faite. Les **sélecteurs métier**
+(`mailsATraiter`, `mailsEnAttenteDeReponse`, `echangesParPhase`) sont le livrable A.12 et ne
+vivent pas ici. `Communication.resume` / `resumeLe` sont en **lecture seule** côté
+navigateur — le GRANT au niveau colonne et le trigger de la migration A.2 le garantissent :
+le résumé s'écrit uniquement par l'Edge Function `resume-messages`, et il s'affiche
+uniquement par `ResumeMessage`.
+
+`propositions.ts` : la couche d'accès à `public.propositions` (A.9), la table à **quatre
+genres** — `tache` / `echeance` / `decision` / `risque` — où atterrissent les détections des
+points 5 à 8 du §12.3. Même forme que `communications.ts` : lecture paginée par curseur
+(`listerPropositions`, `usePropositions`, `correspondAuFiltre`), écritures signées passant par
+la file (`accepter`, `ignorer`, `rouvrir`), même cache. Elle déclare aussi les **quatre listes
+fermées** du livrable — `GENRES_PROPOSITION`, `STATUTS_PROPOSITION`, `OBJETS_PROPOSABLES`,
+`NATURES_RISQUE`, avec leurs libellés français : c'est le partage de `categorisation.ts` pour
+les axes, et les quatre domaines SQL en sont la transcription, comparée valeur par valeur par
+`scripts/test-propositions-modifiables.cjs`. Les détecteurs d'A.10 tournent dans Deno et ne
+peuvent pas importer `src/` : ils **émettent** ces valeurs, leur test les compare à ce module.
+
+**Une proposition n'est jamais l'objet qu'elle propose, et ce n'est pas ce module qui le
+garantit — c'est le schéma.** `statut` ne connaît que `proposee` / `acceptee` / `ignoree` :
+aucun statut métier, donc aucune promotion possible par changement de valeur. « Acceptée »
+équivaut, par contrainte, à « désigne l'objet créé » (`objet_cree_type`, `objet_cree_id`) —
+d'où la signature de `accepter(p, {type, id}, par)`, qui **exige** l'objet au lieu de le rendre
+facultatif. Et rien ne quitte l'état proposé sans signature non vide et datée : l'expiration
+est **impossible**, pas seulement interdite — un délai qui accepterait par défaut devrait
+inventer un nom de personne. Les destinations sont fermées à `tache` et `contact` (§3.14
+décision 4) : ni `Obligation`, qui déclenche le rappel réglementaire de gravité 3, ni
+`EcheanceFacturation`, qui commande l'émission d'une facture. Enfin l'**extrait cité est
+obligatoire** (§13.3, §4.2) : un lien ne suffit pas, il faut la phrase. Le **projet n'est pas
+dans cette table** — il est lu par jointure sur `communications.projet_id`, colonne générée
+qu'une correction de rattachement fait basculer ; recopié, il aurait figé le projet au jour de
+la détection. Ce module **ne détecte rien** (A.10, côté serveur : l'`insert` est réservé au
+`service_role`), **ne crée pas** l'objet accepté (B.10) et **n'assemble aucun libellé** de file
+de revue (B.11).
+
+`rattachement.ts` : LE rattachement d'un message, d'une pièce ou d'une ligne importée à un
+projet (CDC §5.1, plan §3.7) — `rattacherDepuisEtat(state, indices)`, `reperesDe(state)`,
+et les règles apprises (`reglesRattachement`, `regleProposee`, `enregistrerRegle`,
+`basculerRegle`, `supprimerRegle`, `libelleRegle`), plus la file « à rattacher »
+(`courriersARattacher`, `projetsCorrigibles`, `libelleProposition`).
+
+**La cascade elle-même n'est pas dans `src/`** : elle vit dans
+`supabase/functions/_shared/rattachement.ts`, **sans le moindre import**, parce qu'elle doit
+tourner à l'identique dans le navigateur, dans le Deno de l'ingestion et dans le Node du test —
+Deno exige l'extension `.ts` à l'import, TypeScript en `moduleResolution: bundler` la refuse,
+donc un module qui importe quoi que ce soit n'est pas partageable. `src/rattachement.ts` en est
+le versant navigateur : il traduit `AppState` en repères, rien de plus.
+
+C'était le défaut nommé au §3.7 : **trois moteurs répondaient trois choses différentes** à
+« de quel projet parle ce message ? » selon la porte d'entrée — `classer()` serveur,
+`devinerProjet()` navigateur, `rapprocherProjet()` import, plus la recherche de projet de
+`classerFichier()`. Aucun ne se trompait visiblement. Les quatre passent désormais par la
+cascade. **N'en écrivez pas un cinquième** : `scripts/test-rattachement.cjs` refuse toute
+recherche de projet écrite ailleurs.
+
+Deux règles y sont opposables. **La cascade refuse de deviner** : deux projets à égalité
+rendent `null` et nomment les candidats — un rattachement faux se propage à tout un fil et ne
+se voit jamais, un rattachement absent coûte un clic. Et **une correction mémorisée propose,
+elle ne signe pas** : les règles vivent dans `settings.reglesRattachement`, donc dans le
+document partagé que l'ingestion serveur lit déjà, et elles n'alimentent que
+`projet_id_propose`. La colonne humaine et `rattache_par` restent hors de toute écriture
+machine (§3.14, §15). La file « à rattacher » est l'onglet du même nom de `Documents.tsx` ;
+elle écrit par `corrigerRattachement` (`communications.ts`), donc signée, datée et rejouable
+hors ligne.
 
 `prompts.ts` : `assemble(corps, ctx)`, `copier(texte)`, `contexteProjet(state, p)`,
 `contexteMarche(state, m, situation?)`, `contexteFacture(state, f)`,
@@ -194,7 +379,10 @@ recopiée ailleurs (écran, CHECK SQL, Edge Function) elle divergerait sans brui
 actions?})`, `Card({titre?, actions?, className?})`, `Badge({tone})` (`ok|warn|danger|info|muted`),
 `Stat({label, value, sub?, tone?})`, `Money`, `DateF`, `EmptyState`, `Btn({kind, small,
 disabled, title})` (`default|primary|ghost|danger`), `CopyBtn({text: string | () => string,
-label?, kind?, small?})`, `Field({label, hint?})`, `TextInput`, `TextArea({mono?})`,
+label?, kind?, small?})`, `LienGmail({source, bouton?, muet?})`,
+`ResumeMessage({resume, le?})`,
+`AxesMessage({phase?, typeEchange?, importance?, confiance?, raisons?, signePar?})`,
+`Field({label, hint?})`, `TextInput`, `TextArea({mono?})`,
 `NumInput({value: number|null})`, `DateInput({value: string|null})`, `Select({options})`,
 `Modal({titre, onClose, large?})`, `Tabs({tabs, actif, onSelect})`, `Table({head, compact?})`.
 

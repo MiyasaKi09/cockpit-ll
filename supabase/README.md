@@ -85,8 +85,9 @@ réellement utilisés par `supabase/functions/`, `src/entrants.ts` et
 
 | Objet | Rôle | Accès navigateur |
 | --- | --- | --- |
-| `ingestion_config` | secrets OAuth Gmail, secret interne du cron, état du dernier scan | aucun ; `service_role` seulement |
-| `entrants` | index des pièces Gmail et DCE à valider | lecture et marquage traité pour les comptes de l’agence |
+| `ingestion_config` | secrets OAuth Gmail, secret interne du cron, état du dernier scan, curseur de lecture incrémentale Gmail et portée de ce curseur | aucun ; `service_role` seulement |
+| `entrants` | index des pièces Gmail et DCE à valider, avec le contexte du message qui les a apportées (fil, destinataires, en-têtes RFC, libellés, date d’envoi, sens entrant/sortant, extrait du corps) | lecture et marquage traité pour les comptes de l’agence |
+| `communications` | index des **messages** — un message, une ligne, avec ou sans pièce jointe : identité Gmail, participants, extrait borné, rattachement au projet et les trois axes du §5.2 (phase, type d’échange, importance) | lecture, plus `update` **au niveau colonne** sur les seules colonnes humaines |
 | `veille_collectes` | journal de chaque collecte | lecture |
 | `veille_signaux` | opportunités normalisées, dédupliquées par source | lecture |
 | `veille_observations` | provenance des alertes e-mail | lecture |
@@ -108,6 +109,25 @@ La migration crée également :
 - les contraintes d’unicité, clés étrangères et index correspondant aux
   lectures et écritures du code ;
 - des `GRANT` explicites, distincts des politiques RLS.
+
+`public.communications` mérite un mot de plus, parce que son schéma porte une
+règle métier au lieu de la confier aux écrans. Chaque chose que la machine
+propose — le projet, la phase, le type d’échange, le niveau d’importance —
+existe en **trois** colonnes : la proposition (`phase_proposee`), la correction
+humaine (`phase`) et une colonne **générée** (`phase_effective`) que lisent les
+écrans. Tant que personne n’a signé (`categorise_par`, `rattache_par`), c’est la
+proposition qui s’affiche ; dès qu’un humain a signé, seule sa valeur compte —
+**y compris quand il a vidé l’axe**, sans quoi une correction ne tiendrait pas
+une nuit.
+
+Trois garde-fous, et non un : le `GRANT` est au **niveau colonne** (le
+navigateur ne reçoit `update` que sur les colonnes humaines), un trigger
+`before update` refuse explicitement toute réécriture d’une proposition hors
+`service_role`, et l’`insert` reste au serveur. Les valeurs des trois axes ne se
+déclarent qu’à un seul endroit, `src/categorisation.ts` ; les trois domaines SQL
+en sont la transcription, et `scripts/test-communications.cjs` les compare
+valeur par valeur — une liste qui s’ouvre d’un seul côté échoue en CI, et non au
+premier `INSERT` refusé en production.
 
 ## Qui a le droit — le registre des membres
 
@@ -172,7 +192,7 @@ Les quatre tâches reproduites sont :
 
 | Tâche | Fréquence UTC | Fonction |
 | --- | --- | --- |
-| `gmail-ingestion` | toutes les 10 minutes | pièces jointes Gmail |
+| `gmail-ingestion` | toutes les 10 minutes | pièces jointes Gmail, lues par tranches successives depuis un curseur `internalDate` |
 | `veille-collecte` | à `:20`, toutes les 4 heures | BOAMP et TED |
 | `veille-mails` | à `:50`, toutes les heures | alertes des plateformes |
 | `veille-enrichir` | toutes les 10 minutes | fiches publiques, preuves et DCE |

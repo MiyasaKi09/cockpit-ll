@@ -2,8 +2,15 @@
 
 import { Children, Fragment, cloneElement, isValidElement, useEffect, useRef, useState } from 'react'
 import type { CSSProperties, ReactElement, ReactNode } from 'react'
+import type { NiveauImportance, PhaseEchange, TypeEchange } from './categorisation'
+import {
+  LIBELLES_IMPORTANCE,
+  LIBELLES_PHASE_ECHANGE,
+  LIBELLES_TYPE_ECHANGE,
+  graviteDe,
+} from './categorisation'
 import { copier } from './prompts'
-import { fmtDate, fmtMoney, parseNum, todayISO } from './util'
+import { fmtDate, fmtMoney, lienGmail, parseNum, todayISO } from './util'
 
 // ---------- routage hash minimal ----------
 
@@ -610,6 +617,200 @@ export function CopyBtn({
     >
       {fait ? '✓ Copié !' : label}
     </Btn>
+  )
+}
+
+// ---------- retour vers la source (CDC §4.2) ----------
+
+/**
+ * « Ouvrir dans Gmail » — le bouton du §4.2, rendu partout de la même façon.
+ *
+ * POURQUOI UN COMPOSANT, ET PAS UN `<a>` RECOPIÉ. Le lien existait déjà, une
+ * fois, sur la pièce jointe classée (livrable 0.6) ; l'onglet « À rattacher »
+ * en a écrit un second, avec un autre libellé (« ouvrir dans Gmail ↗ »). Deux
+ * copies, et déjà deux formulations pour le même geste — la troisième aurait
+ * oublié `rel="noreferrer"`, et la quatrième serait née dans un module qui
+ * n'affiche le lien que si la source est *devinée* correctement. Le §4.2 dit
+ * « chaque e-mail affiché » : le seul moyen de le vérifier est qu'il n'y ait
+ * qu'un composant à chercher.
+ *
+ * `source` accepte les quatre formes du dépôt (identifiant nu, `gmail:<id>`,
+ * URL déjà construite, texte sans identifiant) : c'est `lienGmail` qui les
+ * ramène à une URL, et `src/util.ts` reste le seul constructeur d'URL Gmail —
+ * `scripts/test-oauth-lecture-seule.cjs` refuse tout autre auteur.
+ *
+ * QUAND IL N'Y A PAS DE LIEN, ON LE DIT. Un courrier importé par une routine
+ * n'a pas d'identifiant Gmail. Ne rien afficher se lirait « ce message n'est
+ * plus dans Gmail », ce qui est faux : il y est, c'est le Cockpit qui ne sait
+ * pas lequel. `muet` supprime cette mention là où elle serait du bruit — une
+ * liste dense, une ligne de tableau — et jamais là où l'utilisateur doit
+ * décider quelque chose à partir du message.
+ */
+export function LienGmail({
+  source,
+  bouton,
+  muet,
+}: {
+  /** identifiant Gmail, `gmail:<id>`, URL déjà construite, ou rien */
+  source: string | null | undefined
+  /** rendu en bouton, pour une barre d'actions ; sinon lien de texte */
+  bouton?: boolean
+  /** ne rien afficher quand la source n'identifie aucun message */
+  muet?: boolean
+}) {
+  const href = lienGmail(source)
+  if (!href)
+    return muet ? null : (
+      <span
+        className="muted small"
+        title="Ce message est arrivé sans son identifiant Gmail (import de routine, saisie manuelle) : il n’y a pas de chemin de retour."
+      >
+        message d’origine non identifié
+      </span>
+    )
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      className={bouton ? 'btn btn-ghost btn-small' : undefined}
+      title="Rouvrir le message dans Gmail — Gmail reste la source de vérité (§4.3)"
+      // le lien vit souvent dans une ligne cliquable : le clic ouvre Gmail,
+      // il n'ouvre pas aussi la fiche derrière
+      onClick={(ev) => ev.stopPropagation()}
+    >
+      Ouvrir dans Gmail
+    </a>
+  )
+}
+
+/**
+ * Le résumé automatique du §5.3 — et la mention « brouillon » qui va avec.
+ *
+ * POURQUOI UN COMPOSANT POUR TROIS LIGNES DE TEXTE. Parce que ces trois
+ * lignes sont les seules du Cockpit qu'une machine a écrites en toutes
+ * lettres. Le §5.3 est explicite — « le résumé ne remplace jamais le message
+ * original » — et le contrat des modules l'est aussi : ce qui vient d'un
+ * modèle reste un brouillon jusqu'à relecture. Ces deux règles ne tiennent
+ * que si elles sont affichées AVEC le texte, à chaque fois : un résumé
+ * recopié à la main dans un écran perdrait sa mention au premier
+ * copier-coller, et personne ne s'en apercevrait — il ressemblerait
+ * exactement à ce que l'expéditeur a écrit. `scripts/test-resume-messages.cjs`
+ * refuse donc que le résumé d'un message soit rendu ailleurs que par ce
+ * composant.
+ *
+ * Il ne porte PAS le lien de retour : `LienGmail` est monté à côté, sur la
+ * même surface, et le dupliquer ici en ferait un second « Ouvrir dans Gmail ».
+ * Quand il n'y a pas de résumé, il n'affiche rien — l'absence n'est pas une
+ * information ici : la plupart des messages n'en ont pas encore, et un
+ * « pas de résumé » répété partout serait du bruit.
+ */
+export function ResumeMessage({
+  resume,
+  le,
+}: {
+  /** `communications.resume` — le brouillon produit par l'Edge Function A.6 */
+  resume: string | null | undefined
+  /** `communications.resume_le` — quand il a été produit */
+  le?: string | null
+}) {
+  const texte = (resume || '').trim()
+  if (!texte) return null
+  return (
+    <div className="pill-note" style={{ margin: '6px 0' }}>
+      <p className="small" style={{ margin: 0 }}>
+        <Badge tone="warn">brouillon</Badge>{' '}
+        <span className="muted">
+          Résumé automatique{le ? ` du ${fmtDate(le.slice(0, 10))}` : ''} — il ne remplace pas le
+          message : relisez l’original avant de décider.
+        </span>
+      </p>
+      {texte.split('\n').map((ligne, i) => (
+        <p key={i} className="small" style={{ margin: '4px 0 0' }}>
+          {ligne}
+        </p>
+      ))}
+    </div>
+  )
+}
+
+/**
+ * Les trois axes du §5.2 d'un message — et POURQUOI ils sont là (livrable A.8).
+ *
+ * Le classement est produit par un lexique déterministe côté serveur
+ * (`supabase/functions/_shared/classement-echanges.ts`) : aucun modèle n'est
+ * appelé. Il n'en reste pas moins une PROPOSITION, et le contrat des modules
+ * est explicite — « une réponse sans source est un défaut, pas une
+ * approximation ». D'où les deux choses que ce composant rend toujours
+ * ensemble : les axes, et le « Voir pourquoi » qui les explique en français.
+ *
+ * Un axe VIDE ne s'affiche pas comme un axe. C'est le repli explicite du plan :
+ * le lexique préfère ne rien dire à dire faux, et un badge « phase : — » répété
+ * sur toute une file ne serait que du bruit. Ce qui se voit, c'est ce qui a été
+ * proposé ; ce qui manque se lit dans les raisons, une par axe.
+ *
+ * `signePar` est `communications.categorise_par`. Tant qu'il est nul, la
+ * proposition de la machine s'affiche avec sa confiance ; dès qu'un humain a
+ * signé, c'est SON classement qui est montré, et la confiance disparaît — elle
+ * ne veut plus rien dire. C'est la bascule de la colonne générée
+ * `phase_effective`, rendue visible plutôt que réécrite (aucun écran ne
+ * recalcule la règle : `scripts/test-communications.cjs` l'interdit).
+ */
+export function AxesMessage({
+  phase,
+  typeEchange,
+  importance,
+  confiance,
+  raisons,
+  signePar,
+}: {
+  /** `communications.phase_effective`, déjà normalisée par `src/communications.ts` */
+  phase?: PhaseEchange | null
+  typeEchange?: TypeEchange | null
+  importance?: NiveauImportance | null
+  /** `confiance_categorisation` — `null` quand la machine n'a rien proposé */
+  confiance?: number | null
+  /** `raisons_categorisation` — le « Voir pourquoi » du dépôt */
+  raisons?: string[]
+  /** `categorise_par` — non nul dès qu'un humain a tranché */
+  signePar?: string | null
+}) {
+  const motifs = raisons || []
+  if (!phase && !typeEchange && !importance && motifs.length === 0) return null
+  // la gravité vient de `graviteDe` (src/categorisation.ts) et de nulle part
+  // ailleurs : l'échelle 1-3 des alertes a un seul propriétaire
+  const gravite = importance ? graviteDe(importance) : 1
+  return (
+    <>
+      <p className="small" style={{ margin: '0 0 4px' }}>
+        {phase && <Badge tone="info">{LIBELLES_PHASE_ECHANGE[phase]}</Badge>}{' '}
+        {typeEchange && <Badge tone="muted">{LIBELLES_TYPE_ECHANGE[typeEchange]}</Badge>}{' '}
+        {importance && (
+          <Badge tone={gravite === 3 ? 'danger' : gravite === 2 ? 'warn' : 'muted'}>
+            {LIBELLES_IMPORTANCE[importance]}
+          </Badge>
+        )}{' '}
+        {signePar ? (
+          <span className="muted">classé par {signePar}</span>
+        ) : (
+          confiance != null && (
+            <Badge tone={confiance >= 0.6 ? 'ok' : confiance >= 0.3 ? 'warn' : 'muted'}>
+              classement proposé {Math.round(confiance * 100)} %
+            </Badge>
+          )
+        )}
+      </p>
+      {motifs.length > 0 && (
+        <details className="small" style={{ marginBottom: 6 }}>
+          <summary>Voir pourquoi ce classement</summary>
+          <ul style={{ margin: '4px 0 0 18px' }}>
+            {motifs.map((r, i) => (
+              <li key={i}>{r}</li>
+            ))}
+          </ul>
+        </details>
+      )}
+    </>
   )
 }
 

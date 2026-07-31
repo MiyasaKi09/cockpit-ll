@@ -190,3 +190,35 @@ export function gmailMessageUrl(messageId: string): string | null {
   if (!/^[0-9a-f]{6,}$/i.test(id)) return null
   return `https://mail.google.com/mail/u/0/#all/${id}`
 }
+
+/** L'identifiant Gmail derrière une référence de source, quelle que soit la
+ *  forme sous laquelle le dépôt la garde. Il y en a quatre, et elles ne sont
+ *  pas interchangeables au premier regard :
+ *
+ *    - l'identifiant nu — `EntrantDistant.sourceMessageId` (`src/entrants.ts`),
+ *      `Communication.gmailMessageId` (`src/communications.ts`) ;
+ *    - `gmail:<id>` — `Courrier.source`, écrit par `src/surveillance.ts` ;
+ *    - l'URL déjà construite — `DocumentRecord.sourceUrl`, `NoteJournal.source`,
+ *      figées au moment du classement ;
+ *    - du texte qui ne désigne aucun message (« routine tri du matin », une
+ *      adresse, un chemin de fichier) — la moitié des `Courrier` du dépôt.
+ *
+ *  Rendre `null` sur le dernier cas est le point : un lien mort vers Gmail se
+ *  découvre en cliquant, une source dite absente se voit tout de suite. */
+export function identifiantGmailDe(source: string | null | undefined): string | null {
+  const brut = (source || '').trim()
+  if (!brut) return null
+  // une URL Gmail porte l'identifiant en dernier segment de son fragment
+  const candidat = brut.includes('://') || brut.startsWith('#')
+    ? brut.slice(brut.lastIndexOf('/') + 1)
+    : brut.replace(/^gmail:/i, '')
+  return candidat || null
+}
+
+/** « Ouvrir dans Gmail » (CDC §4.2), depuis n'importe laquelle de ces formes.
+ *  Passe par `gmailMessageUrl`, qui reste le SEUL constructeur d'URL Gmail du
+ *  dépôt — `scripts/test-oauth-lecture-seule.cjs` le vérifie fichier par
+ *  fichier, et c'est ce qui garde le périmètre Google en lecture seule. */
+export function lienGmail(source: string | null | undefined): string | null {
+  return gmailMessageUrl(identifiantGmailDe(source) || '')
+}

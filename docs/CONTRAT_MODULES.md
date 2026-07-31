@@ -181,6 +181,35 @@ l'échelle de `Alerte.gravite`. `normaliserPhaseEchange` / `normaliserTypeEchang
 recopiée ailleurs (écran, CHECK SQL, Edge Function) elle divergerait sans bruit.
 `scripts/test-categorisation.cjs` le vérifie.
 
+`horsLigne.ts` : le hors-ligne des entités **sorties du document JSONB** (plan §3.3) —
+cache IndexedDB borné à `FENETRE_CACHE_JOURS` (90 j) et file d'écritures idempotentes.
+Règles pures et testables : `dansLaFenetre`, `elaguer`, `nouvelleEcriture`, `fusionnerFile`,
+`rejouer(file, cible, executeurDe)`. Persistance et réarmement : `lireCache` / `ecrireCache` /
+`patcherCache` / `viderCache`, `enfiler`, `rejouerFile`, `enregistrerExecuteur`,
+`reprendreEcriture` / `oublierEcriture`, `useFileEcritures()`. **Ce module ne connaît aucune
+table** : chaque table déclare son exécuteur. `propositions` (A.9) et `pointages` (B.4) s'y
+branchent — un second cache écrit pour la deuxième table serait un doublon, et le test le refuse.
+
+**Deux règles y sont opposables, pas seulement écrites.** Une lecture sans session rend `null`
+— « on ne sait pas » — et jamais `[]`, qui s'affiche « aucun message » : c'est déjà la
+distinction que tient `useNbEntrantsDistants`. Et une écriture en file porte des **valeurs
+absolues** avec l'horodatage **du geste humain**, figé à l'enfilement : c'est ce qui rend le
+rejeu idempotent (§24) sans rien demander au schéma. Une file préparée pour un projet Supabase
+ne se rejoue jamais sur un autre. `scripts/test-hors-ligne.cjs` le vérifie.
+
+`communications.ts` : la couche d'accès à `public.communications` (index des messages, A.2),
+sur le modèle de `veille.ts` — `listerCommunications(options): PageCommunications | null`
+(paginée **par curseur**, jamais par décalage : le cron ingère toutes les 10 minutes),
+`useCommunications(filtre, taille)`, `correspondAuFiltre`, et les trois écritures signées
+`marquerTraite`, `corrigerRattachement`, `corrigerAxes`. Elle lit les colonnes **générées**
+(`projet_id`, `phase_effective`, `type_echange_effectif`, `importance_effective`) et jamais un
+`coalesce` refait sur place. `corrigerAxes` prend **la ligne entière** : `categorise_par`
+commande les trois axes à la fois, et signer en n'écrivant qu'une colonne humaine viderait les
+deux autres. Aucune signature vide n'est acceptée — sans signataire, la colonne générée ne
+bascule pas et la correction serait perdue en paraissant faite. Les **sélecteurs métier**
+(`mailsATraiter`, `mailsEnAttenteDeReponse`, `echangesParPhase`) sont le livrable A.12 et ne
+vivent pas ici.
+
 `prompts.ts` : `assemble(corps, ctx)`, `copier(texte)`, `contexteProjet(state, p)`,
 `contexteMarche(state, m, situation?)`, `contexteFacture(state, f)`,
 `contexteConsultation(state, c)`, `contextePourTemplate(state, template, cible)`.

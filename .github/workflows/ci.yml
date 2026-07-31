@@ -99,6 +99,9 @@ jobs:
       - name: Message index, closed axes and machine proposals
         run: npm run test:communications
 
+      - name: Offline cache, idempotent write queue and message access layer
+        run: npm run test:hors-ligne
+
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 

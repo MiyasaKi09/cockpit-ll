@@ -10,6 +10,10 @@
 // `PhaseCode`, qui ne bouge pas (il porte la chaîne d'honoraires).
 // Import de types seul — aucune dépendance à l'exécution.
 import type { NiveauImportance, PhaseEchange, TypeEchange } from './categorisation'
+// La règle de rattachement mémorisée (CDC §5.1 pt 5) est déclarée avec LA
+// cascade qui l'applique, dans le module partagé avec l'ingestion serveur :
+// deux déclarations divergeraient, et c'est ce que le livrable A.4 referme.
+import type { RegleRattachement } from '../supabase/functions/_shared/rattachement'
 
 export type TypeMO = 'Public' | 'Privé pro' | 'Particulier'
 
@@ -1266,6 +1270,15 @@ export interface Settings {
   /** décisions du Radar par identifiant d'avis : écartée ou surveillée
    *  (partagées entre les 2 postes — l'un écarte, l'autre ne revoit pas) */
   veilleDecisions?: Record<string, 'ignoree' | 'surveillee'>
+  /** corrections de rattachement mémorisées (CDC §5.1 pt 5, livrable A.4) :
+   *  adresse ou domaine → projet. Elles vivent dans les réglages PARTAGÉS,
+   *  et pas dans une table : l'ingestion serveur lit déjà `workspace.data`,
+   *  donc les deux moteurs apprennent de la même correction sans qu'on
+   *  ouvre une seconde source. Une règle PROPOSE (`projet_id_propose`) ;
+   *  elle ne signe jamais à la place d'un humain. Le type vit dans
+   *  `supabase/functions/_shared/rattachement.ts`, avec la cascade qui
+   *  l'applique — il doit rester lisible du Deno de l'ingestion. */
+  reglesRattachement?: RegleRattachement[]
   /** critères de la veille BOAMP intégrée (API DILA gratuite) */
   veilleBoamp?: {
     motsCles: string

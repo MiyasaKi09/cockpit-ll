@@ -10,7 +10,8 @@ import { createContext, useContext, useEffect, useState } from 'react'
 import type { AppState } from './types'
 import { estConnecte, listerEvenements, listerMailsRecents, mailsDejaVus, marquerVus } from './google'
 import type { EvenementAgenda } from './google'
-import { fold, todayISO, uid } from './util'
+import { rattacherMessage, reperesDe } from './rattachement'
+import { todayISO, uid } from './util'
 
 // ---------- journal de bord persistant (hors état exporté) ----------
 
@@ -47,17 +48,27 @@ export function dernierScan(): string | null {
 }
 
 // ---------- rattachement ----------
+//
+// A.4 — CE MOTEUR N'EXISTE PLUS ICI. `devinerProjet` cherchait l'identifiant,
+// le nom du projet (dès 9 caractères) ou le nom d'une entreprise de marché
+// dans l'objet, l'EXTRAIT DU CORPS et l'expéditeur mis bout à bout, et
+// retenait le premier projet croisé — sans confiance, sans raison, et sans
+// jamais refuser de trancher quand deux projets correspondaient. Le serveur
+// et l'import répondaient autrement à la même question (§3.7).
+//
+// Deux conséquences visibles de la bascule, toutes deux voulues :
+//   * le CORPS ne rattache plus rien. Un nom de projet cité en signature ou
+//     dans un fil recopié rattachait à tort, et un rattachement faux se
+//     corrige un par un ;
+//   * deux projets à égalité rendent `null` — le mail part dans la file
+//     « à rattacher » au lieu d'aller au premier de la liste.
 
-/** devine le projet d'un mail : ID Pxx cité, nom de projet, ou entreprise d'un marché */
-export function devinerProjet(state: AppState, texte: string): string | null {
-  const t = fold(texte)
-  for (const p of state.projets) {
-    if (t.includes(fold(p.id)) || (p.nom.length > 8 && t.includes(fold(p.nom)))) return p.id
-  }
-  for (const m of state.marches) {
-    if (t.includes(fold(m.entreprise))) return m.projetId
-  }
-  return null
+/** devine le projet d'un mail — LA cascade du §3.7, jamais une seconde. */
+export function devinerProjet(
+  state: AppState,
+  message: { objet?: string; expediteur?: string },
+): string | null {
+  return rattacherMessage(reperesDe(state), message).projetId
 }
 
 // ---------- scan ----------
@@ -92,7 +103,7 @@ export async function scannerUneFois(
     update((d) => {
       for (const m of nouveaux) {
         if (d.courriers.some((c) => c.source === `gmail:${m.id}`)) continue
-        const projetId = devinerProjet(d, `${m.objet} ${m.extrait} ${m.de}`)
+        const projetId = devinerProjet(d, { objet: m.objet, expediteur: m.de })
         d.courriers.push({
           id: uid('mail'),
           projetId,

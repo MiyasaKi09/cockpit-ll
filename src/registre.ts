@@ -7,6 +7,7 @@
 // ============================================================
 
 import type { AppState, DocumentRecord, PhaseCode, SourceDocument } from './types'
+import { rattacherDepuisEtat } from './rattachement'
 import { fold, todayISO, uid } from './util'
 
 /** catégories contrôlées — partagées par le dépôt manuel et la boîte d'arrivée */
@@ -97,8 +98,20 @@ const LEXIQUE: { categorie: string; motif: RegExp; libelle: string; poids: numbe
   { categorie: 'MAIL', motif: /\.(eml|msg)$/, libelle: 'message enregistré (.eml/.msg)', poids: 0.4 },
 ]
 
-/** propose catégorie + projet + entreprise pour un fichier entrant.
- *  100 % déterministe : mêmes entrées → même proposition. */
+/**
+ * Propose catégorie + projet + entreprise pour un fichier entrant.
+ * 100 % déterministe : mêmes entrées → même proposition.
+ *
+ * A.4 — LE RATTACHEMENT N'EST PLUS CALCULÉ ICI. La recherche « identifiant
+ * Pxx, sinon nom du projet, sinon domaine de l'expéditeur » était la
+ * troisième écriture d'une même règle (§3.7) : elle vit désormais dans la
+ * cascade partagée avec l'ingestion serveur. Ce qui reste ici est ce qui
+ * n'appartient qu'au document — le LEXIQUE de catégorie.
+ *
+ * Ce que la bascule change, et qu'il faut savoir en relisant un écran :
+ * une pièce dont le nom cite deux projets n'est plus rangée dans le premier
+ * trouvé, elle arrive sans projet, avec la raison qui le dit.
+ */
 export function classerFichier(etat: AppState, nomFichier: string, indices?: IndicesClassement): PropositionClassement {
   const texte = fold(`${nomFichier} ${indices?.objet || ''}`)
   const raisons: string[] = []
@@ -119,46 +132,20 @@ export function classerFichier(etat: AppState, nomFichier: string, indices?: Ind
     raisons.push('Aucun mot du lexique reconnu — catégorie à choisir.')
   }
 
-  // --- projet : identifiant Pxx (nomenclature) puis nom du projet ---
-  let projetId: string | null = null
-  const parId = etat.projets.find((p) => new RegExp(`(^|[^a-z0-9])${fold(p.id)}([^a-z0-9]|$)`).test(texte))
-  if (parId) {
-    projetId = parId.id
-    confiance += 0.35
-    raisons.push(`Le nom contient l'identifiant du projet ${parId.id} (${parId.nom}).`)
-  } else {
-    const parNom = etat.projets.find((p) => {
-      const nom = fold(p.nom)
-      return nom.length >= 5 && texte.includes(nom)
-    })
-    if (parNom) {
-      projetId = parNom.id
-      confiance += 0.25
-      raisons.push(`Le nom contient le nom du projet « ${parNom.nom} ».`)
-    }
-  }
-
-  // --- entreprise : raison sociale dans le nom, ou domaine de l'expéditeur ---
-  let entrepriseId: string | null = null
-  const parRaison = etat.entreprises.find((e) => {
-    const rs = fold(e.raisonSociale)
-    return rs.length >= 4 && texte.includes(rs)
+  // --- projet et entreprise : LA cascade, jamais une seconde ---
+  const rattachement = rattacherDepuisEtat(etat, {
+    nomFichier,
+    objet: indices?.objet,
+    expediteur: indices?.expediteur,
   })
-  if (parRaison) {
-    entrepriseId = parRaison.id
-    confiance += 0.2
-    raisons.push(`Le nom contient l'entreprise « ${parRaison.raisonSociale} ».`)
-  } else if (indices?.expediteur) {
-    const domaine = fold(indices.expediteur.split('@')[1] || '')
-    const parDomaine = domaine ? etat.entreprises.find((e) => e.domaines.some((d) => fold(d) === domaine)) : undefined
-    if (parDomaine) {
-      entrepriseId = parDomaine.id
-      confiance += 0.25
-      raisons.push(`L'expéditeur (@${domaine}) correspond à « ${parDomaine.raisonSociale} ».`)
-    }
-  }
 
-  return { categorie, projetId, entrepriseId, confiance: Math.min(confiance, 0.95), raisons }
+  return {
+    categorie,
+    projetId: rattachement.projetId,
+    entrepriseId: rattachement.entrepriseId,
+    confiance: Math.min(confiance + rattachement.confiance, 0.95),
+    raisons: [...raisons, ...rattachement.raisons],
+  }
 }
 
 // ------------------------------------------------------------

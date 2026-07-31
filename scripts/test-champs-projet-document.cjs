@@ -156,7 +156,18 @@ for (const [, phases] of sourceFsdrive.matchAll(/phases: \[([^\]]*)\]/g))
 
 // --- 4. creerDocument reporte bien les champs sur le document ---------------
 
-const registre = charger('src/registre.ts', { './util': charger('src/util.ts') })
+// A.4 : `registre.ts` ne cherche plus le projet lui-même — il appelle la
+// cascade unifiée du §3.7. La doublure suit la vraie dépendance ; la mettre à
+// `{}` ferait passer ce test avec un classement qui ne rattache plus rien.
+const outils = charger('src/util.ts')
+const registre = charger('src/registre.ts', {
+  './util': outils,
+  './rattachement': charger('src/rattachement.ts', {
+    '../supabase/functions/_shared/rattachement': charger('supabase/functions/_shared/rattachement.ts'),
+    './util': outils,
+    './types': {},
+  }),
+})
 const doc = registre.creerDocument({
   titre: 'CR-2026-07-30.pdf',
   nomOriginal: 'CR-2026-07-30.pdf',

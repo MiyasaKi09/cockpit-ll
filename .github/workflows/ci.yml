@@ -102,6 +102,9 @@ jobs:
       - name: Offline cache, idempotent write queue and message access layer
         run: npm run test:hors-ligne
 
+      - name: Unified project attachment cascade and learned corrections
+        run: npm run test:rattachement
+
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 

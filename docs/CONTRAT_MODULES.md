@@ -41,6 +41,7 @@ la bascule d'identité (livrable 3.2), qui ne démarre pas tant qu'il n'est pas 
 - **Les fichiers partagés se modifient, mais jamais en passant** (`types.ts`, `store.tsx`,
   `ui.tsx`, `util.ts`, `miqcp.ts`, `alerts.ts`, `derive.ts`, `prompts.ts`, `seed.ts`,
   `routines.ts`, `importRoutines.ts`, `personnes.ts`, `moi.ts`, `categorisation.ts`,
+  `horsLigne.ts`, `communications.ts`, `rattachement.ts`,
   `styles.css`, `App.tsx`). L'interdiction
   absolue précédente avait un motif réel — un module qui bricole `ui.tsx` casse les 42 autres —
   mais elle produisait l'inverse de son intention : des composants locaux dupliqués, des styles
@@ -209,6 +210,36 @@ deux autres. Aucune signature vide n'est acceptée — sans signataire, la colon
 bascule pas et la correction serait perdue en paraissant faite. Les **sélecteurs métier**
 (`mailsATraiter`, `mailsEnAttenteDeReponse`, `echangesParPhase`) sont le livrable A.12 et ne
 vivent pas ici.
+
+`rattachement.ts` : LE rattachement d'un message, d'une pièce ou d'une ligne importée à un
+projet (CDC §5.1, plan §3.7) — `rattacherDepuisEtat(state, indices)`, `reperesDe(state)`,
+et les règles apprises (`reglesRattachement`, `regleProposee`, `enregistrerRegle`,
+`basculerRegle`, `supprimerRegle`, `libelleRegle`), plus la file « à rattacher »
+(`courriersARattacher`, `projetsCorrigibles`, `libelleProposition`).
+
+**La cascade elle-même n'est pas dans `src/`** : elle vit dans
+`supabase/functions/_shared/rattachement.ts`, **sans le moindre import**, parce qu'elle doit
+tourner à l'identique dans le navigateur, dans le Deno de l'ingestion et dans le Node du test —
+Deno exige l'extension `.ts` à l'import, TypeScript en `moduleResolution: bundler` la refuse,
+donc un module qui importe quoi que ce soit n'est pas partageable. `src/rattachement.ts` en est
+le versant navigateur : il traduit `AppState` en repères, rien de plus.
+
+C'était le défaut nommé au §3.7 : **trois moteurs répondaient trois choses différentes** à
+« de quel projet parle ce message ? » selon la porte d'entrée — `classer()` serveur,
+`devinerProjet()` navigateur, `rapprocherProjet()` import, plus la recherche de projet de
+`classerFichier()`. Aucun ne se trompait visiblement. Les quatre passent désormais par la
+cascade. **N'en écrivez pas un cinquième** : `scripts/test-rattachement.cjs` refuse toute
+recherche de projet écrite ailleurs.
+
+Deux règles y sont opposables. **La cascade refuse de deviner** : deux projets à égalité
+rendent `null` et nomment les candidats — un rattachement faux se propage à tout un fil et ne
+se voit jamais, un rattachement absent coûte un clic. Et **une correction mémorisée propose,
+elle ne signe pas** : les règles vivent dans `settings.reglesRattachement`, donc dans le
+document partagé que l'ingestion serveur lit déjà, et elles n'alimentent que
+`projet_id_propose`. La colonne humaine et `rattache_par` restent hors de toute écriture
+machine (§3.14, §15). La file « à rattacher » est l'onglet du même nom de `Documents.tsx` ;
+elle écrit par `corrigerRattachement` (`communications.ts`), donc signée, datée et rejouable
+hors ligne.
 
 `prompts.ts` : `assemble(corps, ctx)`, `copier(texte)`, `contexteProjet(state, p)`,
 `contexteMarche(state, m, situation?)`, `contexteFacture(state, f)`,

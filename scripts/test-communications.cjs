@@ -422,21 +422,26 @@ for (const { propose } of TRIADES) {
 
 // Un seul moteur de rattachement, appelé pour le message comme pour la pièce
 // (§3.7 : trois moteurs divergents répondaient trois choses différentes).
+//
+// A.4 l'a sorti d'ici : la cascade vit dans `_shared/rattachement.ts`, partagée
+// avec le navigateur. A.2 vérifiait la FORME de la fonction locale ; ce qui
+// compte désormais est qu'elle ne soit plus écrite ici du tout — le détail de
+// la cascade est vérifié par `scripts/test-rattachement.cjs`, qui l'exécute.
 assert.match(
   index,
-  /function rattacher\(reperes: Reperes, texte: string, expediteur: string\): Rattachement/,
-  'le rattachement doit être une fonction unique',
+  /from '\.\.\/_shared\/rattachement\.ts'/,
+  'le rattachement doit être IMPORTÉ du module partagé, jamais réécrit ici (§3.7)',
 )
-const classement = /function classer\(reperes: Reperes[\s\S]*?\n\}/.exec(index)
+assert.ok(
+  !/reperes\.projets\.find/.test(index) && !/function rattacher\(/.test(index),
+  'la cascade de rattachement ne doit plus être écrite dans l’ingestion : un quatrième moteur rouvrirait la divergence du §3.7',
+)
+const classement = /function classer\(reperes: ReperesRattachement[\s\S]*?\n\}/.exec(index)
 assert.ok(classement, 'classer() doit exister')
 assert.match(
   classement[0],
-  /rattacher\(reperes, texte, expediteur\)/,
-  'classer() doit appeler le moteur de rattachement unique, et non en recopier la cascade',
-)
-assert.ok(
-  (index.match(/reperes\.projets\.find/g) || []).length === 2,
-  'la cascade de rattachement ne doit être écrite qu’une fois (identifiant puis nom), dans rattacher()',
+  /rattacherEnCascade\(reperes, \{/,
+  'classer() doit appeler la cascade partagée, et non en recopier les barreaux',
 )
 
 // Les deux formats Gmail du §3.6, et le repli quand la seconde liste est

@@ -67,6 +67,20 @@ import {
   telechargerEntrant,
   type EntrantDistant,
 } from '../entrants'
+import { corrigerRattachement, useCommunications, type Communication } from '../communications'
+import {
+  basculerRegle,
+  courriersARattacher,
+  enregistrerRegle,
+  libelleProposition,
+  libelleRegle,
+  projetsCorrigibles,
+  rattacher,
+  regleProposee,
+  reperesDe,
+  reglesRattachement,
+  supprimerRegle,
+} from '../rattachement'
 
 // ============================================================
 // Phase du document (CDC §7.3) — AUCUN référentiel nouveau : ce
@@ -1052,12 +1066,369 @@ function CarteTous() {
 }
 
 // ============================================================
+// À RATTACHER — la file du §5.1, livrable A.4.
+//
+// Pourquoi cette file existe : la cascade de rattachement REFUSE de
+// deviner. Deux projets à égalité, ou aucun signal, et elle rend `null`
+// plutôt que le premier de la liste. Ce refus n'a de valeur que s'il
+// débouche quelque part — sinon il produit exactement ce qu'il évite,
+// du courrier rangé nulle part que personne ne voit.
+//
+// Pourquoi ici : cet onglet est le seul écran du dépôt dont l'objet est
+// « ce qui est arrivé et qu'on n'a pas su ranger ». La boîte d'arrivée
+// le fait pour les fichiers avec le même geste — proposition, raisons
+// dépliables, Select, validation humaine. Le §3.12 réserve la file
+// quotidienne du Cockpit à A.7 : la doubler ici ferait traiter le même
+// message à deux endroits, ce que ce même paragraphe interdit.
+//
+// DEUX MÉMOIRES, ET C'EST VOULU jusqu'à B.15 : `communications` (le
+// serveur) et `state.courriers` (l'onglet ouvert, `surveillance.ts`).
+// N'en montrer qu'une viderait la file de la moitié de son contenu sans
+// que rien ne le signale.
+// ============================================================
+
+/** un rattachement corrigé à la main mémorise une règle — case cochée par
+ *  défaut, parce que c'est tout l'intérêt, et TOUJOURS visible, parce
+ *  qu'une règle implicite ne se retrouve plus le jour où elle se trompe */
+function ChoixRattachement({
+  adresse,
+  valeur,
+  onValeur,
+  memoriser,
+  onMemoriser,
+  projets,
+}: {
+  adresse: string
+  valeur: string
+  onValeur: (v: string) => void
+  memoriser: boolean
+  onMemoriser: (v: boolean) => void
+  projets: Projet[]
+}) {
+  return (
+    <div className="form-row" style={{ alignItems: 'flex-end' }}>
+      <Field label="Projet">
+        <Select
+          value={valeur}
+          onChange={onValeur}
+          options={[
+            { value: '', label: '— choisir un projet —' },
+            ...projets.map((p) => ({ value: p.id, label: `${p.id} — ${p.nom}` })),
+          ]}
+        />
+      </Field>
+      {adresse && (
+        <Field label="Mémoriser" hint="les prochains messages de cette adresse seront proposés au même projet">
+          <label className="small" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            <input type="checkbox" checked={memoriser} onChange={(e) => onMemoriser(e.target.checked)} />
+            <span className="mono">{adresse}</span> → projet
+          </label>
+        </Field>
+      )}
+    </div>
+  )
+}
+
+function CarteMessagesARattacher() {
+  const { state, update } = useStore()
+  const moi = useMoi()
+  const { lignes, source, erreur, suite, chargerSuite, recharger } = useCommunications({ sansProjet: true })
+  const [choix, setChoix] = useState<Record<string, { projetId: string; memoriser: boolean }>>({})
+  const [occupe, setOccupe] = useState('')
+  const [message, setMessage] = useState('')
+  const projets = projetsCorrigibles(state)
+  // les repères se construisent une fois par rendu, pas une fois par ligne :
+  // la cascade est rejouée ICI parce que le poste peut en savoir plus que le
+  // serveur au moment de l'ingestion — une règle mémorisée depuis, un contact
+  // ajouté, un marché signé
+  const reperes = useMemo(() => reperesDe(state), [state])
+
+  // Les messages sont groupés PAR FIL : le §3.7 fait du fil le signal le plus
+  // fort, et corriger un message d'un fil sans corriger ses frères laisserait
+  // la moitié d'une conversation dans la file.
+  const fils = useMemo(() => {
+    const parFil = new Map<string, Communication[]>()
+    for (const c of lignes || []) {
+      const groupe = parFil.get(c.gmailThreadId)
+      if (groupe) groupe.push(c)
+      else parFil.set(c.gmailThreadId, [c])
+    }
+    return [...parFil.values()]
+  }, [lignes])
+
+  const appliquer = async (groupe: Communication[]) => {
+    const tete = groupe[0]
+    const c = choix[tete.id]
+    if (!c?.projetId) return
+    setOccupe(tete.id)
+    setMessage('')
+    try {
+      for (const msg of groupe) await corrigerRattachement(msg, c.projetId, moi.nom || '')
+      if (c.memoriser) {
+        const regle = regleProposee(state, tete.expediteurAdresse, c.projetId, moi.nom || undefined)
+        if (regle) update((d) => enregistrerRegle(d, regle))
+      }
+      toast(
+        groupe.length > 1
+          ? `${groupe.length} messages du fil rattachés à ${c.projetId}.`
+          : `Message rattaché à ${c.projetId}.`,
+        { tone: 'ok' },
+      )
+      recharger()
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : String(err))
+    } finally {
+      setOccupe('')
+    }
+  }
+
+  return (
+    <Card
+      titre="Messages sans projet"
+      actions={<Btn small kind="ghost" onClick={recharger}>Actualiser</Btn>}
+    >
+      {erreur && <p className="small danger-text" style={{ marginTop: 0 }}>{erreur}</p>}
+      {lignes === null ? (
+        // `null` n'est pas `[]` : « on ne sait pas » ne s'affiche pas
+        // « aucun message », c'est la règle que A.3 rend opposable
+        <p className="small muted" style={{ margin: 0 }}>
+          L'index des messages vit dans l'espace partagé. Connectez-le pour voir ce qui reste à
+          rattacher (<a href="#/sante">Paramètres → Branchements</a>).
+        </p>
+      ) : lignes.length === 0 ? (
+        <EmptyState>Aucun message en attente de projet.</EmptyState>
+      ) : (
+        <>
+          {source === 'cache' && (
+            <p className="small muted" style={{ marginTop: 0 }}>
+              Hors ligne : voici ce que ce poste connaît (90 derniers jours), pas forcément tout.
+            </p>
+          )}
+          {fils.map((groupe) => {
+            const tete = groupe[0]
+            const proposition = rattacher(reperes, {
+              objet: tete.objet,
+              expediteur: tete.expediteurAdresse || tete.expediteur,
+              destinataires: [...tete.destinataires, ...tete.copies],
+            })
+            const c = choix[tete.id] || {
+              projetId: proposition.projetId || '',
+              memoriser: true,
+            }
+            const raisons = [...proposition.raisons, ...tete.propose.raisonsRattachement]
+            return (
+              <div
+                key={tete.id}
+                style={{ border: '1px solid var(--line)', borderRadius: 6, padding: 10, marginBottom: 10 }}
+              >
+                <p className="small" style={{ margin: '0 0 2px' }}>
+                  <strong>{tete.objet || '(sans objet)'}</strong>{' '}
+                  {proposition.projetId && <BadgeConfiance confiance={proposition.confiance} />}{' '}
+                  {groupe.length > 1 && <Badge tone="info">{groupe.length} messages du fil</Badge>}
+                </p>
+                <p className="small muted" style={{ margin: '0 0 6px' }}>
+                  {tete.expediteur || tete.expediteurAdresse} ·{' '}
+                  {tete.envoyeLe ? fmtDate(tete.envoyeLe.slice(0, 10)) : '—'} ·{' '}
+                  {libelleProposition(proposition)}
+                  {tete.urlGmail && (
+                    <>
+                      {' · '}
+                      <a href={tete.urlGmail} target="_blank" rel="noreferrer">
+                        ouvrir dans Gmail ↗
+                      </a>
+                    </>
+                  )}
+                </p>
+                {raisons.length > 0 && (
+                  <details className="small" style={{ marginBottom: 6 }}>
+                    <summary>Voir pourquoi cette proposition</summary>
+                    <ul style={{ margin: '4px 0 0 18px' }}>
+                      {raisons.map((r, i) => (
+                        <li key={i}>{r}</li>
+                      ))}
+                    </ul>
+                  </details>
+                )}
+                <ChoixRattachement
+                  adresse={tete.expediteurAdresse}
+                  valeur={c.projetId}
+                  onValeur={(v) => setChoix((p) => ({ ...p, [tete.id]: { ...c, projetId: v } }))}
+                  memoriser={c.memoriser}
+                  onMemoriser={(v) => setChoix((p) => ({ ...p, [tete.id]: { ...c, memoriser: v } }))}
+                  projets={projets}
+                />
+                <div className="toolbar" style={{ marginTop: 6, marginBottom: 0 }}>
+                  <Btn
+                    small
+                    kind="primary"
+                    disabled={!c.projetId || occupe === tete.id}
+                    onClick={() => void appliquer(groupe)}
+                  >
+                    {occupe === tete.id
+                      ? 'Rattachement…'
+                      : groupe.length > 1
+                        ? `Rattacher le fil (${groupe.length})`
+                        : 'Rattacher'}
+                  </Btn>
+                </div>
+              </div>
+            )
+          })}
+          {suite && (
+            <Btn small kind="ghost" onClick={chargerSuite}>
+              Charger la suite
+            </Btn>
+          )}
+        </>
+      )}
+      {message && <p className="small danger-text" style={{ marginTop: 8 }}>{message}</p>}
+    </Card>
+  )
+}
+
+/** la seconde mémoire, alimentée par l'onglet ouvert (`surveillance.ts`)
+ *  jusqu'à B.15 — la carte disparaîtra avec elle */
+function CarteCourriersARattacher() {
+  const { state, update } = useStore()
+  const moi = useMoi()
+  const [choix, setChoix] = useState<Record<string, { projetId: string; memoriser: boolean }>>({})
+  const enAttente = courriersARattacher(state)
+  const projets = projetsCorrigibles(state)
+  if (enAttente.length === 0) return null
+
+  const appliquer = (id: string) => {
+    const c = choix[id]
+    if (!c?.projetId) return
+    const ligne = enAttente.find((x) => x.id === id)
+    const regle = c.memoriser && ligne ? regleProposee(state, ligne.adresse, c.projetId, moi.nom || undefined) : null
+    update((d) => {
+      const courrier = d.courriers.find((x) => x.id === id)
+      if (courrier) courrier.projetId = c.projetId
+      if (regle) enregistrerRegle(d, regle)
+    })
+    toast(`Courrier rattaché à ${c.projetId}.`, { tone: 'ok' })
+  }
+
+  return (
+    <Card titre="Courriers captés par l'onglet ouvert, sans projet">
+      <p className="small muted" style={{ marginTop: 0 }}>
+        Seconde mémoire, alimentée tant que la surveillance Gmail du navigateur tourne. Elle
+        disparaîtra quand l'ingestion serveur aura fait ses preuves ; d'ici là, l'ignorer laisserait
+        la moitié de la file invisible.
+      </p>
+      {enAttente.map((ligne) => {
+        const c = choix[ligne.id] || { projetId: ligne.proposition.projetId || '', memoriser: true }
+        return (
+          <div
+            key={ligne.id}
+            style={{ border: '1px solid var(--line)', borderRadius: 6, padding: 10, marginBottom: 10 }}
+          >
+            <p className="small" style={{ margin: '0 0 2px' }}>
+              <strong>{ligne.objet || '(sans objet)'}</strong>{' '}
+              {ligne.proposition.projetId && <BadgeConfiance confiance={ligne.proposition.confiance} />}
+            </p>
+            <p className="small muted" style={{ margin: '0 0 6px' }}>
+              {ligne.expediteur} · {ligne.date ? fmtDate(ligne.date) : '—'} ·{' '}
+              {libelleProposition(ligne.proposition)}
+            </p>
+            {ligne.proposition.raisons.length > 0 && (
+              <details className="small" style={{ marginBottom: 6 }}>
+                <summary>Voir pourquoi cette proposition</summary>
+                <ul style={{ margin: '4px 0 0 18px' }}>
+                  {ligne.proposition.raisons.map((r, i) => (
+                    <li key={i}>{r}</li>
+                  ))}
+                </ul>
+              </details>
+            )}
+            <ChoixRattachement
+              adresse={ligne.adresse}
+              valeur={c.projetId}
+              onValeur={(v) => setChoix((p) => ({ ...p, [ligne.id]: { ...c, projetId: v } }))}
+              memoriser={c.memoriser}
+              onMemoriser={(v) => setChoix((p) => ({ ...p, [ligne.id]: { ...c, memoriser: v } }))}
+              projets={projets}
+            />
+            <div className="toolbar" style={{ marginTop: 6, marginBottom: 0 }}>
+              <Btn small kind="primary" disabled={!c.projetId} onClick={() => appliquer(ligne.id)}>
+                Rattacher
+              </Btn>
+            </div>
+          </div>
+        )
+      })}
+    </Card>
+  )
+}
+
+/** Les règles apprises, listées, désactivables, supprimables — jamais
+ *  implicites. Une règle qu'on ne peut pas retrouver est une règle qu'on
+ *  ne peut pas corriger, et elle se trompera un jour. */
+function CarteRegles() {
+  const { state, update } = useStore()
+  const regles = reglesRattachement(state)
+  return (
+    <Card titre="Corrections mémorisées">
+      <p className="small muted" style={{ marginTop: 0 }}>
+        Chaque correction apprend une règle « adresse → projet ». Elle PROPOSE le projet des
+        messages suivants — l'ingestion serveur les applique aussi — et ne valide jamais rien à
+        votre place : la proposition reste corrigible.
+      </p>
+      {regles.length === 0 ? (
+        <EmptyState>Aucune règle pour l'instant — elles naissent des corrections ci-dessus.</EmptyState>
+      ) : (
+        <Table head={['Règle', 'Depuis', 'Par', 'État', '']}>
+          {regles.map((r) => (
+            <tr key={r.id}>
+              <td>{libelleRegle(state, r)}</td>
+              <td className="small muted">{fmtDate(r.creeLe)}</td>
+              <td className="small muted">{r.creePar || '—'}</td>
+              <td>
+                <Badge tone={r.actif ? 'ok' : 'muted'}>{r.actif ? 'active' : 'en pause'}</Badge>
+              </td>
+              <td className="right">
+                <Btn small kind="ghost" onClick={() => update((d) => basculerRegle(d, r.id, !r.actif))}>
+                  {r.actif ? 'Désactiver' : 'Réactiver'}
+                </Btn>{' '}
+                <Btn
+                  small
+                  kind="ghost"
+                  onClick={() => {
+                    void (async () => {
+                      if (await confirmer(`Supprimer la règle « ${libelleRegle(state, r)} » ?`))
+                        update((d) => supprimerRegle(d, r.id))
+                    })()
+                  }}
+                >
+                  Supprimer
+                </Btn>
+              </td>
+            </tr>
+          ))}
+        </Table>
+      )}
+    </Card>
+  )
+}
+
+function OngletRattacher() {
+  return (
+    <>
+      <CarteMessagesARattacher />
+      <CarteCourriersARattacher />
+      <CarteRegles />
+    </>
+  )
+}
+
+// ============================================================
 // Page
 // ============================================================
 
 const ONGLETS = [
   { id: 'entrants', label: "Boîte d'arrivée" },
   { id: 'verifier', label: 'À vérifier' },
+  { id: 'rattacher', label: 'À rattacher' },
   { id: 'tous', label: 'Tous les documents' },
 ] as const
 
@@ -1068,8 +1439,8 @@ export default function Documents() {
   const tab = ONGLETS.some((o) => o.id === route[1]) ? route[1] : 'entrants'
   return (
     <Page
-      titre="Documents"
-      sousTitre="Chaque fichier qui compte, tracé : source, projet, version, validation."
+      titre="Documents & arrivées"
+      sousTitre="Tout ce qui arrive — fichiers et messages — tracé : source, projet, version, validation."
     >
       <Tabs
         tabs={ONGLETS.map((o) => ({
@@ -1086,6 +1457,7 @@ export default function Documents() {
         </>
       )}
       {tab === 'verifier' && <CarteAVerifier />}
+      {tab === 'rattacher' && <OngletRattacher />}
       {tab === 'tous' && <CarteTous />}
     </Page>
   )

@@ -179,6 +179,23 @@ function migrate(parsed: AppState): AppState {
     }
   })
   if (typeof parsed.settings?.fraisGenerauxAnnuels !== 'number') etat.settings.fraisGenerauxAnnuels = 30040
+  // A.4 — les corrections de rattachement mémorisées (§5.1 pt 5). Normalisées
+  // et non reprises : rien n'existait avant, il n'y a rien à reconstruire. Une
+  // règle mal formée (import JSON, version future) est écartée plutôt que
+  // laissée en place : elle rattacherait du courrier à un projet inexistant,
+  // ce qui ne lève aucune erreur et ne se voit que dans la file « à rattacher ».
+  etat.settings.reglesRattachement = (
+    Array.isArray(parsed.settings?.reglesRattachement) ? parsed.settings.reglesRattachement : []
+  ).filter(
+    (r) =>
+      r &&
+      typeof r.id === 'string' &&
+      (r.declencheur === 'adresse' || r.declencheur === 'domaine') &&
+      typeof r.valeur === 'string' &&
+      r.valeur.trim() !== '' &&
+      typeof r.projetId === 'string' &&
+      r.projetId !== '',
+  )
   // veille AO : l'ancien défaut « 60, 80, 02 » s'élargit aux 3 régions complètes
   if (etat.settings.veilleBoamp && etat.settings.veilleBoamp.departements.replace(/\s/g, '') === '60,80,02') {
     etat.settings.veilleBoamp = { ...etat.settings.veilleBoamp, departements: DEPARTEMENTS_DEFAUT }

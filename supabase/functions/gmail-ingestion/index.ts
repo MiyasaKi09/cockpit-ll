@@ -78,6 +78,29 @@
 //    axes du §5.2, eux, restent VIDES ici : leur classifieur est le
 //    livrable A.8, et un axe faux coûte plus cher qu'un axe à choisir.
 //
+// LIVRABLE A.4 — CE QUI A CHANGÉ, ET POURQUOI
+// -------------------------------------------
+// 7. LE MOTEUR DE RATTACHEMENT SORT D'ICI. A.2 l'avait extrait en
+//    notant qu'il attendait sa fusion avec ceux du navigateur : c'est
+//    faite. La cascade du §3.7 vit dans `../_shared/rattachement.ts`,
+//    importée telle quelle par `src/rattachement.ts` — donc par
+//    `src/surveillance.ts`, `src/importRoutines.ts` et
+//    `src/registre.ts`, les trois moteurs divergents que le §3.7
+//    décrivait. Un seul fichier à corriger le jour où la règle change.
+// 8. LE FIL DEVIENT LE SIGNAL LE PLUS FORT, ce que A.1 avait rendu
+//    possible en captant `threadId` mais que personne ne lisait. Avant
+//    d'indexer un message, on demande à `communications` si son fil est
+//    déjà rattaché — colonne GÉNÉRÉE `projet_id`, donc le choix humain
+//    dès qu'il y en a eu un. C'est la phrase du §3.7 rendue vraie :
+//    « un seul rattachement humain propage tout le fil ».
+// 9. LES CORRECTIONS HUMAINES SONT APPLIQUÉES. Les règles adresse →
+//    projet mémorisées par le Cockpit vivent dans
+//    `settings.reglesRattachement`, donc dans `workspace.data`, que
+//    cette fonction lit déjà. Elles ne renseignent que
+//    `projet_id_propose` : une règle propose, elle ne signe pas — la
+//    colonne humaine et `rattache_par` restent hors de toute écriture
+//    machine, et le GRANT au niveau colonne d'A.2 le garantit.
+//
 // Accès : en-tête x-cron-secret (planificateur) OU jeton d'une
 // personne de l'agence (bouton « Scanner maintenant »).
 //
@@ -90,6 +113,14 @@
 
 import { createClient, type SupabaseClient } from 'jsr:@supabase/supabase-js@2.110.0'
 import { adressesMembresActifs, adresseNormalisee, jetonDeMembreActif } from '../_shared/membres.ts'
+import {
+  fold,
+  normaliserAdresse,
+  rattacher as rattacherEnCascade,
+  rattacherMessage,
+  type Rattachement,
+  type ReperesRattachement,
+} from '../_shared/rattachement.ts'
 import {
   depuisBase64UrlOctets,
   enrichir,
@@ -155,9 +186,9 @@ function json(corps: unknown, status = 200): Response {
 
 // ---------- classement déterministe (miroir de src/registre.ts) ----------
 
-function fold(s: string): string {
-  return s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim()
-}
+// `fold` n'est plus redéfini ici : il vient de `../_shared/rattachement.ts`,
+// avec la cascade qui s'en sert. C'était la quatrième copie de la même
+// normalisation dans le dépôt.
 
 const LEXIQUE: { categorie: string; motif: RegExp; libelle: string; poids: number }[] = [
   { categorie: 'CCTP', motif: /cctp|cahier des clauses techniques/, libelle: 'contient « CCTP »', poids: 0.5 },
@@ -173,68 +204,97 @@ const LEXIQUE: { categorie: string; motif: RegExp; libelle: string; poids: numbe
   { categorie: 'PHOTO', motif: /photo|img[_-]|dsc[_-]|\.(jpe?g|png|heic|webp)$/, libelle: 'photo (nom ou format image)', poids: 0.35 },
 ]
 
-interface Reperes {
-  projets: { id: string; nom: string }[]
-  entreprises: { raisonSociale: string; domaines: string[] }[]
-}
-
-/** ce qu'on sait du projet auquel un texte se rattache, et pourquoi */
-interface Rattachement {
-  projetId: string | null
-  confiance: number
-  raisons: string[]
-}
-
 /**
- * LE moteur de rattachement, celui du §3.7 : identifiant de projet dans le
- * texte, à défaut nom du projet, puis domaine de l'expéditeur rapproché de
- * `Entreprise.domaines`. Un seul, appelé aussi bien pour un MESSAGE que pour
- * une PIÈCE : le §3.7 relève que trois moteurs divergents répondaient trois
- * choses différentes à la même question selon la porte d'entrée. Sa fusion
- * complète avec ceux du navigateur est le livrable A.4 ; ici on s'interdit
- * simplement d'en ajouter un quatrième.
+ * A.4 — LE MOTEUR DE RATTACHEMENT N'EST PLUS ÉCRIT ICI.
  *
- * `texte` est déjà replié (`fold`) par l'appelant.
+ * A.1 en avait extrait une version locale en notant qu'elle attendait sa
+ * fusion : c'est ce livrable. La cascade du §3.7 vit désormais dans
+ * `../_shared/rattachement.ts`, importée telle quelle par le navigateur
+ * (`src/rattachement.ts`) — un seul fichier à corriger le jour où la règle
+ * change, au lieu des trois moteurs divergents que le §3.7 décrivait.
+ *
+ * Ce qui reste ici est ce qui n'appartient qu'au serveur : le LEXIQUE
+ * documentaire (catégorie d'une pièce) et la traduction de `workspace.data`
+ * en repères.
  */
-function rattacher(reperes: Reperes, texte: string, expediteur: string): Rattachement {
-  const raisons: string[] = []
-  let confiance = 0
 
-  let projetId: string | null = null
-  const parId = reperes.projets.find((p) =>
-    new RegExp(`(^|[^a-z0-9])${fold(p.id)}([^a-z0-9]|$)`).test(texte),
-  )
-  if (parId) {
-    projetId = parId.id
-    confiance += 0.35
-    raisons.push(`Contient l'identifiant du projet ${parId.id} (${parId.nom}).`)
-  } else {
-    const parNom = reperes.projets.find((p) => {
-      const nom = fold(p.nom)
-      return nom.length >= 5 && texte.includes(nom)
-    })
-    if (parNom) {
-      projetId = parNom.id
-      confiance += 0.25
-      raisons.push(`Contient le nom du projet « ${parNom.nom} ».`)
-    }
+/** l'état partagé, réduit à ce que la cascade a le droit de connaître.
+ *  Le §3.7 fait de l'adresse d'un participant déclaré le deuxième signal :
+ *  ce sont `Projet.emailMOA`, `Contact.email` et `MarcheTravaux.contactEmail`
+ *  — les mêmes trois gisements que côté navigateur, sinon les deux moteurs
+ *  divergeraient de nouveau, cette fois par leurs ENTRÉES. */
+interface EtatPartage {
+  projets?: {
+    id: string
+    nom: string
+    codeExterne?: string
+    adresseProjet?: string
+    emailMOA?: string
+  }[]
+  contacts?: { nom?: string; email?: string; projetsIds?: string[] }[]
+  marches?: { projetId: string; lot?: string; entreprise?: string; entrepriseId?: string | null; contactEmail?: string }[]
+  entreprises?: { id: string; raisonSociale: string; domaines?: string[] }[]
+  settings?: {
+    equipe?: { email?: string }[]
+    surveillance?: { email?: string }
+    reglesRattachement?: ReperesRattachement['regles']
   }
-
-  const domaine = fold(expediteur.split('@')[1]?.replace(/>.*$/, '') || '')
-  const parDomaine = domaine
-    ? reperes.entreprises.find((e) => e.domaines.some((d) => fold(d) === domaine))
-    : undefined
-  if (parDomaine) {
-    confiance += 0.25
-    raisons.push(`L'expéditeur (@${domaine}) correspond à « ${parDomaine.raisonSociale} ».`)
-  }
-
-  return { projetId, confiance: Math.min(confiance, 0.95), raisons }
 }
 
-/** classement documentaire d'une PIÈCE : le lexique, puis le rattachement
- *  ci-dessus. Résultats inchangés — c'est une extraction, pas une réécriture. */
-function classer(reperes: Reperes, nomFichier: string, objet: string, expediteur: string) {
+function reperesDepuisEtat(etat: EtatPartage): ReperesRattachement {
+  const internes = new Set<string>()
+  for (const p of etat.settings?.equipe || []) {
+    const email = normaliserAdresse(p.email)
+    if (email) internes.add(email)
+  }
+  const surveillee = normaliserAdresse(etat.settings?.surveillance?.email)
+  if (surveillee) internes.add(surveillee)
+
+  const parAdresse = new Map<string, { projetIds: Set<string>; origine: string }>()
+  const ajouter = (brut: string | undefined, projetId: string | undefined, origine: string) => {
+    const email = normaliserAdresse(brut)
+    if (!email || internes.has(email) || !projetId) return
+    const courant = parAdresse.get(email)
+    if (courant) courant.projetIds.add(projetId)
+    else parAdresse.set(email, { projetIds: new Set([projetId]), origine })
+  }
+  for (const p of etat.projets || []) ajouter(p.emailMOA, p.id, 'La maîtrise d’ouvrage')
+  for (const c of etat.contacts || [])
+    for (const projetId of c.projetsIds || []) ajouter(c.email, projetId, `Le contact ${c.nom || ''}`.trim())
+  for (const m of etat.marches || []) ajouter(m.contactEmail, m.projetId, `Le contact du marché « ${m.lot || ''} »`)
+
+  return {
+    projets: (etat.projets || []).map((p) => ({
+      id: p.id,
+      nom: p.nom,
+      codeExterne: p.codeExterne,
+      adresseProjet: p.adresseProjet,
+    })),
+    participants: [...parAdresse.entries()].map(([email, v]) => ({
+      email,
+      projetIds: [...v.projetIds],
+      origine: v.origine,
+    })),
+    entreprises: (etat.entreprises || []).map((e) => ({
+      id: e.id,
+      raisonSociale: e.raisonSociale,
+      domaines: e.domaines || [],
+      projetIds: [
+        ...new Set(
+          (etat.marches || [])
+            .filter((m) => m.entrepriseId === e.id || fold(m.entreprise || '') === fold(e.raisonSociale))
+            .map((m) => m.projetId),
+        ),
+      ],
+    })),
+    regles: etat.settings?.reglesRattachement || [],
+  }
+}
+
+/** classement documentaire d'une PIÈCE : le lexique — qui n'appartient qu'ici
+ *  — puis la cascade partagée pour le projet. Le nom de fichier entre dans le
+ *  texte fouillé : c'est lui qui porte la nomenclature `AAAAMMJJ_P01_…`. */
+function classer(reperes: ReperesRattachement, nomFichier: string, objet: string, expediteur: string, projetDuFil: string | null) {
   const texte = fold(`${nomFichier} ${objet}`)
   const raisons: string[] = []
   let confiance = 0
@@ -249,29 +309,13 @@ function classer(reperes: Reperes, nomFichier: string, objet: string, expediteur
     raisons.push('Aucun mot du lexique reconnu — catégorie à choisir.')
   }
 
-  const projet = rattacher(reperes, texte, expediteur)
+  const projet = rattacherEnCascade(reperes, { nomFichier, objet, expediteur, projetDuFil })
 
   return {
     categorie,
     projetId: projet.projetId,
     confiance: Math.min(confiance + projet.confiance, 0.95),
     raisons: [...raisons, ...projet.raisons],
-  }
-}
-
-/** Rattachement d'un MESSAGE : son objet seul, jamais son corps — un nom de
- *  projet cité en signature ou dans un fil recopié rattacherait à tort, et un
- *  rattachement faux se corrige à la main un par un. */
-function rattacherMessage(reperes: Reperes, objet: string, expediteur: string): Rattachement {
-  const trouve = rattacher(reperes, fold(objet), expediteur)
-  if (trouve.projetId) return trouve
-  return {
-    projetId: null,
-    confiance: 0,
-    raisons: [
-      ...trouve.raisons,
-      'Ni identifiant ni nom de projet dans l’objet — projet à choisir.',
-    ],
   }
 }
 
@@ -472,17 +516,7 @@ Deno.serve(async (req: Request) => {
     .eq('id', cfg.workspace_id || 'agence-ll')
     .maybeSingle()
   if (erreurWorkspace) return json({ erreur: `Workspace illisible : ${erreurWorkspace.message}` }, 500)
-  const etat = (ws?.data ?? {}) as {
-    projets?: { id: string; nom: string }[]
-    entreprises?: { raisonSociale: string; domaines?: string[] }[]
-  }
-  const reperes: Reperes = {
-    projets: (etat.projets || []).map((p) => ({ id: p.id, nom: p.nom })),
-    entreprises: (etat.entreprises || []).map((e) => ({
-      raisonSociale: e.raisonSociale,
-      domaines: e.domaines || [],
-    })),
-  }
+  const reperes = reperesDepuisEtat((ws?.data ?? {}) as EtatPartage)
 
   // --- qui est « l'agence » ? le registre, jamais une adresse écrite ici ---
   const adressesAgence = await adressesMembresActifs(sb)
@@ -541,6 +575,36 @@ Deno.serve(async (req: Request) => {
     for (const e of existants || []) dejaVus.add(e.source_id as string)
   }
 
+  // --- A.4 : le fil déjà rattaché, signal le plus fort du §3.7 ---
+  //
+  // `projet_id` est la colonne GÉNÉRÉE : le choix humain dès qu'il y en a eu
+  // un, la proposition sinon. C'est ce qui donne son sens à la phrase du
+  // §3.7 — « un seul rattachement humain propage tout le fil ».
+  //
+  // Une requête par FIL, pas par message, et le résultat est mémorisé pour
+  // le passage entier — y compris la réponse « ce fil n'est rattaché à
+  // rien », sans quoi un long fil non rattaché coûterait une requête par
+  // message à chaque scan. La carte se complète pendant la boucle : le
+  // premier message d'un fil neuf rattache les suivants du même passage,
+  // sans repasser par la base. Le threadId n'est connu qu'après l'ouverture
+  // du message : le pré-charger pour toute la tranche est impossible.
+  const projetDuFilParThread = new Map<string, string | null>()
+  const projetDuFil = async (threadId: string): Promise<string | null> => {
+    if (!threadId) return null
+    const connu = projetDuFilParThread.get(threadId)
+    if (connu !== undefined) return connu
+    const { data } = await sb
+      .from('communications')
+      .select('projet_id')
+      .eq('gmail_thread_id', threadId)
+      .not('projet_id', 'is', null)
+      .limit(1)
+      .maybeSingle()
+    const trouve = (data?.projet_id as string | undefined) ?? null
+    projetDuFilParThread.set(threadId, trouve)
+    return trouve
+  }
+
   let nouvelles = 0
   let ignorees = 0
   let sortants = 0
@@ -586,11 +650,22 @@ Deno.serve(async (req: Request) => {
     // curseur ne crée pas de doublon. Et parce que la ligne n'emporte AUCUNE
     // colonne humaine, un re-scan ne peut pas effacer un rattachement corrigé,
     // un axe choisi ni un message marqué traité.
-    const projet = rattacherMessage(reperes, msg.objet, msg.expediteur)
+    const filRattacheA = await projetDuFil(msg.threadId)
+    const projet = rattacherMessage(reperes, {
+      objet: msg.objet,
+      expediteur: msg.expediteurAdresse || msg.expediteur,
+      // le §5.1 pt 1 : l'adresse du projet peut n'apparaître qu'en
+      // destinataire ou en copie, jamais chez l'expéditeur
+      destinataires: [...msg.destinataires, ...msg.copies].map((d) => d.adresse),
+      projetDuFil: filRattacheA,
+    })
     const { error: erreurIndex } = await sb
       .from('communications')
       .upsert(ligneCommunication(msg, projet, pieces.length), { onConflict: 'gmail_message_id' })
     if (!erreurIndex) messagesIndexes++
+    // ce que ce message vient d'apprendre au fil sert aux suivants du même
+    // passage — un fil neuf se rattache d'un coup, pas message par message
+    if (!filRattacheA && projet.projetId) projetDuFilParThread.set(msg.threadId, projet.projetId)
 
     // Les pièces, elles, ne se rouvrent pas : le message est déjà passé par la
     // boîte d'arrivée. Cette borne vient APRÈS l'index des messages — sinon un
@@ -630,7 +705,13 @@ Deno.serve(async (req: Request) => {
         .eq('empreinte_sha256', empreinte)
         .limit(1)
         .maybeSingle()
-      const proposition = classer(reperes, nom, msg.objet, msg.expediteur)
+      const proposition = classer(
+        reperes,
+        nom,
+        msg.objet,
+        msg.expediteurAdresse || msg.expediteur,
+        projetDuFilParThread.get(msg.threadId) ?? null,
+      )
       if (doublon) {
         ignorees++
         await sb.from('entrants').insert({

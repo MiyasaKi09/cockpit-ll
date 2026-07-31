@@ -10,7 +10,7 @@ import {
   soldeFacture,
   ttcFacture,
 } from './facture'
-import { addDays, diffDays, fmtMoney, fold } from './util'
+import { addDays, diffDays, fmtDate, fmtMoney, fold } from './util'
 
 export function projetById(state: AppState, id: string): Projet | undefined {
   return state.projets.find((p) => p.id === id)
@@ -946,4 +946,421 @@ export function tempsParPersonne(state: AppState, debut: string, fin: string): L
     .map(([personne, v]) => ({ personne, heures: v.heures, jours: enJours(state, v.heures), cout: v.cout }))
     .filter((l) => l.heures > 0)
     .sort((a, b) => b.heures - a.heures)
+}
+
+// ==================================================================
+// ACCUEIL PERSONNEL (CDC §8.1) — ce que le Cockpit AFFICHE.
+//
+// « L'accueil n'invente aucun calcul » : chaque bloc de la page
+// d'accueil lit une fonction de ce fichier plutôt que de refiltrer
+// l'état pour son compte. La règle a déjà été contournée une fois —
+// les factures à émettre étaient recalculées à la fois par le Cockpit
+// et par `financeActions.actionsATraiter`, deux boucles sur les mêmes
+// `echeancesFacturation`, deux libellés écrits séparément. Les deux
+// gravités coïncidaient à la main : rien n'aurait signalé le jour où
+// l'une aurait bougé. `scripts/test-accueil.cjs` verrouille le retour
+// de ce genre de doublon.
+//
+// Aucun modèle de données neuf ici : tout se dérive de `AppState`, de
+// la liste d'actions produite par `financeActions` et du flux Google
+// Agenda déjà capté par `surveillance.ts`.
+// ==================================================================
+
+import type { DocumentRecord, ReunionChantier, StatutDocument } from './types'
+// imports de TYPE uniquement (effacés à la compilation) : ce module
+// reste exécutable hors navigateur, sans React ni session Google.
+import type { EvenementAgenda } from './google'
+import type { ActionFinance } from './financeActions'
+import type { IconName } from './ui'
+
+// ---------- validations attendues ----------
+
+/** statuts d'un document qui appellent encore un geste humain */
+export const STATUTS_DOCUMENT_A_TRAITER: StatutDocument[] = ['recu', 'a_classer', 'a_valider']
+
+/** documents du registre en attente d'un geste humain — le compteur du
+ *  menu Documents comme le bloc « validations attendues » de l'accueil
+ *  lisent CETTE liste : recopié, le triplet de statuts diverge en silence */
+export function documentsATraiter(state: AppState): DocumentRecord[] {
+  return (state.registreDocuments || []).filter((d) => STATUTS_DOCUMENT_A_TRAITER.includes(d.statut))
+}
+
+/** situations déposées par la routine et pas encore vérifiées */
+export function situationsAVerifier(state: AppState): Situation[] {
+  return state.situations.filter((s) => s.statut === 'a_verifier')
+}
+
+/** une famille de validations en attente, telle qu'affichée sur l'accueil */
+export interface GroupeValidation {
+  cle: 'facture_achat' | 'document' | 'situation' | 'entrant'
+  titre: string
+  nombre: number
+  detail: string
+  lien: string
+  gravite: 1 | 2 | 3
+}
+
+const pluriel = (n: number) => (n > 1 ? 's' : '')
+
+/**
+ * Validations attendues (CDC §8.1) — factures fournisseurs, documents du
+ * registre, situations de travaux et pièces arrivées côté serveur.
+ *
+ * Les factures fournisseurs ne sont PAS refiltrées ici : elles arrivent
+ * par `actionsFinance`, la liste que `financeActions.actionsATraiter`
+ * produit déjà pour le badge Finance. `entrantsDistants` est passé par
+ * l'appelant parce qu'il vient d'une requête réseau (index partagé
+ * Supabase) et non de l'état local ; `null` = espace partagé non lu.
+ */
+export function validationsAttendues(
+  state: AppState,
+  today: string,
+  actionsFinance: readonly ActionFinance[],
+  entrantsDistants?: number | null,
+): GroupeValidation[] {
+  const groupes: GroupeValidation[] = []
+
+  const achats = actionsFinance.filter((a) => a.kind === 'facture_achat')
+  if (achats.length > 0) {
+    const ancienne = achats.reduce((min, a) => ((a.date || '9999') < (min.date || '9999') ? a : min))
+    groupes.push({
+      cle: 'facture_achat',
+      titre: `${achats.length} facture${pluriel(achats.length)} fournisseur${pluriel(achats.length)} à valider`,
+      nombre: achats.length,
+      detail: ancienne.date
+        ? `la plus ancienne reçue le ${fmtDate(ancienne.date)} — à contrôler avant paiement`
+        : 'à contrôler avant paiement',
+      lien: achats[0].lien,
+      gravite: 2,
+    })
+  }
+
+  const docs = documentsATraiter(state)
+  if (docs.length > 0) {
+    const ancien = docs.reduce((min, d) => (d.recuLe < min.recuLe ? d : min))
+    groupes.push({
+      cle: 'document',
+      titre: `${docs.length} document${pluriel(docs.length)} à classer ou à valider`,
+      nombre: docs.length,
+      detail: `le plus ancien reçu le ${fmtDate(ancien.recuLe.slice(0, 10))}`,
+      lien: '#/documents',
+      gravite: 2,
+    })
+  }
+
+  const sits = situationsAVerifier(state)
+  if (sits.length > 0) {
+    const enRetard = sits.filter((s) => dateLimiteVerif(state, s) < today).length
+    groupes.push({
+      cle: 'situation',
+      titre: `${sits.length} situation${pluriel(sits.length)} de travaux à vérifier`,
+      nombre: sits.length,
+      detail: enRetard > 0
+        ? `dont ${enRetard} au-delà du délai contractuel de vérification`
+        : 'délai de vérification en cours — la MOE porte le risque du délai global',
+      lien: '#/situations',
+      gravite: 3,
+    })
+  }
+
+  if (entrantsDistants && entrantsDistants > 0) {
+    groupes.push({
+      cle: 'entrant',
+      titre: `${entrantsDistants} pièce${pluriel(entrantsDistants)} arrivée${pluriel(entrantsDistants)} dans la boîte partagée`,
+      nombre: entrantsDistants,
+      detail: 'captée côté serveur — classement à confirmer à la main',
+      lien: '#/documents',
+      gravite: 2,
+    })
+  }
+
+  return groupes.sort((a, b) => b.gravite - a.gravite || b.nombre - a.nombre)
+}
+
+// ---------- réunions du jour ----------
+
+/** une réunion d'aujourd'hui, quelle que soit sa provenance */
+export interface ReunionDuJour {
+  id: string
+  titre: string
+  /** « HH:MM » quand l'heure est connue, sinon null (journée entière) */
+  heure: string | null
+  detail: string
+  /** lien interne, absent pour un rendez-vous purement Google */
+  lien: string | null
+  source: 'chantier' | 'agenda'
+}
+
+/**
+ * Réunions du jour (CDC §8.1) : les `ReunionChantier` datées d'aujourd'hui
+ * et les rendez-vous Google Agenda BORNÉS À LA JOURNÉE.
+ *
+ * Le flux Google est passé en argument : seul le chemin navigateur a la
+ * portée calendrier (src/google.ts, jeton OAuth en mémoire) — le jeton
+ * serveur ne l'a pas. Sans session Google ouverte, `agenda` est vide et
+ * l'écran doit le DIRE : une liste courte et muette se lit comme
+ * « rien aujourd'hui », ce qui est faux et se paie en rendez-vous manqué.
+ */
+export function reunionsDuJour(
+  state: AppState,
+  today: string,
+  agenda: readonly EvenementAgenda[] = [],
+): ReunionDuJour[] {
+  const lignes: ReunionDuJour[] = []
+
+  for (const r of state.reunions.filter((x: ReunionChantier) => x.date === today)) {
+    const participants = (r.participants || '').trim()
+    lignes.push({
+      id: `reunion-${r.id}`,
+      titre: r.titre,
+      heure: r.heure || null,
+      detail: [r.projetId, participants.length > 70 ? `${participants.slice(0, 70)}…` : participants]
+        .filter(Boolean)
+        .join(' · '),
+      lien: `#/projets/${r.projetId}/chantier`,
+      source: 'chantier',
+    })
+  }
+
+  for (const e of agenda) {
+    if (!e.debut || e.debut.slice(0, 10) !== today) continue
+    lignes.push({
+      id: `agenda-${e.id}`,
+      titre: e.titre,
+      heure: e.journee ? null : e.debut.slice(11, 16) || null,
+      detail: [e.lieu, 'Google Agenda'].filter(Boolean).join(' · '),
+      lien: null,
+      source: 'agenda',
+    })
+  }
+
+  return lignes.sort(
+    (a, b) => (a.heure || '99:99').localeCompare(b.heure || '99:99') || a.titre.localeCompare(b.titre),
+  )
+}
+
+// ---------- toutes les dates qui comptent ----------
+
+/** un événement daté de l'état — pastille du calendrier, ligne de l'accueil */
+export interface EvtCal {
+  date: string // ISO
+  label: string
+  lien: string
+  /** couleur de la pastille */
+  couleur: string
+  titreLong: string
+  /** icône optionnelle (sinon, une pastille ronde) */
+  icon?: IconName
+}
+
+export const COULEURS_ECHEANCE = {
+  rendu: 'var(--danger)',
+  facture: 'var(--warn)',
+  encaissement: 'var(--ok)',
+  ao: 'var(--cat-purple)',
+  reunion: 'var(--accent)',
+  obligation: 'var(--cat-amber)',
+  crm: 'var(--ink-3)',
+  projet: 'var(--cat-teal)',
+}
+
+/**
+ * Tous les événements datés de l'état — calculé, jamais stocké.
+ *
+ * Vivait dans `modules/Calendrier.tsx`, où il ne servait qu'à la grille
+ * mensuelle. L'accueil en a besoin pour ses « prochaines échéances » :
+ * la fonction remonte donc au module de calcul plutôt que d'être
+ * recopiée sur un second écran.
+ */
+export function evenements(state: AppState): EvtCal[] {
+  const evts: EvtCal[] = []
+
+  for (const p of state.projets) {
+    if (STATUTS_ACTIFS.includes(p.statut)) {
+      for (const ph of p.phases) {
+        if (ph.fin && ph.montantHT > 0)
+          evts.push({
+            date: ph.fin,
+            label: `◀ ${p.id} ${ph.code}`,
+            lien: `#/projets/${p.id}`,
+            couleur: COULEURS_ECHEANCE.rendu,
+            titreLong: `Rendu ${ph.code} — ${p.nom}`,
+          })
+        if (ph.debut && ph.montantHT > 0)
+          evts.push({
+            date: ph.debut,
+            label: `▶ ${p.id} ${ph.code}`,
+            lien: `#/projets/${p.id}`,
+            couleur: COULEURS_ECHEANCE.projet,
+            titreLong: `Début ${ph.code} — ${p.nom}`,
+          })
+      }
+    }
+    if (p.dateLancement)
+      evts.push({ date: p.dateLancement, label: p.id, icon: 'rocket', lien: `#/projets/${p.id}`, couleur: COULEURS_ECHEANCE.projet, titreLong: `Lancement — ${p.nom}` })
+    if (p.dateCloture)
+      evts.push({ date: p.dateCloture, label: p.id, icon: 'flag', lien: `#/projets/${p.id}`, couleur: COULEURS_ECHEANCE.projet, titreLong: `Clôture — ${p.nom}` })
+  }
+
+  for (const e of state.echeancesFacturation) {
+    evts.push({
+      date: e.datePrevue,
+      label: `€ ${e.projetId}`,
+      lien: '#/facturation',
+      couleur: COULEURS_ECHEANCE.facture,
+      titreLong: `Facture à émettre — ${e.libelle}`,
+    })
+  }
+  for (const f of state.factures) {
+    if (f.statut === 'emise')
+      evts.push({
+        date: encaissementPrevu(f),
+        label: `⬇ ${f.projetId}`,
+        lien: '#/facturation',
+        couleur: COULEURS_ECHEANCE.encaissement,
+        titreLong: `Encaissement attendu — ${f.numero || f.id} · ${f.libelle}`,
+      })
+  }
+
+  for (const c of state.consultations) {
+    if (c.dateLimite && ['a_etudier', 'go'].includes(c.statut))
+      evts.push({
+        date: c.dateLimite,
+        label: `AO remise`,
+        lien: '#/ao',
+        couleur: COULEURS_ECHEANCE.ao,
+        titreLong: `Remise des offres — ${c.intitule}`,
+      })
+  }
+
+  for (const r of state.reunions) {
+    evts.push({
+      date: r.date,
+      label: r.projetId,
+      icon: 'hardhat',
+      lien: `#/projets/${r.projetId}/chantier`,
+      couleur: COULEURS_ECHEANCE.reunion,
+      titreLong: `Réunion — ${r.titre}`,
+    })
+  }
+
+  for (const o of state.obligations) {
+    evts.push({
+      date: o.echeance,
+      label: `${o.libelle.slice(0, 14)}${o.libelle.length > 14 ? '…' : ''}`,
+      icon: 'scale',
+      lien: '#/agenda',
+      couleur: COULEURS_ECHEANCE.obligation,
+      titreLong: `Obligation — ${o.libelle}${o.organisme ? ` (${o.organisme})` : ''}`,
+    })
+  }
+
+  for (const c of state.contacts) {
+    if (c.dateProchaineAction)
+      evts.push({
+        date: c.dateProchaineAction,
+        label: c.nom.split(' ')[0],
+        icon: 'user',
+        lien: '#/agenda',
+        couleur: COULEURS_ECHEANCE.crm,
+        titreLong: `CRM — ${c.nom} : ${c.prochaineAction || 'action prévue'}`,
+      })
+  }
+
+  for (const a of state.artisans) {
+    if (a.decennaleFin)
+      evts.push({
+        date: a.decennaleFin,
+        label: a.nom.slice(0, 12),
+        icon: 'shield',
+        lien: '#/ressources',
+        couleur: COULEURS_ECHEANCE.crm,
+        titreLong: `Décennale expire — ${a.nom}`,
+      })
+  }
+
+  return evts
+}
+
+/** échéances datées entre aujourd'hui et aujourd'hui + `jours` (bornes incluses) */
+export function prochainesEcheances(state: AppState, today: string, jours = 14): EvtCal[] {
+  const fin = addDays(today, jours)
+  return evenements(state)
+    .filter((e) => e.date >= today && e.date <= fin)
+    .sort((a, b) => a.date.localeCompare(b.date) || a.titreLong.localeCompare(b.titreLong))
+}
+
+// ---------- repères du jour ----------
+
+export interface PhaseEnCours {
+  projet: Projet
+  phase: Phase
+}
+
+/** phases des projets actifs dont la fenêtre encadre la date du jour */
+export function phasesEnCours(state: AppState, today: string): PhaseEnCours[] {
+  return state.projets
+    .filter((p) => STATUTS_ACTIFS.includes(p.statut))
+    .flatMap((p) =>
+      p.phases
+        .filter((ph) => ph.debut && ph.fin && ph.debut <= today && today <= ph.fin)
+        .map((ph) => ({ projet: p, phase: ph })),
+    )
+}
+
+// ---------- la semaine d'une personne ----------
+
+/** temps enregistré ET charge prévisionnelle d'une personne, même semaine */
+export interface LigneSemainePersonne {
+  personne: string
+  /** heures pointées sur la semaine (projets + hors-projet) */
+  heures: number
+  jours: number
+  cout: number
+  /** heures PLANIFIÉES par les phases actives de ses projets */
+  charge: number
+  /** capacité de la semaine, congés déduits */
+  capacite: number
+  absence: number
+}
+
+/**
+ * Les blocs « temps enregistré » et « charge prévisionnelle » du §8.1,
+ * pour la semaine du lundi donné. Rien de neuf n'est calculé ici : les
+ * heures viennent de `tempsParPersonne`, la charge de
+ * `chargePlanifieeSemaine` et la capacité de `capacitePersonneSemaine`.
+ * Le seul apport est de les mettre en regard, personne par personne —
+ * y compris celles qui n'ont rien pointé (charge sans pointage) et
+ * celles qui ont pointé sans figurer dans l'équipe (nom renommé).
+ */
+export function semaineParPersonne(
+  state: AppState,
+  lundi: string,
+  personnes?: readonly string[],
+): LigneSemainePersonne[] {
+  const roster =
+    personnes && personnes.length > 0
+      ? [...personnes]
+      : [
+          ...new Set(
+            [
+              ...(state.settings.equipe || []).map((p) => p.nom),
+              ...(state.settings.personnes || []),
+            ].filter(Boolean),
+          ),
+        ]
+  const pointe = new Map(tempsParPersonne(state, lundi, lundi).map((l) => [l.personne, l]))
+  const noms = [...new Set([...roster, ...pointe.keys()])]
+  return noms.map((nom) => {
+    const t = pointe.get(nom)
+    return {
+      personne: nom,
+      heures: t?.heures ?? 0,
+      jours: t?.jours ?? 0,
+      cout: t?.cout ?? 0,
+      charge: chargePlanifieeSemaine(state, nom, lundi),
+      capacite: capacitePersonneSemaine(state, nom, lundi),
+      absence: heuresAbsenceSemaine(state, nom, lundi),
+    }
+  })
 }

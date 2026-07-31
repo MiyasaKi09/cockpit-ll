@@ -1,21 +1,44 @@
 // ============================================================
 // Cockpit — tableau de bord : météo financière, CENTRE D'ACTIONS
-// (une seule file : à faire, à surveiller, information — courriers,
-// tâches et alertes classés ensemble) et repères du jour.
-// Tout est dérivé de l'état : aucune donnée propre au module.
+// (une seule file : à faire, validations attendues, à surveiller,
+// information — courriers, tâches et alertes classés ensemble),
+// la semaine de chacun et les repères du jour.
+//
+// Tout est dérivé de l'état, et RIEN n'est calculé ici : chaque
+// chiffre affiché sort de derive.ts, alerts.ts ou financeActions.ts.
+// La règle avait déjà été contournée — les factures à émettre étaient
+// construites deux fois, ici et dans `actionsATraiter`, à partir des
+// mêmes `echeancesFacturation` ; deux gravités identiques par
+// coïncidence entretenue à la main. `scripts/test-accueil.cjs` le
+// verrouille désormais.
+//
 // Règle d'or : une action financière ou contractuelle s'OUVRE et
 // se vérifie d'abord ; le raccourci « marquer… » reste possible
 // mais demande une confirmation explicite.
 // ============================================================
 
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import type { Alerte } from '../types'
 import { useStore } from '../store'
-import { Btn, Card, DateF, EmptyState, Icon, Modal, Money, Page, RowMenu, Stat, confirmer, navigate, toast, useToday } from '../ui'
+import { Btn, Card, DateF, EmptyState, Icon, Modal, Money, Page, RowMenu, Stat, Table, confirmer, navigate, toast, useToday } from '../ui'
 import { alertesActives } from '../alerts'
-import { STATUTS_ACTIFS, caCible, caRealiseAnnee, meteoFinanciere } from '../derive'
-import { addDays, fmtDate, fmtMoney, fmtPct, ouvrirGmail } from '../util'
+import {
+  caCible,
+  caRealiseAnnee,
+  meteoFinanciere,
+  phasesEnCours,
+  prochainesEcheances,
+  reunionsDuJour,
+  semaineParPersonne,
+  situationsAVerifier,
+  validationsAttendues,
+} from '../derive'
+import type { ActionFinance } from '../financeActions'
+import { actionsATraiter } from '../financeActions'
+import { useNbEntrantsDistants } from '../entrants'
+import { useMoi } from '../moi'
+import { addDays, fmtDate, fmtHeures, fmtMoney, fmtPct, mondayOf, ouvrirGmail } from '../util'
 import { useSurveillanceCtx } from '../surveillance'
 
 // ---------- petits composants locaux ----------
@@ -57,9 +80,12 @@ function RienASignaler({ children }: { children: ReactNode }) {
 // ---------- centre d'actions : le modèle unifié ----------
 
 /** raccourci « marquer… » : les actions financières/contractuelles portent
- *  une confirmation explicite (sinon exécution directe, toujours annulable) */
+ *  une confirmation explicite (sinon exécution directe, toujours annulable).
+ *  Il n'y a PAS de raccourci « Émettre… » : le lien « Ouvrir et vérifier »
+ *  mène déjà au parcours contrôlé d'émission (numéro légal, contrôles
+ *  bloquants, gel de la pièce) — un second bouton vers exactement la même
+ *  adresse ne faisait que doubler la cible. */
 type ActionRapide =
-  | { kind: 'emettre_facture'; refId: string; label: string; confirme?: undefined }
   | { kind: 'valider_situation'; refId: string; label: string; confirme: string }
   | { kind: 'note_faite'; refId: string; projetId: string; label: string; confirme?: undefined }
 
@@ -80,9 +106,16 @@ interface ItemAFaire {
   actionsSpecifiques?: ReactNode
 }
 
-function itemsAFaire(state: ReturnType<typeof useStore>['state'], today: string): ItemAFaire[] {
+/** La file du jour. `actionsFinance` est la liste que `financeActions`
+ *  produit déjà pour le badge Finance : l'accueil y SÉLECTIONNE ce qui le
+ *  concerne au lieu de refaire la boucle sur `echeancesFacturation`. */
+function itemsAFaire(
+  state: ReturnType<typeof useStore>['state'],
+  today: string,
+  actionsFinance: readonly ActionFinance[],
+): ItemAFaire[] {
   const items: ItemAFaire[] = []
-  for (const s of state.situations.filter((x) => x.statut === 'a_verifier')) {
+  for (const s of situationsAVerifier(state)) {
     items.push({
       id: `sit-${s.id}`,
       gravite: 3,
@@ -112,18 +145,20 @@ function itemsAFaire(state: ReturnType<typeof useStore>['state'], today: string)
       marqueur: 'square',
     })
   }
-  // audit F0 : plus de « marquer émise » à l'aveugle — l'émission passe
-  // par le parcours contrôlé (contrôles bloquants, numéro légal, gel)
-  for (const e of state.echeancesFacturation.filter((x) => x.datePrevue <= today)) {
+  // Factures à émettre : titre, détail, lien, date et gravité viennent tels
+  // quels de `actionsATraiter`. Audit F0 : plus de « marquer émise » à
+  // l'aveugle — le lien mène au parcours contrôlé (contrôles bloquants,
+  // numéro légal, gel de la pièce).
+  for (const a of actionsFinance) {
+    if (a.kind !== 'emettre_facture') continue
     items.push({
-      id: `fac-${e.id}`,
-      gravite: 3,
-      titre: `Émettre la facture — ${fmtMoney(e.montantHT)} HT`,
-      detail: `${e.projetId} · ${e.libelle} · prévue le ${fmtDate(e.datePrevue)}`,
-      lien: `#/facturation/emettre/${e.id}`,
-      dateLimite: e.datePrevue,
+      id: `fac-${a.id}`,
+      gravite: a.gravite,
+      titre: a.titre,
+      detail: a.detail,
+      lien: a.lien,
+      dateLimite: a.date,
       marqueur: 'circle',
-      rapide: { kind: 'emettre_facture', refId: e.id, label: 'Émettre…' },
     })
   }
   for (const r of state.reunions.filter((x) => x.statut !== 'diffuse' && x.date <= today)) {
@@ -293,23 +328,25 @@ function LigneCourrier({ personne }: { personne: string }) {
 
 // ---------- centre d'actions ----------
 
-function CentreActions() {
+function CentreActions({ personne }: { personne: string }) {
   const { state, update, replace } = useStore()
   const today = useToday()
-  const [personne, setPersonne] = useState('')
   const [toutAfficher, setToutAfficher] = useState(false)
   /** revue séquentielle : index dans `visibles` (null = fermée) */
   const [revue, setRevue] = useState<number | null>(null)
+  /** pièces captées côté serveur — hors état local, donc lues, pas dérivées */
+  const nbEntrants = useNbEntrantsDistants()
 
   const horizon = addDays(today, 7)
 
+  // la seule construction de la file finance de la journée
+  const actionsFinance = useMemo(() => actionsATraiter(state, today), [state, today])
+  const validations = useMemo(
+    () => validationsAttendues(state, today, actionsFinance, nbEntrants),
+    [state, today, actionsFinance, nbEntrants],
+  )
+
   const faireRapide = async (a: ActionRapide) => {
-    if (a.kind === 'emettre_facture') {
-      // audit F0 : l'émission attribue le numéro légal et fige la pièce —
-      // elle s'ouvre toujours dans le parcours contrôlé, jamais en un clic
-      navigate(`/facturation/emettre/${a.refId}`)
-      return
-    }
     if (a.confirme && !(await confirmer({ message: a.confirme, confirmerLabel: a.label.replace('…', '') }))) return
     const snap = state
     executerRapide(update, a)
@@ -369,7 +406,7 @@ function CentreActions() {
   const aSurveiller = alertes.filter((a) => a.gravite === 2)
   const information = alertes.filter((a) => a.gravite === 1)
 
-  const tous = [...itemsAFaire(state, today), ...alertes.filter((a) => a.gravite === 3).map(alerteVersItem)].sort(trierAFaire)
+  const tous = [...itemsAFaire(state, today, actionsFinance), ...alertes.filter((a) => a.gravite === 3).map(alerteVersItem)].sort(trierAFaire)
   const filtres = personne ? tous.filter((i) => !i.pour || i.pour === personne) : tous
   // par défaut : les retards, aujourd'hui et cette semaine — le reste sur demande
   const masquables = filtres.filter((i) => i.dateLimite && i.dateLimite > horizon).length
@@ -462,18 +499,7 @@ function CentreActions() {
   )
 
   return (
-    <Card
-      titre="Centre d'actions"
-      actions={
-        <span className="segmente" role="group" aria-label="Filtrer par personne">
-          {['', ...state.settings.personnes].map((p) => (
-            <button key={p || 'tous'} aria-pressed={personne === p} onClick={() => setPersonne(p)}>
-              {p || 'Tout'}
-            </button>
-          ))}
-        </span>
-      }
-    >
+    <Card titre="Centre d'actions">
       {/* ---------- synthèse du jour + revue séquentielle ---------- */}
       {(visibles.length > 0 || nbCourriers > 0) && (
         <p className="small" style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', margin: '0 0 10px' }}>
@@ -507,6 +533,34 @@ function CentreActions() {
               : `Afficher aussi ${masquables} échéance${masquables > 1 ? 's' : ''} à plus de 7 jours`}
           </Btn>
         </p>
+      )}
+
+      {/* ---------- validations attendues (CDC §8.1) ----------
+          Un groupe, quatre familles : factures fournisseurs, documents du
+          registre, situations de travaux, pièces arrivées côté serveur.
+          Les situations figurent aussi, une par une, dans « À faire »
+          au-dessus — elles y portent leur raccourci ; ici elles se
+          comptent avec le reste de ce qui attend une signature. */}
+      {validations.length > 0 && (
+        <>
+          <div style={STYLE_GROUPE}>
+            Validations attendues ({validations.reduce((s, v) => s + v.nombre, 0)})
+          </div>
+          {validations.map((v) => (
+            <div key={v.cle} className={`alert-item ${v.gravite === 3 ? 'alert-3' : ''}`}>
+              <span className={`gmk gmk-${v.gravite === 3 ? 'triangle' : 'square'}`} aria-hidden="true" />
+              <div style={{ minWidth: 0 }}>
+                <div className="alert-titre">{v.titre}</div>
+                <div className="alert-detail">{v.detail}</div>
+              </div>
+              <div className="alert-actions">
+                <a className="btn btn-small btn-primary" href={v.lien}>
+                  Ouvrir et vérifier
+                </a>
+              </div>
+            </div>
+          ))}
+        </>
       )}
 
       {/* ---------- à surveiller ---------- */}
@@ -573,39 +627,128 @@ function CentreActions() {
   )
 }
 
+// ---------- ma semaine : temps enregistré + charge prévisionnelle ----------
+
+/**
+ * Blocs 8 et 10 du §8.1. Les deux chiffres se lisent ensemble ou pas du
+ * tout : 12 h pointées ne veut rien dire sans les 28 h planifiées en face.
+ * Aucun des deux n'est calculé ici — `semaineParPersonne` met en regard
+ * `tempsParPersonne`, `chargePlanifieeSemaine` et `capacitePersonneSemaine`.
+ */
+function CarteSemaine({ personne }: { personne: string }) {
+  const { state } = useStore()
+  const today = useToday()
+  const lundi = mondayOf(today)
+  const toutes = semaineParPersonne(state, lundi)
+  const lignes = personne ? toutes.filter((l) => l.personne === personne) : toutes
+  // vide compris : `every` sur une liste vide est vrai, et c'est le bon sens ici
+  const rienAMontrer = lignes.every((l) => l.heures === 0 && l.charge === 0)
+
+  return (
+    <Card
+      titre={`${personne ? `Semaine de ${personne}` : 'Semaine de l’équipe'} — du ${fmtDate(lundi)} au ${fmtDate(addDays(lundi, 6))}`}
+      actions={
+        <>
+          <a className="btn btn-small" href="#/temps">
+            Saisir le temps
+          </a>
+          <a className="btn btn-small btn-ghost" href="#/planning">
+            Plan de charge
+          </a>
+        </>
+      }
+    >
+      {rienAMontrer ? (
+        <EmptyState>
+          Rien à afficher cette semaine : aucune heure pointée, et aucune phase datée sur un
+          projet où figure quelqu'un de l'équipe. Le temps se saisit dans « Temps » ; la charge
+          vient des heures prévues des phases (onglet Phases d'un projet).
+        </EmptyState>
+      ) : (
+        <>
+          <Table head={['Personne', 'Temps enregistré', 'Charge prévue', 'Capacité', 'Charge / capacité']}>
+            {lignes.map((l) => (
+              <tr key={l.personne}>
+                <td>{l.personne}</td>
+                <td className="right num">{fmtHeures(l.heures)}</td>
+                <td className="right num">{fmtHeures(l.charge)}</td>
+                <td className="right num">
+                  {fmtHeures(l.capacite)}
+                  {l.absence > 0 && <span className="muted"> (−{fmtHeures(l.absence)} congés)</span>}
+                </td>
+                <td className="right">
+                  {l.capacite > 0 ? (
+                    // seule comparaison faite ici, et elle n'invente aucun seuil :
+                    // la charge dépasse la capacité, ou elle ne la dépasse pas
+                    <span className={l.charge > l.capacite ? 'danger-text' : undefined}>
+                      {fmtPct(l.charge / l.capacite, 0)}
+                    </span>
+                  ) : (
+                    <span className="muted">—</span>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </Table>
+          <p className="muted small" style={{ margin: '8px 2px 0' }}>
+            Temps enregistré : heures pointées de la semaine, projets et hors-projet. Charge
+            prévue : heures des phases actives des projets où la personne figure, réparties sur
+            la durée de la phase puis entre les personnes affectées.
+          </p>
+        </>
+      )}
+    </Card>
+  )
+}
+
 // ---------- module ----------
 
 export default function Cockpit() {
-  const { state, update } = useStore()
+  const { state } = useStore()
   const today = useToday()
-  // la surveillance tourne à la racine de l'app (INT-02) — ici on ne fait que lire
-  const { evenements } = useSurveillanceCtx()
+  // la surveillance tourne à la racine de l'app (INT-02) — ici on ne fait que lire.
+  // Seul ce chemin NAVIGATEUR porte la portée calendrier : le jeton serveur de
+  // l'ingestion Gmail n'a pas accès à l'agenda, il ne pourra jamais suppléer.
+  const { evenements: agendaGoogle, direct: googleEnDirect } = useSurveillanceCtx()
   const dateFR = today.split('-').reverse().join('.')
+
+  // §8 : l'accueil est PERSONNEL. Tant que le filtre n'est pas touché, il suit
+  // `useMoi()` ; quand l'application ne sait pas qui est là, `null` veut dire
+  // `null` — on retombe sur « Tout » plutôt que de désigner le premier venu.
+  const moi = useMoi()
+  const [choixFiltre, setChoixFiltre] = useState<string | null>(null)
+  const personne = choixFiltre ?? moi.nom ?? ''
+  const nomsFiltre = useMemo(
+    () => [
+      ...new Set(
+        [...(state.settings.personnes || []), ...(state.settings.equipe || []).map((p) => p.nom)].filter(Boolean),
+      ),
+    ],
+    [state.settings.personnes, state.settings.equipe],
+  )
 
   const meteo = meteoFinanciere(state, today)
   const excel = state.settings.dernierImportExcel
 
-  // phases en cours : projets actifs dont une phase encadre la date du jour
-  const phasesEnCours = state.projets
-    .filter((p) => STATUTS_ACTIFS.includes(p.statut))
-    .flatMap((p) =>
-      p.phases
-        .filter((ph) => ph.debut && ph.fin && ph.debut <= today && today <= ph.fin)
-        .map((ph) => ({ projet: p, phase: ph })),
-    )
-
-  const prochainesFactures = state.echeancesFacturation
-    .filter((e) => e.datePrevue >= today)
-    .sort((a, b) => a.datePrevue.localeCompare(b.datePrevue))
-    .slice(0, 3)
-
-  const prochainesObligations = state.obligations
-    .filter((o) => o.echeance >= today)
-    .sort((a, b) => a.echeance.localeCompare(b.echeance))
-    .slice(0, 3)
+  const phases = phasesEnCours(state, today)
+  const reunions = reunionsDuJour(state, today, agendaGoogle)
+  const echeances = prochainesEcheances(state, today, 14)
 
   return (
-    <Page titre="aujourd’hui" wordmark meta={`Décisions du jour · ${dateFR}`}>
+    <Page
+      titre="aujourd’hui"
+      wordmark
+      meta={`Décisions du jour · ${dateFR}`}
+      actions={
+        <span className="segmente" role="group" aria-label="Filtrer par personne">
+          {['', ...nomsFiltre].map((p) => (
+            <button key={p || 'tous'} aria-pressed={personne === p} onClick={() => setChoixFiltre(p)}>
+              {p || 'Tout'}
+            </button>
+          ))}
+        </span>
+      }
+    >
       {/* ---------- météo financière ---------- */}
       <div style={{ marginBottom: 16 }}>
         <div className="grid3">
@@ -667,18 +810,77 @@ export default function Cockpit() {
       {/* ---------- centre d'actions + rail latéral ---------- */}
       <div className="cockpit-cols">
         <div className="cockpit-main">
-          <CentreActions />
+          <CentreActions personne={personne} />
+          <CarteSemaine personne={personne} />
         </div>
 
         {/* ---------- repères du jour (rail latéral discret) ---------- */}
         <aside className="cockpit-rail">
           <Card titre={<>Repères — {fmtDate(today)}</>}>
             <div className="cockpit-rail-stack">
+              {/* ---------- réunions du jour (CDC §8.1) ----------
+                  Réunions de chantier saisies ici + agenda Google borné à la
+                  journée. Le repli est EXPLICITE : sans session Google, une
+                  liste courte se lit « rien aujourd'hui », ce qui est faux et
+                  se paie en rendez-vous manqué. */}
+              <Repere titre="Réunions du jour">
+                {reunions.length === 0 ? (
+                  <RienASignaler>Aucune réunion aujourd'hui.</RienASignaler>
+                ) : (
+                  reunions.map((r) => (
+                    <Ligne key={r.id}>
+                      <strong>{r.heure ? `${r.heure} · ` : ''}</strong>
+                      {r.lien ? <a href={r.lien}>{r.titre}</a> : <strong>{r.titre}</strong>}
+                      {r.detail && <div className="muted">{r.detail}</div>}
+                    </Ligne>
+                  ))
+                )}
+                {!googleEnDirect && (
+                  <div className="muted small" style={{ paddingTop: 4 }}>
+                    Agenda Google non connecté — seules les réunions de chantier saisies dans le
+                    Cockpit sont listées. <a href="#/parametres">Se connecter</a> (la lecture du
+                    calendrier ne passe que par ce navigateur).
+                  </div>
+                )}
+              </Repere>
+
+              {/* ---------- prochaines échéances (CDC §8.1) ----------
+                  Toutes les dates qui comptent sur 14 jours : rendus de phase,
+                  factures à émettre, encaissements attendus, remises d'AO,
+                  réunions, obligations, relances CRM, décennales. Même
+                  inventaire que la grille mensuelle — `derive.evenements`. */}
+              <Repere titre="Prochaines échéances (14 jours)">
+                {echeances.length === 0 ? (
+                  <RienASignaler>Aucune échéance dans les quatorze jours.</RienASignaler>
+                ) : (
+                  <>
+                    {echeances.slice(0, 8).map((e, i) => (
+                      <Ligne key={`${e.date}-${i}`}>
+                        <a href={e.lien} style={{ color: e.couleur, fontWeight: 600 }}>
+                          {e.icon && <Icon name={e.icon} size={12} style={{ verticalAlign: '-0.1em' }} />}{' '}
+                          {e.titreLong}
+                        </a>
+                        <div className="muted">
+                          {e.date === today ? "aujourd'hui" : <DateF d={e.date} />}
+                        </div>
+                      </Ligne>
+                    ))}
+                    {echeances.length > 8 && (
+                      <div className="muted small" style={{ paddingTop: 4 }}>
+                        <a href="#/calendrier">
+                          + {echeances.length - 8} autre{echeances.length - 8 > 1 ? 's' : ''} — voir le calendrier
+                        </a>
+                      </div>
+                    )}
+                  </>
+                )}
+              </Repere>
+
               <Repere titre="Phases en cours">
-                {phasesEnCours.length === 0 ? (
+                {phases.length === 0 ? (
                   <RienASignaler>Aucune phase en cours aujourd'hui.</RienASignaler>
                 ) : (
-                  phasesEnCours.map(({ projet, phase }) => (
+                  phases.map(({ projet, phase }) => (
                     <Ligne key={`${projet.id}-${phase.code}`}>
                       <a href={`#/projets/${projet.id}`}>
                         {projet.id} · {phase.code}
@@ -686,52 +888,6 @@ export default function Cockpit() {
                       — {projet.nom}
                       <div className="muted">
                         fin prévue le <DateF d={phase.fin} />
-                      </div>
-                    </Ligne>
-                  ))
-                )}
-              </Repere>
-
-              <Repere titre="Prochaines factures à émettre">
-                {prochainesFactures.length === 0 ? (
-                  <RienASignaler>Aucune facturation prévue à venir.</RienASignaler>
-                ) : (
-                  prochainesFactures.map((e) => (
-                    <Ligne key={e.id}>
-                      <a href={`#/projets/${e.projetId}`}>{e.projetId}</a> — {e.libelle}
-                      <div className="muted">
-                        <Money v={e.montantHT} /> HT · à émettre le <DateF d={e.datePrevue} />
-                      </div>
-                    </Ligne>
-                  ))
-                )}
-              </Repere>
-
-              {evenements.length > 0 && (
-                <Repere titre="Agenda (72 h, en direct)">
-                  {evenements.slice(0, 4).map((e) => (
-                    <Ligne key={e.id}>
-                      <strong>{e.titre}</strong>
-                      <div className="muted">
-                        {e.journee
-                          ? `journée du ${fmtDate(e.debut)}`
-                          : new Date(e.debut).toLocaleString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
-                        {e.lieu ? ` · ${e.lieu}` : ''}
-                      </div>
-                    </Ligne>
-                  ))}
-                </Repere>
-              )}
-              <Repere titre="Prochaines obligations">
-                {prochainesObligations.length === 0 ? (
-                  <RienASignaler>Aucune obligation à venir.</RienASignaler>
-                ) : (
-                  prochainesObligations.map((o) => (
-                    <Ligne key={o.id}>
-                      <a href="#/agenda">{o.libelle}</a>
-                      {o.organisme ? <span className="muted"> — {o.organisme}</span> : null}
-                      <div className="muted">
-                        échéance le <DateF d={o.echeance} />
                       </div>
                     </Ligne>
                   ))

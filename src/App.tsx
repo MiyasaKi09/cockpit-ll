@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { useStore } from './store'
 import { Btn, ConfirmHost, Icon, Select, ToastHost, useRoute, useToday } from './ui'
 import { alertesActives } from './alerts'
+import { documentsATraiter } from './derive'
 import { badgeFinance } from './financeActions'
 import { basculerTheme, themeCourant } from './theme'
 import { useMoi, useSessionSupabase } from './moi'
@@ -151,9 +152,9 @@ export default function App() {
   // « local » après une connexion réussie, jusqu'au rechargement de la page
   const session = useSessionSupabase()
   const nbAlertes = alertesActives(state, today).filter((a) => a.gravite >= 2).length
-  const nbDocsATraiter = state.registreDocuments.filter((d) =>
-    ['recu', 'a_classer', 'a_valider'].includes(d.statut),
-  ).length
+  // le triplet de statuts « en attente d'un geste » se déclare dans derive.ts :
+  // recopié ici, il divergeait du bloc « validations attendues » de l'accueil
+  const nbDocsATraiter = documentsATraiter(state).length
   // badge Finance : uniquement les décisions humaines (audit §3.3)
   const nbFinance = badgeFinance(state, today)
   const [theme, setTheme] = useState(themeCourant())

@@ -55,6 +55,10 @@ import {
   type FSDirHandle,
 } from '../fsdrive'
 import { LIBELLES_PHASES, PHASES_ORDRE } from '../miqcp'
+// le triplet de statuts « en attente d'un geste humain » se déclare une
+// seule fois, dans derive.ts : recopié, il diverge du compteur du menu
+// et du bloc « validations attendues » de l'accueil
+import { documentsATraiter } from '../derive'
 import { syncActif } from '../sync'
 import {
   listerEntrantsDistants,
@@ -767,9 +771,7 @@ function CarteAVerifier() {
   // même règle qu'à la boîte d'arrivée : on ne signe pas au nom d'un autre
   const moi = useMoi()
   const signataire = moi.nom ?? state.settings.personnes[0]
-  const aVerifier = state.registreDocuments.filter((d) =>
-    ['recu', 'a_classer', 'a_valider'].includes(d.statut),
-  )
+  const aVerifier = documentsATraiter(state)
 
   const valider = (doc: DocumentRecord) =>
     update((d) => {
@@ -1062,9 +1064,7 @@ const ONGLETS = [
 export default function Documents() {
   const route = useRoute()
   const { state } = useStore()
-  const nbAVerifier = state.registreDocuments.filter((d) =>
-    ['recu', 'a_classer', 'a_valider'].includes(d.statut),
-  ).length
+  const nbAVerifier = documentsATraiter(state).length
   const tab = ONGLETS.some((o) => o.id === route[1]) ? route[1] : 'entrants'
   return (
     <Page

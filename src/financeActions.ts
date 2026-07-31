@@ -10,6 +10,20 @@ import { attendusOuverts } from './achats'
 import { controlesCloture } from './comptable'
 import { addMonths, fmtDate, fmtMoney, monthKey } from './util'
 
+/** famille d'une action — l'accueil SÉLECTIONNE dans cette liste au lieu
+ *  de refaire la boucle. Le préfixe de `id` portait déjà l'information,
+ *  mais sous forme de chaîne à découper : un champ typé se relit, se
+ *  rétrécit (`a.kind === 'facture_achat'`) et ne se désynchronise pas.
+ *  Champ OPTIONNEL : les appelants existants (badge Finance, écran
+ *  Finance) ne changent pas d'une ligne. */
+export type KindActionFinance =
+  | 'emettre_facture'
+  | 'facture_achat'
+  | 'attendu'
+  | 'encaissement'
+  | 'rejet_transmission'
+  | 'cloture'
+
 export interface ActionFinance {
   id: string
   titre: string
@@ -17,6 +31,7 @@ export interface ActionFinance {
   lien: string
   date?: string
   gravite: 1 | 2 | 3
+  kind?: KindActionFinance
 }
 
 /** décisions humaines en attente sur toute la chaîne finance */
@@ -33,6 +48,7 @@ export function actionsATraiter(state: AppState, today: string): ActionFinance[]
       lien: `#/facturation/emettre/${e.id}`,
       date: e.datePrevue,
       gravite: 3,
+      kind: 'emettre_facture',
     })
   }
   // factures fournisseurs à valider
@@ -45,6 +61,7 @@ export function actionsATraiter(state: AppState, today: string): ActionFinance[]
       lien: '#/finance/achats',
       date: f.dateFacture,
       gravite: 2,
+      kind: 'facture_achat',
     })
   }
   // attendus : facture récurrente absente, justificatif bancaire, montant anormal
@@ -56,6 +73,7 @@ export function actionsATraiter(state: AppState, today: string): ActionFinance[]
       lien: a.type === 'justificatif_banque' ? '#/finance/banque' : '#/finance/achats',
       date: a.date,
       gravite: 2,
+      kind: 'attendu',
     })
   }
   // encaissements non rapprochés (les débits sont déjà des attendus)
@@ -68,6 +86,7 @@ export function actionsATraiter(state: AppState, today: string): ActionFinance[]
       lien: '#/finance/banque',
       date: t.date,
       gravite: 2,
+      kind: 'encaissement',
     })
   }
   // transmissions rejetées (Chorus/PDP) — action précise avec le motif
@@ -81,6 +100,7 @@ export function actionsATraiter(state: AppState, today: string): ActionFinance[]
       lien: '#/facturation',
       date: derniere.date,
       gravite: 3,
+      kind: 'rejet_transmission',
     })
   }
   // clôture du mois précédent bloquée
@@ -95,6 +115,7 @@ export function actionsATraiter(state: AppState, today: string): ActionFinance[]
         detail: 'checklist de clôture dans Finance → Comptable',
         lien: '#/finance/comptable',
         gravite: 2,
+        kind: 'cloture',
       })
     }
   }

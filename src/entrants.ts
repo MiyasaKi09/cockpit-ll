@@ -7,7 +7,8 @@
 // clé secrète côté client.
 // ============================================================
 
-import { clientSupabase } from './sync'
+import { useEffect, useState } from 'react'
+import { clientSupabase, syncActif } from './sync'
 
 /** une pièce reçue côté serveur, en attente de validation humaine */
 export interface EntrantDistant {
@@ -78,6 +79,47 @@ export async function listerEntrantsDistants(): Promise<EntrantDistant[]> {
     confiance: l.confiance,
     raisons: Array.isArray(l.raisons) ? l.raisons : [],
   }))
+}
+
+/**
+ * Combien de pièces attendent dans la boîte partagée — `null` quand
+ * l'espace partagé n'est pas connecté ou n'a pas encore répondu.
+ *
+ * L'accueil annonce ces pièces parmi les validations attendues, mais il
+ * ne peut pas les DÉRIVER : elles vivent côté serveur, pas dans l'état
+ * local. Le compteur est donc lu ici, une fois, et passé en argument aux
+ * fonctions de calcul — l'écran ne filtre rien lui-même. La session du
+ * lien magique s'ouvrant en asynchrone au démarrage, une seconde lecture
+ * est tentée peu après, puis le rythme retombe à cinq minutes.
+ */
+export function useNbEntrantsDistants(): number | null {
+  const [nb, setNb] = useState<number | null>(null)
+  useEffect(() => {
+    let vivant = true
+    const lire = async () => {
+      if (!syncActif()) {
+        if (vivant) setNb(null)
+        return
+      }
+      try {
+        const liste = await listerEntrantsDistants()
+        if (vivant) setNb(liste.length)
+      } catch {
+        // boîte partagée illisible : l'accueil n'annonce rien plutôt
+        // qu'un zéro trompeur — le module Documents porte le message
+        if (vivant) setNb(null)
+      }
+    }
+    void lire()
+    const differe = setTimeout(() => void lire(), 2500)
+    const iv = setInterval(() => void lire(), 300_000)
+    return () => {
+      vivant = false
+      clearTimeout(differe)
+      clearInterval(iv)
+    }
+  }, [])
+  return nb
 }
 
 /** télécharge le contenu de la pièce (bucket privé) en File prêt à ranger */

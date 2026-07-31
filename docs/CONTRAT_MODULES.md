@@ -108,7 +108,13 @@ facturable90j, carnetHT}`, `dateLimiteVerif(state, situation)`,
 référence), `ecartHeures(state, projet, phase?): EcartHeuresPhase`
 (`{baseline, prevu, reel, reference, ecart, surBaseline, derivePrevision}` — l'écart
 signé du §11.3), `baselineDepuisPhases(phases, meta)`, `normaliserBaselineHeures`,
-`baselineApresMigration(projet, reprendre, le)`.
+`baselineApresMigration(projet, reprendre, le)` ; **accueil du §8.1** :
+`documentsATraiter(state)` (+ `STATUTS_DOCUMENT_A_TRAITER`), `situationsAVerifier(state)`,
+`validationsAttendues(state, today, actionsFinance, entrantsDistants?): GroupeValidation[]`,
+`reunionsDuJour(state, today, agenda?): ReunionDuJour[]`, `evenements(state): EvtCal[]`
+(+ `COULEURS_ECHEANCE`) et `prochainesEcheances(state, today, jours = 14)`,
+`phasesEnCours(state, today)`, `semaineParPersonne(state, lundi, personnes?):
+LigneSemainePersonne[]` (temps pointé, charge planifiée et capacité en regard).
 
 **La prévision d'heures figée ne vit jamais dans `Phase`.** `Projet.baselineHeures` est
 un champ à part parce que « Recalculer la répartition » remplace `projet.phases` en
@@ -193,9 +199,33 @@ alert-actions`, `form-row form-foot`, `empty`.
   classes `alert-item alert-{gravite}` ; chaque alerte : dot, titre, détail, lien « ouvrir »
   vers `a.lien`, bouton « Sommeil 7 j » (snooze via update) et « 30 j ». Grouper visuellement :
   gravité 3 d'abord (l'ordre est déjà trié). État vide : « Rien d'urgent — le fil est calme. »
-- **Repères du jour** : carte avec la date du jour formatée, phases en cours (projets actifs
-  dont une phase encadre today, avec fin), 3 prochaines factures à émettre (statut prevue,
-  émission ≥ today, triées), 3 prochaines obligations. Liens vers les modules.
+- **Validations attendues** (CDC §8.1) : un groupe du centre d'actions qui agrège les quatre
+  familles en attente d'une signature — factures fournisseurs `a_valider`, documents du registre
+  `recu`/`a_classer`/`a_valider`, situations `a_verifier`, pièces arrivées dans la boîte
+  partagée. Une ligne par famille : compte, détail traçable, lien. La source est
+  `derive.validationsAttendues(state, today, actionsATraiter(…), nbEntrants)` — les factures
+  fournisseurs **ne sont pas refiltrées** ici, elles arrivent par `financeActions`.
+- **Repères du jour** (rail latéral) : réunions du jour (`reunionsDuJour` — `ReunionChantier`
+  du jour + agenda Google **borné à la journée**, avec un repli explicite quand la session
+  Google est fermée : seul le navigateur porte la portée calendrier, le jeton serveur ne
+  l'a pas) ; prochaines échéances sur 14 jours (`prochainesEcheances`, qui remplace et
+  contient les anciennes listes « prochaines factures à émettre » et « prochaines
+  obligations ») ; phases en cours (`phasesEnCours`). Liens vers les modules.
+  **[corrigé]** La rédaction précédente décrivait trois listes calculées sur place dans
+  `Cockpit.tsx` ; elles refaisaient, moins bien, l'inventaire de `evenements()`.
+- **Ma semaine** : `Table` du temps enregistré et de la charge prévisionnelle de la semaine,
+  via `derive.semaineParPersonne` (qui met en regard `tempsParPersonne`,
+  `chargePlanifieeSemaine` et `capacitePersonneSemaine`). Aucun seuil de couleur inventé :
+  la charge dépasse la capacité, ou elle ne la dépasse pas.
+- **Filtre par personne** : un `segmente` dans l'en-tête de page qui gouverne toute la page.
+  Il part de `useMoi()` et **retombe sur « Tout » quand l'identité est inconnue** ; un choix
+  explicite de l'utilisateur l'emporte ensuite.
+- **Les factures à émettre n'ont qu'un seul constructeur** : `financeActions.actionsATraiter`.
+  Le Cockpit sélectionne `kind === 'emettre_facture'` dans cette liste et en réaffiche le
+  titre, le détail, le lien, la date et la gravité — il ne les réécrit pas. La version
+  précédente les construisait des deux côtés, avec deux gravités identiques par coïncidence
+  entretenue à la main. `scripts/test-accueil.cjs` le vérifie, comme il vérifie qu'aucune
+  balise `<table>` brute n'est réintroduite dans les écrans de l'accueil.
 - Sous-titre de page : rappel « Claude propose, l'humain valide — intranet 100 % déterministe ».
 
 ### Projets.tsx — projets & marchés (le plus gros module)

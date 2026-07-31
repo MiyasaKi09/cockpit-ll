@@ -81,6 +81,9 @@ jobs:
       - name: Project team on creation
         run: npm run test:equipe
 
+      - name: Home screen blocks and no recomputation
+        run: npm run test:accueil
+
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 

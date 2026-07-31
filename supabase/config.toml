@@ -16,6 +16,11 @@ verify_jwt = false
 [functions.veille-enrichir]
 verify_jwt = false
 
+# Résumé automatique (§5.3) : appelée par pg_cron avec son propre secret
+# (resume_cron_secret), distinct de celui des quatre autres tâches.
+[functions.resume-messages]
+verify_jwt = false
+
 # Configuration pilotée depuis le Cockpit : JWT utilisateur obligatoire.
 [functions.ingestion-config]
 verify_jwt = true

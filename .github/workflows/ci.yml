@@ -105,6 +105,9 @@ jobs:
       - name: Unified project attachment cascade and learned corrections
         run: npm run test:rattachement
 
+      - name: Draft summaries stay attached, bounded and labelled
+        run: npm run test:resume
+
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 

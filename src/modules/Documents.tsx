@@ -17,6 +17,7 @@ import {
   LienGmail,
   Modal,
   Page,
+  ResumeMessage,
   Select,
   Table,
   Tabs,
@@ -1255,6 +1256,16 @@ function CarteMessagesARattacher() {
                     </ul>
                   </details>
                 )}
+                {/* Le résumé du §5.3 quand il y en a un — c'est-à-dire quand
+                    ce message a DÉJÀ été rattaché puis détaché à la main :
+                    l'Edge Function A.6 ne résume que les messages rattachés.
+                    Le cas est rare et il est exactement celui où la mention
+                    « brouillon » compte : on rouvre un message dont une
+                    machine a écrit trois lignes, et c'est d'après lui, pas
+                    d'après elles, qu'on choisit le projet. A.7 montera le
+                    même composant dans `LigneCourrier`, où il servira tous
+                    les jours. */}
+                <ResumeMessage resume={tete.resume} le={tete.resumeLe} />
                 <ChoixRattachement
                   adresse={tete.expediteurAdresse}
                   valeur={c.projetId}

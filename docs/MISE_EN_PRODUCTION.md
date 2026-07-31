@@ -76,17 +76,32 @@ Dans cet ordre :
    npx supabase functions deploy veille-collecte
    npx supabase functions deploy veille-mails
    npx supabase functions deploy veille-enrichir
+   npx supabase functions deploy resume-messages
    ```
 
-   `supabase/config.toml` fixe le `verify_jwt` de chacune. Les cinq fonctions
+   `supabase/config.toml` fixe le `verify_jwt` de chacune. Les six fonctions
    appelées sans session utilisateur — callback OAuth et tâches planifiées —
    sont en `verify_jwt = false` et appliquent leur propre authentification
    (`state` OAuth signé ou `x-cron-secret`). Un déploiement qui les passerait en
    `verify_jwt = true` casserait les crons.
 
-4. **Tâches planifiées** : créées par la migration `20260730085456`.
-   `cron.schedule()` remplace une tâche de même nom, donc réappliquer ne crée
-   pas de doublon.
+4. **Tâches planifiées** : créées par les migrations `20260730085456`
+   (`gmail-ingestion`, `veille-collecte`, `veille-mails`, `veille-enrichir`) et
+   `20260731170000` (`resume-messages`). `cron.schedule()` remplace une tâche de
+   même nom, donc réappliquer ne crée pas de doublon.
+
+5. **Secret du résumé automatique**, si l'agence veut les résumés du §5.3 :
+
+   ```bash
+   npx supabase secrets set RESUME_ANTHROPIC_API_KEY=sk-ant-...
+   # facultatif : npx supabase secrets set RESUME_MODELE=claude-opus-5
+   ```
+
+   Cette clé est **propre à `resume-messages`** : ce n'est pas celle de Vercel,
+   et c'est délibéré — révoquer l'une n'éteint pas l'autre, et la facture se
+   lit par usage. Tant qu'elle n'est pas posée, la tâche tourne, ne dépense
+   rien, et l'écrit dans `ingestion_config.resume_dernier_resultat`. Rien
+   d'autre dans le Cockpit n'en dépend.
 
 La migration `20260730180000` crée le **registre des membres**
 (`public.membres`) et fait appeler `est_membre_actif()` / `role_courant()` par
@@ -157,6 +172,26 @@ Cette migration ne se défait pas d'un `drop table` sans perdre les corrections
 humaines qu'elle aura accumulées : rattachements, axes choisis, messages
 marqués traités. Elle est en revanche entièrement rejouable.
 
+La migration `20260731170000` fait tourner le **résumé automatique** du §5.3
+(livrable A.6). Elle ne crée aucune colonne de résumé — `communications.resume`
+et `resume_le` viennent de `20260731150000` — mais elle pose ce qui borne la
+dépense. Quatre points opérationnels :
+
+- **elle s'applique AVANT le déploiement de `resume-messages`** : la fonction
+  s'authentifie sur `ingestion_config.resume_cron_secret`, et sans cette
+  colonne elle refuse tout le monde, y compris son propre planificateur ;
+- **le secret de cette tâche est distinct de `cron_secret`**, que les quatre
+  autres partagent, et il est tiré en base : il n'apparaît ni dans Git ni dans
+  `cron.job`. C'est la seule tâche du dépôt qui dépense de l'argent à chaque
+  passage — un secret compromis ailleurs ne doit pas ouvrir ce robinet. La
+  migration **refuse de s'appliquer** si les deux secrets sont identiques ;
+- **seuls les messages rattachés à un projet sont résumés** (§3.8), au plus
+  huit par passage, quarante par heure et deux cents par jour. Ces bornes sont
+  dans le code de la fonction ; le compteur, lui, est `resume_le` — ce qui a
+  réellement été facturé, et non un compteur à part qui pourrait en diverger ;
+- **sans `RESUME_ANTHROPIC_API_KEY`, rien ne se produit et rien ne se casse.**
+  Le résumé est un confort : le reste du Cockpit ne le lit jamais pour décider.
+
 La migration `20260730160000` fait estampiller l'auteur d'une écriture par le
 serveur : `workspace.updated_by` cesse de recevoir l'identifiant d'onglet envoyé
 par le navigateur et reçoit `auth.uid()`. La signature de la RPC ne change pas,
@@ -215,7 +250,8 @@ select id, public from storage.buckets where id in ('entrants', 'veille') order 
 
 select jobname, schedule, active
   from cron.job
- where jobname in ('gmail-ingestion', 'veille-collecte', 'veille-mails', 'veille-enrichir')
+ where jobname in ('gmail-ingestion', 'veille-collecte', 'veille-mails', 'veille-enrichir',
+                   'resume-messages')
  order by jobname;
 
 select grantee, privilege_type

@@ -677,6 +677,56 @@ export function LienGmail({
   )
 }
 
+/**
+ * Le résumé automatique du §5.3 — et la mention « brouillon » qui va avec.
+ *
+ * POURQUOI UN COMPOSANT POUR TROIS LIGNES DE TEXTE. Parce que ces trois
+ * lignes sont les seules du Cockpit qu'une machine a écrites en toutes
+ * lettres. Le §5.3 est explicite — « le résumé ne remplace jamais le message
+ * original » — et le contrat des modules l'est aussi : ce qui vient d'un
+ * modèle reste un brouillon jusqu'à relecture. Ces deux règles ne tiennent
+ * que si elles sont affichées AVEC le texte, à chaque fois : un résumé
+ * recopié à la main dans un écran perdrait sa mention au premier
+ * copier-coller, et personne ne s'en apercevrait — il ressemblerait
+ * exactement à ce que l'expéditeur a écrit. `scripts/test-resume-messages.cjs`
+ * refuse donc que le résumé d'un message soit rendu ailleurs que par ce
+ * composant.
+ *
+ * Il ne porte PAS le lien de retour : `LienGmail` est monté à côté, sur la
+ * même surface, et le dupliquer ici en ferait un second « Ouvrir dans Gmail ».
+ * Quand il n'y a pas de résumé, il n'affiche rien — l'absence n'est pas une
+ * information ici : la plupart des messages n'en ont pas encore, et un
+ * « pas de résumé » répété partout serait du bruit.
+ */
+export function ResumeMessage({
+  resume,
+  le,
+}: {
+  /** `communications.resume` — le brouillon produit par l'Edge Function A.6 */
+  resume: string | null | undefined
+  /** `communications.resume_le` — quand il a été produit */
+  le?: string | null
+}) {
+  const texte = (resume || '').trim()
+  if (!texte) return null
+  return (
+    <div className="pill-note" style={{ margin: '6px 0' }}>
+      <p className="small" style={{ margin: 0 }}>
+        <Badge tone="warn">brouillon</Badge>{' '}
+        <span className="muted">
+          Résumé automatique{le ? ` du ${fmtDate(le.slice(0, 10))}` : ''} — il ne remplace pas le
+          message : relisez l’original avant de décider.
+        </span>
+      </p>
+      {texte.split('\n').map((ligne, i) => (
+        <p key={i} className="small" style={{ margin: '4px 0 0' }}>
+          {ligne}
+        </p>
+      ))}
+    </div>
+  )
+}
+
 // ---------- formulaires ----------
 
 export function Field({ label, children, hint }: { label: string; children: ReactNode; hint?: string }) {

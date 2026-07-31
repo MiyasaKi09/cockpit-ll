@@ -164,6 +164,35 @@ Le critère 2, lui, ne tient pas au lien de retour mais à ce que le message soi
 et **affiché** (A.7, puis B.15) : tant que la file quotidienne lit `state.courriers`, un courrier
 importé par une routine n'a pas d'identifiant Gmail et le composant le dit.
 
+**Le résumé automatique du §5.3 n'a qu'un composant : `ResumeMessage` (`ui.tsx`).**
+Il rend `communications.resume` — les trois phrases qu'une machine a écrites — et il
+rend TOUJOURS avec elles la mention « brouillon » et la phrase du §5.3 : le résumé ne
+remplace jamais le message d'origine. C'est là toute sa raison d'être : le texte, seul,
+est indiscernable de ce que l'expéditeur a écrit, et un écran qui l'afficherait sans sa
+mention transformerait une aide de lecture en source. Sans résumé il n'affiche rien —
+la plupart des messages n'en ont pas, et le dire partout serait du bruit. Il ne porte pas
+le lien de retour : `LienGmail` est monté à côté, sur la même surface. **Tout écran qui
+lit `Communication.resumeLe` doit monter ce composant** ; `scripts/test-resume-messages.cjs`
+le vérifie fichier par fichier, rend le composant en HTML et refuse une seconde
+définition. Il est monté aujourd'hui dans `CarteMessagesARattacher` (`Documents.tsx`) —
+le seul écran où un message déjà résumé peut réapparaître, puisqu'il a fallu le détacher
+à la main pour l'y ramener ; A.7 le montera dans `LigneCourrier`, où il servira chaque
+matin.
+
+**Le résumé est produit côté serveur, jamais dans le navigateur.** L'Edge Function
+`supabase/functions/resume-messages` (livrable A.6, §3.8) est la seule à appeler un
+modèle pour cet usage, avec **sa propre clé Anthropic** (secret Supabase
+`RESUME_ANTHROPIC_API_KEY`, jamais celle de Vercel), **son propre secret de
+planification** (`ingestion_config.resume_cron_secret`, distinct de celui des quatre
+autres tâches : c'est la seule qui dépense de l'argent à chaque passage) et **sa propre
+limitation de débit** à trois bornes — huit appels par passage, quarante par heure, deux
+cents par jour, comptés dans `resume_le`, c'est-à-dire dans ce qui a réellement été
+facturé. Elle ne résume que les messages **rattachés à un projet** (colonne générée
+`projet_id`), et elle n'écrit que `resume` et `resume_le` : ni le corps, ni l'objet, ni un
+axe, ni un rattachement. Elle ne détecte **ni tâche, ni échéance, ni décision, ni
+risque** — c'est A.9 (la table `propositions`) et A.10 (les détecteurs), et sa consigne
+le lui interdit nommément.
+
 `fsdrive.ts` : accès au dossier Drive local (File System Access) — `supporteFS`,
 `choisirRacine` / `lireRacine` / `sauverRacine` (poignée mémorisée en IndexedDB),
 `verifierPermission`, `slugProjet(p)`, `nomConforme`, `rangerFichier`,
@@ -232,7 +261,10 @@ commande les trois axes à la fois, et signer en n'écrivant qu'une colonne huma
 deux autres. Aucune signature vide n'est acceptée — sans signataire, la colonne générée ne
 bascule pas et la correction serait perdue en paraissant faite. Les **sélecteurs métier**
 (`mailsATraiter`, `mailsEnAttenteDeReponse`, `echangesParPhase`) sont le livrable A.12 et ne
-vivent pas ici.
+vivent pas ici. `Communication.resume` / `resumeLe` sont en **lecture seule** côté
+navigateur — le GRANT au niveau colonne et le trigger de la migration A.2 le garantissent :
+le résumé s'écrit uniquement par l'Edge Function `resume-messages`, et il s'affiche
+uniquement par `ResumeMessage`.
 
 `rattachement.ts` : LE rattachement d'un message, d'une pièce ou d'une ligne importée à un
 projet (CDC §5.1, plan §3.7) — `rattacherDepuisEtat(state, indices)`, `reperesDe(state)`,
@@ -277,7 +309,8 @@ hors ligne.
 actions?})`, `Card({titre?, actions?, className?})`, `Badge({tone})` (`ok|warn|danger|info|muted`),
 `Stat({label, value, sub?, tone?})`, `Money`, `DateF`, `EmptyState`, `Btn({kind, small,
 disabled, title})` (`default|primary|ghost|danger`), `CopyBtn({text: string | () => string,
-label?, kind?, small?})`, `LienGmail({source, bouton?, muet?})`, `Field({label, hint?})`, `TextInput`, `TextArea({mono?})`,
+label?, kind?, small?})`, `LienGmail({source, bouton?, muet?})`,
+`ResumeMessage({resume, le?})`, `Field({label, hint?})`, `TextInput`, `TextArea({mono?})`,
 `NumInput({value: number|null})`, `DateInput({value: string|null})`, `Select({options})`,
 `Modal({titre, onClose, large?})`, `Tabs({tabs, actif, onSelect})`, `Table({head, compact?})`.
 

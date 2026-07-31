@@ -100,7 +100,7 @@ const fonctions = fs
   .filter((entree) => entree.isDirectory() && !entree.name.startsWith('_'))
   .map((entree) => entree.name)
 
-assert.equal(fonctions.length, 6, 'six fonctions Edge sont attendues')
+assert.equal(fonctions.length, 7, 'sept fonctions Edge sont attendues')
 for (const nom of fonctions) {
   assert.ok(
     runbook.includes(`functions deploy ${nom}`),

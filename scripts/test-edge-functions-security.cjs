@@ -12,11 +12,18 @@ const configurationFonction = (nom) => {
   return motif.exec(config)?.[1] || ''
 }
 
-for (const nom of ['gmail-oauth', 'gmail-ingestion', 'veille-collecte', 'veille-mails', 'veille-enrichir']) {
+for (const nom of [
+  'gmail-oauth',
+  'gmail-ingestion',
+  'veille-collecte',
+  'veille-mails',
+  'veille-enrichir',
+  'resume-messages',
+]) {
   assert.match(configurationFonction(nom), /verify_jwt\s*=\s*false/, `${nom} doit accepter son auth applicative`)
 }
 assert.match(configurationFonction('ingestion-config'), /verify_jwt\s*=\s*true/, 'ingestion-config doit exiger un JWT')
-for (const nom of ['gmail-ingestion', 'veille-collecte', 'veille-mails', 'veille-enrichir']) {
+for (const nom of ['gmail-ingestion', 'veille-collecte', 'veille-mails', 'veille-enrichir', 'resume-messages']) {
   assert.match(
     lire(`supabase/functions/${nom}/index.ts`),
     /req\.method !== 'POST'/,
@@ -90,7 +97,14 @@ assert.equal(
 // Le contrôle d'accès passe par le registre des membres (livrable 0.2) et non
 // plus par une liste d'adresses recopiée dans chaque fonction. Le détail est
 // vérifié par scripts/test-registre-membres.cjs ; ici on garde le principe.
-for (const nom of ['gmail-ingestion', 'ingestion-config', 'veille-collecte', 'veille-enrichir', 'veille-mails']) {
+for (const nom of [
+  'gmail-ingestion',
+  'ingestion-config',
+  'veille-collecte',
+  'veille-enrichir',
+  'veille-mails',
+  'resume-messages',
+]) {
   assert.match(
     lire(`supabase/functions/${nom}/index.ts`),
     /from '\.\.\/_shared\/membres\.ts'/,
@@ -139,6 +153,7 @@ for (const fichier of [
   'supabase/functions/veille-collecte/index.ts',
   'supabase/functions/veille-enrichir/index.ts',
   'supabase/functions/veille-mails/index.ts',
+  'supabase/functions/resume-messages/index.ts',
 ]) {
   const resultat = ts.transpileModule(lire(fichier), {
     compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
@@ -160,6 +175,7 @@ for (const fichier of [
   'supabase/functions/veille-collecte/index.ts',
   'supabase/functions/veille-enrichir/index.ts',
   'supabase/functions/veille-mails/index.ts',
+  'supabase/functions/resume-messages/index.ts',
 ]) {
   assert.match(
     lire(fichier),

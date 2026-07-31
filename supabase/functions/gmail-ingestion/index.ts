@@ -47,13 +47,45 @@
 //    n'est ni téléchargée ni proposée à la validation : la boîte
 //    d'arrivée ne liste que `a_valider`, elle ne bouge pas d'un iota.
 //
+// LIVRABLE A.2 — CE QUI A CHANGÉ, ET POURQUOI
+// -------------------------------------------
+// 4. LA REQUÊTE S'ÉLARGIT À TOUT LE COURRIER. `has:attachment` faisait
+//    de `entrants` l'unique mémoire des échanges, donc un message sans
+//    pièce jointe n'existait NULLE PART — c'est le critère 2 du §22
+//    qui tombait. Chaque message indexable alimente désormais
+//    `public.communications` : un message, une ligne. `entrants` ne
+//    bouge pas d'un iota : elle reste l'index des PIÈCES à valider.
+//    `PORTEE_CURSEUR` passe donc en v2, et c'est exactement ce pour
+//    quoi elle a été écrite en A.1 : un curseur hérité de la requête
+//    étroite ferait sauter tout l'historique sans pièce jointe.
+// 5. DEUX FORMATS GMAIL, SELON LE MESSAGE (§3.6). `format=metadata`
+//    coûte le même quota que `format=full` pour une réponse dix à
+//    cinquante fois plus légère, mais il ne rend ni `payload.parts` ni
+//    `attachmentId` : inapplicable à un message porteur d'une pièce.
+//    On liste donc la tranche DEUX fois — une fois en entier, une fois
+//    filtrée sur `has:attachment` — et la seconde liste ne sert qu'à
+//    savoir quel format demander. L'ORDRE, lui, vient toujours de la
+//    liste complète : c'est de lui que dépend la monotonie du curseur,
+//    et fusionner deux listes triées par date sans connaître les dates
+//    la détruirait. Si la liste filtrée est tronquée, on retombe sur
+//    `full` pour tout le monde : mieux vaut une réponse lourde qu'une
+//    pièce jointe jamais vue.
+// 6. LE RATTACHEMENT N'A QU'UN MOTEUR. `classer()` est scindé en
+//    `rattacher()` (projet + domaine de l'expéditeur) et le classement
+//    documentaire qui l'appelle : le message et la pièce reçoivent la
+//    même réponse à la même question. Ses résultats à l'identique —
+//    c'est une extraction, pas une seconde implémentation. Les trois
+//    axes du §5.2, eux, restent VIDES ici : leur classifieur est le
+//    livrable A.8, et un axe faux coûte plus cher qu'un axe à choisir.
+//
 // Accès : en-tête x-cron-secret (planificateur) OU jeton d'une
 // personne de l'agence (bouton « Scanner maintenant »).
 //
-// ORDRE DE DÉPLOIEMENT : la migration
-// `20260731103000_ingestion_gmail_enrichie` s'applique AVANT ce code.
-// Sans elle, les colonnes enrichies n'existent pas et chaque
-// insertion échoue.
+// ORDRE DE DÉPLOIEMENT : les migrations
+// `20260731103000_ingestion_gmail_enrichie` et
+// `20260731150000_communications_index_des_messages` s'appliquent
+// AVANT ce code. Sans elles, les colonnes enrichies et la table des
+// messages n'existent pas, et chaque insertion échoue.
 // ============================================================
 
 import { createClient, type SupabaseClient } from 'jsr:@supabase/supabase-js@2.110.0'
@@ -78,11 +110,23 @@ const TAILLE_MIN_IMAGE = 20 * 1024 // sous 20 Ko, une image est une signature
 
 /** La requête que le curseur parcourt. Elle fait partie de l'IDENTITÉ du
  *  curseur (`curseur_gmail_portee`) : l'élargir sans le dire ferait sauter
- *  tout ce qui précède le curseur et n'entrait pas dans l'ancienne requête. */
-const REQUETE_GMAIL = 'has:attachment'
+ *  tout ce qui précède le curseur et n'entrait pas dans l'ancienne requête.
+ *
+ *  A.2 l'élargit de `has:attachment` à TOUT le courrier : un message sans
+ *  pièce jointe n'existait nulle part, et c'est le critère 2 du §22. La
+ *  recherche Gmail couvre par défaut tout sauf spam et corbeille ; seuls les
+ *  fils Chat sont écartés ici, les brouillons l'étant par `estIndexable()`. */
+const REQUETE_GMAIL = '-in:chats'
+/** Le filtre qui distingue les messages à ouvrir en `format=full` (une pièce
+ *  jointe s'y trouve, il faut la nommer et la télécharger) de ceux qui se
+ *  contentent de `format=metadata`. */
+const REQUETE_PIECES = 'has:attachment'
 /** Version de la portée : à incrémenter si le SENS de la requête change
  *  sans que son texte change (nouveau filtrage côté code, par exemple). */
-const PORTEE_CURSEUR = `${REQUETE_GMAIL}|v1`
+const PORTEE_CURSEUR = `${REQUETE_GMAIL}|v2`
+/** Les en-têtes demandés en `format=metadata` — ceux du §3.6, plus `Date` et
+ *  `Subject` sans lesquels un message n'a ni date d'envoi ni objet. */
+const ENTETES_METADATA = ['From', 'To', 'Cc', 'Subject', 'Date', 'Message-ID', 'In-Reply-To', 'References']
 
 const JOUR_MS = 86_400_000
 /** premier passage : on reprend la fenêtre de l'ancienne requête, ni plus ni moins */
@@ -134,20 +178,27 @@ interface Reperes {
   entreprises: { raisonSociale: string; domaines: string[] }[]
 }
 
-function classer(reperes: Reperes, nomFichier: string, objet: string, expediteur: string) {
-  const texte = fold(`${nomFichier} ${objet}`)
+/** ce qu'on sait du projet auquel un texte se rattache, et pourquoi */
+interface Rattachement {
+  projetId: string | null
+  confiance: number
+  raisons: string[]
+}
+
+/**
+ * LE moteur de rattachement, celui du §3.7 : identifiant de projet dans le
+ * texte, à défaut nom du projet, puis domaine de l'expéditeur rapproché de
+ * `Entreprise.domaines`. Un seul, appelé aussi bien pour un MESSAGE que pour
+ * une PIÈCE : le §3.7 relève que trois moteurs divergents répondaient trois
+ * choses différentes à la même question selon la porte d'entrée. Sa fusion
+ * complète avec ceux du navigateur est le livrable A.4 ; ici on s'interdit
+ * simplement d'en ajouter un quatrième.
+ *
+ * `texte` est déjà replié (`fold`) par l'appelant.
+ */
+function rattacher(reperes: Reperes, texte: string, expediteur: string): Rattachement {
   const raisons: string[] = []
   let confiance = 0
-
-  let categorie = 'AUTRE'
-  const entree = LEXIQUE.find((l) => l.motif.test(texte))
-  if (entree) {
-    categorie = entree.categorie
-    confiance += entree.poids
-    raisons.push(`Le nom ou l'objet ${entree.libelle}.`)
-  } else {
-    raisons.push('Aucun mot du lexique reconnu — catégorie à choisir.')
-  }
 
   let projetId: string | null = null
   const parId = reperes.projets.find((p) =>
@@ -178,7 +229,50 @@ function classer(reperes: Reperes, nomFichier: string, objet: string, expediteur
     raisons.push(`L'expéditeur (@${domaine}) correspond à « ${parDomaine.raisonSociale} ».`)
   }
 
-  return { categorie, projetId, confiance: Math.min(confiance, 0.95), raisons }
+  return { projetId, confiance: Math.min(confiance, 0.95), raisons }
+}
+
+/** classement documentaire d'une PIÈCE : le lexique, puis le rattachement
+ *  ci-dessus. Résultats inchangés — c'est une extraction, pas une réécriture. */
+function classer(reperes: Reperes, nomFichier: string, objet: string, expediteur: string) {
+  const texte = fold(`${nomFichier} ${objet}`)
+  const raisons: string[] = []
+  let confiance = 0
+
+  let categorie = 'AUTRE'
+  const entree = LEXIQUE.find((l) => l.motif.test(texte))
+  if (entree) {
+    categorie = entree.categorie
+    confiance += entree.poids
+    raisons.push(`Le nom ou l'objet ${entree.libelle}.`)
+  } else {
+    raisons.push('Aucun mot du lexique reconnu — catégorie à choisir.')
+  }
+
+  const projet = rattacher(reperes, texte, expediteur)
+
+  return {
+    categorie,
+    projetId: projet.projetId,
+    confiance: Math.min(confiance + projet.confiance, 0.95),
+    raisons: [...raisons, ...projet.raisons],
+  }
+}
+
+/** Rattachement d'un MESSAGE : son objet seul, jamais son corps — un nom de
+ *  projet cité en signature ou dans un fil recopié rattacherait à tort, et un
+ *  rattachement faux se corrige à la main un par un. */
+function rattacherMessage(reperes: Reperes, objet: string, expediteur: string): Rattachement {
+  const trouve = rattacher(reperes, fold(objet), expediteur)
+  if (trouve.projetId) return trouve
+  return {
+    projetId: null,
+    confiance: 0,
+    raisons: [
+      ...trouve.raisons,
+      'Ni identifiant ni nom de projet dans l’objet — projet à choisir.',
+    ],
+  }
 }
 
 // ---------- Gmail ----------
@@ -200,10 +294,11 @@ async function gmail<T>(jeton: string, chemin: string): Promise<T> {
  */
 async function listerTranche(
   jeton: string,
+  requete: string,
   apresSec: number,
   avantSec: number,
 ): Promise<{ ids: string[]; complet: boolean }> {
-  const q = encodeURIComponent(`${REQUETE_GMAIL} after:${apresSec} before:${avantSec}`)
+  const q = encodeURIComponent(`${requete} after:${apresSec} before:${avantSec}`)
   const ids: string[] = []
   let pageToken = ''
   for (let page = 0; page < PAGES_MAX; page++) {
@@ -245,6 +340,40 @@ function contexteMessage(msg: MessageEnrichi) {
     libelles: msg.libelles,
     direction: msg.direction,
     corps_extrait: msg.corpsExtrait,
+  }
+}
+
+/** La ligne de `public.communications` : le message lui-même, une fois, qu'il
+ *  porte une pièce jointe ou non.
+ *
+ *  Ce qu'elle n'écrit PAS est aussi important que ce qu'elle écrit. Les
+ *  colonnes humaines (`projet_id_valide`, `phase`, `type_echange`,
+ *  `importance`, `traite_le`…) sont absentes : l'`upsert` ne les touche donc
+ *  jamais, et un re-scan ne peut pas effacer une correction. Les trois axes
+ *  PROPOSÉS restent vides — leur classifieur est le livrable A.8 ; les
+ *  remplir à l'aveugle ici donnerait un classement faux, c'est-à-dire un
+ *  classement qui ne se voit pas. */
+function ligneCommunication(msg: MessageEnrichi, projet: Rattachement, nbPieces: number) {
+  return {
+    gmail_message_id: msg.id,
+    gmail_thread_id: msg.threadId,
+    message_id_rfc: msg.messageIdRfc,
+    en_reponse_a: msg.enReponseA,
+    references_rfc: msg.references,
+    expediteur: msg.expediteur,
+    expediteur_adresse: msg.expediteurAdresse,
+    destinataires: msg.destinataires,
+    copies: msg.copies,
+    objet: msg.objet,
+    corps_extrait: msg.corpsExtrait,
+    libelles: msg.libelles,
+    direction: msg.direction,
+    nb_pieces_jointes: nbPieces,
+    envoye_le: msg.envoyeLe,
+    recu_le: msg.recuLe,
+    projet_id_propose: projet.projetId,
+    confiance_rattachement: projet.projetId ? projet.confiance : null,
+    raisons_rattachement: projet.raisons,
   }
 }
 
@@ -370,20 +499,34 @@ Deno.serve(async (req: Request) => {
   const plafond = maintenant - MARGE_MS
   if (borneBasse >= plafond) {
     await noter('Rien de nouveau (curseur à jour).')
-    return json({ statut: 'ok', nouvelles: 0, messages: 0, ignorees: 0, sortants: 0 })
+    return json({ statut: 'ok', nouvelles: 0, messages: 0, messagesIndexes: 0, ignorees: 0, sortants: 0 })
   }
   let borneHaute = Math.min(plafond, borneBasse + FENETRE_MS)
 
   // Tranche listée jusqu'au bout, ou resserrée jusqu'à ce qu'elle le soit :
   // c'est la seule façon de savoir quels sont les PLUS ANCIENS messages d'une
   // liste que Gmail rend du plus récent au plus ancien.
-  let listing = await listerTranche(jetonGmail, Math.floor(borneBasse / 1000), Math.ceil(borneHaute / 1000))
+  let listing = await listerTranche(jetonGmail, REQUETE_GMAIL, Math.floor(borneBasse / 1000), Math.ceil(borneHaute / 1000))
   let resserrages = 0
   while (!listing.complet && borneHaute - borneBasse > FENETRE_MIN_MS && resserrages < 3) {
     borneHaute = borneBasse + Math.max(FENETRE_MIN_MS, Math.floor((borneHaute - borneBasse) / 2))
-    listing = await listerTranche(jetonGmail, Math.floor(borneBasse / 1000), Math.ceil(borneHaute / 1000))
+    listing = await listerTranche(jetonGmail, REQUETE_GMAIL, Math.floor(borneBasse / 1000), Math.ceil(borneHaute / 1000))
     resserrages++
   }
+
+  // Seconde liste, sur la MÊME tranche : elle ne sert qu'à savoir quel format
+  // demander message par message. L'ordre, lui, reste celui de la liste
+  // complète ci-dessus — fusionner deux listes triées par date sans connaître
+  // les dates détruirait la monotonie du curseur. Tronquée, elle ne sert plus
+  // à rien : on repasse tout le monde en `full` plutôt que de risquer une
+  // pièce jointe jamais vue.
+  const listingPieces = await listerTranche(
+    jetonGmail,
+    `${REQUETE_GMAIL} ${REQUETE_PIECES}`,
+    Math.floor(borneBasse / 1000),
+    Math.ceil(borneHaute / 1000),
+  )
+  const avecPiece = new Set(listingPieces.ids)
 
   // Gmail liste du plus récent au plus ancien : on remonte le temps pour
   // traiter les plus anciens d'abord et n'avancer le curseur qu'après eux.
@@ -402,12 +545,20 @@ Deno.serve(async (req: Request) => {
   let ignorees = 0
   let sortants = 0
   let echecs = 0
+  let messagesIndexes = 0
   let curseurAtteint = borneBasse
 
   for (const id of ids) {
     let msg: MessageEnrichi
     try {
-      const brut = await gmail<MessageGmail>(jetonGmail, `messages/${id}?format=full`)
+      // `format=metadata` coûte le même quota pour une réponse dix à cinquante
+      // fois plus légère (§3.6) — mais il ne rend ni les parties MIME ni les
+      // identifiants de téléchargement : réservé aux messages sans pièce.
+      const complet = !listingPieces.complet || avecPiece.has(id)
+      const chemin = complet
+        ? `messages/${id}?format=full`
+        : `messages/${id}?format=metadata&${ENTETES_METADATA.map((h) => `metadataHeaders=${h}`).join('&')}`
+      const brut = await gmail<MessageGmail>(jetonGmail, chemin)
       msg = enrichir({ ...brut, id }, adressesAgence, maintenant)
     } catch {
       // un message illisible ne doit pas bloquer le curseur : il serait
@@ -422,9 +573,30 @@ Deno.serve(async (req: Request) => {
     curseurAtteint = Math.max(curseurAtteint, msg.recuMs)
 
     if (!estIndexable(msg.libelles)) continue
-    if (dejaVus.has(id)) continue
 
     const pieces = msg.pieces.filter(pieceRetenue)
+
+    // --- L'INDEX DES MESSAGES (§4.3, critère 2) ---
+    // Avant tout traitement de pièce, et pour TOUS les messages — entrants
+    // comme sortants, avec pièce ou sans. C'est ce qui fait exister dans
+    // Cockpit un message qui n'apporte aucun fichier, c'est-à-dire la grande
+    // majorité du courrier d'un projet.
+    //
+    // `upsert` sur `gmail_message_id` : rejouer une tranche ou redescendre le
+    // curseur ne crée pas de doublon. Et parce que la ligne n'emporte AUCUNE
+    // colonne humaine, un re-scan ne peut pas effacer un rattachement corrigé,
+    // un axe choisi ni un message marqué traité.
+    const projet = rattacherMessage(reperes, msg.objet, msg.expediteur)
+    const { error: erreurIndex } = await sb
+      .from('communications')
+      .upsert(ligneCommunication(msg, projet, pieces.length), { onConflict: 'gmail_message_id' })
+    if (!erreurIndex) messagesIndexes++
+
+    // Les pièces, elles, ne se rouvrent pas : le message est déjà passé par la
+    // boîte d'arrivée. Cette borne vient APRÈS l'index des messages — sinon un
+    // message dont les pièces sont déjà validées n'entrerait jamais dans la
+    // mémoire du projet.
+    if (dejaVus.has(id)) continue
 
     // --- message SORTANT : indexé, jamais téléchargé, jamais à valider ---
     if (msg.direction === 'sortant') {
@@ -501,6 +673,7 @@ Deno.serve(async (req: Request) => {
   const reste = idsAnciensDabord.length - ids.length
   const details = [
     `${ids.length} message(s) examiné(s) jusqu'au ${new Date(curseurSuivant).toISOString().slice(0, 16).replace('T', ' ')}`,
+    `${messagesIndexes} indexé(s) dans la mémoire des échanges`,
     ignorees ? `${ignorees} doublon(s) ignoré(s)` : '',
     sortants ? `${sortants} pièce(s) sortante(s) indexée(s)` : '',
     reste > 0 ? `${reste} en attente du prochain passage` : '',
@@ -511,13 +684,16 @@ Deno.serve(async (req: Request) => {
   await noter(
     nouvelles > 0
       ? `${nouvelles} pièce(s) proposée(s) dans la boîte d'arrivée (${details.join(', ')}).`
-      : `Rien de nouveau (${details.join(', ')}).`,
+      : messagesIndexes > 0
+        ? `Aucune pièce à valider, mais la mémoire des échanges a avancé (${details.join(', ')}).`
+        : `Rien de nouveau (${details.join(', ')}).`,
     curseurSuivant,
   )
   return json({
     statut: 'ok',
     nouvelles,
     messages: ids.length,
+    messagesIndexes,
     ignorees,
     sortants,
     echecs,

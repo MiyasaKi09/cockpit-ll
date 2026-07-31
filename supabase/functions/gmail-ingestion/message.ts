@@ -26,18 +26,24 @@
 // — n'a aucune définition sans eux. Un message ingéré sans son fil
 // est un message qu'il faudra ré-ingérer.
 //
-// DÉVIATION ASSUMÉE SUR `format=metadata` (§3.6)
-// ----------------------------------------------
+// LES DEUX FORMATS GMAIL, ET POURQUOI LES DEUX (§3.6)
+// ---------------------------------------------------
 // Le §3.6 recommande `format=metadata` avec des `metadataHeaders`
 // ciblés : même coût de quota, réponse dix à cinquante fois plus
-// légère. C'est juste pour A.2, qui indexera TOUS les messages. Ici
-// l'ingestion n'ouvre que des messages qui portent une pièce jointe,
-// et `format=metadata` ne renvoie ni `payload.parts` ni
-// `body.attachmentId` : il ne permet donc ni de nommer la pièce ni
-// de la télécharger. L'intention du §3.6 — capter les métadonnées
-// dès maintenant — est tenue ; son moyen ne l'est pas, faute d'être
-// applicable à ce périmètre. A.2 reprendra `format=metadata` pour
-// les messages sans pièce.
+// légère. Il n'est applicable qu'aux messages SANS pièce jointe —
+// `format=metadata` ne renvoie ni `payload.parts` ni
+// `body.attachmentId`, donc il ne permet ni de nommer une pièce ni de
+// la télécharger. Depuis A.2, l'ingestion ouvre TOUS les messages :
+// elle emploie donc les deux formats, `full` pour ceux qui portent
+// une pièce, `metadata` pour les autres (voir `index.ts`).
+//
+// Conséquence pour ce module : en `metadata`, le corps est absent.
+// Gmail rend en revanche `snippet` dans TOUS les formats — un extrait
+// en texte brut, déjà débalisé. C'est lui qui alimente alors
+// `corpsExtrait`. Sans ce repli, tous les messages sans pièce
+// entreraient dans l'index avec un extrait vide, et le résumé du
+// §5.3 (livrable A.6) n'aurait rien à résumer sur la moitié la plus
+// nombreuse du courrier.
 // ============================================================
 
 /** un en-tête RFC 5322 tel que l'API Gmail le rend */
@@ -56,12 +62,17 @@ export interface PartieGmail {
   parts?: PartieGmail[]
 }
 
-/** la ressource `users.messages.get?format=full`, réduite à ce qu'on lit */
+/** la ressource `users.messages.get`, réduite à ce qu'on lit — les deux
+ *  formats employés (`full`, `metadata`) rendent les mêmes champs, à ceci
+ *  près que `metadata` livre `payload.headers` sans `payload.parts` */
 export interface MessageGmail {
   id: string
   threadId?: string
   labelIds?: string[]
   internalDate?: string
+  /** extrait en texte brut rendu par Gmail dans TOUS les formats — le seul
+   *  corps disponible quand le message a été ouvert en `format=metadata` */
+  snippet?: string
   payload?: PartieGmail
 }
 
@@ -246,10 +257,17 @@ export function debaliser(html: string): string {
     .trim()
 }
 
-/** l'extrait de corps : `text/plain` d'abord, `text/html` débalisé à défaut */
-export function extraitDuCorps(payload: PartieGmail | undefined, max = EXTRAIT_MAX): string {
+/** l'extrait de corps : `text/plain` d'abord, `text/html` débalisé à défaut,
+ *  et le `snippet` de Gmail en dernier ressort — c'est le seul corps rendu
+ *  par `format=metadata`, employé pour les messages sans pièce jointe. Le
+ *  `snippet` porte des entités HTML (`&#39;`) : il passe par `debaliser`. */
+export function extraitDuCorps(
+  payload: PartieGmail | undefined,
+  max = EXTRAIT_MAX,
+  snippet = '',
+): string {
   const texte = partieDeType(payload, 'text/plain')
-  const brut = texte || debaliser(partieDeType(payload, 'text/html'))
+  const brut = texte || debaliser(partieDeType(payload, 'text/html')) || debaliser(snippet)
   return brut.replace(/\r\n/g, '\n').replace(/[ \t]{2,}/g, ' ').trim().slice(0, max)
 }
 
@@ -342,7 +360,7 @@ export function enrichir(
     recuLe,
     recuMs,
     direction: directionDe(libelles, expediteurAdresse, adressesAgence),
-    corpsExtrait: extraitDuCorps(payload),
+    corpsExtrait: extraitDuCorps(payload, EXTRAIT_MAX, m.snippet || ''),
     pieces: piecesDe(payload),
   }
 }

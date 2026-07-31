@@ -127,6 +127,36 @@ Deux points opérationnels :
   `ingestion_config.dernier_resultat` dit à chaque fois jusqu'où le curseur est
   allé et combien de messages restent en attente.
 
+La migration `20260731150000` crée `public.communications` (livrable A.2),
+l'index des **messages** : un message, une ligne, qu'il porte une pièce jointe
+ou non. C'est elle qui fait exister dans Cockpit le courrier d'un projet qui
+n'apporte aucun fichier — la grande majorité — et donc le critère 2 du §22.
+Quatre points opérationnels :
+
+- **elle s'applique AVANT le redéploiement de `gmail-ingestion`**, pour la même
+  raison que la précédente : la nouvelle source insère dans cette table, et une
+  insertion vers une table absente échoue à chaque passage du cron ;
+- **la requête Gmail s'élargit**, de « les messages avec pièce jointe » à tout
+  le courrier. La portée du curseur passe donc de `v1` à `v2`, et la fonction
+  **repart d'une fenêtre de sept jours** : c'est voulu, et c'est ce que
+  `curseur_gmail_portee` protégeait. Un curseur hérité de la requête étroite
+  aurait fait sauter en silence tout l'historique sans pièce jointe. Le
+  rattrapage prend plusieurs heures de cron ; les pièces déjà validées ne sont
+  pas re-proposées (l'unicité de `entrants` et le contrôle « déjà vues » n'ont
+  pas bougé) et les messages déjà indexés sont mis à jour, jamais dupliqués ;
+- **le volume par passage est borné à 25 messages** comme avant. Les messages
+  sans pièce jointe sont ouverts en `format=metadata` (§3.6) : même coût de
+  quota, réponse dix à cinquante fois plus légère, et le `snippet` de Gmail
+  sert d'extrait de corps ;
+- **les trois axes du §5.2 restent vides au premier jour.** Leur classifieur
+  déterministe est le livrable A.8 ; la table les porte dès maintenant parce
+  que les ajouter après coup imposerait de rouvrir dans Gmail, une par une,
+  toutes les lignes déjà ingérées.
+
+Cette migration ne se défait pas d'un `drop table` sans perdre les corrections
+humaines qu'elle aura accumulées : rattachements, axes choisis, messages
+marqués traités. Elle est en revanche entièrement rejouable.
+
 La migration `20260730160000` fait estampiller l'auteur d'une écriture par le
 serveur : `workspace.updated_by` cesse de recevoir l'identifiant d'onglet envoyé
 par le navigateur et reçoit `auth.uid()`. La signature de la RPC ne change pas,

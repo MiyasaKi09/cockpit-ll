@@ -96,6 +96,9 @@ jobs:
       - name: Enriched Gmail ingestion and incremental cursor
         run: npm run test:ingestion-gmail
 
+      - name: Message index, closed axes and machine proposals
+        run: npm run test:communications
+
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 

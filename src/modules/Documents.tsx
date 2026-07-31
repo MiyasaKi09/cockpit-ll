@@ -14,6 +14,7 @@ import {
   Card,
   EmptyState,
   Field,
+  LienGmail,
   Modal,
   Page,
   Select,
@@ -26,7 +27,7 @@ import {
   toast,
   useRoute,
 } from '../ui'
-import { fmtDate, fold, gmailMessageUrl, todayISO } from '../util'
+import { fmtDate, fold, lienGmail, todayISO } from '../util'
 import {
   CATEGORIES_DOC,
   DOSSIER_PAR_CATEGORIE,
@@ -210,7 +211,7 @@ function CarteArriveesServeur() {
         sourceId: e.id,
         // le chemin de retour vers l'échange d'origine (critère 10) : sans lui,
         // une pièce classée perd le contexte qui explique pourquoi elle existe
-        sourceUrl: gmailMessageUrl(e.sourceMessageId || '') || undefined,
+        sourceUrl: lienGmail(e.sourceMessageId) || undefined,
         categorie: c.categorie,
         typeMime: e.typeMime || undefined,
         taille: e.taille || undefined,
@@ -312,7 +313,11 @@ function CarteArriveesServeur() {
                 {e.confiance != null && <BadgeConfiance confiance={e.confiance} />}
               </p>
               <p className="small muted" style={{ margin: '0 0 6px' }}>
-                {e.expediteur} · « {e.objet} » · {fmtDate(e.recuLe.slice(0, 10))}
+                {e.expediteur} · « {e.objet} » · {fmtDate(e.recuLe.slice(0, 10))} ·{' '}
+                {/* le classement se décide sur le message, pas sur son nom de
+                    fichier : sans ce lien il faut retrouver l'échange à la main
+                    dans Gmail avant de choisir un projet */}
+                <LienGmail source={e.sourceMessageId} />
               </p>
               {e.raisons.length > 0 && (
                 <details className="small" style={{ marginBottom: 6 }}>
@@ -374,7 +379,7 @@ function CarteArriveesServeur() {
 
 /** journalise la provenance mail sur le document (dans le producteur) */
 function ajouterEvenementMail(doc: DocumentRecord, e: EntrantDistant): void {
-  const lien = gmailMessageUrl(e.sourceMessageId || '')
+  const lien = lienGmail(e.sourceMessageId)
   doc.evenements.push({
     date: todayISO(),
     type: 'source',
@@ -911,11 +916,12 @@ function ModalDocument({ doc: docInitial, onClose }: { doc: DocumentRecord; onCl
           hint="corrige le rattachement — la modification est journalisée ci-dessous"
         />
       </div>
-      {doc.sourceUrl && (
+      {/* la mention est portée par la SOURCE du document, pas par la présence
+          de l'URL : une pièce venue de Gmail dont le lien manque doit le dire,
+          un fichier déposé à la main n'a rien à dire du tout */}
+      {doc.source === 'gmail' && (
         <p className="small" style={{ margin: '8px 0' }}>
-          <a href={doc.sourceUrl} target="_blank" rel="noreferrer">
-            Ouvrir dans Gmail
-          </a>{' '}
+          <LienGmail source={doc.sourceUrl} />{' '}
           <span className="muted">— l’e-mail qui a apporté cette pièce reste la source de vérité.</span>
         </p>
       )}
@@ -1032,6 +1038,14 @@ function CarteTous() {
                     {d.titre}
                   </a>
                   {d.cheminDrive && <div className="small muted mono">{d.cheminDrive}</div>}
+                  {d.source === 'gmail' && (
+                    <div className="small">
+                      {/* `muet` : dans un tableau de tout le registre, dire
+                          l'absence d'un lien ligne après ligne serait du bruit
+                          — la fiche, elle, le dit */}
+                      <LienGmail source={d.sourceUrl} muet />
+                    </div>
+                  )}
                 </td>
                 <td>
                   {d.categorie}
@@ -1229,15 +1243,7 @@ function CarteMessagesARattacher() {
                 <p className="small muted" style={{ margin: '0 0 6px' }}>
                   {tete.expediteur || tete.expediteurAdresse} ·{' '}
                   {tete.envoyeLe ? fmtDate(tete.envoyeLe.slice(0, 10)) : '—'} ·{' '}
-                  {libelleProposition(proposition)}
-                  {tete.urlGmail && (
-                    <>
-                      {' · '}
-                      <a href={tete.urlGmail} target="_blank" rel="noreferrer">
-                        ouvrir dans Gmail ↗
-                      </a>
-                    </>
-                  )}
+                  {libelleProposition(proposition)} · <LienGmail source={tete.urlGmail} />
                 </p>
                 {raisons.length > 0 && (
                   <details className="small" style={{ marginBottom: 6 }}>
@@ -1329,7 +1335,7 @@ function CarteCourriersARattacher() {
             </p>
             <p className="small muted" style={{ margin: '0 0 6px' }}>
               {ligne.expediteur} · {ligne.date ? fmtDate(ligne.date) : '—'} ·{' '}
-              {libelleProposition(ligne.proposition)}
+              {libelleProposition(ligne.proposition)} · <LienGmail source={ligne.source} />
             </p>
             {ligne.proposition.raisons.length > 0 && (
               <details className="small" style={{ marginBottom: 6 }}>

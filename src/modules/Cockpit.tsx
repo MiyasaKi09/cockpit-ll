@@ -21,7 +21,7 @@ import { useMemo, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import type { Alerte } from '../types'
 import { useStore } from '../store'
-import { Btn, Card, DateF, EmptyState, Icon, Modal, Money, Page, RowMenu, Stat, Table, confirmer, navigate, toast, useToday } from '../ui'
+import { Btn, Card, DateF, EmptyState, Icon, LienGmail, Modal, Money, Page, RowMenu, Stat, Table, confirmer, navigate, toast, useToday } from '../ui'
 import { alertesActives } from '../alerts'
 import {
   caCible,
@@ -274,6 +274,12 @@ function LigneCourrier({ personne }: { personne: string }) {
         auteur: c.pour,
         texte: `Mail de ${c.de} — ${c.objet}\n${c.resume}${c.actionProposee ? `\nAction : ${c.actionProposee}` : ''}`,
         tags: ['mail', c.type],
+        // §4.2 : « chaque tâche, décision, document ou échéance issue d'un
+        // e-mail doit également conserver ce lien ». Ce geste-ci est le seul
+        // du dépôt qui transforme un message en autre chose ET fait
+        // disparaître le message de la file : la note devient la seule trace,
+        // et sans la source elle est une citation sans référence.
+        source: c.source,
       })
       c.statut = 'traite'
     })
@@ -308,6 +314,10 @@ function LigneCourrier({ personne }: { personne: string }) {
             </div>
           </div>
           <div className="alert-actions">
+            {/* §4.2 : le premier geste sur un mail à traiter est souvent de le
+                RELIRE en entier — le résumé ne remplace pas le message, et le
+                Cockpit ne devient pas une messagerie (§4.1) */}
+            <LienGmail source={c.source} bouton />
             {c.de && (
               <Btn small kind="primary" onClick={() => repondre(c)} title="Ouvre un brouillon de réponse dans Gmail">
                 Répondre

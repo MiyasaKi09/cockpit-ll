@@ -3,7 +3,7 @@
 import { Children, Fragment, cloneElement, isValidElement, useEffect, useRef, useState } from 'react'
 import type { CSSProperties, ReactElement, ReactNode } from 'react'
 import { copier } from './prompts'
-import { fmtDate, fmtMoney, parseNum, todayISO } from './util'
+import { fmtDate, fmtMoney, lienGmail, parseNum, todayISO } from './util'
 
 // ---------- routage hash minimal ----------
 
@@ -610,6 +610,70 @@ export function CopyBtn({
     >
       {fait ? '✓ Copié !' : label}
     </Btn>
+  )
+}
+
+// ---------- retour vers la source (CDC §4.2) ----------
+
+/**
+ * « Ouvrir dans Gmail » — le bouton du §4.2, rendu partout de la même façon.
+ *
+ * POURQUOI UN COMPOSANT, ET PAS UN `<a>` RECOPIÉ. Le lien existait déjà, une
+ * fois, sur la pièce jointe classée (livrable 0.6) ; l'onglet « À rattacher »
+ * en a écrit un second, avec un autre libellé (« ouvrir dans Gmail ↗ »). Deux
+ * copies, et déjà deux formulations pour le même geste — la troisième aurait
+ * oublié `rel="noreferrer"`, et la quatrième serait née dans un module qui
+ * n'affiche le lien que si la source est *devinée* correctement. Le §4.2 dit
+ * « chaque e-mail affiché » : le seul moyen de le vérifier est qu'il n'y ait
+ * qu'un composant à chercher.
+ *
+ * `source` accepte les quatre formes du dépôt (identifiant nu, `gmail:<id>`,
+ * URL déjà construite, texte sans identifiant) : c'est `lienGmail` qui les
+ * ramène à une URL, et `src/util.ts` reste le seul constructeur d'URL Gmail —
+ * `scripts/test-oauth-lecture-seule.cjs` refuse tout autre auteur.
+ *
+ * QUAND IL N'Y A PAS DE LIEN, ON LE DIT. Un courrier importé par une routine
+ * n'a pas d'identifiant Gmail. Ne rien afficher se lirait « ce message n'est
+ * plus dans Gmail », ce qui est faux : il y est, c'est le Cockpit qui ne sait
+ * pas lequel. `muet` supprime cette mention là où elle serait du bruit — une
+ * liste dense, une ligne de tableau — et jamais là où l'utilisateur doit
+ * décider quelque chose à partir du message.
+ */
+export function LienGmail({
+  source,
+  bouton,
+  muet,
+}: {
+  /** identifiant Gmail, `gmail:<id>`, URL déjà construite, ou rien */
+  source: string | null | undefined
+  /** rendu en bouton, pour une barre d'actions ; sinon lien de texte */
+  bouton?: boolean
+  /** ne rien afficher quand la source n'identifie aucun message */
+  muet?: boolean
+}) {
+  const href = lienGmail(source)
+  if (!href)
+    return muet ? null : (
+      <span
+        className="muted small"
+        title="Ce message est arrivé sans son identifiant Gmail (import de routine, saisie manuelle) : il n’y a pas de chemin de retour."
+      >
+        message d’origine non identifié
+      </span>
+    )
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      className={bouton ? 'btn btn-ghost btn-small' : undefined}
+      title="Rouvrir le message dans Gmail — Gmail reste la source de vérité (§4.3)"
+      // le lien vit souvent dans une ligne cliquable : le clic ouvre Gmail,
+      // il n'ouvre pas aussi la fiche derrière
+      onClick={(ev) => ev.stopPropagation()}
+    >
+      Ouvrir dans Gmail
+    </a>
   )
 }
 

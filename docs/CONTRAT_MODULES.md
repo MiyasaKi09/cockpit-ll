@@ -105,7 +105,10 @@ Alerte, Settings, AppState…).
 `parseNum`, `clamp`, `fold` (normalisation accents/casse), `download(nom, contenu, type?)`,
 `DOMAINE_AGENCE` (`agence-ll.fr` — non acheté : il ne sert qu'à *proposer*, rien ne doit
 dépendre de son existence), `adresseProjetProposee(codeExterne, domaine?)`,
-`adresseProjetValide(adresse)` (aucun domaine présumé ; le champ vide est valide).
+`adresseProjetValide(adresse)` (aucun domaine présumé ; le champ vide est valide),
+`gmailComposeUrl` / `ouvrirGmail` (le seul chemin sortant, §22 critère 14),
+`gmailMessageUrl(id)` (le seul constructeur d'URL Gmail) et `lienGmail(source)`, qui lit les
+quatre formes sous lesquelles le dépôt garde la trace d'un message — voir `LienGmail` ci-dessous.
 
 `miqcp.ts` : `BAREME_1994`, `OUVRAGES` (`{code, bas, haut}`), `CRITERES_COMPLEXITE`
 (3 groupes × critères), `TOUS_CRITERES`, `REPARTITION_PHASES`, `PHASES_ORDRE`,
@@ -140,6 +143,26 @@ l'écart prévu / réel se reconstituerait faux la semaine suivante. Un écran q
 prévu et réel passe par `ecartHeures` — jamais par une soustraction locale — et n'écrit
 `baselineHeures` que sur un geste humain explicite (signature, figeage, redéfinition).
 `scripts/test-baseline-heures.cjs` le vérifie, et il porte le critère 15 du §22.
+
+**« Ouvrir dans Gmail » n'a qu'un composant : `LienGmail` (`ui.tsx`).** Le CDC §4.2 exige le
+bouton sur *chaque* e-mail affiché et sur *chaque* objet qui en est issu — pièce jointe classée,
+document du registre, note de journal archivée depuis un mail. Il existait deux fois, avec deux
+libellés pour le même geste, avant que la seconde copie n'oublie `rel="noreferrer"`. Le composant
+prend une `source` sous n'importe laquelle des quatre formes du dépôt (identifiant nu de
+`EntrantDistant.sourceMessageId` ou `Communication.gmailMessageId`, `gmail:<id>` de
+`Courrier.source`, URL figée de `DocumentRecord.sourceUrl` / `NoteJournal.source`, ou du texte qui
+ne désigne aucun message) et les ramène à une URL par `lienGmail` (`util.ts`) — `gmailMessageUrl`
+restant le seul constructeur d'URL Gmail du dépôt. **Quand la source n'identifie aucun message, il
+le dit** au lieu de ne rien afficher : une absence muette se lit « ce message n'existe plus »,
+alors qu'il est dans Gmail et que c'est le Cockpit qui ne sait pas lequel ; `muet` supprime cette
+mention là où elle serait du bruit, jamais là où l'utilisateur décide à partir du message.
+`scripts/test-lien-gmail.cjs` rend le composant en HTML, vérifie sur l'arbre syntaxique qu'il est
+monté dans chacune des sept surfaces d'affichage, et refuse qu'un autre fichier prononce
+« Ouvrir dans Gmail » — c'était la leçon du 0.6, dont le test ne regardait que le stockage : un
+lien rangé et jamais montré ne ramène personne à son e-mail. Il porte les critères 3 et 10 du §22.
+Le critère 2, lui, ne tient pas au lien de retour mais à ce que le message soit **indexé** (A.2)
+et **affiché** (A.7, puis B.15) : tant que la file quotidienne lit `state.courriers`, un courrier
+importé par une routine n'a pas d'identifiant Gmail et le composant le dit.
 
 `fsdrive.ts` : accès au dossier Drive local (File System Access) — `supporteFS`,
 `choisirRacine` / `lireRacine` / `sauverRacine` (poignée mémorisée en IndexedDB),
@@ -254,7 +277,7 @@ hors ligne.
 actions?})`, `Card({titre?, actions?, className?})`, `Badge({tone})` (`ok|warn|danger|info|muted`),
 `Stat({label, value, sub?, tone?})`, `Money`, `DateF`, `EmptyState`, `Btn({kind, small,
 disabled, title})` (`default|primary|ghost|danger`), `CopyBtn({text: string | () => string,
-label?, kind?, small?})`, `Field({label, hint?})`, `TextInput`, `TextArea({mono?})`,
+label?, kind?, small?})`, `LienGmail({source, bouton?, muet?})`, `Field({label, hint?})`, `TextInput`, `TextArea({mono?})`,
 `NumInput({value: number|null})`, `DateInput({value: string|null})`, `Select({options})`,
 `Modal({titre, onClose, large?})`, `Tabs({tabs, actif, onSelect})`, `Table({head, compact?})`.
 

@@ -577,6 +577,9 @@ pre {
   transition: transform 0.08s, box-shadow 0.08s, background 0.12s;
   white-space: nowrap;
 }
+/* « Ouvrir dans Gmail » est un lien (nouvel onglet), pas un bouton d'action :
+   il en garde l'apparence dans une barre d'actions sans en perdre la nature */
+a.btn { display: inline-block; text-decoration: none; }
 .btn:hover { background: color-mix(in srgb, var(--ink) 6%, var(--panel)); }
 .btn:disabled { opacity: 0.5; cursor: default; }
 .btn-primary {

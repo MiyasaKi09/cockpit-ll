@@ -11,7 +11,7 @@ import { useStore } from '../store'
 import { suggererTags, taggerImage } from '../tagging'
 import { lireRacine, nomConforme, rangerFichier, supporteFS, type ResultatRangement } from '../fsdrive'
 import { creerDocument, empreinteSha256, enregistrerDocument } from '../registre'
-import { Badge, Btn, Card, CopyBtn, EmptyState, Select, TextArea, TextInput, confirmer, toast, RowMenu } from '../ui'
+import { Badge, Btn, Card, CopyBtn, EmptyState, LienGmail, Select, TextArea, TextInput, confirmer, toast, RowMenu } from '../ui'
 import { fmtDate, fold, todayISO, uid } from '../util'
 
 function noteEnMarkdown(p: Projet, n: NoteJournal): string {
@@ -259,7 +259,11 @@ export default function ProjetJournal({ projet: p }: { projet: Projet }) {
                     <Badge key={t} tone={t === 'a-faire' ? (n.fait ? 'muted' : 'warn') : 'muted'}>
                       #{t}
                     </Badge>
-                  ))}
+                  ))}{' '}
+                  {/* une note archivée depuis un mail garde le chemin de retour
+                      vers ce mail (§4.2) ; les notes écrites à la main n'ont
+                      rien à afficher, d'où `muet` */}
+                  <LienGmail source={n.source} muet />
                 </div>
                 <div style={{ marginTop: 4, whiteSpace: 'pre-wrap', textDecoration: n.fait ? 'line-through' : undefined }}>
                   {n.texte}

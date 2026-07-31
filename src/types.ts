@@ -88,6 +88,11 @@ export interface NoteJournal {
   fichier?: string
   /** documents du registre rattachés à la note */
   documentIds?: string[]
+  /** trace du message d'origine quand la note vient d'un mail archivé
+   *  (« → Journal » du Cockpit) — même forme que `Courrier.source`, lue par
+   *  `lienGmail` (`src/util.ts`). CDC §4.2 : l'objet issu d'un e-mail garde
+   *  le chemin de retour vers l'e-mail. */
+  source?: string
 }
 
 export interface Projet {

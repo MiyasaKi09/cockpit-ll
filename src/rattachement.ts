@@ -257,6 +257,11 @@ export interface ARattacher {
   date: string
   /** le fil, quand il est connu : corriger un message corrige tout le fil */
   filId?: string
+  /** la trace du message d'origine, telle qu'elle est stockée — `gmail:<id>`
+   *  pour un courrier capté par l'onglet, du texte libre pour un courrier
+   *  importé. `lienGmail` (`src/util.ts`) sait la lire ; l'écran n'a pas à
+   *  connaître ces formes (CDC §4.2) */
+  source?: string
   proposition: Rattachement
 }
 
@@ -281,6 +286,7 @@ export function courriersARattacher(state: AppState): ARattacher[] {
       adresse: normaliserAdresse(c.de),
       objet: c.objet,
       date: c.dateReception || '',
+      source: c.source,
       proposition: rattacherMessage(reperes, { objet: c.objet, expediteur: c.de }),
     }))
 }

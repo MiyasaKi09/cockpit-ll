@@ -117,6 +117,9 @@ jobs:
       - name: On-screen notifications stay bounded
         run: npm run test:notifications
 
+      - name: Inbox switchover keeps both memories
+        run: npm run test:boite
+
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 

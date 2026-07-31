@@ -205,7 +205,7 @@ export function gmailMessageUrl(messageId: string): string | null {
  *
  *  Rendre `null` sur le dernier cas est le point : un lien mort vers Gmail se
  *  découvre en cliquant, une source dite absente se voit tout de suite. */
-function identifiantGmailDe(source: string | null | undefined): string | null {
+export function identifiantGmailDe(source: string | null | undefined): string | null {
   const brut = (source || '').trim()
   if (!brut) return null
   // une URL Gmail porte l'identifiant en dernier segment de son fragment

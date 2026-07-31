@@ -765,6 +765,39 @@ export function mailsATraiter(
 }
 
 /**
+ * La boîte « À traiter » de l'accueil (§8.1), telle que l'écran la montre.
+ *
+ * `mailsATraiter` répond à « ce message m'est-il adressé ». La boîte pose
+ * une question un peu plus large, et c'est celle que l'ancienne file
+ * `Courrier` posait déjà (`!c.pour || c.pour === personne`) : ce qui m'est
+ * adressé, ET ce qui n'est adressé nommément à personne de l'agence.
+ *
+ * Sans cette seconde moitié, un message arrivé sur une boîte partagée —
+ * `contact@…`, un formulaire de site, une liste de diffusion — ne serait
+ * dans la file de personne. Il disparaîtrait de l'accueil des deux
+ * associés le jour de la bascule, sans que rien ne le signale : c'est
+ * exactement le mode de panne que le §3.15 du plan interdit.
+ *
+ * Un message adressé nommément à l'autre associé, en revanche, sort bien
+ * de ma file : c'est le sens de la colonne `pour` qu'elle remplace.
+ */
+export function mailsATraiterPourLaBoite(
+  messages: Communication[],
+  adressesPersonne: string[],
+  adressesAgence: string[],
+): Communication[] {
+  const attendent = mailsATraiter(messages)
+  const miennes = new Set((adressesPersonne || []).map(adresseNormalisee).filter(Boolean))
+  if (miennes.size === 0) return attendent
+  const agence = new Set((adressesAgence || []).map(adresseNormalisee).filter(Boolean))
+  return attendent.filter((c) => {
+    const cibles = [...c.destinataires, ...c.copies].map(adresseNormalisee)
+    if (cibles.some((a) => miennes.has(a))) return true
+    return !cibles.some((a) => agence.has(a))
+  })
+}
+
+/**
  * Les fils dont le DERNIER message est entrant : on nous a écrit, et rien
  * n'est reparti depuis. C'est la définition du §8.2 (« mails nécessitant
  * une réponse »), et c'est elle que le producteur d'alerte

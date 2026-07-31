@@ -19,10 +19,15 @@
 
 import { useMemo, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
-import type { Alerte } from '../types'
+import type { Alerte, Courrier } from '../types'
 import { useStore } from '../store'
-import { Btn, Card, DateF, EmptyState, Icon, LienGmail, Modal, Money, Page, RowMenu, Stat, Table, confirmer, navigate, toast, useToday } from '../ui'
+import { Btn, Card, DateF, EmptyState, Icon, LienGmail, Modal, Money, Page, ResumeMessage, RowMenu, Stat, Table, confirmer, navigate, toast, useToday } from '../ui'
+import type { ContexteAlertes, MessageNotifiable } from '../alerts'
 import { alertesActives } from '../alerts'
+import { dateDe, fusionnerBoite, urgenceDe } from '../boite'
+import type { Communication, FiltreCommunications } from '../communications'
+import { mailsATraiterPourLaBoite, marquerTraite, useCommunications } from '../communications'
+import { lienGmail } from '../util'
 import {
   caCible,
   caRealiseAnnee,
@@ -235,16 +240,89 @@ function MenuReporter({ onReporter }: { onReporter: (jours: number | string) => 
   )
 }
 
-function LigneCourrier({ personne }: { personne: string }) {
+// ---------- la boîte « À traiter » : deux mémoires, un seul écran (A.7) ----------
+//
+// La file quotidienne bascule de `state.courriers` vers la table
+// `communications` (A.2), qui porte le fil, le sens du message, les trois
+// axes du §5.2 et un marqueur de traitement NOMINATIF (`traite_par` /
+// `traite_le`) là où `Courrier.statut` n'avait qu'un booléen anonyme.
+//
+// La bascule se fait par FUSION, pas par remplacement. Les deux sources
+// cohabitent tant qu'il reste des `Courrier` en `a_traiter` : couper
+// l'ancienne avant que la nouvelle soit prouvée en production ne casserait
+// pas la file — elle la viderait en silence, ce qui est pire, parce que
+// rien ne le signalerait. Le retrait est un livrable à part (B.15), et sa
+// condition de déclenchement est sept jours de parité mesurée.
+//
+// Les trois boutons sont RIGOUREUSEMENT les mêmes qu'avant : « Répondre »,
+// « → Journal », « ✓ Fait ». Le remplacement de « ✓ Fait » par « Créer une
+// tâche » appartient à B.3 ; le faire ici retirerait un geste avant que son
+// successeur existe.
+
+/** le filtre est une constante de module : il ne doit pas se reconstruire
+ *  à chaque rendu, sans quoi la couche d'accès repagine en boucle */
+const FILTRE_BOITE: FiltreCommunications = { direction: 'entrant', nonTraite: true }
+
+/** Une ligne de la boîte, quelle que soit la mémoire d'où elle vient.
+ *  Les deux sources se rejoignent ici pour être TRIÉES ENSEMBLE : deux
+ *  listes l'une sous l'autre auraient reclassé l'urgent d'une source
+ *  derrière l'ordinaire de l'autre. */
+interface LigneATraiter {
+  cle: string
+  /** 0-3, l'échelle de `Courrier.urgence` et de `graviteDe` — la même */
+  urgence: number
+  dateReception: string
+  objet: string
+  de: string
+  resume: string
+  actionProposee: string | null
+  pour: string | null
+  projetId: string | null
+  source: string | null
+  /** le brouillon du §5.3 quand A.6 en a produit un, avec sa date */
+  brouillon: { texte: string; le: string | null } | null
+  /** ce que le fil d'urgences a besoin d'en savoir (A.11) — la ligne le
+   *  porte plutôt que de laisser l'appelant le reconstruire depuis deux
+   *  formes différentes */
+  notifiable: MessageNotifiable
+  /** null quand le geste n'a pas de destination (message sans projet) */
+  versJournal: (() => void) | null
+  traiter: () => void
+  repondre: (() => void) | null
+}
+
+/**
+ * Construit la boîte du jour à partir des deux mémoires.
+ *
+ * Le dédoublonnage est la partie qui compte : le même mail existe des deux
+ * côtés pendant toute la transition — la surveillance navigateur écrit un
+ * `Courrier` (`src/surveillance.ts`), le cron serveur écrit une
+ * `communication`. L'identifiant Gmail les réconcilie.
+ *
+ * C'est la ligne RELATIONNELLE qui l'emporte : elle porte le projet, les
+ * axes et la signature. Mais traiter un message dont le jumeau existe
+ * encore marque AUSSI le jumeau : sans cela le vieux `Courrier` ressort dès
+ * que la table est hors de portée (hors ligne, cache froid), et le mail
+ * réapparaît traité une fois, à traiter une autre.
+ */
+function useBoiteATraiter(personne: string): LigneATraiter[] {
   const { state, update, replace } = useStore()
+  const moi = useMoi()
+  const { lignes } = useCommunications(FILTRE_BOITE)
+
   const courriers = state.courriers
     .filter((c) => c.statut === 'a_traiter')
     .filter((c) => !personne || !c.pour || c.pour === personne)
-    .sort((a, b) => (b.urgence || 0) - (a.urgence || 0) || a.dateReception.localeCompare(b.dateReception))
 
-  if (courriers.length === 0) return null
+  const signature = state.settings.personnes.join(' & ') || state.settings.nomAgence
+  const corpsDeReponse = (objet: string) =>
+    `Bonjour,\n\n` +
+    `Suite à votre message « ${objet} » :\n\n[à compléter]\n\n` +
+    `Cordialement,\n${signature}\n${state.settings.nomAgence}`
 
-  const traiter = (id: string) => {
+  // ----- ancienne mémoire : à l'identique, y compris ses gestes -----
+
+  const traiterCourrier = (id: string) => {
     const snap = state
     update((d) => {
       const c = d.courriers.find((x) => x.id === id)
@@ -253,15 +331,7 @@ function LigneCourrier({ personne }: { personne: string }) {
     toast('Courrier traité.', { undo: () => replace(snap) })
   }
 
-  const repondre = (c: (typeof courriers)[number]) => {
-    const corps =
-      `Bonjour,\n\n` +
-      `Suite à votre message « ${c.objet} » :\n\n[à compléter]\n\n` +
-      `Cordialement,\n${state.settings.personnes.join(' & ') || state.settings.nomAgence}\n${state.settings.nomAgence}`
-    ouvrirGmail(c.de, `Re: ${c.objet}`, corps)
-  }
-
-  const versJournal = (id: string) => {
+  const versJournalCourrier = (id: string) => {
     const snap = state
     update((d) => {
       const c = d.courriers.find((x) => x.id === id)
@@ -286,10 +356,144 @@ function LigneCourrier({ personne }: { personne: string }) {
     toast('Archivé dans le journal du projet.', { undo: () => replace(snap) })
   }
 
+  const deCourrier = (c: Courrier): LigneATraiter => ({
+    cle: `courrier:${c.id}`,
+    urgence: urgenceDe({ genre: 'courrier', courrier: c }),
+    dateReception: dateDe({ genre: 'courrier', courrier: c }),
+    objet: c.objet,
+    de: c.de,
+    resume: c.resume,
+    actionProposee: c.actionProposee || null,
+    pour: c.pour || null,
+    projetId: c.projetId,
+    source: c.source || null,
+    brouillon: null,
+    notifiable: {
+      id: `courrier-${c.id}`,
+      objet: c.objet,
+      expediteur: c.de,
+      projetId: c.projetId,
+      importance: c.importance ?? null,
+      envoyeLe: c.dateReception,
+      urlGmail: lienGmail(c.source),
+    },
+    versJournal: c.projetId ? () => versJournalCourrier(c.id) : null,
+    traiter: () => traiterCourrier(c.id),
+    repondre: c.de ? () => ouvrirGmail(c.de, `Re: ${c.objet}`, corpsDeReponse(c.objet)) : null,
+  })
+
+  // ----- nouvelle mémoire : mêmes gestes, écriture signée et datée -----
+
+  /** marque le message traité, et son jumeau `Courrier` s'il en reste un.
+   *  Rend `false` si l'écriture a été refusée — l'appelant ne doit alors
+   *  PAS annoncer que c'est fait. */
+  const marquer = async (c: Communication, jumeau: Courrier | null, fait: boolean): Promise<boolean> => {
+    try {
+      await marquerTraite(c, moi.nom || '', fait)
+    } catch (e) {
+      toast(e instanceof Error ? e.message : String(e), { tone: 'warn' })
+      return false
+    }
+    if (jumeau)
+      update((d) => {
+        const j = d.courriers.find((x) => x.id === jumeau.id)
+        if (j) j.statut = fait ? 'traite' : 'a_traiter'
+      })
+    return true
+  }
+
+  const traiterMessage = async (c: Communication, jumeau: Courrier | null) => {
+    if (!(await marquer(c, jumeau, true))) return
+    toast(`Message traité par ${moi.nom}.`, { undo: () => void marquer(c, jumeau, false) })
+  }
+
+  const versJournalMessage = async (c: Communication, jumeau: Courrier | null) => {
+    if (!c.projetId) return
+    const snap = state
+    // L'ordre compte : la marque de traitement part la PREMIÈRE. Si elle est
+    // refusée (aucun espace partagé, aucune identité), on n'a pas encore
+    // écrit de note — le message reste dans la file, visible, et rien n'est
+    // à défaire. L'inverse laisserait une note orpheline sur un message qui
+    // revient le lendemain.
+    if (!(await marquer(c, jumeau, true))) return
+    update((d) => {
+      const p = d.projets.find((x) => x.id === c.projetId)
+      if (!p) return
+      p.journal.push({
+        id: `note-${c.id}`,
+        date: c.envoyeLe || c.recuLe || new Date().toISOString(),
+        auteur: moi.nom || undefined,
+        texte: `Mail de ${c.expediteur} — ${c.objet}\n${c.resume || c.corpsExtrait}`,
+        tags: ['mail', c.typeEchange || 'autre'],
+        // même exigence qu'au-dessus : la note devient la seule trace
+        source: c.gmailMessageId,
+      })
+    })
+    toast('Archivé dans le journal du projet.', {
+      undo: () => {
+        replace(snap)
+        void marquer(c, jumeau, false)
+      },
+    })
+  }
+
+  const deMessage = (c: Communication, jumeau: Courrier | null): LigneATraiter => ({
+    cle: `message:${c.id}`,
+    // l'échelle commune aux deux mémoires vit dans `src/boite.ts`, avec le
+    // tri qui la consomme : la recopier ici la ferait diverger de l'ordre
+    urgence: urgenceDe({ genre: 'message', message: c, jumeau }),
+    dateReception: dateDe({ genre: 'message', message: c, jumeau }),
+    objet: c.objet,
+    de: c.expediteur || c.expediteurAdresse,
+    resume: c.corpsExtrait,
+    actionProposee: null,
+    pour: null,
+    projetId: c.projetId,
+    source: c.gmailMessageId,
+    brouillon: c.resume ? { texte: c.resume, le: c.resumeLe } : null,
+    notifiable: {
+      id: c.id,
+      objet: c.objet,
+      expediteur: c.expediteur || c.expediteurAdresse,
+      projetId: c.projetId,
+      importance: c.importance,
+      envoyeLe: c.envoyeLe,
+      urlGmail: c.urlGmail,
+      destinataires: c.destinataires,
+      copies: c.copies,
+    },
+    versJournal: c.projetId ? () => void versJournalMessage(c, jumeau) : null,
+    traiter: () => void traiterMessage(c, jumeau),
+    repondre: c.expediteurAdresse
+      ? () => ouvrirGmail(c.expediteurAdresse, `Re: ${c.objet}`, corpsDeReponse(c.objet))
+      : null,
+  })
+
+  // ----- la fusion -----
+
+  const adressesAgence = state.settings.equipe.map((p) => p.email || '').filter(Boolean)
+  const miennes = state.settings.equipe
+    .filter((p) => p.nom === (personne || moi.nom))
+    .map((p) => p.email || '')
+    .filter(Boolean)
+
+  // `lignes` vaut `null` tant qu'on ne sait pas : ni réseau ni cache. On
+  // n'en conclut PAS que la boîte relationnelle est vide — on n'affiche
+  // que l'ancienne, et la file du jour reste celle d'hier.
+  const messages = lignes ? mailsATraiterPourLaBoite(lignes, miennes, adressesAgence) : []
+
+  return fusionnerBoite(courriers, messages).map((e) =>
+    e.genre === 'message' ? deMessage(e.message, e.jumeau) : deCourrier(e.courrier),
+  )
+}
+
+function LigneCourrier({ lignes }: { lignes: LigneATraiter[] }) {
+  if (lignes.length === 0) return null
+
   return (
     <>
-      {courriers.map((c) => (
-        <div key={c.id} className={`alert-item ${c.urgence === 3 ? 'alert-3' : ''}`}>
+      {lignes.map((c) => (
+        <div key={c.cle} className={`alert-item ${c.urgence === 3 ? 'alert-3' : ''}`}>
           <span className={`gmk gmk-${c.urgence === 3 ? 'triangle' : 'circle'}`} aria-hidden="true" />
           <div style={{ minWidth: 0 }}>
             <div className="alert-titre">
@@ -312,23 +516,26 @@ function LigneCourrier({ personne }: { personne: string }) {
                 </>
               )}
             </div>
+            {/* le résumé d'A.6 est un BROUILLON, et il le dit lui-même :
+                il ne remplace pas l'extrait ci-dessus, il s'y ajoute */}
+            {c.brouillon && <ResumeMessage resume={c.brouillon.texte} le={c.brouillon.le} />}
           </div>
           <div className="alert-actions">
             {/* §4.2 : le premier geste sur un mail à traiter est souvent de le
                 RELIRE en entier — le résumé ne remplace pas le message, et le
                 Cockpit ne devient pas une messagerie (§4.1) */}
             <LienGmail source={c.source} bouton />
-            {c.de && (
-              <Btn small kind="primary" onClick={() => repondre(c)} title="Ouvre un brouillon de réponse dans Gmail">
+            {c.repondre && (
+              <Btn small kind="primary" onClick={c.repondre} title="Ouvre un brouillon de réponse dans Gmail">
                 Répondre
               </Btn>
             )}
-            {c.projetId && (
-              <Btn small kind="ghost" onClick={() => versJournal(c.id)} title="Archive le mail dans le journal du projet et le marque traité">
+            {c.versJournal && (
+              <Btn small kind="ghost" onClick={c.versJournal} title="Archive le mail dans le journal du projet et le marque traité">
                 → Journal
               </Btn>
             )}
-            <Btn small onClick={() => traiter(c.id)}>✓ Fait</Btn>
+            <Btn small onClick={c.traiter}>✓ Fait</Btn>
           </div>
         </div>
       ))}
@@ -346,6 +553,9 @@ function CentreActions({ personne }: { personne: string }) {
   const [revue, setRevue] = useState<number | null>(null)
   /** pièces captées côté serveur — hors état local, donc lues, pas dérivées */
   const nbEntrants = useNbEntrantsDistants()
+  /** la boîte « À traiter », les deux mémoires fusionnées (A.7) */
+  const boite = useBoiteATraiter(personne)
+  const moi = useMoi()
 
   const horizon = addDays(today, 7)
 
@@ -412,7 +622,24 @@ function CentreActions({ personne }: { personne: string }) {
     toast(libelle, { undo: () => replace(snap) })
   }
 
-  const alertes = alertesActives(state, today).filter((a) => !TYPES_DANS_INBOX.has(a.type))
+  // Le contexte d'A.11. `computeAlertes` reste pur : on lui passe ce que la
+  // boîte a déjà chargé, il ne va rien chercher. Les deux sources y entrent
+  // — un `Courrier` qualifié « urgent » au palier v19 alerte autant qu'une
+  // `communication`, sans quoi la bascule ferait taire la moitié du fil.
+  //
+  // `enAttenteDeReponse` n'est PAS alimenté ici, et c'est délibéré : ce
+  // producteur a besoin des fils COMPLETS pour savoir si on a répondu, or
+  // cette lecture-ci est paginée et filtrée sur l'entrant non traité. La
+  // nourrir avec une vue partielle produirait des relances fausses —
+  // « le client attend » alors qu'on lui a répondu la veille. Un fil
+  // d'urgences qui se trompe cesse d'être lu ; mieux vaut un producteur
+  // muet qu'un producteur menteur.
+  const contexteAlertes = useMemo<ContexteAlertes>(
+    () => ({ moi: personne || moi.nom, aTraiter: boite.map((l) => l.notifiable) }),
+    [boite, personne, moi.nom],
+  )
+
+  const alertes = alertesActives(state, today, contexteAlertes).filter((a) => !TYPES_DANS_INBOX.has(a.type))
   const aSurveiller = alertes.filter((a) => a.gravite === 2)
   const information = alertes.filter((a) => a.gravite === 1)
 
@@ -422,9 +649,7 @@ function CentreActions({ personne }: { personne: string }) {
   const masquables = filtres.filter((i) => i.dateLimite && i.dateLimite > horizon).length
   const visibles = toutAfficher ? filtres : filtres.filter((i) => !i.dateLimite || i.dateLimite <= horizon)
 
-  const nbCourriers = state.courriers.filter(
-    (c) => c.statut === 'a_traiter' && (!personne || !c.pour || c.pour === personne),
-  ).length
+  const nbCourriers = boite.length
 
   function alerteVersItem(a: Alerte): ItemAFaire {
     return {
@@ -529,7 +754,7 @@ function CentreActions({ personne }: { personne: string }) {
 
       {/* ---------- à faire ---------- */}
       <div style={{ ...STYLE_GROUPE, marginTop: 0 }}>À faire</div>
-      <LigneCourrier personne={personne} />
+      <LigneCourrier lignes={boite} />
       {visibles.length === 0 && nbCourriers === 0 ? (
         <EmptyState>Rien à faire — le centre d'actions est calme.</EmptyState>
       ) : (

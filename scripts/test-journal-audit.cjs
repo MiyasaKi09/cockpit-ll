@@ -149,11 +149,37 @@ assert.deepEqual(
   ecrivables('20260731190000_propositions_quatre_genres.sql', 'propositions').slice().sort(),
   'même exigence pour `propositions` : accepter ou ignorer une détection est un acte humain (§15)',
 )
+// Les colonnes de `membres` sont lues DANS SA MIGRATION, pas recopiées ici.
+// La première version de ce test comparait à une liste écrite à la main, où
+// figurait « nom » : la table déclare `personne`. Le test passait, et la
+// migration échouait à l'application — c'est la base qui a trouvé le défaut,
+// pas la CI. Une liste recopiée ne vérifie que sa propre copie.
+const colonnesMembres = (() => {
+  const src = lire('20260730180000_registre_des_membres.sql')
+  const bloc = /create table if not exists public\.membres \(([\s\S]*?)\n\);/.exec(src)
+  assert.ok(bloc, 'la table membres doit être déclarée dans sa migration')
+  return [...bloc[1].matchAll(/^\s{2}([a-z_]+)\s+\S/gm)].map((m) => m[1])
+})()
+
+// Ce que le journal ne retient PAS : l'horodatage technique et les notes
+// libres. Tout le reste d'un membre est un droit, et se journalise.
+const HORS_AUDIT_MEMBRES = ['cree_le', 'maj_le', 'notes']
 assert.deepEqual(
   liste('membres').slice().sort(),
-  ['actif', 'compte_id', 'email', 'nom', 'role'],
-  'un changement de droits se journalise en entier — c’était la seule action sensible que le dépôt ne traçait nulle part',
+  colonnesMembres.filter((c) => !HORS_AUDIT_MEMBRES.includes(c)).sort(),
+  'un changement de droits se journalise en entier — c’était la seule action sensible que le dépôt ne traçait nulle part. ' +
+    'Les colonnes viennent de la migration de `membres` : une colonne renommée doit casser ici, pas à l’application.',
 )
+
+// Et la fonction qui lit le nom de l'acteur doit interroger une colonne qui
+// existe. `security definer` + `language sql` : PostgreSQL valide le corps à
+// la création, donc l'erreur arrive au `db push`, en production, à l'instant
+// où l'on croyait avoir fini.
+for (const colonne of [...sql.matchAll(/select m\.([a-z_]+) from public\.membres m/g)].map((m) => m[1]))
+  assert.ok(
+    colonnesMembres.includes(colonne),
+    `acteur_courant() lit public.membres.${colonne}, qui n’existe pas : la migration échouerait à l’application`,
+  )
 
 // --- 5. les trois déclencheurs, et leurs opérations -------------------------
 

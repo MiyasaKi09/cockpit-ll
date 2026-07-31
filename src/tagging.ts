@@ -73,8 +73,12 @@ const LEXIQUE: [string, string[]][] = [
   ['diagnostic', ['diagnostic']],
 ]
 
-/** marqueurs « action à faire » */
-const MARQUEURS_ACTION = ['penser a', 'a faire', 'ne pas oublier', 'rappeler', 'relancer', 'verifier', 'prevoir', 'demander', 'envoyer', 'appeler']
+/** marqueurs « action à faire ». Exporté depuis A.10 : le détecteur de tâches
+ *  (`src/detecteurs.ts`) part de cette liste-ci plutôt que d'en tenir une
+ *  seconde. Deux lexiques auraient fini par diverger, et la divergence se
+ *  serait vue là où on la remarque le moins — une tâche détectée dans une
+ *  note, pas dans le mail qui l'a produite. */
+export const MARQUEURS_ACTION = ['penser a', 'a faire', 'ne pas oublier', 'rappeler', 'relancer', 'verifier', 'prevoir', 'demander', 'envoyer', 'appeler']
 
 export interface SuggestionTags {
   tags: string[]

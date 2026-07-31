@@ -60,12 +60,20 @@ import { jetonDeMembreActif } from '../_shared/membres.ts'
 import {
   CONSIGNE_RESUME,
   MODELE_PAR_DEFAUT,
+  type DetectionModele,
+  type MessageAResumer,
   demandeDeResume,
+  detectionsDuRetour,
   estResumable,
   nettoyerResume,
   quotaDuPassage,
-  type MessageAResumer,
 } from './resume.ts'
+
+/** ce qu'un appel au modèle rend : les deux sorties, lues indépendamment */
+interface RetourModele {
+  resume: string | null
+  detections: DetectionModele[]
+}
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -126,7 +134,7 @@ function messageDepuisLigne(l: LigneAResumer): MessageAResumer {
  *  visible, ce qui est précisément ce qu'un résumé montré à l'écran ne doit
  *  pas contenir. `nettoyerResume` reste la ceinture, l'effort bas est la
  *  bretelle — et c'est aussi le réglage le moins cher. */
-async function resumer(cle: string, modele: string, m: MessageAResumer): Promise<string | null> {
+async function resumer(cle: string, modele: string, m: MessageAResumer): Promise<RetourModele> {
   const controleur = new AbortController()
   const expiration = setTimeout(() => controleur.abort(), DELAI_ANTHROPIC_MS)
   let reponse: Response
@@ -166,12 +174,58 @@ async function resumer(cle: string, modele: string, m: MessageAResumer): Promise
   // Un refus de sécurité n'est pas une panne : le message n'est simplement pas
   // résumé, et il ne sera pas re-tenté indéfiniment puisque le suivant passera
   // devant lui à chaque fenêtre.
-  if (corps.stop_reason === 'refusal') return null
+  if (corps.stop_reason === 'refusal') return { resume: null, detections: [] }
   const texte = corps.content
     .filter((b) => b.type === 'text')
     .map((b) => b.text || '')
     .join('\n')
-  return nettoyerResume(texte)
+  // Les deux sorties viennent du MÊME texte, et se lisent indépendamment :
+  // un bloc de détections malformé coûte les détections, jamais le résumé.
+  return { resume: nettoyerResume(texte), detections: detectionsDuRetour(texte) }
+}
+
+/**
+ * Écrit les détections d'A.10 dans `propositions`, et nulle part ailleurs.
+ *
+ * C'est LA règle du livrable : aucune détection n'atterrit dans
+ * `workspace.data`. Une tâche, une décision ou un risque écrits dans l'état
+ * partagé seraient créés par une machine — ce que le §15 interdit et que le
+ * domaine SQL de `statut` (`proposee` / `acceptee` / `ignoree`, sans aucun
+ * statut métier) rend structurellement impossible.
+ *
+ * Un échec d'insertion ne fait PAS échouer le résumé, qui est déjà écrit et
+ * déjà payé. Il est journalisé et le passage continue : perdre une détection
+ * est un incident, perdre un résumé facturé en est un autre.
+ */
+async function enregistrerDetections(
+  sb: SupabaseClient,
+  communicationId: string,
+  detections: DetectionModele[],
+): Promise<number> {
+  if (detections.length === 0) return 0
+  const { error } = await sb.from('propositions').insert(
+    detections.map((d) => ({
+      communication_id: communicationId,
+      genre: d.genre,
+      // `proposee` n'est pas un défaut de commodité : c'est le seul statut
+      // qu'une écriture machine a le droit d'écrire, et le seul dont la
+      // sortie exige une signature humaine.
+      statut: 'proposee',
+      extrait: d.extrait,
+      confiance: d.confiance,
+      raisons: d.raisons,
+      charge_utile: d.chargeUtile,
+      origine: 'modele',
+    })),
+  )
+  if (error) {
+    // Le genre ou la charge utile refusés par une contrainte arrivent ici.
+    // C'est le comportement voulu : la base est l'autorité sur ce qui est
+    // une proposition valide, pas la fonction qui la propose.
+    console.error('Détections refusées', { motif: error.message })
+    return 0
+  }
+  return detections.length
 }
 
 Deno.serve(async (req: Request) => {
@@ -264,6 +318,7 @@ Deno.serve(async (req: Request) => {
 
   let appels = 0
   let resumes = 0
+  let detections = 0
   let vides = 0
   let echecs = 0
   let interrompu = ''
@@ -277,10 +332,10 @@ Deno.serve(async (req: Request) => {
       interrompu = 'budget de temps'
       break
     }
-    let texte: string | null
+    let retour: RetourModele
     appels++
     try {
-      texte = await resumer(cle, modele, messageDepuisLigne(ligne))
+      retour = await resumer(cle, modele, messageDepuisLigne(ligne))
     } catch (e) {
       const motif = e instanceof Error ? e.message : String(e)
       // Un refus de débit du fournisseur arrête le passage : insister
@@ -297,6 +352,7 @@ Deno.serve(async (req: Request) => {
       continue
     }
     echecs = 0
+    const texte = retour.resume
     if (!texte) {
       // Le modèle a répondu, et il n'y avait rien à résumer (accusé de
       // réception, réponse automatique, refus de sécurité). On le MARQUE :
@@ -325,10 +381,12 @@ Deno.serve(async (req: Request) => {
       continue
     }
     resumes++
+    detections += await enregistrerDetections(sb, ligne.id, retour.detections)
   }
 
   const details = [
     `${candidats.length} message(s) rattaché(s) en attente`,
+    detections ? `${detections} détection(s) proposée(s)` : '',
     vides ? `${vides} sans matière à résumer` : '',
     echecs ? `${echecs} échec(s)` : '',
     interrompu ? `passage écourté (${interrompu})` : '',
@@ -342,6 +400,7 @@ Deno.serve(async (req: Request) => {
   return json({
     statut: interrompu ? 'ecourte' : 'ok',
     resumes,
+    detections,
     appels,
     candidats: candidats.length,
     vides,

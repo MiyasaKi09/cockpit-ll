@@ -293,10 +293,27 @@ assert.match(
 
 // « → Journal » archive le mail ET le fait disparaître de la file : la note
 // devient la seule trace. Sans la source, c'est une citation sans référence.
+//
+// Depuis A.7 la boîte a DEUX mémoires, donc deux chemins vers le journal :
+// l'ancien `Courrier` et la `communication`. Les deux doivent porter la
+// source — en oublier un ne casserait rien de visible, il produirait des
+// notes orphelines sur la moitié des mails archivés.
+const boite = fonction('src/modules/Cockpit.tsx', 'useBoiteATraiter').getText()
 assert.match(
-  fonction('src/modules/Cockpit.tsx', 'LigneCourrier').getText(),
-  /source:\s*c\.source/,
-  'src/modules/Cockpit.tsx : la note de journal issue d’un mail doit conserver sa source (§4.2)',
+  boite,
+  /source:\s*c\.source\b/,
+  'src/modules/Cockpit.tsx : la note issue d’un ancien `Courrier` doit conserver sa source (§4.2)',
+)
+assert.match(
+  boite,
+  /source:\s*c\.gmailMessageId\b/,
+  'src/modules/Cockpit.tsx : la note issue d’une `communication` doit conserver sa source, elle aussi (§4.2)',
+)
+assert.equal(
+  (boite.match(/p\.journal\.push\(/g) || []).length,
+  2,
+  'exactement deux chemins écrivent dans le journal depuis la boîte : un par mémoire. ' +
+    'Un troisième aurait échappé aux deux contrôles ci-dessus',
 )
 assert.match(
   lire('src/rattachement.ts'),

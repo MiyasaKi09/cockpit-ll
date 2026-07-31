@@ -34,6 +34,35 @@ export interface RetourConsultation {
   notes?: string
 }
 
+/**
+ * Une détection produite par le modèle — A.10, second étage.
+ *
+ * Les trois champs obligatoires sont ceux sans lesquels la revue humaine est
+ * impossible, et ils sont obligatoires POUR CETTE RAISON :
+ *
+ *   * `extrait` — la phrase du message. §13.3 et §4.2 : un lien vers le
+ *     message ne suffit pas. Sans la phrase, relire ce qui a été compris
+ *     demande de rouvrir Gmail, et la revue coûte alors plus cher que la
+ *     saisie manuelle. Personne ne la fait, et les détections s'empilent ;
+ *   * `confiance` — sans elle, rien ne distingue une lecture certaine d'une
+ *     supposition, et tout se présente avec le même aplomb ;
+ *   * `raisons` — en français, vérifiables. « Le modèle a estimé » n'est pas
+ *     une raison : c'est une signature.
+ *
+ * Une détection à laquelle il manque l'un des trois est REFUSÉE, pas
+ * complétée d'un défaut. Un extrait vide inventé par l'analyseur serait la
+ * pire des sorties : il aurait l'air d'une citation.
+ */
+export interface RetourDetection {
+  /** `tache` | `echeance` | `decision` | `risque` — validé à l'insertion */
+  genre: string
+  extrait: string
+  confiance: number
+  raisons: string[]
+  /** typée par genre, contrainte en SQL — voir `src/propositions.ts` */
+  chargeUtile: Record<string, unknown>
+}
+
 export interface RetourCourrier {
   de: string
   objet: string
@@ -44,6 +73,9 @@ export interface RetourCourrier {
   urgence?: number
   pour?: string
   source?: string
+  /** A.10 — les quatre genres du §12.3 (points 5 à 8), dans la MÊME réponse
+   *  que le résumé : elles n'ajoutent pas un appel, seulement des jetons */
+  detections?: RetourDetection[]
 }
 
 export type RetourRoutine =
@@ -59,6 +91,48 @@ export function extraireJSON(brut: string): string | null {
   const fin = brut.lastIndexOf('}')
   if (debut >= 0 && fin > debut) return brut.slice(debut, fin + 1)
   return null
+}
+
+/**
+ * Les détections d'A.10, filtrées.
+ *
+ * Le parti pris est le SILENCE plutôt que la complétion : une détection
+ * incomplète est écartée, pas rafistolée. Un modèle qui rend un extrait vide
+ * a mal lu ; lui fabriquer un extrait à partir du résumé donnerait une
+ * citation qui n'est citée de nulle part, et c'est exactement ce qu'un
+ * relecteur pressé accepterait.
+ *
+ * Le genre et la charge utile ne sont PAS validés ici : ils le sont par le
+ * domaine SQL et les contraintes par genre (`propositions`, A.9). Les
+ * revalider ici créerait une seconde définition qui finirait par diverger de
+ * celle qui fait foi.
+ */
+function detectionsDe(brut: unknown): RetourDetection[] | undefined {
+  if (!Array.isArray(brut)) return undefined
+  const sorties: RetourDetection[] = []
+  for (const raw of brut) {
+    const d = raw as Record<string, unknown>
+    const genre = typeof d?.genre === 'string' ? d.genre.trim() : ''
+    const extrait = typeof d?.extrait === 'string' ? d.extrait.trim() : ''
+    const raisons = Array.isArray(d?.raisons)
+      ? d.raisons.filter((v): v is string => typeof v === 'string' && v.trim() !== '')
+      : []
+    if (!genre || !extrait || raisons.length === 0) continue
+    if (typeof d.confiance !== 'number' || Number.isNaN(d.confiance)) continue
+    sorties.push({
+      genre,
+      extrait,
+      // le plafond est celui du classifieur d'ingestion : une détection
+      // annoncée à 1,00 invite à accepter sans lire
+      confiance: Math.max(0, Math.min(0.95, d.confiance)),
+      raisons,
+      chargeUtile:
+        d.chargeUtile && typeof d.chargeUtile === 'object' && !Array.isArray(d.chargeUtile)
+          ? (d.chargeUtile as Record<string, unknown>)
+          : {},
+    })
+  }
+  return sorties.length ? sorties : undefined
 }
 
 export function parseRetourRoutine(brut: string): { retour?: RetourRoutine; erreur?: string } {
@@ -120,6 +194,7 @@ export function parseRetourRoutine(brut: string): { retour?: RetourRoutine; erre
         urgence: typeof r.urgence === 'number' ? r.urgence : undefined,
         pour: typeof r.pour === 'string' ? r.pour : undefined,
         source: typeof r.source === 'string' ? r.source : undefined,
+        detections: detectionsDe(r.detections),
       })
     }
     return { retour: { type: 'courriers', items } }

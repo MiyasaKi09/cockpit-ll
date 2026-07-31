@@ -123,6 +123,9 @@ jobs:
       - name: Append-only audit journal
         run: npm run test:audit
 
+      - name: Two-stage detectors and their false positives
+        run: npm run test:detecteurs
+
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 

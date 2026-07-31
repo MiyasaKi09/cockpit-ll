@@ -198,6 +198,23 @@ dépense. Quatre points opérationnels :
 - **sans `RESUME_ANTHROPIC_API_KEY`, rien ne se produit et rien ne se casse.**
   Le résumé est un confort : le reste du Cockpit ne le lit jamais pour décider.
 
+**Depuis A.10, cette même fonction produit aussi les détections** (tâches,
+échéances, décisions, risques). Trois conséquences opérationnelles :
+
+- **redéployez `resume-messages` APRÈS `20260731190000`**, qui crée
+  `propositions`. Dans l'autre ordre, chaque passage écrirait vers une table
+  absente : le résumé passerait quand même — l'échec d'insertion est capté et
+  journalisé — mais les détections seraient perdues sans trace visible ;
+- **les détections ne coûtent aucun appel supplémentaire.** Elles voyagent dans
+  la même réponse que le résumé, sous forme d'un bloc JSON séparé, et
+  n'ajoutent que des jetons de sortie. Les bornes de débit ci-dessus les
+  couvrent donc telles quelles ;
+- **elles n'écrivent que dans `propositions`, au statut `proposee`.** Aucune
+  tâche, aucune décision, aucun risque n'est créé : c'est l'acceptation humaine
+  qui crée, et le domaine SQL de `statut` le rend structurel. Un premier étage
+  déterministe (`src/detecteurs.ts`) fonctionne par ailleurs sans clé d'API :
+  le jour où le budget IA est coupé, les détections lexicales continuent.
+
 La migration `20260731190000` crée `public.propositions` (livrable A.9), la
 table à **quatre genres** où atterriront les détections de tâches, échéances,
 décisions et risques (§12.3 pts 5-8). Trois points opérationnels, et le premier

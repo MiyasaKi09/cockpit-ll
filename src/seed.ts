@@ -306,6 +306,7 @@ export function seedState(): AppState {
       fraisGenerauxAnnuels: 30040,
       nomenclature: 'AAAAMMJJ_PROJET_TYPE_objet_vNN',
       snoozes: {},
+      vus: {},
       dernierImportExcel: null,
     },
 

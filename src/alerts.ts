@@ -18,8 +18,121 @@ import {
 } from './derive'
 import { addDays, diffDays, fmtDate, fmtMoney, fmtMois, monthKey } from './util'
 
-/** toutes les alertes, hors snooze — pure : `today` en paramètre */
-export function computeAlertes(state: AppState, today: string): Alerte[] {
+// ------------------------------------------------------------
+// A.11 — notifier les personnes concernées (§12.3 pt 10)
+// ------------------------------------------------------------
+//
+// Le contexte des messages vit hors de `workspace.data` : il est chargé
+// par la couche d'accès d'A.3 et mis en cache. `computeAlertes` ne va
+// donc pas le chercher — on le lui passe, et il reste pur.
+//
+// Ce contexte porte le RÉSULTAT des sélecteurs d'A.12, pas les messages
+// bruts : « à traiter » et « en attente de réponse » se définissent à un
+// seul endroit. Un producteur qui redirait la définition la ferait
+// diverger de l'écran qui l'affiche, sans que rien ne le signale.
+
+/** un message, réduit à ce que le fil d'urgences a besoin d'en savoir */
+export interface MessageNotifiable {
+  id: string
+  objet: string
+  expediteur: string
+  projetId: string | null
+  importance: string | null
+  envoyeLe: string | null
+  urlGmail: string | null
+  destinataires?: string[]
+  copies?: string[]
+}
+
+/** une détection en attente de revue humaine */
+export interface PropositionNotifiable {
+  id: string
+  genre: string
+  projetId: string | null
+}
+
+export interface ContexteAlertes {
+  /** sortie de `mailsATraiter()` — A.12 */
+  aTraiter?: MessageNotifiable[]
+  /** sortie de `mailsEnAttenteDeReponse()` — A.12 */
+  enAttenteDeReponse?: MessageNotifiable[]
+  /** propositions au statut `proposee` */
+  propositions?: PropositionNotifiable[]
+  /** la personne devant l'écran, pour attribuer les alertes produites */
+  moi?: string | null
+}
+
+/** au-delà, un fil sans réponse cesse d'être un oubli et devient un signal */
+const JOURS_AVANT_RELANCE = 3
+
+/** les niveaux du §5.2 qui ont leur place dans un fil d'URGENCES */
+const IMPORTANCES_ALERTANTES = new Set(['URGENT', 'BLOQUANT', 'CONTRACTUEL'])
+
+function alertesDesMessages(ctx: ContexteAlertes, today: string): Alerte[] {
+  const sortie: Alerte[] = []
+
+  // Un message à traiter n'est pas une urgence en soi — sinon le fil se
+  // remplirait de tout le courrier. Seuls y entrent les niveaux que
+  // l'agence a elle-même qualifiés d'urgents, bloquants ou contractuels.
+  for (const m of ctx.aTraiter || []) {
+    if (!m.importance || !IMPORTANCES_ALERTANTES.has(m.importance)) continue
+    sortie.push({
+      id: `mail-${m.id}`,
+      type: 'mail_a_traiter',
+      gravite: m.importance === 'CONTRACTUEL' ? 3 : m.importance === 'BLOQUANT' ? 3 : 2,
+      titre: `Message ${m.importance.toLowerCase()} — ${m.objet || '(sans objet)'}`,
+      detail: `De ${m.expediteur}. Non traité.`,
+      lien: `#/messages/${m.id}`,
+      date: m.envoyeLe ? m.envoyeLe.slice(0, 10) : undefined,
+      pour: ctx.moi || undefined,
+      projetId: m.projetId || undefined,
+    })
+  }
+
+  // Un fil dont le dernier message est entrant depuis plus de trois jours :
+  // ce n'est plus « à lire », c'est quelqu'un qui attend.
+  for (const m of ctx.enAttenteDeReponse || []) {
+    if (!m.envoyeLe) continue
+    const jours = diffDays(m.envoyeLe.slice(0, 10), today)
+    if (jours < JOURS_AVANT_RELANCE) continue
+    sortie.push({
+      id: `reponse-${m.id}`,
+      type: 'reponse_attendue',
+      gravite: jours >= 7 ? 3 : 2,
+      titre: `Sans réponse depuis ${jours} jours — ${m.objet || '(sans objet)'}`,
+      detail: `${m.expediteur} attend. Dernier message du fil, rien n'est reparti depuis.`,
+      lien: `#/messages/${m.id}`,
+      date: m.envoyeLe.slice(0, 10),
+      pour: ctx.moi || undefined,
+      projetId: m.projetId || undefined,
+    })
+  }
+
+  // Les propositions sont AGRÉGÉES, et en gravité 1. Une détection n'est
+  // jamais urgente : la présenter comme telle pousserait à l'accepter pour
+  // faire taire l'alerte, ce que le §15 interdit précisément. On signale
+  // qu'il y a de la revue en attente, on ne met pas la main dessus.
+  const enAttente = (ctx.propositions || []).length
+  if (enAttente > 0) {
+    sortie.push({
+      id: 'propositions-a-revoir',
+      type: 'proposition_ia',
+      gravite: 1,
+      titre: `${enAttente} proposition${enAttente > 1 ? 's' : ''} à revoir`,
+      detail: 'Détections issues des messages : à accepter, modifier ou ignorer.',
+      lien: '#/messages/propositions',
+      pour: ctx.moi || undefined,
+    })
+  }
+
+  return sortie
+}
+
+/** toutes les alertes, hors snooze — pure : `today` en paramètre.
+ *  `contexte` est optionnel : les cinq sites d'appel historiques n'en
+ *  passent pas et continuent de compiler et de rendre exactement la même
+ *  chose qu'avant. */
+export function computeAlertes(state: AppState, today: string, contexte?: ContexteAlertes): Alerte[] {
   const alertes: Alerte[] = []
   const s = state.settings
 
@@ -255,14 +368,28 @@ export function computeAlertes(state: AppState, today: string): Alerte[] {
   }
 
   // tri : gravité décroissante puis date croissante
+  if (contexte) alertes.push(...alertesDesMessages(contexte, today))
+
   alertes.sort((x, y) => y.gravite - x.gravite || (x.date || '9999').localeCompare(y.date || '9999'))
   return alertes
 }
 
-/** filtre les alertes en sommeil */
-export function alertesActives(state: AppState, today: string): Alerte[] {
-  return computeAlertes(state, today).filter((a) => {
+/** filtre les alertes en sommeil, et celles qu'on a déjà lues */
+export function alertesActives(state: AppState, today: string, contexte?: ContexteAlertes): Alerte[] {
+  const vus = state.settings.vus || {}
+  return computeAlertes(state, today, contexte).filter((a) => {
     const until = state.settings.snoozes[a.id]
-    return !until || until <= today
+    if (until && until > today) return false
+    // « Vu » ne vaut que pour les alertes de la mémoire des échanges : les
+    // autres se règlent en agissant sur leur source, et disparaissent
+    // d'elles-mêmes. Marquer vu une facture en retard la ferait taire sans
+    // qu'elle soit émise.
+    if (!TYPES_MARQUABLES_VUS.has(a.type)) return true
+    return !vus[a.id]
   })
 }
+
+/** seules ces alertes se marquent « vu » : elles n'ont pas d'autre issue
+ *  que la lecture, contrairement à une facture qu'on émet ou une situation
+ *  qu'on vérifie */
+const TYPES_MARQUABLES_VUS = new Set(['mail_a_traiter', 'reponse_attendue', 'proposition_ia'])

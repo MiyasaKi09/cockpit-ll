@@ -114,6 +114,9 @@ jobs:
       - name: Pure message selectors
         run: npm run test:selecteurs
 
+      - name: On-screen notifications stay bounded
+        run: npm run test:notifications
+
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 

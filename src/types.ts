@@ -1173,6 +1173,13 @@ export type TypeAlerte =
   | 'cr_en_attente'
   | 'sauvegarde'
   | 'rg_a_liberer'
+  // A.11 — les trois producteurs de la mémoire des échanges (§12.3 pt 10).
+  // Ils ne sortent rien de l'application : ni e-mail, ni notification
+  // poussée. Notifier, ici, c'est faire apparaître dans le fil de la
+  // personne concernée (divergence déclarée, plan §3.15).
+  | 'mail_a_traiter'
+  | 'reponse_attendue'
+  | 'proposition_ia'
 
 /** Alerte du fil d'urgences — calculée, jamais stockée (hors snooze) */
 /** action rapide attachée à une alerte, réalisable depuis le fil */
@@ -1193,6 +1200,12 @@ export interface Alerte {
   date?: string
   /** action rapide contextuelle (émettre, valider, cocher…) */
   action?: ActionAlerte
+  /** à qui elle s'adresse — vide = à l'agence. Le fil se filtre dessus,
+   *  il ne se scinde pas : une alerte non attribuée reste visible de tous. */
+  pour?: string
+  /** le projet concerné, quand il y en a un : permet de rassembler le fil
+   *  d'un projet sans redécouper chaque titre à la recherche d'un code */
+  projetId?: string
 }
 
 export interface ImportExcelMeta {
@@ -1262,6 +1275,11 @@ export interface Settings {
   mentionTVA?: string
   /** alerteId → ISO « en sommeil jusqu'au » */
   snoozes: Record<string, string>
+  /** jumeau de `snoozes` : identifiant d'alerte → date où on l'a VUE.
+   *  Mettre en sommeil, c'est dire « pas maintenant » ; marquer vu, c'est
+   *  dire « j'ai lu ». Confondre les deux ferait réapparaître ce qu'on a
+   *  lu, ou disparaître ce qu'on a seulement reporté. */
+  vus: Record<string, string>
   dernierImportExcel?: ImportExcelMeta | null
   /** étapes cochées du guide « Bien démarrer » */
   onboarding?: Record<string, boolean>

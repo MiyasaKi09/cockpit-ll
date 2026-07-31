@@ -61,6 +61,7 @@ import {
   ecrireCache,
   enfiler,
   enregistrerExecuteur,
+  exigerSignataire,
   lireCache,
   patcherCache,
 } from './horsLigne'
@@ -519,23 +520,13 @@ async function depuisLeCache(
 // 5. Les écritures — par la file, donc hors ligne comprises
 // ------------------------------------------------------------
 
-/** Aucune signature anonyme.
- *
- *  `useMoi()` rend `null` quand l'application ne sait pas qui est devant
- *  l'écran, et le contrat des modules est explicite : « null veut dire null —
- *  un écran qui ne sait pas qui est là ne doit rien signer ». Ici la
- *  conséquence est mécanique et non morale : c'est la signature
- *  (`categorise_par`, `rattache_par`) qui fait basculer les colonnes
- *  générées. Une correction non signée ne s'appliquerait tout simplement
- *  pas — elle serait perdue en paraissant faite. */
-function exigerSignataire(par: string): string {
-  const nom = (par || '').trim()
-  if (!nom)
-    throw new Error(
-      'Impossible de signer cette correction : l’application ne sait pas qui est connecté. Choisissez « je suis… » dans les Paramètres.',
-    )
-  return nom
-}
+// Aucune signature anonyme : la règle vit dans `src/horsLigne.ts`, avec la
+// file qui porte les écritures signées — `propositions` (A.9) l'applique mot
+// pour mot, et deux copies auraient fini par diverger. Ici, la conséquence est
+// mécanique et non morale : c'est la signature (`categorise_par`,
+// `rattache_par`) qui fait basculer les colonnes générées. Une correction non
+// signée ne s'appliquerait tout simplement pas — elle serait perdue en
+// paraissant faite.
 
 async function ecrire(
   c: Communication,

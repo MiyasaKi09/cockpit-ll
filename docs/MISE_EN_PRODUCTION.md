@@ -198,6 +198,30 @@ dépense. Quatre points opérationnels :
 - **sans `RESUME_ANTHROPIC_API_KEY`, rien ne se produit et rien ne se casse.**
   Le résumé est un confort : le reste du Cockpit ne le lit jamais pour décider.
 
+La migration `20260731190000` crée `public.propositions` (livrable A.9), la
+table à **quatre genres** où atterriront les détections de tâches, échéances,
+décisions et risques (§12.3 pts 5-8). Trois points opérationnels, et le premier
+est le plus reposant :
+
+- **elle n'est suivie d'aucun déploiement.** Rien ne la remplit encore : les
+  détecteurs sont le livrable A.10 et les écrans de revue B.10/B.11. Une table
+  vide ne casse rien et ne coûte rien ; c'est l'inverse — une détection écrite
+  vers une table absente — qui échouerait à chaque passage du cron, sans autre
+  trace que les journaux Supabase ;
+- **elle s'applique après `20260731150000`**, dont elle référence la clé
+  primaire (`communication_id`), et après le registre des membres, dont elle
+  appelle `est_membre_actif()` / `role_courant()` ;
+- **elle refuse de s'appliquer** si le domaine de `statut` a pris un statut
+  métier, si l'extrait ou la source peuvent être nuls, ou si le navigateur a
+  reçu le droit d'écrire une colonne autre que les cinq colonnes de traitement.
+  Ce n'est pas une précaution de style : ces trois défauts ne produiraient
+  aucune erreur visible, et le premier ferait de la table des détections la
+  mémoire des décisions de l'agence.
+
+Elle se défait par un `drop table public.propositions` tant qu'aucune décision
+humaine n'y a été enregistrée — c'est-à-dire jusqu'à B.10. Après, elle porte des
+acceptations signées, comme `communications` porte des rattachements corrigés.
+
 La migration `20260730160000` fait estampiller l'auteur d'une écriture par le
 serveur : `workspace.updated_by` cesse de recevoir l'identifiant d'onglet envoyé
 par le navigateur et reçoit `auth.uid()`. La signature de la RPC ne change pas,

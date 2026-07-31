@@ -31,10 +31,10 @@
 //    sauter en silence tout l'historique sans pièce jointe.
 //
 // Ce test ne couvre PAS `propositions` ni `charge_utile->>'cible'` :
-// c'est `test-categorisation-propositions.cjs` (livrable B.17) qui les
-// prendra, quand la table d'A.9 existera. Écrire ici des assertions
-// sur une table absente donnerait un test qui passe en ne vérifiant
-// rien.
+// la table d'A.9 existe désormais, et c'est
+// `test-propositions-modifiables.cjs` qui la prend — partie II, avec le
+// reste du critère 11, plutôt que dans un troisième fichier qui aurait
+// fait relire deux fois la même doctrine.
 // ============================================================
 
 const assert = require('node:assert/strict')

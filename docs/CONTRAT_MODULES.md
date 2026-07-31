@@ -41,7 +41,7 @@ la bascule d'identité (livrable 3.2), qui ne démarre pas tant qu'il n'est pas 
 - **Les fichiers partagés se modifient, mais jamais en passant** (`types.ts`, `store.tsx`,
   `ui.tsx`, `util.ts`, `miqcp.ts`, `alerts.ts`, `derive.ts`, `prompts.ts`, `seed.ts`,
   `routines.ts`, `importRoutines.ts`, `personnes.ts`, `moi.ts`, `categorisation.ts`,
-  `horsLigne.ts`, `communications.ts`, `rattachement.ts`,
+  `horsLigne.ts`, `communications.ts`, `propositions.ts`, `rattachement.ts`,
   `styles.css`, `App.tsx`). L'interdiction
   absolue précédente avait un motif réel — un module qui bricole `ui.tsx` casse les 42 autres —
   mais elle produisait l'inverse de son intention : des composants locaux dupliqués, des styles
@@ -280,7 +280,17 @@ branchent — un second cache écrit pour la deuxième table serait un doublon, 
 distinction que tient `useNbEntrantsDistants`. Et une écriture en file porte des **valeurs
 absolues** avec l'horodatage **du geste humain**, figé à l'enfilement : c'est ce qui rend le
 rejeu idempotent (§24) sans rien demander au schéma. Une file préparée pour un projet Supabase
-ne se rejoue jamais sur un autre. `scripts/test-hors-ligne.cjs` le vérifie.
+ne se rejoue jamais sur un autre. `scripts/test-hors-ligne.cjs` le vérifie, et il refuse
+désormais qu'une **seconde base IndexedDB** soit ouverte : `propositions` (A.9) est branchée
+sur ce cache et sur cette file, `pointages` (B.4) le sera.
+
+`exigerSignataire(par)` y vit aussi, et c'est délibéré : **aucune écriture enfilée n'est
+anonyme**, et la règle vaut pour toutes les tables, pas pour une. Elle était locale à
+`communications.ts` tant qu'il n'y avait qu'une couche d'accès ; deux copies auraient fini par
+diverger sur le seul détail qui compte — l'une aurait accepté un espace. La conséquence est
+mécanique et non morale : sur `communications`, c'est la signature qui fait basculer les
+colonnes générées ; sur `propositions`, une contrainte refuse qu'une proposition quitte l'état
+« proposée » sans nom. Dans les deux cas, une écriture non signée paraîtrait faite.
 
 `communications.ts` : la couche d'accès à `public.communications` (index des messages, A.2),
 sur le modèle de `veille.ts` — `listerCommunications(options): PageCommunications | null`
@@ -297,6 +307,34 @@ vivent pas ici. `Communication.resume` / `resumeLe` sont en **lecture seule** c�
 navigateur — le GRANT au niveau colonne et le trigger de la migration A.2 le garantissent :
 le résumé s'écrit uniquement par l'Edge Function `resume-messages`, et il s'affiche
 uniquement par `ResumeMessage`.
+
+`propositions.ts` : la couche d'accès à `public.propositions` (A.9), la table à **quatre
+genres** — `tache` / `echeance` / `decision` / `risque` — où atterrissent les détections des
+points 5 à 8 du §12.3. Même forme que `communications.ts` : lecture paginée par curseur
+(`listerPropositions`, `usePropositions`, `correspondAuFiltre`), écritures signées passant par
+la file (`accepter`, `ignorer`, `rouvrir`), même cache. Elle déclare aussi les **quatre listes
+fermées** du livrable — `GENRES_PROPOSITION`, `STATUTS_PROPOSITION`, `OBJETS_PROPOSABLES`,
+`NATURES_RISQUE`, avec leurs libellés français : c'est le partage de `categorisation.ts` pour
+les axes, et les quatre domaines SQL en sont la transcription, comparée valeur par valeur par
+`scripts/test-propositions-modifiables.cjs`. Les détecteurs d'A.10 tournent dans Deno et ne
+peuvent pas importer `src/` : ils **émettent** ces valeurs, leur test les compare à ce module.
+
+**Une proposition n'est jamais l'objet qu'elle propose, et ce n'est pas ce module qui le
+garantit — c'est le schéma.** `statut` ne connaît que `proposee` / `acceptee` / `ignoree` :
+aucun statut métier, donc aucune promotion possible par changement de valeur. « Acceptée »
+équivaut, par contrainte, à « désigne l'objet créé » (`objet_cree_type`, `objet_cree_id`) —
+d'où la signature de `accepter(p, {type, id}, par)`, qui **exige** l'objet au lieu de le rendre
+facultatif. Et rien ne quitte l'état proposé sans signature non vide et datée : l'expiration
+est **impossible**, pas seulement interdite — un délai qui accepterait par défaut devrait
+inventer un nom de personne. Les destinations sont fermées à `tache` et `contact` (§3.14
+décision 4) : ni `Obligation`, qui déclenche le rappel réglementaire de gravité 3, ni
+`EcheanceFacturation`, qui commande l'émission d'une facture. Enfin l'**extrait cité est
+obligatoire** (§13.3, §4.2) : un lien ne suffit pas, il faut la phrase. Le **projet n'est pas
+dans cette table** — il est lu par jointure sur `communications.projet_id`, colonne générée
+qu'une correction de rattachement fait basculer ; recopié, il aurait figé le projet au jour de
+la détection. Ce module **ne détecte rien** (A.10, côté serveur : l'`insert` est réservé au
+`service_role`), **ne crée pas** l'objet accepté (B.10) et **n'assemble aucun libellé** de file
+de revue (B.11).
 
 `rattachement.ts` : LE rattachement d'un message, d'une pièce ou d'une ligne importée à un
 projet (CDC §5.1, plan §3.7) — `rattacherDepuisEtat(state, indices)`, `reperesDe(state)`,

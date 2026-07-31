@@ -46,10 +46,12 @@ const lire = (fichier) => fs.readFileSync(path.join(racine, fichier), 'utf8')
 
 const CHEMIN_HORS_LIGNE = 'src/horsLigne.ts'
 const CHEMIN_COMMUNICATIONS = 'src/communications.ts'
+const CHEMIN_PROPOSITIONS = 'src/propositions.ts'
 const CHEMIN_MIGRATION = 'supabase/migrations/20260731150000_communications_index_des_messages.sql'
 
 const sourceHorsLigne = lire(CHEMIN_HORS_LIGNE)
 const sourceCommunications = lire(CHEMIN_COMMUNICATIONS)
+const sourcePropositions = lire(CHEMIN_PROPOSITIONS)
 const migration = lire(CHEMIN_MIGRATION)
 
 /** charge un module TypeScript en remplaçant ses imports par des doublures */
@@ -117,7 +119,13 @@ function serveurFactice() {
   }
 }
 
-/** doublure du hors-ligne : cache injectable, écritures capturées */
+/** doublure du hors-ligne : cache injectable, écritures capturées.
+ *
+ *  Le module RÉEL est étalé dessous : seules la persistance et la file sont
+ *  remplacées. Les règles pures qu'il exporte — `exigerSignataire` en
+ *  particulier, partagée par les deux couches d'accès — sont donc celles du
+ *  dépôt, et non une seconde copie écrite ici, qui aurait pu accepter ce que
+ *  la vraie refuse. */
 function horsLigneFactice(cache) {
   const enfilees = []
   let executeur = null
@@ -125,6 +133,7 @@ function horsLigneFactice(cache) {
     enfilees,
     executeurEnregistre: () => executeur,
     module: {
+      ...horsLigne,
       lireCache: async () => cache,
       ecrireCache: async () => undefined,
       patcherCache: async () => undefined,
@@ -145,6 +154,17 @@ function chargerCommunications(cache, sync = syncFactice) {
   const mod = charger(CHEMIN_COMMUNICATIONS, {
     react: reactFactice,
     './categorisation': categorisation,
+    './horsLigne': doublure.module,
+    './sync': sync,
+    './util': util,
+  })
+  return { mod, doublure }
+}
+
+function chargerPropositions(cache, sync = syncFactice) {
+  const doublure = horsLigneFactice(cache)
+  const mod = charger(CHEMIN_PROPOSITIONS, {
+    react: reactFactice,
     './horsLigne': doublure.module,
     './sync': sync,
     './util': util,
@@ -717,11 +737,144 @@ async function principal() {
     'l’ouverture de session aussi : elle arrive en asynchrone au démarrage, et une correction saisie avant elle attend cet instant précis',
   )
 
+  // ----------------------------------------------------------------
+  // 7. La DEUXIÈME table branchée sur la même file (A.9)
+  // ----------------------------------------------------------------
+  //
+  // C'est ici que le doublon se serait écrit. Le §3.3 le nomme d'avance :
+  // « un second cache écrit pour la deuxième table serait un doublon ». Ce
+  // bloc vérifie que `src/propositions.ts` se branche sur la mécanique
+  // existante au lieu d'en refaire une — et qu'il en tient les deux
+  // invariants, qui ne se déduisent pas du branchement.
+
+  // --- 7a. aucune seconde base IndexedDB ---
+  const ouvreursIndexedDB = parcourir('src').filter((f) => /indexedDB\.open\(/.test(lire(f)))
+  assert.deepEqual(
+    ouvreursIndexedDB.sort(),
+    ['src/fsdrive.ts', CHEMIN_HORS_LIGNE],
+    'une seconde base IndexedDB a été ouverte : le cache hors ligne est mutualisé (§3.3), et deux bases élagueraient selon deux fenêtres',
+  )
+
+  // --- 7b. ni session ni cache : « on ne sait pas », jamais « rien à valider » ---
+  {
+    const { mod } = chargerPropositions(null)
+    assert.equal(
+      await mod.listerPropositions({}),
+      null,
+      'sans session et sans cache, la lecture doit rendre `null`. « Rien à valider » annoncé à quelqu’un qui n’est pas connecté est un mensonge sur lequel on organise sa journée.',
+    )
+  }
+
+  // --- 7c. le cache répond, filtre et pagine comme pour les messages ---
+  {
+    const enCache = (id, creeLe, sup = {}) => ({
+      id,
+      genre: 'tache',
+      extrait: 'Merci de nous retourner le plan avant vendredi.',
+      confiance: 0.6,
+      raisons: [],
+      origine: 'lexique',
+      statut: 'proposee',
+      objetCreeType: null,
+      objetCreeId: null,
+      traitePar: null,
+      traiteLe: null,
+      creeLe,
+      chargeUtile: { titre: 'Mettre à jour le plan de façade' },
+      message: { communicationId: 'm1', gmailMessageId: '18f3ab9c1d2e3f40', urlGmail: null, objet: '', envoyeLe: null, projetId: 'P03' },
+      ...sup,
+    })
+    const { mod } = chargerPropositions({
+      luLe: MAINTENANT,
+      lignes: [
+        enCache('p1', '2026-07-31T10:00:00.000Z'),
+        enCache('p2', '2026-07-30T10:00:00.000Z', { statut: 'ignoree', traitePar: 'Zoé', traiteLe: MAINTENANT }),
+        enCache('p3', '2026-07-29T10:00:00.000Z', {
+          message: { communicationId: 'm2', gmailMessageId: '18f3ab9c1d2e3f41', urlGmail: null, objet: '', envoyeLe: null, projetId: 'P07' },
+        }),
+      ],
+    })
+
+    const tout = await mod.listerPropositions({})
+    assert.equal(tout.source, 'cache', 'sans session, la réponse vient du cache et le dit')
+    assert.deepEqual(tout.lignes.map((p) => p.id), ['p1', 'p2', 'p3'], 'du plus récent au plus ancien')
+
+    const aRevoir = await mod.listerPropositions({ statut: 'proposee' })
+    assert.deepEqual(
+      aRevoir.lignes.map((p) => p.id),
+      ['p1', 'p3'],
+      'la file de revue du §8.7 se filtre aussi dans le cache',
+    )
+
+    const duProjet = await mod.listerPropositions({ projetId: 'P03' })
+    assert.deepEqual(
+      duProjet.lignes.map((p) => p.id),
+      ['p1', 'p2'],
+      'le projet vient de la jointure sur `communications` et se filtre des deux côtés : recopié dans la table, il aurait figé le rattachement au jour de la détection',
+    )
+
+    const page1 = await mod.listerPropositions({ taille: 2 })
+    assert.deepEqual(page1.lignes.map((p) => p.id), ['p1', 'p2'])
+    const page2 = await mod.listerPropositions({ taille: 2, suiteDe: page1.curseur })
+    assert.deepEqual(
+      page2.lignes.map((p) => p.id),
+      ['p3'],
+      'la page suivante ne saute ni ne répète : les détecteurs tournent derrière le cron',
+    )
+  }
+
+  // --- 7d. l'exécuteur : valeurs absolues sur la clé primaire, rejeu identique ---
+  {
+    const appels = []
+    const client = {
+      from: (table) => ({
+        update: (valeurs) => ({
+          eq: (colonne, valeur) => {
+            appels.push({ table, valeurs, colonne, valeur })
+            return Promise.resolve({ error: null })
+          },
+        }),
+      }),
+    }
+    const { doublure } = chargerPropositions(null, { ...syncFactice, clientSupabase: () => client })
+    const executeur = doublure.executeurEnregistre()
+    assert.ok(executeur, 'src/propositions.ts doit déclarer son exécuteur à la file — sinon ses décisions dormiraient')
+    const e = {
+      id: 'op-p',
+      magasin: 'propositions',
+      cle: 'p1',
+      valeurs: { statut: 'acceptee', objet_cree_type: 'tache', objet_cree_id: 'T-42', traite_par: 'Julien', traite_le: MAINTENANT },
+    }
+    await executeur(e)
+    await executeur(e)
+    assert.deepEqual(
+      appels[0],
+      appels[1],
+      'rejouer une décision doit produire exactement le même appel : c’est l’idempotence du §24, et elle tient parce que les valeurs sont absolues',
+    )
+    assert.equal(appels[0].colonne, 'id', 'l’update vise la clé primaire')
+    assert.equal(appels[0].table, 'propositions')
+  }
+
+  // --- 7e. une seule règle de signature, partagée ---
+  assert.match(
+    sourcePropositions,
+    /exigerSignataire,?\s*$/m,
+    'src/propositions.ts doit IMPORTER exigerSignataire de src/horsLigne.ts : deux copies de cette règle auraient fini par diverger sur ce qui compte — l’une accepterait un espace',
+  )
+  for (const fichier of [CHEMIN_COMMUNICATIONS, CHEMIN_PROPOSITIONS]) {
+    assert.ok(
+      !/function exigerSignataire/.test(lire(fichier)),
+      `${fichier} redéfinit exigerSignataire : la règle vit dans src/horsLigne.ts, avec la file qui porte les écritures signées`,
+    )
+  }
+
   console.log(
     `Hors-ligne : fenêtre ${horsLigne.FENETRE_CACHE_JOURS} j, file idempotente (rejeu double sans effet, ` +
       `${horsLigne.MAX_TENTATIVES} tentatives puis blocage sans retenir les suivantes, cibles cloisonnées), ` +
       `lecture sans session = null et jamais 0, ${colonnesEcrites.size} colonnes écrites toutes accordées par le GRANT, ` +
-      `${champsFiltre.length} filtres à double traduction.`,
+      `${champsFiltre.length} filtres à double traduction, ` +
+      'et une DEUXIÈME table (propositions, A.9) branchée sur le même cache et la même file — une seule base IndexedDB.',
   )
 }
 

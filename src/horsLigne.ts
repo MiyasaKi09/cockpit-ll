@@ -45,11 +45,14 @@
 //    deux fois. Corollaire : l'HORODATAGE EST CELUI DU GESTE HUMAIN,
 //    figé à l'enfilement, jamais recalculé au moment de l'envoi — sinon
 //    la même écriture rejouée dirait autre chose, et « rejouable »
-//    cesserait d'être vrai. Les tables qui INSÈRENT (A.9, B.4) portent
-//    en plus `ecriture_id` en clé d'unicité serveur, sur le patron
-//    d'`entrants_source_unq` ; celles qui ne font que corriger une ligne
-//    existante — c'est le cas de `communications` — sont idempotentes
-//    par construction, l'`update` visant une clé primaire.
+//    cesserait d'être vrai. Les tables qui INSÈRENT depuis le navigateur
+//    (B.4) porteront en plus `ecriture_id` en clé d'unicité serveur, sur
+//    le patron d'`entrants_source_unq` ; celles qui ne font que corriger
+//    une ligne existante sont idempotentes par construction, l'`update`
+//    visant une clé primaire. [corrigé] `propositions` (A.9) était
+//    rangée avec les premières : elle est en fait du second groupe —
+//    son `insert` est réservé au `service_role`, le navigateur n'y fait
+//    qu'accepter, ignorer ou rouvrir une ligne qui existe déjà.
 //
 // La partie qui décide (fenêtre, ordre, idempotence, cloisonnement des
 // cibles) est écrite en fonctions PURES, testables sans navigateur —
@@ -184,6 +187,32 @@ export function fusionnerFile(
 ): EcritureEnAttente[] {
   if (file.some((e) => e.id === ecriture.id)) return file
   return [...file, ecriture].sort((a, b) => a.ordre - b.ordre)
+}
+
+/**
+ * Aucune signature vide — la règle est ICI parce qu'elle vaut pour TOUTE
+ * écriture enfilée, et non pour une table en particulier.
+ *
+ * `useMoi()` rend `null` quand l'application ne sait pas qui est devant
+ * l'écran, et le contrat des modules est explicite : « null veut dire null —
+ * un écran qui ne sait pas qui est là ne doit rien signer ». Deux couches
+ * d'accès en tiendraient deux copies, et deux copies finiraient par diverger
+ * sur le seul détail qui compte : l'une accepterait un espace.
+ *
+ * La conséquence est mécanique, pas morale. Sur `communications`, c'est la
+ * signature (`categorise_par`, `rattache_par`) qui fait basculer les colonnes
+ * générées : une correction non signée ne s'appliquerait tout simplement pas.
+ * Sur `propositions`, une contrainte refuse qu'une proposition quitte l'état
+ * « proposée » sans nom. Dans les deux cas, l'écriture partirait, serait
+ * refusée ou sans effet, et paraîtrait faite.
+ */
+export function exigerSignataire(par: string): string {
+  const nom = (par || '').trim()
+  if (!nom)
+    throw new Error(
+      'Impossible de signer cette correction : l’application ne sait pas qui est connecté. Choisissez « je suis… » dans les Paramètres.',
+    )
+  return nom
 }
 
 export type Executeur = (ecriture: EcritureEnAttente) => Promise<void>

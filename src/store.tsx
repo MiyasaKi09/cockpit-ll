@@ -9,6 +9,7 @@ import { seedState, STATE_VERSION } from './seed'
 import { PHASES_ORDRE } from './miqcp'
 import { baselineApresMigration } from './derive'
 import { reprendreAxes } from './categorisation'
+import { tachesDepuisNotes } from './taches'
 import { amorcerFinance } from './amorceFinance'
 import { DEPARTEMENTS_DEFAUT } from './boamp'
 import {
@@ -66,6 +67,23 @@ function migrate(parsed: AppState): AppState {
   const versionAncienne = typeof parsed.version === 'number' ? parsed.version : 0
   const reprendreBaselines = versionAncienne < 20
   const aujourdhui = todayISO()
+  // v20 → v21 : la collection `taches` (B.1), et la reprise des notes de
+  // journal « à faire » non réglées.
+  //
+  // La reprise ne se fait qu'AU FRANCHISSEMENT du palier, comme celle des
+  // baselines juste au-dessus et pour la même raison : `migrate()` tourne à
+  // chaque chargement ET sur tout état distant reçu. Inconditionnelle, elle
+  // recréerait les tâches à chaque ouverture — sans erreur, sans trace, et
+  // en quelques jours la file serait inutilisable.
+  //
+  // `tachesDepuisNotes` se protège en plus par la source (`note_journal` +
+  // identifiant de note) : même rejouée par accident, elle ne double rien.
+  // Deux garde-fous plutôt qu'un, parce que celui-ci est le seul palier du
+  // dépôt qui CRÉE des objets au lieu de compléter des champs.
+  etat.taches = Array.isArray(parsed.taches) ? parsed.taches : []
+  if (versionAncienne < 21) {
+    etat.taches = [...etat.taches, ...tachesDepuisNotes(etat.projets, etat.taches)]
+  }
   etat.reunions = Array.isArray(parsed.reunions) ? parsed.reunions : []
   // v18 → v19 : les trois axes du §5.2 (src/categorisation.ts). Le palier
   // REPREND les courriers existants sans rien inventer : le type d'échange

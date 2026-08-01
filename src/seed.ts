@@ -28,7 +28,7 @@ import { amorcerFinance } from './amorceFinance'
 // « reprise » et non « signature ». Un état v19 rouvert sur une version
 // antérieure garde tout ; « Recalculer la répartition » ne touche pas ce
 // champ, qui vit hors du tableau `phases` (voir src/types.ts).
-export const STATE_VERSION = 20
+export const STATE_VERSION = 21
 
 const P = (v: number) => Math.round(v * 100) / 100
 
@@ -990,6 +990,12 @@ export function seedState(): AppState {
     ],
 
     tempsHorsProjet: [],
+
+    // B.1 — la collection naît VIDE, même dans le jeu d'amorce. Une tâche
+    // d'exemple entrerait dans la file du jour de quelqu'un dès la première
+    // ouverture, et il faudrait la fermer avant de comprendre d'où elle vient.
+    // Le palier v21 la remplit depuis les notes « à faire » réelles.
+    taches: [],
 
     courriers: [
       {

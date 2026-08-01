@@ -211,6 +211,69 @@ export interface Courrier {
   importance?: NiveauImportance | null
 }
 
+// ---------- la tâche interne (CDC §8.5) — livrable B.1 ----------
+//
+// Les dix-huit champs du §8.5, dans son ordre. Les référentiels — statuts,
+// priorités, origines — vivent dans `src/taches.ts`, avec les fonctions qui
+// les consomment ; ici il n'y a que la forme.
+
+/** un commentaire de tâche : horodaté et attribué, comme les événements du
+ *  registre documentaire dont il reprend le patron (§19.3 pt 5) */
+export interface CommentaireTache {
+  id: string
+  date: string // ISO
+  auteur: string | null
+  texte: string
+}
+
+/** une sous-tâche : une case à cocher, pas une tâche à part entière. En
+ *  faire une `TacheInterne` complète imposerait un projet, un statut sur
+ *  neuf et une échéance à ce qui est une étape de trois mots. */
+export interface SousTache {
+  id: string
+  titre: string
+  faite: boolean
+}
+
+/** d'où vient la tâche (§8.4). `id` désigne l'objet d'origine — `null`
+ *  pour une saisie manuelle, qui ne vient de rien. */
+export interface SourceTache {
+  type: string
+  id: string | null
+}
+
+export interface TacheInterne {
+  id: string
+  titre: string
+  description: string
+  projetId: string | null
+  phase: PhaseCode | null
+  /** qui la porte. Entre dans l'inventaire de `src/personnes.ts`. */
+  responsable: string | null
+  /** qui l'a créée. Y entre aussi : c'est le filtre « créées par moi » du §8.3. */
+  createur: string | null
+  participants: string[]
+  /** `basse` | `normale` | `haute` | `critique` — voir `src/taches.ts` */
+  priorite: string
+  /** l'un des neuf du §8.6 — voir `STATUTS_TACHE` */
+  statut: string
+  debut: string | null
+  echeance: string | null
+  /** en heures */
+  tempsEstime: number | null
+  /** en heures. PROJETÉ depuis les pointages (B.9), jamais saisi : le
+   *  calculer à deux endroits le ferait diverger de la marge (§7.3). */
+  tempsEnregistre: number
+  source: SourceTache
+  documentIds: string[]
+  commentaires: CommentaireTache[]
+  sousTaches: SousTache[]
+  /** identifiants d'autres tâches qui doivent être finies avant celle-ci */
+  dependances: string[]
+  creeLe: string
+  majLe: string
+}
+
 export type StatutReunion = 'a_preparer' | 'cr_a_generer' | 'cr_a_relire' | 'diffuse'
 
 /** réunion de chantier — support du circuit audio → transcription → CR */
@@ -1492,6 +1555,9 @@ export interface AppState {
   prompts: PromptTemplate[]
   reunions: ReunionChantier[]
   courriers: Courrier[]
+  /** B.1 — les tâches internes du §8.5. Restent dans le document JSONB :
+   *  le volume est borné et la fréquence d'écriture est HUMAINE (§3.1). */
+  taches: TacheInterne[]
   tempsHorsProjet: TempsHorsProjet[]
   absences: Absence[]
   evaluations: EvaluationEntreprise[]

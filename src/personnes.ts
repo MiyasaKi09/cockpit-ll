@@ -169,6 +169,37 @@ export const REFERENCES_PERSONNE: Reference[] = [
       d.responsable = v
     },
   ),
+  // B.1 — les trois désignations de personne d'une tâche. Sans elles, un
+  // renommage dans les Paramètres orphelinerait les tâches de quelqu'un :
+  // elles ne disparaîtraient pas, elles sortiraient de « mes tâches » et
+  // du plan de charge, ce qui est exactement le mode de perte que ce
+  // module existe pour empêcher.
+  champTexte<{ responsable?: string | null }>(
+    'tâches — responsable',
+    (s) => s.taches,
+    (t) => t.responsable ?? undefined,
+    (t, v) => {
+      t.responsable = v
+    },
+  ),
+  champTexte<{ createur?: string | null }>(
+    // le filtre « créées par moi » du §8.3 s'appuie dessus : ce n'est pas
+    // une trace datée mais bien une désignation vivante
+    'tâches — créateur',
+    (s) => s.taches,
+    (t) => t.createur ?? undefined,
+    (t, v) => {
+      t.createur = v
+    },
+  ),
+  champListe<{ participants?: string[] }>(
+    'tâches — participants',
+    (s) => s.taches,
+    (t) => t.participants,
+    (t, v) => {
+      t.participants = v
+    },
+  ),
   champTexte<{ auteur?: string }>(
     // qui a déposé le document — la personne, pas un geste daté : c'est sur
     // ce nom que se filtrera « mes documents ». Les traces datées du même

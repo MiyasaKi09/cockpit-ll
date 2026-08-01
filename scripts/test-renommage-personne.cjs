@@ -67,7 +67,7 @@ const javascript = ts.transpileModule(personnes, {
 }).outputText
 const module_ = { exports: {} }
 new Function('module', 'exports', 'require', javascript)(module_, module_.exports, require)
-const { renommerPersonne, referencesDe } = module_.exports
+const { renommerPersonne, referencesDe, REFERENCES_PERSONNE } = module_.exports
 
 const ANCIEN = 'Julien'
 const NOUVEAU = 'Julien Martin'
@@ -102,18 +102,36 @@ const etat = () => ({
     { id: 'd1', pour: ANCIEN, exigences: [{ id: 'e1', responsable: ANCIEN }, { id: 'e2', responsable: 'Zoé' }] },
   ],
   decisionsDirection: [{ id: 'dd1', responsable: ANCIEN }],
+  taches: [
+    { id: 't1', responsable: ANCIEN, createur: 'Zoé', participants: ['Zoé'] },
+    { id: 't2', responsable: 'Zoé', createur: ANCIEN, participants: [ANCIEN, 'Zoé'] },
+  ],
 })
 
 const avant = etat()
 const trouvees = referencesDe(avant, ANCIEN)
-assert.ok(
-  trouvees.length >= 15,
-  `le jeu d'essai doit couvrir tous les sites : ${trouvees.length} familles trouvées, au moins 15 attendues`,
+
+// L'assertion se mesure à l'INVENTAIRE, pas à un nombre écrit ici. Avec un
+// seuil (« au moins 15 »), ajouter une seizième référence sans l'exercer
+// dans le jeu d'essai laisse le test au vert : il valide alors à vide, et
+// c'est exactement ce qui vient de se produire en ajoutant les tâches.
+// L'égalité oblige le jeu d'essai à couvrir chaque site inventorié.
+const manquants = REFERENCES_PERSONNE.map((r) => r.libelle).filter(
+  (libelle) => !trouvees.some((t) => t.libelle === libelle),
 )
+assert.deepEqual(
+  manquants,
+  [],
+  'le jeu d’essai n’exerce pas ces références : elles seraient déclarées correctes sans avoir été testées',
+)
+assert.equal(trouvees.length, REFERENCES_PERSONNE.length)
 
 const apres = etat()
 const reecrites = renommerPersonne(apres, ANCIEN, NOUVEAU)
-assert.ok(reecrites >= 15, `renommage incomplet : ${reecrites} références réécrites, au moins 15 attendues`)
+assert.ok(
+  reecrites >= REFERENCES_PERSONNE.length,
+  `renommage incomplet : ${reecrites} références réécrites pour ${REFERENCES_PERSONNE.length} sites inventoriés`,
+)
 
 const restant = JSON.stringify(apres).split(`"${ANCIEN}"`).length - 1
 assert.equal(restant, 0, `${restant} référence(s) à « ${ANCIEN} » ont survécu au renommage`)

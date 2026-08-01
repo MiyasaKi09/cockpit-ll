@@ -126,6 +126,9 @@ jobs:
       - name: Two-stage detectors and their false positives
         run: npm run test:detecteurs
 
+      - name: Internal tasks collection and its migration step
+        run: npm run test:taches
+
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 

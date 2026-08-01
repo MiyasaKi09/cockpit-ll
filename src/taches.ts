@@ -402,7 +402,96 @@ export function trierTaches(a: TacheInterne, b: TacheInterne): number {
 }
 
 // ------------------------------------------------------------
-// 6. Reprise des notes « à faire » (palier v20 → v21)
+// 6. La fiche tâche — livrable B.8
+// ------------------------------------------------------------
+
+/**
+ * Les cinq statuts EXPOSÉS au menu de la fiche, sur les neuf stockés.
+ *
+ * Neuf entrées dans un menu se lisent moins bien que cinq, et quatre des
+ * neuf ne se posent pas à la main : « à qualifier » est l'état d'une
+ * proposition non revue (B.10 en sort), « planifiée » viendra du planning,
+ * « en attente » et « bloquée » demandent un motif que la fiche ne
+ * réclame pas encore. Ils restent dans le modèle — un statut absent du
+ * modèle ne se rattrape pas, un statut absent d'un menu s'y ajoute.
+ */
+export const STATUTS_TACHE_AU_MENU: StatutTache[] = [
+  'a_faire',
+  'en_cours',
+  'a_valider',
+  'terminee',
+  'annulee',
+]
+
+/** l'écart entre ce qui était estimé et ce qui a été passé, en heures
+ *  signées. `null` quand rien n'a été estimé : afficher « +3 h » sur une
+ *  tâche sans estimation ferait passer une absence de repère pour un
+ *  dépassement. */
+export function ecartDeTemps(t: TacheInterne): number | null {
+  if (typeof t.tempsEstime !== 'number' || t.tempsEstime <= 0) return null
+  return Math.round(((t.tempsEnregistre || 0) - t.tempsEstime) * 100) / 100
+}
+
+/** avancement des sous-tâches, ou `null` s'il n'y en a pas */
+export function avancementSousTaches(t: TacheInterne): { faites: number; total: number } | null {
+  const total = (t.sousTaches || []).length
+  if (total === 0) return null
+  return { faites: t.sousTaches.filter((s) => s.faite).length, total }
+}
+
+/**
+ * Les tâches dont celle-ci dépend, résolues.
+ *
+ * Une dépendance vers une tâche supprimée ne doit pas disparaître en
+ * silence : elle ressort dans `introuvables`, parce qu'une dépendance
+ * qu'on ne voit plus est une dépendance qu'on croit levée.
+ */
+export function dependancesDe(
+  t: TacheInterne,
+  toutes: TacheInterne[],
+): { resolues: TacheInterne[]; introuvables: string[] } {
+  const index = new Map(toutes.map((x) => [x.id, x]))
+  const resolues: TacheInterne[] = []
+  const introuvables: string[] = []
+  for (const id of t.dependances || []) {
+    const cible = index.get(id)
+    if (cible) resolues.push(cible)
+    else introuvables.push(id)
+  }
+  return { resolues, introuvables }
+}
+
+/** Vrai si toutes les dépendances sont levées — donc si la tâche peut
+ *  réellement démarrer. Une dépendance INTROUVABLE compte comme non levée :
+ *  on ne présume pas qu'un objet disparu était terminé. */
+export function dependancesLevees(t: TacheInterne, toutes: TacheInterne[]): boolean {
+  const { resolues, introuvables } = dependancesDe(t, toutes)
+  if (introuvables.length > 0) return false
+  return resolues.every((d) => !estOuverte(d))
+}
+
+let compteurCommentaire = 0
+
+/** un commentaire horodaté et attribué (§19.3 pt 5) */
+export function creerCommentaire(texte: string, auteur: string | null) {
+  compteurCommentaire += 1
+  return {
+    id: `com-${Date.now().toString(36)}-${compteurCommentaire.toString(36)}`,
+    date: new Date().toISOString(),
+    auteur,
+    texte: texte.trim(),
+  }
+}
+
+let compteurSousTache = 0
+
+export function creerSousTache(titre: string) {
+  compteurSousTache += 1
+  return { id: `st-${Date.now().toString(36)}-${compteurSousTache.toString(36)}`, titre: titre.trim(), faite: false }
+}
+
+// ------------------------------------------------------------
+// 7. Reprise des notes « à faire » (palier v20 → v21)
 // ------------------------------------------------------------
 
 /** le tag qui, depuis toujours, fait d'une note de journal une action */

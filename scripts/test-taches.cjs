@@ -403,6 +403,94 @@ const projets = () => [
   assert.match(ecran, /creerTache\(\{/, 'toute création passe par la fabrique des 18 champs')
 }
 
+// --- B.8 : la fiche, et les règles qu'elle ne doit pas inventer ------------
+
+{
+  const tache = (over = {}) => ({
+    id: over.id ?? 't1',
+    titre: 'Relancer le BET',
+    statut: over.statut ?? 'a_faire',
+    priorite: 'normale',
+    tempsEstime: over.tempsEstime ?? null,
+    tempsEnregistre: over.tempsEnregistre ?? 0,
+    sousTaches: over.sousTaches ?? [],
+    dependances: over.dependances ?? [],
+    commentaires: [],
+    source: { type: 'manuelle', id: null },
+    creeLe: '2026-07-01',
+  })
+
+  // Cinq statuts au menu sur les neuf stockés — et tous doivent exister.
+  assert.equal(T.STATUTS_TACHE_AU_MENU.length, 5)
+  for (const s of T.STATUTS_TACHE_AU_MENU)
+    assert.ok(T.STATUTS_TACHE.includes(s), `« ${s} » au menu doit être un statut du référentiel`)
+  assert.ok(
+    !T.STATUTS_TACHE_AU_MENU.includes('a_qualifier'),
+    '« à qualifier » ne se pose pas à la main : c’est l’état d’une proposition non revue (B.10)',
+  )
+
+  // L'écart de temps : `null` sans estimation. Afficher « +3 h » sur une
+  // tâche jamais estimée ferait passer une absence de repère pour un
+  // dépassement — et le §7.3 tient les faux dépassements pour ce qui fait
+  // cesser de regarder la marge.
+  assert.equal(T.ecartDeTemps(tache({ tempsEnregistre: 3 })), null, 'sans estimation, pas d’écart')
+  assert.equal(T.ecartDeTemps(tache({ tempsEstime: 0, tempsEnregistre: 3 })), null, 'une estimation à zéro n’en est pas une')
+  assert.equal(T.ecartDeTemps(tache({ tempsEstime: 2, tempsEnregistre: 3.5 })), 1.5)
+  assert.equal(T.ecartDeTemps(tache({ tempsEstime: 4, tempsEnregistre: 1 })), -3, 'l’écart est SIGNÉ')
+
+  // Sous-tâches
+  assert.equal(T.avancementSousTaches(tache()), null, 'aucune sous-tâche : pas de « 0 / 0 »')
+  assert.deepEqual(
+    T.avancementSousTaches(tache({ sousTaches: [{ faite: true }, { faite: false }, { faite: true }] })),
+    { faites: 2, total: 3 },
+  )
+
+  // Dépendances : une cible supprimée ne disparaît PAS en silence.
+  const autres = [tache({ id: 'a', statut: 'terminee' }), tache({ id: 'b', statut: 'en_cours' })]
+  const t3 = tache({ id: 't3', dependances: ['a', 'b', 'fantome'] })
+  const { resolues, introuvables } = T.dependancesDe(t3, autres)
+  assert.deepEqual(resolues.map((x) => x.id), ['a', 'b'])
+  assert.deepEqual(
+    introuvables,
+    ['fantome'],
+    'une dépendance vers une tâche supprimée doit RESSORTIR : celle qu’on ne voit plus est celle qu’on croit levée',
+  )
+
+  assert.equal(T.dependancesLevees(tache({ dependances: ['a'] }), autres), true, 'une dépendance terminée est levée')
+  assert.equal(T.dependancesLevees(tache({ dependances: ['b'] }), autres), false, 'une dépendance en cours ne l’est pas')
+  assert.equal(
+    T.dependancesLevees(tache({ dependances: ['fantome'] }), autres),
+    false,
+    'on ne présume pas qu’un objet disparu était terminé',
+  )
+  assert.equal(T.dependancesLevees(tache(), autres), true, 'aucune dépendance : rien ne bloque')
+
+  // Commentaires : horodatés ET attribués (§19.3 pt 5).
+  const c = T.creerCommentaire('  Le BET a répondu.  ', 'Julien')
+  assert.equal(c.texte, 'Le BET a répondu.')
+  assert.equal(c.auteur, 'Julien')
+  assert.ok(c.date && c.id, 'un commentaire sans date ni identité ne dit pas qui a tranché')
+  assert.equal(T.creerCommentaire('x', null).auteur, null, 'sans personne reconnue, on n’invente pas un auteur')
+
+  // L'écran ne réimplémente rien.
+  const fiche = lire('src/modules/FicheTache.tsx')
+  for (const fn of ['ecartDeTemps', 'avancementSousTaches', 'dependancesDe', 'STATUTS_TACHE_AU_MENU'])
+    assert.ok(fiche.includes(fn), `la fiche doit consommer ${fn} plutôt que de le refaire`)
+  assert.doesNotMatch(
+    fiche,
+    /tempsEnregistre\s*=|tempsEnregistre\s*\+=/,
+    'la fiche n’écrit PAS le temps enregistré : c’est une projection des pointages (B.9)',
+  )
+
+  // Le chrono est B.6 : la fiche doit le DIRE, pas offrir un bouton mort.
+  assert.match(
+    fiche,
+    /livrable B\.6/,
+    'la fiche doit dire que le chrono n’existe pas encore — un bouton mort se clique deux fois, ' +
+      'puis on cesse de faire confiance à l’écran',
+  )
+}
+
 // --- 5. le temps enregistré ne s'écrit pas ici -----------------------------
 
 const source = lire('src/taches.ts')
@@ -436,6 +524,7 @@ assert.equal(
 assert.match(lire('src/seed.ts'), /taches: \[\]/, 'le jeu d’amorce ne contient AUCUNE tâche d’exemple')
 
 console.log(
-  'Tâches (B.1/B.2) : 18 champs du §8.5, 9 statuts et 4 priorités du CDC, reprise des notes ' +
-    'idempotente et non destructive, 11 filtres du §8.3 câblés, et le temps enregistré reste une projection.',
+  'Tâches (B.1/B.2/B.8) : 18 champs du §8.5, 9 statuts et 4 priorités du CDC, reprise des notes ' +
+    'idempotente et non destructive, 11 filtres du §8.3 câblés, fiche sans règle inventée, ' +
+    'et le temps enregistré reste une projection.',
 )

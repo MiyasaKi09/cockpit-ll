@@ -19,6 +19,7 @@ import type { TacheInterne } from '../types'
 import { useStore } from '../store'
 import { Btn, Card, DateF, EmptyState, Icon, Page, Table, toast, useToday } from '../ui'
 import { useMoi } from '../moi'
+import FicheTache from './FicheTache'
 import { lienGmail } from '../util'
 import {
   type FiltreTaches,
@@ -123,6 +124,12 @@ export default function Taches() {
     })
   }
 
+  // B.8 : la fiche s'ouvre EN MODALE. Quitter la liste pour ouvrir une
+  // tâche ferait perdre les filtres à chaque fois, et la revue d'une file
+  // de vingt tâches deviendrait insupportable.
+  const [ouverte, setOuverte] = useState<string | null>(null)
+  const tacheOuverte = ouverte ? state.taches.find((x) => x.id === ouverte) : null
+
   const projets = state.projets.map((p) => p.id)
   const nbSansFiltre = state.taches.length
 
@@ -203,7 +210,15 @@ export default function Taches() {
             {visibles.map((t) => (
               <tr key={t.id}>
                 <td>
-                  {t.titre}
+                  <a
+                    href="#"
+                    onClick={(e) => {
+                      e.preventDefault()
+                      setOuverte(t.id)
+                    }}
+                  >
+                    {t.titre}
+                  </a>
                   {/* §4.2 : un objet issu d'un e-mail garde le lien vers lui.
                       Sans ce bouton, la source serait une donnée morte. */}
                   {t.source?.type === 'message' && lienGmail(t.source.id) && (
@@ -253,6 +268,8 @@ export default function Taches() {
           </Table>
         )}
       </Card>
+
+      {tacheOuverte && <FicheTache tache={tacheOuverte} onClose={() => setOuverte(null)} />}
     </Page>
   )
 }

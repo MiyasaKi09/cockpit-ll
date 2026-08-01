@@ -129,6 +129,9 @@ jobs:
       - name: Internal tasks collection and its migration step
         run: npm run test:taches
 
+      - name: Machine proposals stay reviewable (criterion 11)
+        run: npm run test:critere11
+
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 

@@ -262,7 +262,147 @@ export function creerTache(champs: NouvelleTache): TacheInterne {
 }
 
 // ------------------------------------------------------------
-// 5. Reprise des notes « à faire » (palier v20 → v21)
+// 5. Les onze filtres du §8.3 — livrable B.2
+// ------------------------------------------------------------
+//
+// Ils vivent ici, purs, et non dans l'écran : c'est ce qui les rend
+// vérifiables en CI sans navigateur. Le §8.3 en énumère onze ; la version
+// 1 du plan en déclarait dix et tenait quand même le critère 6 pour
+// satisfait — « Proposées par l'IA » manquait.
+//
+// Trois d'entre eux sont PARAMÉTRÉS (projet, priorité, statut) et huit
+// sont des prédicats simples. Les mélanger dans une seule énumération
+// ferait de « par projet » un booléen, ce qu'il n'est pas.
+
+export type FiltreTemporel = 'aujourdhui' | 'en_retard' | 'cette_semaine' | 'a_venir' | 'sans_date'
+
+export interface FiltreTaches {
+  /** la personne devant l'écran — filtre par DÉFAUT de la vue (§8.3) */
+  personne?: string | null
+  temporel?: FiltreTemporel | null
+  projetId?: string | null
+  priorite?: PrioriteTache | null
+  statut?: StatutTache | null
+  /** « Créées par moi » */
+  creeesParMoi?: boolean
+  /** « Assignées par un tiers » : quelqu'un d'autre me l'a confiée */
+  assigneesParUnTiers?: boolean
+  /** « Proposées par l'IA » — lit la SOURCE, pas un champ à part */
+  proposeesParIA?: boolean
+  /** inclure ce qui est terminé ou annulé. Faux par défaut : une file qui
+   *  montre l'histoire complète cesse d'être une file. */
+  inclureClos?: boolean
+}
+
+/** lundi de la semaine d'une date ISO — la semaine commence lundi en France */
+function lundiDe(iso: string): string {
+  const d = new Date(`${iso}T00:00:00Z`)
+  const jour = d.getUTCDay()
+  d.setUTCDate(d.getUTCDate() - ((jour + 6) % 7))
+  return d.toISOString().slice(0, 10)
+}
+
+function ajouterJours(iso: string, n: number): string {
+  const d = new Date(`${iso}T00:00:00Z`)
+  d.setUTCDate(d.getUTCDate() + n)
+  return d.toISOString().slice(0, 10)
+}
+
+/**
+ * Le prédicat temporel, sur l'ÉCHÉANCE.
+ *
+ * Une tâche sans échéance n'est ni en retard, ni pour aujourd'hui, ni pour
+ * cette semaine : elle est « sans date », et c'est un filtre à part entière
+ * du §8.3. La faire tomber dans « à venir » la noierait parmi des tâches
+ * datées, et personne ne lui en donnerait jamais une.
+ *
+ * « En retard » se juge STRICTEMENT avant aujourd'hui : une échéance du
+ * jour n'est pas en retard, elle est pour aujourd'hui. Confondre les deux
+ * ferait paraître en retard tout ce qui est simplement à faire ce matin.
+ */
+export function correspondAuTemporel(t: TacheInterne, filtre: FiltreTemporel, aujourdhui: string): boolean {
+  const echeance = t.echeance ? t.echeance.slice(0, 10) : null
+  if (filtre === 'sans_date') return !echeance
+  if (!echeance) return false
+  if (filtre === 'en_retard') return echeance < aujourdhui
+  if (filtre === 'aujourdhui') return echeance === aujourdhui
+  if (filtre === 'cette_semaine') {
+    const lundi = lundiDe(aujourdhui)
+    // Bornes incluses des deux côtés : une échéance au dimanche appartient
+    // à la semaine, et une échéance en retard de mardi y appartient aussi —
+    // « cette semaine » répond « ce sur quoi porte ma semaine », pas
+    // « ce qui reste ».
+    return echeance >= lundi && echeance <= ajouterJours(lundi, 6)
+  }
+  // « à venir » : strictement après aujourd'hui. Le jour même a son filtre.
+  return echeance > aujourdhui
+}
+
+/**
+ * Applique les onze filtres du §8.3.
+ *
+ * Ils se COMBINENT : « mes tâches en retard sur P01 » est une question
+ * légitime, et la poser demande trois filtres à la fois. Un sélecteur par
+ * filtre obligerait l'écran à les composer lui-même, donc à réimplémenter
+ * la combinaison — mal, et différemment de la fois suivante.
+ */
+export function filtrerTaches(
+  taches: TacheInterne[],
+  filtre: FiltreTaches,
+  aujourdhui: string,
+): TacheInterne[] {
+  const moi = (filtre.personne || '').trim()
+  return (taches || []).filter((t) => {
+    if (!filtre.inclureClos && !estOuverte(t)) return false
+
+    // Le filtre par personne est celui par DÉFAUT de la vue. Sans personne
+    // reconnue, on montre tout plutôt que de choisir quelqu'un au hasard —
+    // même règle que la boîte « À traiter » (A.7).
+    if (moi && !filtre.creeesParMoi && t.responsable !== moi) return false
+
+    if (filtre.temporel && !correspondAuTemporel(t, filtre.temporel, aujourdhui)) return false
+    if (filtre.projetId && t.projetId !== filtre.projetId) return false
+    if (filtre.priorite && t.priorite !== filtre.priorite) return false
+    if (filtre.statut && t.statut !== filtre.statut) return false
+
+    if (filtre.creeesParMoi && (!moi || t.createur !== moi)) return false
+
+    // « Assignées par un tiers » : je la porte, quelqu'un d'autre l'a
+    // créée. Une tâche que je me suis donnée n'a pas été assignée — et
+    // c'est toute la question que ce filtre pose.
+    if (filtre.assigneesParUnTiers) {
+      if (!moi || t.responsable !== moi) return false
+      if (!t.createur || t.createur === moi) return false
+    }
+
+    // « Proposées par l'IA » lit la SOURCE. Un champ booléen à part
+    // finirait par dire autre chose que la source, et c'est la source qui
+    // fait foi (§4.2).
+    if (filtre.proposeesParIA && t.source?.type !== 'proposition') return false
+
+    return true
+  })
+}
+
+/**
+ * L'ordre de la vue : ce qui presse d'abord.
+ *
+ * Retard, puis échéance, puis priorité décroissante, puis date de création.
+ * Les tâches sans échéance viennent APRÈS les datées — elles n'ont pas de
+ * rendez-vous, elles ne peuvent pas en réclamer un.
+ */
+export function trierTaches(a: TacheInterne, b: TacheInterne): number {
+  const ea = a.echeance ? a.echeance.slice(0, 10) : '9999-99-99'
+  const eb = b.echeance ? b.echeance.slice(0, 10) : '9999-99-99'
+  if (ea !== eb) return ea < eb ? -1 : 1
+  const pa = estPrioriteTache(a.priorite) ? graviteDePriorite(a.priorite) : 0
+  const pb = estPrioriteTache(b.priorite) ? graviteDePriorite(b.priorite) : 0
+  if (pa !== pb) return pb - pa
+  return (a.creeLe || '').localeCompare(b.creeLe || '')
+}
+
+// ------------------------------------------------------------
+// 6. Reprise des notes « à faire » (palier v20 → v21)
 // ------------------------------------------------------------
 
 /** le tag qui, depuis toujours, fait d'une note de journal une action */

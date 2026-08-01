@@ -247,6 +247,162 @@ const projets = () => [
   assert.equal(t.description, long.trim(), 'le texte entier survit dans la description — rien n’est perdu')
 }
 
+// --- B.2 : les onze filtres du §8.3, lus dans le CDC -----------------------
+
+{
+  const cdc = lire('docs/CDC_MAILS_TACHES_TEMPS.md')
+  const bloc = /## 8\.3 Vue « Mes tâches »\n([\s\S]*?)\n---/.exec(cdc)
+  assert.ok(bloc, 'le §8.3 doit énumérer les filtres')
+  const filtresCdc = bloc[1].split('\n').filter((l) => l.trim().startsWith('-'))
+  assert.equal(
+    filtresCdc.length,
+    11,
+    'le §8.3 en énumère ONZE. La version 1 du plan en déclarait dix et tenait quand même ' +
+      'le critère 6 pour satisfait — « Proposées par l’IA » manquait',
+  )
+
+  const AUJ = '2026-08-05' // un mercredi
+  const t = (over) => ({
+    id: over.id,
+    statut: over.statut ?? 'a_faire',
+    priorite: over.priorite ?? 'normale',
+    echeance: over.echeance ?? null,
+    projetId: over.projetId ?? null,
+    responsable: over.responsable ?? 'Julien',
+    createur: over.createur ?? 'Julien',
+    source: { type: over.sourceType ?? 'manuelle', id: null },
+    creeLe: over.creeLe ?? '2026-07-01',
+  })
+
+  const jeu = [
+    t({ id: 'retard', echeance: '2026-08-03' }),
+    t({ id: 'auj', echeance: AUJ }),
+    t({ id: 'semaine', echeance: '2026-08-07' }),
+    t({ id: 'venir', echeance: '2026-09-15' }),
+    t({ id: 'sans', echeance: null }),
+    t({ id: 'zoe', echeance: AUJ, responsable: 'Zoé', createur: 'Zoé' }),
+    t({ id: 'assignee', echeance: AUJ, responsable: 'Julien', createur: 'Zoé' }),
+    t({ id: 'ia', echeance: AUJ, statut: 'a_qualifier', sourceType: 'proposition' }),
+    t({ id: 'close', echeance: AUJ, statut: 'terminee' }),
+    t({ id: 'p01', echeance: AUJ, projetId: 'P01', priorite: 'critique' }),
+  ]
+  const ids = (f) => T.filtrerTaches(jeu, f, AUJ).map((x) => x.id).sort()
+
+  // --- les cinq filtres temporels ---
+  assert.deepEqual(ids({ temporel: 'en_retard' }), ['retard'])
+  assert.deepEqual(ids({ temporel: 'aujourdhui' }).includes('retard'), false,
+    'une échéance dépassée n’est pas « aujourd’hui »')
+  assert.ok(ids({ temporel: 'aujourdhui' }).includes('auj'))
+  assert.deepEqual(ids({ temporel: 'sans_date' }), ['sans'])
+  assert.ok(!ids({ temporel: 'a_venir' }).includes('sans'),
+    'une tâche sans échéance n’est pas « à venir » : elle a son propre filtre, sinon personne ne lui en donne jamais')
+  assert.ok(!ids({ temporel: 'a_venir' }).includes('auj'),
+    '« à venir » commence DEMAIN : le jour même a son filtre')
+
+  // « cette semaine » englobe le retard de la semaine en cours : elle
+  // répond « ce sur quoi porte ma semaine », pas « ce qui reste ».
+  const semaine = ids({ temporel: 'cette_semaine' })
+  assert.ok(semaine.includes('retard') && semaine.includes('auj') && semaine.includes('semaine'))
+  assert.ok(!semaine.includes('venir'), 'septembre n’est pas cette semaine')
+
+  // --- les trois filtres paramétrés ---
+  assert.deepEqual(ids({ projetId: 'P01' }), ['p01'])
+  assert.deepEqual(ids({ priorite: 'critique' }), ['p01'])
+  assert.deepEqual(ids({ statut: 'a_qualifier' }), ['ia'])
+
+  // --- personne, créateur, assignation ---
+  assert.ok(!ids({ personne: 'Julien' }).includes('zoe'), 'la vue filtre par personne PAR DÉFAUT')
+  assert.ok(ids({ personne: null }).includes('zoe'),
+    'sans personne reconnue, on montre tout plutôt que de choisir quelqu’un au hasard')
+  assert.deepEqual(
+    ids({ personne: 'Julien', assigneesParUnTiers: true }),
+    ['assignee'],
+    '« assignée par un tiers » : je la porte, quelqu’un d’AUTRE l’a créée — ' +
+      'une tâche que je me suis donnée n’a été assignée par personne',
+  )
+  // « Créées par moi » regarde le CRÉATEUR, pas le responsable — donc elle
+  // montre ce que j'ai confié à quelqu'un d'autre. C'est précisément à quoi
+  // sert le filtre : savoir ce qui avance de ce que j'ai lancé. Le confondre
+  // avec « mes tâches » le rendrait redondant avec le filtre par défaut.
+  const parZoe = ids({ personne: 'Zoé', creeesParMoi: true })
+  assert.ok(
+    parZoe.includes('assignee'),
+    '« créées par moi » montre ce que j’ai confié à quelqu’un d’autre : sinon le filtre ' +
+      'ne dirait rien de plus que le filtre par personne',
+  )
+  assert.ok(parZoe.includes('zoe'), 'et ce que j’ai gardé pour moi')
+  assert.ok(!parZoe.includes('auj'), 'mais pas ce qu’un autre a créé')
+
+  // --- le onzième, celui que la v1 du plan oubliait ---
+  assert.deepEqual(
+    ids({ proposeesParIA: true }),
+    ['ia'],
+    '« Proposées par l’IA » lit la SOURCE. Un booléen à part finirait par dire autre chose qu’elle',
+  )
+
+  // --- ce qui est clos sort des files par défaut ---
+  assert.ok(!ids({}).includes('close'), 'une file qui montre l’histoire complète cesse d’être une file')
+  assert.ok(ids({ inclureClos: true }).includes('close'), 'mais elle reste consultable sur demande')
+
+  // --- les filtres se COMBINENT ---
+  assert.deepEqual(
+    ids({ personne: 'Julien', projetId: 'P01', temporel: 'aujourdhui' }),
+    ['p01'],
+    '« mes tâches d’aujourd’hui sur P01 » est une question légitime : les filtres se composent',
+  )
+
+  // --- l'ordre : ce qui presse d'abord ---
+  const tries = [...jeu].sort(T.trierTaches).map((x) => x.id)
+  assert.equal(tries[0], 'retard', 'le retard passe devant')
+  assert.equal(tries[tries.length - 1], 'sans',
+    'les tâches sans échéance ferment la marche : sans rendez-vous, elles n’en réclament pas')
+  assert.ok(
+    tries.indexOf('p01') < tries.indexOf('auj'),
+    'à échéance égale, la priorité la plus forte passe devant',
+  )
+}
+
+// --- l'écran de B.2 : onze filtres, et aucune logique -----------------------
+
+{
+  const ecran = lire('src/modules/Taches.tsx')
+
+  // Les onze filtres doivent être ATTEIGNABLES depuis l'écran. Livrer les
+  // sélecteurs sans les câbler laisserait le critère 6 déclaré et non tenu,
+  // ce qui est précisément ce que la version 1 du plan avait fait.
+  for (const [libelle, indice] of [
+    ["Aujourd'hui", 'aujourdhui'],
+    ['En retard', 'en_retard'],
+    ['Cette semaine', 'cette_semaine'],
+    ['À venir', 'a_venir'],
+    ['Sans date', 'sans_date'],
+    ['Par projet', 'Filtrer par projet'],
+    ['Par priorité', 'Filtrer par priorité'],
+    ['Par statut', 'Filtrer par statut'],
+    ['Créées par moi', 'Créées par moi'],
+    ['Assignées par un tiers', 'Assignées par un tiers'],
+    ["Proposées par l'IA", 'proposeesParIA'],
+  ]) {
+    assert.ok(ecran.includes(indice), `le filtre « ${libelle} » du §8.3 doit être atteignable depuis l’écran`)
+  }
+
+  // Aucune logique dans le module : les filtres, l'ordre et « ouverte »
+  // vivent dans `src/taches.ts`. L'accueil s'était déjà mis à recalculer
+  // les factures à émettre pour son compte, et deux gravités identiques
+  // par coïncidence entretenue à la main en avaient résulté.
+  assert.match(ecran, /filtrerTaches\(/, 'l’écran CONSOMME le sélecteur, il ne le réimplémente pas')
+  assert.match(ecran, /\.sort\(trierTaches\)/, 'et l’ordre vient du même module')
+  assert.doesNotMatch(
+    ecran,
+    /STATUTS_TACHE_OUVERTS|echeance\s*<\s*aujourdhui|new Set\(\[/,
+    'l’écran ne redéfinit ni « ouverte » ni « en retard » : une seconde définition divergerait',
+  )
+
+  // La tâche saisie passe par la fabrique — sinon elle naîtrait sans
+  // `participants` et le premier écran qui le lit casserait.
+  assert.match(ecran, /creerTache\(\{/, 'toute création passe par la fabrique des 18 champs')
+}
+
 // --- 5. le temps enregistré ne s'écrit pas ici -----------------------------
 
 const source = lire('src/taches.ts')
@@ -280,6 +436,6 @@ assert.equal(
 assert.match(lire('src/seed.ts'), /taches: \[\]/, 'le jeu d’amorce ne contient AUCUNE tâche d’exemple')
 
 console.log(
-  'Tâches (B.1) : 18 champs du §8.5 tous présents, 9 statuts et 4 priorités du CDC, ' +
-    'reprise des notes idempotente et non destructive, et le temps enregistré reste une projection.',
+  'Tâches (B.1/B.2) : 18 champs du §8.5, 9 statuts et 4 priorités du CDC, reprise des notes ' +
+    'idempotente et non destructive, 11 filtres du §8.3 câblés, et le temps enregistré reste une projection.',
 )

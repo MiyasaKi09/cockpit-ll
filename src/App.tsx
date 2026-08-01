@@ -14,6 +14,7 @@ import { diffDays } from './util'
 import type { AppState } from './types'
 
 import Cockpit from './modules/Cockpit'
+import Taches from './modules/Taches'
 import RechercheOverlay from './modules/RechercheOverlay'
 import Pilotage from './modules/Pilotage'
 import Projets from './modules/Projets'
@@ -47,6 +48,7 @@ const NAV: { groupe: string; repliable?: boolean; items: { path: string; label: 
     groupe: 'Travail',
     items: [
       { path: '', label: "Aujourd'hui" },
+      { path: 'taches', label: 'Mes tâches' },
       { path: 'projets', label: 'Projets' },
       { path: 'documents', label: 'Documents' },
       { path: 'planning', label: 'Planning' },
@@ -205,6 +207,9 @@ export default function App() {
   switch (section) {
     case '':
       page = <Cockpit />
+      break
+    case 'taches':
+      page = <Taches />
       break
     case 'revue':
       page = <Pilotage ongletInitial="revue" />

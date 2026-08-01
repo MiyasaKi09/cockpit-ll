@@ -15,6 +15,7 @@ import type { AppState } from './types'
 
 import Cockpit from './modules/Cockpit'
 import Taches from './modules/Taches'
+import Parite from './modules/Parite'
 import RechercheOverlay from './modules/RechercheOverlay'
 import Pilotage from './modules/Pilotage'
 import Projets from './modules/Projets'
@@ -210,6 +211,12 @@ export default function App() {
       break
     case 'taches':
       page = <Taches />
+      break
+    // Écran d'exploitation (B.18) : atteignable par son adresse, absent du
+    // menu. Il ne sert qu'à décider si la coupure de B.15 est permise, et
+    // disparaîtra avec elle.
+    case 'parite':
+      page = <Parite />
       break
     case 'revue':
       page = <Pilotage ongletInitial="revue" />

@@ -33,6 +33,11 @@
 >   active := true);
 > ```
 >
+> **Après le déploiement de `gmail-ingestion`, l'écran `#/parite` (B.18)
+> mesure la condition de coupure de B.15** : jours consécutifs sans écart
+> entre les deux mémoires du courrier. C'est lui qui dira quand
+> `state.courriers` peut cesser d'être alimenté — pas une impression.
+>
 > Ce déploiement se fait par la CLI et non autrement : elle envoie les fichiers
 > relus, octet pour octet. Les retaper à travers un outil, ce serait déployer
 > une copie non relue de 4 900 lignes qui tournent sans surveillance — et

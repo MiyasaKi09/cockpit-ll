@@ -25,6 +25,7 @@ import { Btn, Card, DateF, EmptyState, Icon, LienGmail, Modal, Money, Page, Resu
 import type { ContexteAlertes, MessageNotifiable } from '../alerts'
 import { alertesActives } from '../alerts'
 import { dateDe, fusionnerBoite, urgenceDe } from '../boite'
+import { creerTache } from '../taches'
 import type { Communication, FiltreCommunications } from '../communications'
 import { mailsATraiterPourLaBoite, marquerTraite, useCommunications } from '../communications'
 import { lienGmail } from '../util'
@@ -177,7 +178,15 @@ function itemsAFaire(
       marqueur: 'circle',
     })
   }
-  // notes de journal « à faire » non réglées
+  // Notes de journal « à faire » non réglées.
+  //
+  // ATTENTION B.12 : le palier v21 a repris ces mêmes notes en `taches`
+  // (`tachesDepuisNotes`). Le jour où les tâches entreront dans cette file,
+  // chaque note reprise y figurera DEUX FOIS — une fois par ce bloc, une
+  // fois par la tâche qui en est née. C'est ce bloc-ci qui doit alors
+  // disparaître : la tâche porte la source de la note, l'inverse n'est pas
+  // vrai. Écrit ici plutôt qu'espéré, parce qu'un doublon dans la file du
+  // matin se remarque tard et se corrige mal.
   for (const p of state.projets) {
     for (const n of p.journal) {
       if (!n.tags.includes('a-faire') || n.fait) continue
@@ -289,6 +298,8 @@ interface LigneATraiter {
   versJournal: (() => void) | null
   traiter: () => void
   repondre: (() => void) | null
+  /** B.3 — « Créer une tâche depuis ce message », en conservant sa source */
+  creerTacheDepuis: () => void
 }
 
 /**
@@ -356,6 +367,46 @@ function useBoiteATraiter(personne: string): LigneATraiter[] {
     toast('Archivé dans le journal du projet.', { undo: () => replace(snap) })
   }
 
+  /**
+   * B.3 — transforme un message en tâche SANS le faire disparaître.
+   *
+   * Le §4.2 est explicite : « chaque tâche, décision, document ou échéance
+   * issue d'un e-mail doit également conserver ce lien ». La source porte
+   * donc la même valeur que celle d'une note de journal — celle que
+   * `lienGmail()` sait rouvrir, quelle que soit la mémoire d'origine.
+   *
+   * Le message n'est PAS marqué traité. C'est délibéré, et c'est le point
+   * qui distingue B.3 de B.15 : créer la tâche est un geste d'organisation,
+   * marquer traité en est un autre. Les enchaîner d'office ferait sortir de
+   * la boîte un mail auquel on n'a pas encore répondu.
+   */
+  const creerTacheDepuisMessage = (champs: {
+    titre: string
+    projetId: string | null
+    source: string | null
+    echeance?: string | null
+  }) => {
+    const snap = state
+    const tache = creerTache({
+      titre: champs.titre,
+      projetId: champs.projetId,
+      // Le créateur est celui qui clique ; le responsable aussi, faute de
+      // mieux. Ne rien mettre laisserait la tâche hors de « mes tâches »
+      // (§8.3) et hors du plan de charge — invisible sans être perdue,
+      // ce qui est pire.
+      createur: moi.nom,
+      responsable: moi.nom,
+      echeance: champs.echeance ?? null,
+      source: { type: 'message', id: champs.source },
+    })
+    update((d) => {
+      d.taches.push(tache)
+    })
+    toast(`Tâche créée${champs.projetId ? ` sur ${champs.projetId}` : ''}.`, {
+      undo: () => replace(snap),
+    })
+  }
+
   const deCourrier = (c: Courrier): LigneATraiter => ({
     cle: `courrier:${c.id}`,
     urgence: urgenceDe({ genre: 'courrier', courrier: c }),
@@ -380,6 +431,12 @@ function useBoiteATraiter(personne: string): LigneATraiter[] {
     versJournal: c.projetId ? () => versJournalCourrier(c.id) : null,
     traiter: () => traiterCourrier(c.id),
     repondre: c.de ? () => ouvrirGmail(c.de, `Re: ${c.objet}`, corpsDeReponse(c.objet)) : null,
+    creerTacheDepuis: () =>
+      creerTacheDepuisMessage({
+        titre: c.actionProposee?.trim() || c.objet,
+        projetId: c.projetId,
+        source: c.source || null,
+      }),
   })
 
   // ----- nouvelle mémoire : mêmes gestes, écriture signée et datée -----
@@ -464,6 +521,12 @@ function useBoiteATraiter(personne: string): LigneATraiter[] {
     },
     versJournal: c.projetId ? () => void versJournalMessage(c, jumeau) : null,
     traiter: () => void traiterMessage(c, jumeau),
+    creerTacheDepuis: () =>
+      creerTacheDepuisMessage({
+        titre: c.objet || '(sans objet)',
+        projetId: c.projetId,
+        source: c.gmailMessageId,
+      }),
     repondre: c.expediteurAdresse
       ? () => ouvrirGmail(c.expediteurAdresse, `Re: ${c.objet}`, corpsDeReponse(c.objet))
       : null,
@@ -535,6 +598,13 @@ function LigneCourrier({ lignes }: { lignes: LigneATraiter[] }) {
                 → Journal
               </Btn>
             )}
+            {/* B.3. « ✓ Fait » lui cède la place en B.15, pas avant : retirer
+                un geste avant que son successeur soit éprouvé, c'est le
+                retirer tout court. Les deux cohabitent le temps de la
+                transition. */}
+            <Btn small kind="ghost" onClick={c.creerTacheDepuis} title="Crée une tâche qui garde le lien vers ce message">
+              Créer une tâche
+            </Btn>
             <Btn small onClick={c.traiter}>✓ Fait</Btn>
           </div>
         </div>

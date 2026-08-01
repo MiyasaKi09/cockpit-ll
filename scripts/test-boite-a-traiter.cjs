@@ -230,13 +230,54 @@ const message = (over) => ({
   assert.ok(zoe.includes('partage'), 'le courrier partagé est dans les DEUX files : quelqu’un doit le prendre')
 }
 
+// --- B.3 : créer une tâche depuis un message, sans le faire disparaître -----
+
+{
+  const boite = /function useBoiteATraiter[\s\S]*?\n}/.exec(lire('src/modules/Cockpit.tsx'))
+  assert.ok(boite, 'useBoiteATraiter doit exister')
+
+  assert.match(
+    boite[0],
+    /source: \{ type: 'message', id: champs\.source \}/,
+    'la tâche créée depuis un message CONSERVE le lien vers lui (§4.2) — sans quoi ' +
+      'elle devient une phrase sans référence, et rouvrir le mail demande de le retrouver à la main',
+  )
+
+  // Les deux mémoires passent par la MÊME fabrique : deux chemins de
+  // création divergeraient sur la source, et l'un des deux la perdrait.
+  assert.equal(
+    (boite[0].match(/creerTacheDepuisMessage\(\{/g) || []).length,
+    2,
+    'les deux sources appellent la même fabrique — une par mémoire, pas deux implémentations',
+  )
+  assert.equal(
+    (boite[0].match(/creerTache\(\{/g) || []).length,
+    1,
+    'une seule construction de tâche : la fabrique de `src/taches.ts` garantit les 18 champs',
+  )
+
+  // LE point de B.3 : créer une tâche ne marque pas le message traité.
+  // Les enchaîner ferait sortir de la boîte un mail auquel on n'a pas
+  // encore répondu — le geste d'organisation n'est pas le geste de clôture.
+  const fabrique = /const creerTacheDepuisMessage[\s\S]*?undo: \(\) => replace\(snap\),/.exec(boite[0])
+  assert.ok(fabrique, 'la fabrique doit être identifiable')
+  assert.doesNotMatch(
+    fabrique[0],
+    /marquerTraite|statut = 'traite'/,
+    'créer une tâche ne marque PAS le message traité : ce sont deux gestes, et les enchaîner ' +
+      'ferait sortir de la boîte un mail auquel on n’a pas répondu',
+  )
+  assert.match(fabrique[0], /undo: \(\) => replace\(snap\)/, 'le geste est annulable, comme les autres')
+}
+
 // --- 5. l'écran garde ses trois boutons -------------------------------------
 
 const cockpit = lire('src/modules/Cockpit.tsx')
 for (const [bouton, pourquoi] of [
   ['Répondre', 'le brouillon Gmail est le seul geste d’envoi — le Cockpit n’envoie pas d’e-mail (§4.1)'],
   ['→ Journal', 'transformer un mail en note de projet est le geste du §4.2'],
-  ['✓ Fait', 'son remplaçant « Créer une tâche » est en B.3 : le retirer ici retirerait un geste'],
+  ['✓ Fait', 'son remplaçant est arrivé en B.3, mais le retrait est B.15 : les deux cohabitent'],
+  ['Créer une tâche', 'B.3 — le geste du §8.4 « depuis un e-mail », avec sa source'],
 ]) {
   assert.ok(cockpit.includes(bouton), `A.7 ne change PAS les actions : « ${bouton} » doit rester — ${pourquoi}`)
 }

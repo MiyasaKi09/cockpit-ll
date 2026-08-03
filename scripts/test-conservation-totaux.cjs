@@ -78,7 +78,7 @@ const total = (entrees) => Math.round(entrees.reduce((s, e) => s + e.heures, 0) 
   // ils totaliseraient 2,40 h. La vérité est 140 min = 2,33 h. L'écart
   // paraît dérisoire ; c'est 3 % de l'heure, tous les jours, sur la
   // grandeur qui porte la marge.
-  const petits = Array.from({ length: 20 }, (_, i) =>
+  const petits = Array.from({ length: 20 }, () =>
     pt({ debut: `2026-08-03T09:00:00Z`, fin: null, minutes: 7 }),
   ).map((p) => ({ ...p, fin: '2026-08-03T09:07:00Z' }))
 

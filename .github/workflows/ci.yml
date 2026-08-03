@@ -135,6 +135,9 @@ jobs:
       - name: Time totals are conserved through both projections
         run: npm run test:conservation
 
+      - name: Proposal review creates and signs, never transforms
+        run: npm run test:revue-propositions
+
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 

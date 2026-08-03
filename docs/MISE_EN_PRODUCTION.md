@@ -38,6 +38,11 @@
 > entre les deux mémoires du courrier. C'est lui qui dira quand
 > `state.courriers` peut cesser d'être alimenté — pas une impression.
 >
+> **Une migration de plus attend** : `20260801090000_pointages_et_chrono.sql`
+> (livrables B.4, B.6, B.7, B.16). Elle crée `pointages` et `chrono_actif`,
+> et étend le journal d'audit aux deux. Elle s'applique après le registre
+> des membres, dont elle appelle `est_membre_actif()`.
+>
 > Ce déploiement se fait par la CLI et non autrement : elle envoie les fichiers
 > relus, octet pour octet. Les retaper à travers un outil, ce serait déployer
 > une copie non relue de 4 900 lignes qui tournent sans surveillance — et

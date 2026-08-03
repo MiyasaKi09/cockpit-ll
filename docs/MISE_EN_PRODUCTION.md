@@ -112,14 +112,27 @@ testez l'assistant) :
 | `ASSISTANT_MODELE` | non | modèle standard |
 | `ASSISTANT_MODELE_DIFFICILE` | non | modèle d'escalade |
 
-Valeurs de ce projet — les deux premières ne sont pas des secrets, la clé
-publiable est faite pour être lue par le navigateur :
+Valeurs de ce projet — ni l'une ni l'autre n'est un secret, la clé publiable
+est faite pour être lue par le navigateur :
 
 ```
 SUPABASE_URL=https://rxwnbscmmgflvwxafbek.supabase.co
 SUPABASE_PUBLISHABLE_KEY=sb_publishable_1vHhiHfOTn4hbN-EIDrQcQ_HgjPPKCj
-AGENCE_EMAILS=julenglet@gmail.com,zoefhebert@gmail.com
 ```
+
+`AGENCE_EMAILS` ne figure pas ici, et ce n'est pas un oubli : depuis le
+livrable 0.2, `public.membres` est la seule autorité sur qui est de l'agence.
+Recopier les adresses dans ce document en ferait un endroit de plus à retrouver
+le jour de la bascule d'identité (livrable 3.2) — c'est précisément ce que
+`test:adresses` interdit, et il a raison. Lisez-les au registre :
+
+```sql
+select string_agg(email, ',' order by email) as agence_emails
+from membres where actif;
+```
+
+Le résultat se colle tel quel. Il est juste par construction, et il le restera
+après un ajout ou un départ.
 
 Cette étape précède obligatoirement le déploiement du front : sans
 `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY` et `AGENCE_EMAILS`, l'assistant

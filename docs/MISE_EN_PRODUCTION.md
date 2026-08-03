@@ -15,22 +15,42 @@
 > le seul champ modifié, avec ses valeurs avant et après ; le commentaire libre
 > y figure par son NOM, jamais par sa valeur.
 >
-> **Fonctions Edge : PAS à jour.** Les six déployées datent du 30/07 et
-> continuent de fonctionner — les migrations sont additives, c'est leur raison
-> d'être. Mais elles n'écrivent pas encore `communications`, ni les colonnes
-> enrichies d'`entrants`. `resume-messages` **n'est pas déployée du tout**, et
-> son cron a donc été **désactivé** plutôt que laissé à frapper une fonction
-> absente toutes les quinze minutes.
+> **Fonctions Edge : deux restent en retard.** État relevé le 03/08 :
 >
-> **Trois gestes restent, dans cet ordre :**
+> | Fonction | En ligne | Verdict |
+> | --- | --- | --- |
+> | `gmail-oauth` | v2, 30/07 | à jour |
+> | `ingestion-config` | **v3, 03/08** | à jour |
+> | `veille-collecte` / `-enrichir` / `-mails` | v2–v3, 30/07 | à jour |
+> | `gmail-ingestion` | v2, 30/07 | **en retard de 5 commits** (A.1, A.2, A.4, A.8) |
+> | `resume-messages` | — | **jamais déployée** |
 >
-> ```bash
-> npx supabase functions deploy gmail-ingestion
-> npx supabase functions deploy ingestion-config
-> npx supabase functions deploy resume-messages
-> ```
+> Les versions en ligne continuent de fonctionner — les migrations sont
+> additives, c'est leur raison d'être. Le cron `gmail-ingestion` tourne
+> d'ailleurs toutes les dix minutes sans erreur et répond « En attente : Gmail
+> n'est pas connecté ». Mais la version déployée est ANTÉRIEURE à A.2, le
+> livrable qui a créé `public.communications` : elle n'écrit pas dans cette
+> table. Le cron de `resume-messages` a été **désactivé** plutôt que laissé à
+> frapper une fonction absente toutes les quinze minutes.
 >
-> puis réactiver le cron du résumé :
+> **Le déploiement se fait par le workflow `Déployer une fonction Edge`**
+> (`.github/workflows/deployer-fonctions.yml`) : onglet Actions du dépôt,
+> « Run workflow », choisir la fonction. Il exige une fois le secret
+> `SUPABASE_ACCESS_TOKEN` (Settings → Secrets and variables → Actions).
+>
+> Pourquoi par là et pas autrement : le workflow déploie **les octets du
+> dépôt**. Retaper 113 Ko à travers un outil de conversation, ce serait
+> déployer une copie non relue — et `classement-echanges.ts` est un lexique de
+> 714 lignes où une faute d'un caractère ne plante rien : elle fait classer
+> faux, en silence. Aucun test du dépôt ne verrait la différence, puisqu'ils
+> lisent les fichiers, pas ce qui a été déployé.
+>
+> **Dans cet ordre :**
+>
+> 1. workflow → `gmail-ingestion` ;
+> 2. workflow → `resume-messages`, puis ses deux secrets côté Supabase
+>    (`RESUME_ANTHROPIC_API_KEY`, `RESUME_MODELE` — Edge Functions → Secrets),
+>    puis réactiver son cron :
 >
 > ```sql
 > select cron.alter_job(
@@ -38,16 +58,17 @@
 >   active := true);
 > ```
 >
+> 3. **et seulement ensuite** le consentement Gmail (section plus bas).
+>
+> L'ordre n'est pas cosmétique : consentir AVANT de déployer `gmail-ingestion`
+> lance l'ingestion sur la version pré-A.2. `communications` resterait à 0 et
+> le compteur de `#/parite` ne bougerait jamais — on chercherait un défaut de
+> mesure là où il y aurait un défaut de version.
+>
 > **Après le déploiement de `gmail-ingestion`, l'écran `#/parite` (B.18)
 > mesure la condition de coupure de B.15** : jours consécutifs sans écart
 > entre les deux mémoires du courrier. C'est lui qui dira quand
 > `state.courriers` peut cesser d'être alimenté — pas une impression.
->
-> Ce déploiement se fait par la CLI et non autrement : elle envoie les fichiers
-> relus, octet pour octet. Les retaper à travers un outil, ce serait déployer
-> une copie non relue de 4 900 lignes qui tournent sans surveillance — et
-> aucun test du dépôt ne verrait la différence, puisqu'ils lisent les fichiers,
-> pas ce qui a été déployé.
 
 Procédure de bascule d'un projet Cockpit **déjà en service** vers la version
 durcie. Elle est ordonnée : chaque étape suppose la précédente terminée, et
@@ -91,13 +112,37 @@ testez l'assistant) :
 | `ASSISTANT_MODELE` | non | modèle standard |
 | `ASSISTANT_MODELE_DIFFICILE` | non | modèle d'escalade |
 
+Valeurs de ce projet — les deux premières ne sont pas des secrets, la clé
+publiable est faite pour être lue par le navigateur :
+
+```
+SUPABASE_URL=https://rxwnbscmmgflvwxafbek.supabase.co
+SUPABASE_PUBLISHABLE_KEY=sb_publishable_1vHhiHfOTn4hbN-EIDrQcQ_HgjPPKCj
+AGENCE_EMAILS=julenglet@gmail.com,zoefhebert@gmail.com
+```
+
 Cette étape précède obligatoirement le déploiement du front : sans
 `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY` et `AGENCE_EMAILS`, l'assistant
 répond `501 Assistant non configuré` par conception, et ce comportement ne doit
 pas être contourné.
 
+**Redéployez après avoir enregistré.** Vercel n'applique les variables qu'aux
+déploiements suivants : sans redéploiement on lit `501` et on croit à une faute
+de frappe.
+
+`APP_ORIGIN` est marquée obligatoire mais ne bloque pas l'assistant : le code
+ajoute déjà l'hôte courant à la liste autorisée. Elle sert le jour de la
+bascule vers `agence-ll.fr` — mettez-y alors les deux origines, séparées par
+une virgule.
+
+**Vérification :** ouvrez l'assistant depuis le Cockpit connecté. Appeler
+`/api/assistant?ping=1` dans la barre d'adresse ne prouve rien — la route exige
+une session Supabase et répond `501` même bien configurée.
+
 N'écrivez jamais la clé `service_role` ni la clé Anthropic dans une variable
-préfixée `VITE_` : Vite les intégrerait au code envoyé au navigateur.
+préfixée `VITE_` : Vite les intégrerait au code envoyé au navigateur. La
+`service_role` n'a rien à faire chez Vercel du tout — aucun fichier de `api/`
+ne la lit.
 
 ## 4. Appliquer Supabase
 
@@ -397,11 +442,26 @@ Relisez enfin les avis de sécurité du projet Supabase.
 ## Consentement Gmail
 
 Étape distincte, qui exige les identifiants OAuth Google et une action humaine :
-elle ne peut pas être automatisée.
+elle ne peut pas être automatisée. Google veut quelqu'un devant l'écran de
+consentement, et c'est très bien ainsi.
+
+**À faire APRÈS le déploiement de `gmail-ingestion`**, pour la raison donnée en
+tête de document : consentir avant lancerait l'ingestion sur la version
+pré-A.2, qui n'écrit pas `communications`.
 
 1. Dans la console Google Cloud, créer un identifiant OAuth « application web »
-   dont l'URI de redirection est
-   `https://<project-ref>.supabase.co/functions/v1/gmail-oauth`.
+   dont l'URI de redirection est, exactement et sans barre finale :
+
+   ```
+   https://rxwnbscmmgflvwxafbek.supabase.co/functions/v1/gmail-oauth
+   ```
+
+   Vérifier dans « Écran de consentement OAuth » que la portée demandée est
+   `https://www.googleapis.com/auth/gmail.readonly` et rien d'autre — c'est ce
+   que le code demande (`gmail.readonly openid email`), et `gmail.send`,
+   `gmail.modify` et `gmail.compose` doivent rester hors du périmètre. Si
+   l'application est en mode *Testing*, ajouter le compte à lire dans
+   « Utilisateurs test », sinon Google refuse le consentement.
 2. Saisir `client_id` et `client_secret` dans **Paramètres → Branchements** du
    Cockpit. Ils sont stockés côté serveur, dans `ingestion_config`, jamais dans
    l'état partagé ni dans Git.
@@ -413,6 +473,17 @@ elle ne peut pas être automatisée.
 
 Tant que le consentement n'est pas accordé, `gmail-ingestion` n'a pas de
 `refresh_token` et ne remonte aucune pièce ; le reste de la veille fonctionne.
+
+**Vérification**, dans le SQL Editor Supabase, dix minutes après :
+
+```sql
+select dernier_scan, dernier_resultat from ingestion_config;
+select count(*) from communications;
+```
+
+`dernier_resultat` doit cesser de dire « En attente ». Si le compteur reste à 0
+alors que `dernier_resultat` a changé, c'est que `gmail-ingestion` n'a pas été
+redéployée — c'est le symptôme exact de l'inversion d'ordre.
 
 ## Retour arrière
 

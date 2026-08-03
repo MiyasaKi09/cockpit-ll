@@ -1,0 +1,146 @@
+# ============================================================
+# Déploiement des fonctions Edge — déclenché à la main.
+#
+# POURQUOI CE FICHIER EXISTE
+# ---------------------------
+# Déployer une fonction Edge demandait jusqu'ici un poste de
+# développement : Node, la CLI Supabase, le dépôt cloné. L'agence n'en a
+# pas, et n'a pas à en avoir un pour remettre une fonction en ligne.
+#
+# GitHub, lui, a déjà le dépôt. Ce workflow y fait tourner exactement les
+# commandes qu'on aurait tapées, sur les OCTETS DU DÉPÔT — pas sur une
+# copie retranscrite. C'est le point qui compte : `classement-echanges.ts`
+# fait 714 lignes de lexique, et une faute d'un caractère dans un lexique
+# ne fait rien planter. Elle fait classer faux, en silence.
+#
+# JAMAIS AUTOMATIQUE
+# -------------------
+# `workflow_dispatch` seulement. Un déploiement déclenché par un `push`
+# mettrait en production tout commit fusionné, y compris un travail en
+# cours ; et le jour où une fonction casse l'ingestion, il faut pouvoir
+# arrêter de déployer sans arrêter de committer.
+#
+# CE QU'IL FAUT AVOIR FAIT UNE FOIS (voir MISE_EN_PRODUCTION.md)
+# ---------------------------------------------------------------
+# Settings → Secrets and variables → Actions → New repository secret :
+#   SUPABASE_ACCESS_TOKEN   jeton personnel Supabase (supabase.com/dashboard/account/tokens)
+#
+# Les secrets LUS PAR LES FONCTIONS (RESUME_ANTHROPIC_API_KEY, etc.) ne
+# se mettent pas ici : ils se règlent dans le tableau de bord Supabase,
+# et ils survivent aux déploiements. Les faire passer par GitHub les
+# recopierait sans raison dans un second endroit.
+# ============================================================
+
+name: Déployer une fonction Edge
+
+on:
+  workflow_dispatch:
+    inputs:
+      fonction:
+        description: Quelle fonction déployer
+        required: true
+        type: choice
+        default: gmail-ingestion
+        options:
+          - gmail-ingestion
+          - resume-messages
+          - ingestion-config
+          - gmail-oauth
+          - veille-collecte
+          - veille-enrichir
+          - veille-mails
+          - toutes
+
+permissions:
+  contents: read
+
+# Deux déploiements simultanés sur le même projet se marcheraient dessus.
+concurrency:
+  group: deploiement-fonctions-edge
+  cancel-in-progress: false
+
+env:
+  PROJET_SUPABASE: rxwnbscmmgflvwxafbek
+
+jobs:
+  deployer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Refuser si le jeton Supabase manque
+        # Sans ce contrôle, la CLI échoue plus loin avec un message
+        # d'authentification qui ressemble à une panne Supabase. Ici on dit
+        # ce qui manque et où le mettre.
+        #
+        # Le secret passe par l'ENVIRONNEMENT, jamais par `${{ }}` dans le
+        # corps du script : interpolé, un jeton contenant une apostrophe
+        # casserait le shell — et le message d'erreur, lui, contiendrait le
+        # jeton.
+        env:
+          JETON: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          if [ -z "$JETON" ]; then
+            echo "::error::Le secret SUPABASE_ACCESS_TOKEN est absent."
+            echo "::error::Créez-le dans Settings → Secrets and variables → Actions,"
+            echo "::error::avec un jeton pris sur supabase.com/dashboard/account/tokens."
+            exit 1
+          fi
+
+      - name: CLI Supabase
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Déployer
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          choix='${{ inputs.fonction }}'
+
+          # `--project-ref` évite le `supabase link`, qui écrit un état
+          # local dont un runner jetable n'a que faire.
+          #
+          # verify_jwt n'est PAS passé en option : la CLI lit
+          # supabase/config.toml, où il est déclaré par fonction. Le
+          # répéter ici créerait une seconde source de vérité, et c'est le
+          # genre de réglage qui, divergent, ouvre une fonction au monde.
+          deployer() {
+            echo "::group::$1"
+            supabase functions deploy "$1" --project-ref "$PROJET_SUPABASE"
+            echo "::endgroup::"
+          }
+
+          if [ "$choix" = "toutes" ]; then
+            for f in supabase/functions/*/; do
+              nom=$(basename "$f")
+              [ "$nom" = "_shared" ] && continue
+              deployer "$nom"
+            done
+          else
+            deployer "$choix"
+          fi
+
+      - name: Ce qu'il reste à faire
+        if: success()
+        run: |
+          {
+            echo "### Déploiement terminé"
+            echo ""
+            echo "Fonction(s) : \`${{ inputs.fonction }}\`"
+            echo ""
+            echo "**Vérifier que ça ingère vraiment** — dans le SQL Editor Supabase :"
+            echo ""
+            echo '```sql'
+            echo "select dernier_scan, dernier_resultat from ingestion_config;"
+            echo "select count(*) from communications;"
+            echo '```'
+            echo ""
+            echo "Tant que Gmail n'est pas connecté, \`dernier_resultat\` dit"
+            echo "« En attente » et le compteur reste à 0 : c'est normal, et c'est"
+            echo "l'étape suivante (Paramètres → Branchements)."
+          } >> "$GITHUB_STEP_SUMMARY"

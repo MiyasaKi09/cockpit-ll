@@ -138,6 +138,9 @@ jobs:
       - name: Proposal review creates and signs, never transforms
         run: npm run test:revue-propositions
 
+      - name: Member departure transfers instead of orphaning
+        run: npm run test:depart
+
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 

@@ -997,6 +997,12 @@ export interface Personne {
   heuresAnnuelles: number
   /** part facturable visée (0,6 = 60 %) */
   facturablePct: number
+  /** B.14 — une personne partie est DÉSACTIVÉE, jamais supprimée. Son nom
+   *  reste référencé par les pointages, les heures, les notes de journal et
+   *  les documents déposés : l'effacer orphelinerait tout cela, ce que
+   *  `src/personnes.ts` existe pour empêcher. `undefined` vaut « active » —
+   *  les états antérieurs à B.14 n'ont pas le champ. */
+  actif?: boolean
 }
 
 export interface Reference {

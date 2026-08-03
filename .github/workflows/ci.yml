@@ -132,6 +132,9 @@ jobs:
       - name: Machine proposals stay reviewable (criterion 11)
         run: npm run test:critere11
 
+      - name: Time totals are conserved through both projections
+        run: npm run test:conservation
+
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 

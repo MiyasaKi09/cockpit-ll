@@ -143,7 +143,7 @@ as $$
       lower(nullif(btrim(coalesce(auth.jwt() ->> 'email', '')), ''))
     ),
     coalesce(
-      (select m.nom from public.membres m
+      (select m.personne from public.membres m
         where (m.compte_id is not null and m.compte_id = auth.uid())
            or m.email = lower(nullif(btrim(coalesce(auth.jwt() ->> 'email', '')), ''))
         order by (m.compte_id is not null and m.compte_id = auth.uid()) desc, m.email
@@ -189,7 +189,7 @@ as $$
     -- Un changement de droits est l'action sensible par excellence, et la
     -- seule que le dépôt ne traçait nulle part : c'était une migration
     -- écrite à la main, invisible.
-    when 'membres' then array['email', 'compte_id', 'nom', 'role', 'actif']
+    when 'membres' then array['email', 'compte_id', 'personne', 'role', 'actif']
     else array[]::text[]
   end;
 $$;

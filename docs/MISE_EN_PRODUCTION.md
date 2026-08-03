@@ -1,5 +1,54 @@
 # Mise en production
 
+> **État du projet `rxwnbscmmgflvwxafbek` au 31/07/2026, 23 h.**
+>
+> **Base : à jour.** Les dix migrations sont appliquées, journal d'audit compris,
+> et vérifiées : registre à deux membres actifs rattachés à leurs comptes, zéro
+> politique comparant à une adresse littérale, `communications` avec ses quatre
+> colonnes générées, `propositions` avec ses sept contraintes, et le journal
+> d'audit exercé de bout en bout — un changement de rôle y laisse une ligne, un
+> changement hors liste blanche n'y laisse rien, et la suppression est refusée
+> même en `service_role`.
+>
+> **Fonctions Edge : PAS à jour.** Les six déployées datent du 30/07 et
+> continuent de fonctionner — les migrations sont additives, c'est leur raison
+> d'être. Mais elles n'écrivent pas encore `communications`, ni les colonnes
+> enrichies d'`entrants`. `resume-messages` **n'est pas déployée du tout**, et
+> son cron a donc été **désactivé** plutôt que laissé à frapper une fonction
+> absente toutes les quinze minutes.
+>
+> **Trois gestes restent, dans cet ordre :**
+>
+> ```bash
+> npx supabase functions deploy gmail-ingestion
+> npx supabase functions deploy ingestion-config
+> npx supabase functions deploy resume-messages
+> ```
+>
+> puis réactiver le cron du résumé :
+>
+> ```sql
+> select cron.alter_job(
+>   job_id := (select jobid from cron.job where jobname = 'resume-messages'),
+>   active := true);
+> ```
+>
+> **Après le déploiement de `gmail-ingestion`, l'écran `#/parite` (B.18)
+> mesure la condition de coupure de B.15** : jours consécutifs sans écart
+> entre les deux mémoires du courrier. C'est lui qui dira quand
+> `state.courriers` peut cesser d'être alimenté — pas une impression.
+>
+> **Une migration de plus attend** : `20260801090000_pointages_et_chrono.sql`
+> (livrables B.4, B.6, B.7, B.16). Elle crée `pointages` et `chrono_actif`,
+> et étend le journal d'audit aux deux. Elle s'applique après le registre
+> des membres, dont elle appelle `est_membre_actif()`.
+>
+> Ce déploiement se fait par la CLI et non autrement : elle envoie les fichiers
+> relus, octet pour octet. Les retaper à travers un outil, ce serait déployer
+> une copie non relue de 4 900 lignes qui tournent sans surveillance — et
+> aucun test du dépôt ne verrait la différence, puisqu'ils lisent les fichiers,
+> pas ce qui a été déployé.
+
 Procédure de bascule d'un projet Cockpit **déjà en service** vers la version
 durcie. Elle est ordonnée : chaque étape suppose la précédente terminée, et
 l'ordre existe précisément pour qu'aucun poste ne se retrouve sans chemin

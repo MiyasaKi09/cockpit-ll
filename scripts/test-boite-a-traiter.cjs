@@ -52,7 +52,7 @@ function charger(chemin) {
   return mod.exports
 }
 
-const { fusionnerBoite, urgenceDe, dateDe } = charger('src/boite.ts')
+const { fusionnerBoite, urgenceDe, dateDe, comparerMemoires, joursConsecutifsSansEcart, ECARTS_BLOQUANTS, JOURS_DE_PARITE_EXIGES } = charger('src/boite.ts')
 const { mailsATraiterPourLaBoite } = charger('src/communications.ts')
 const { NIVEAUX_IMPORTANCE, graviteDe } = charger('src/categorisation.ts')
 
@@ -230,13 +230,160 @@ const message = (over) => ({
   assert.ok(zoe.includes('partage'), 'le courrier partagé est dans les DEUX files : quelqu’un doit le prendre')
 }
 
+// --- B.3 : créer une tâche depuis un message, sans le faire disparaître -----
+
+{
+  const boite = /function useBoiteATraiter[\s\S]*?\n}/.exec(lire('src/modules/Cockpit.tsx'))
+  assert.ok(boite, 'useBoiteATraiter doit exister')
+
+  assert.match(
+    boite[0],
+    /source: \{ type: 'message', id: champs\.source \}/,
+    'la tâche créée depuis un message CONSERVE le lien vers lui (§4.2) — sans quoi ' +
+      'elle devient une phrase sans référence, et rouvrir le mail demande de le retrouver à la main',
+  )
+
+  // Les deux mémoires passent par la MÊME fabrique : deux chemins de
+  // création divergeraient sur la source, et l'un des deux la perdrait.
+  assert.equal(
+    (boite[0].match(/creerTacheDepuisMessage\(\{/g) || []).length,
+    2,
+    'les deux sources appellent la même fabrique — une par mémoire, pas deux implémentations',
+  )
+  assert.equal(
+    (boite[0].match(/creerTache\(\{/g) || []).length,
+    1,
+    'une seule construction de tâche : la fabrique de `src/taches.ts` garantit les 18 champs',
+  )
+
+  // LE point de B.3 : créer une tâche ne marque pas le message traité.
+  // Les enchaîner ferait sortir de la boîte un mail auquel on n'a pas
+  // encore répondu — le geste d'organisation n'est pas le geste de clôture.
+  const fabrique = /const creerTacheDepuisMessage[\s\S]*?undo: \(\) => replace\(snap\),/.exec(boite[0])
+  assert.ok(fabrique, 'la fabrique doit être identifiable')
+  assert.doesNotMatch(
+    fabrique[0],
+    /marquerTraite|statut = 'traite'/,
+    'créer une tâche ne marque PAS le message traité : ce sont deux gestes, et les enchaîner ' +
+      'ferait sortir de la boîte un mail auquel on n’a pas répondu',
+  )
+  assert.match(fabrique[0], /undo: \(\) => replace\(snap\)/, 'le geste est annulable, comme les autres')
+}
+
+// --- B.18 : mesurer la parité, sinon « sept jours » est une phrase ----------
+
+{
+  const FENETRE = { debut: '2026-07-25', fin: '2026-07-31' }
+  const par = (c, m) => comparerMemoires(c, m, FENETRE)
+  const genres = (c, m) => par(c, m).flatMap((j) => j.ecarts.map((e) => e.genre)).sort()
+
+  // Le cas qui INTERDIT la coupure : le navigateur l'a vu, le cron non.
+  assert.deepEqual(
+    genres([courrier({ id: 'c1', gmailId: '18f0aa11', dateReception: '2026-07-30T09:00:00Z' })], []),
+    ['absent_du_relationnel'],
+    'un mail vu par le navigateur et absent de la table est l’écart qui interdit la coupure',
+  )
+
+  // Un `Courrier` SANS identifiant Gmail n'est pas comparable. La moitié
+  // du dépôt est dans ce cas ; les compter manquants produirait un écart
+  // permanent qui masquerait les vrais.
+  assert.deepEqual(
+    genres([courrier({ id: 'c1', source: 'routine tri du matin', dateReception: '2026-07-30T09:00:00Z' })], []),
+    [],
+    'un courrier sans identifiant Gmail sort de la comparaison au lieu de la polluer',
+  )
+
+  // L'inverse n'est PAS un défaut : le serveur ne dépend pas d'un onglet
+  // ouvert. On le montre — c'est ce qui permet de CONSTATER le gain — mais
+  // il ne doit pas bloquer.
+  assert.deepEqual(
+    genres([], [message({ id: 'm1', gmailId: '18f0bb22', recuLe: '2026-07-30T09:00:00Z' })]),
+    ['absent_de_l_ancien'],
+  )
+  assert.ok(
+    !ECARTS_BLOQUANTS.has('absent_de_l_ancien'),
+    'le gain attendu ne doit pas bloquer la coupure qu’il justifie',
+  )
+
+  // Divergences de contenu sur un mail présent des deux côtés.
+  const jumeaux = (over = {}) => [
+    [courrier({ id: 'c1', gmailId: '18f0cc33', dateReception: '2026-07-30T09:00:00Z', projetId: over.projetAncien ?? null, de: over.de ?? 'client@example.com' })],
+    [message({ id: 'm1', gmailId: '18f0cc33', recuLe: '2026-07-30T09:00:00Z', projetId: over.projetNeuf ?? null, expediteurAdresse: over.deNeuf ?? 'client@example.com' })],
+  ]
+  assert.deepEqual(genres(...jumeaux()), [], 'deux mémoires d’accord ne produisent aucun écart')
+  assert.deepEqual(
+    genres(...jumeaux({ projetAncien: 'P01', projetNeuf: 'P02' })),
+    ['projet_divergent'],
+  )
+  // `null` d'un côté n'est pas une divergence : c'est « pas encore
+  // rattaché », et les deux mémoires n'apprennent pas au même rythme.
+  assert.deepEqual(
+    genres(...jumeaux({ projetAncien: 'P01', projetNeuf: null })),
+    [],
+    'un rattachement absent d’un côté n’est pas une divergence — sinon l’outil crie tous les jours',
+  )
+  assert.deepEqual(
+    genres(...jumeaux({ de: 'Client <CLIENT@example.com>' })),
+    [],
+    'la casse et la forme « Nom <adresse> » ne sont pas des divergences',
+  )
+  assert.deepEqual(genres(...jumeaux({ deNeuf: 'autre@example.com' })), ['expediteur_divergent'])
+
+  // La réponse exacte à la condition de B.15.
+  const jour = (j, nb) => ({ jour: j, nbAncien: nb, nbRelationnel: nb, ecarts: [] })
+  assert.equal(
+    joursConsecutifsSansEcart([jour('2026-07-31', 3), jour('2026-07-30', 2), jour('2026-07-29', 1)]),
+    3,
+  )
+  assert.equal(
+    joursConsecutifsSansEcart([
+      jour('2026-07-31', 3),
+      { ...jour('2026-07-30', 2), ecarts: [{ genre: 'absent_du_relationnel' }] },
+      jour('2026-07-29', 1),
+    ]),
+    1,
+    'le compteur repart de zéro au premier écart bloquant, en partant du plus récent',
+  )
+
+  // LE piège : un jour vide n'est pas un jour « sans écart ». Le compter
+  // offrirait une semaine de congés comme preuve de parité, ce qui est
+  // l'inverse exact d'une mesure.
+  assert.equal(
+    joursConsecutifsSansEcart([jour('2026-07-31', 3), jour('2026-07-30', 0), jour('2026-07-29', 1)]),
+    1,
+    'un jour sans aucun message des deux côtés est sans INFORMATION, pas sans écart',
+  )
+
+  assert.equal(JOURS_DE_PARITE_EXIGES, 7, 'le seuil du plan, cité trois fois comme non négociable')
+
+  // Les jours sortent du plus récent au plus ancien : c'est l'ordre dans
+  // lequel le compteur les lit, et celui dans lequel on les regarde.
+  const plusieurs = par(
+    [
+      courrier({ id: 'c1', gmailId: '18f0d1d1', dateReception: '2026-07-28T09:00:00Z' }),
+      courrier({ id: 'c2', gmailId: '18f0d2d2', dateReception: '2026-07-30T09:00:00Z' }),
+    ],
+    [],
+  )
+  assert.deepEqual(plusieurs.map((j) => j.jour), ['2026-07-30', '2026-07-28'])
+
+  // Hors fenêtre : ignoré des deux côtés. Sans cela, tout l'historique
+  // antérieur au déploiement du cron apparaîtrait comme un écart.
+  assert.deepEqual(
+    par([courrier({ id: 'c1', gmailId: '18f0e1e1', dateReception: '2026-01-01T09:00:00Z' })], []),
+    [],
+    'la fenêtre est donnée par l’appelant : avant le cron, tout serait « absent du relationnel »',
+  )
+}
+
 // --- 5. l'écran garde ses trois boutons -------------------------------------
 
 const cockpit = lire('src/modules/Cockpit.tsx')
 for (const [bouton, pourquoi] of [
   ['Répondre', 'le brouillon Gmail est le seul geste d’envoi — le Cockpit n’envoie pas d’e-mail (§4.1)'],
   ['→ Journal', 'transformer un mail en note de projet est le geste du §4.2'],
-  ['✓ Fait', 'son remplaçant « Créer une tâche » est en B.3 : le retirer ici retirerait un geste'],
+  ['✓ Fait', 'son remplaçant est arrivé en B.3, mais le retrait est B.15 : les deux cohabitent'],
+  ['Créer une tâche', 'B.3 — le geste du §8.4 « depuis un e-mail », avec sa source'],
 ]) {
   assert.ok(cockpit.includes(bouton), `A.7 ne change PAS les actions : « ${bouton} » doit rester — ${pourquoi}`)
 }

@@ -144,6 +144,9 @@ jobs:
       - name: Task templates preview before creating
         run: npm run test:modeles
 
+      - name: Browser-invoked Edge Functions allow the headers supabase-js sends
+        run: npm run test:cors-edge
+
       - name: Google session survives reload without storing the token
         run: npm run test:session-google
 

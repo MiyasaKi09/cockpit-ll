@@ -25,7 +25,7 @@ import { Btn, Card, DateF, EmptyState, Icon, LienGmail, Modal, Money, Page, Resu
 import type { ContexteAlertes, MessageNotifiable } from '../alerts'
 import { alertesActives } from '../alerts'
 import { dateDe, fusionnerBoite, urgenceDe } from '../boite'
-import { creerTache } from '../taches'
+import { LIBELLES_STATUT_TACHE, creerTache, estOuverte, estPrioriteTache, graviteDePriorite } from '../taches'
 import type { Communication, FiltreCommunications } from '../communications'
 import { mailsATraiterPourLaBoite, marquerTraite, useCommunications } from '../communications'
 import { lienGmail } from '../util'
@@ -178,30 +178,43 @@ function itemsAFaire(
       marqueur: 'circle',
     })
   }
-  // Notes de journal « à faire » non réglées.
+  // B.12 — les tâches entrent dans la file du matin.
   //
-  // ATTENTION B.12 : le palier v21 a repris ces mêmes notes en `taches`
-  // (`tachesDepuisNotes`). Le jour où les tâches entreront dans cette file,
-  // chaque note reprise y figurera DEUX FOIS — une fois par ce bloc, une
-  // fois par la tâche qui en est née. C'est ce bloc-ci qui doit alors
-  // disparaître : la tâche porte la source de la note, l'inverse n'est pas
-  // vrai. Écrit ici plutôt qu'espéré, parce qu'un doublon dans la file du
-  // matin se remarque tard et se corrige mal.
-  for (const p of state.projets) {
-    for (const n of p.journal) {
-      if (!n.tags.includes('a-faire') || n.fait) continue
-      items.push({
-        id: `note-${n.id}`,
-        gravite: 2,
-        titre: n.texte.length > 90 ? n.texte.slice(0, 90) + '…' : n.texte,
-        detail: `${p.id} · note du ${fmtDate(n.date)}${n.auteur ? ` (${n.auteur})` : ''}`,
-        lien: `#/projets/${p.id}/journal`,
-        dateReception: n.date,
-        pour: n.auteur,
-        marqueur: 'circle',
-        rapide: { kind: 'note_faite', refId: n.id, projetId: p.id, label: '✓ Fait' },
-      })
-    }
+  // Elles y entrent comme un `ItemAFaire` DE PLUS : le tri, le badge
+  // « en retard », l'horizon à sept jours, le filtre par personne et la
+  // revue séquentielle s'appliquent sans être réécrits. Une seconde file
+  // à côté aurait imposé de choisir laquelle regarder le matin.
+  //
+  // Le bloc des notes de journal « à faire » a DISPARU d'ici, et c'est le
+  // point du livrable : le palier v21 a repris ces notes en tâches
+  // (`tachesDepuisNotes`). Les garder toutes les deux aurait affiché
+  // chaque note reprise DEUX FOIS — une fois comme note, une fois comme
+  // tâche. C'est la tâche qui reste : elle porte la source de la note,
+  // l'inverse n'est pas vrai, et elle a un responsable, une priorité et
+  // une échéance que la note n'avait pas.
+  for (const t of state.taches || []) {
+    if (!estOuverte(t)) continue
+    const echeance = t.echeance ? t.echeance.slice(0, 10) : undefined
+    const enRetard = !!echeance && echeance < today
+    items.push({
+      id: `tache-${t.id}`,
+      // La priorité se projette sur la gravité par `graviteDePriorite`,
+      // qui vit dans `src/taches.ts` : l'échelle des alertes a un seul
+      // propriétaire, et une tâche « normale » ne doit pas entrer dans
+      // les urgences — le fil cesserait d'être lu.
+      gravite: enRetard ? 3 : estPrioriteTache(t.priorite) ? graviteDePriorite(t.priorite) : 1,
+      titre: t.titre.length > 90 ? `${t.titre.slice(0, 90)}…` : t.titre,
+      detail: [
+        t.projetId || 'sans projet',
+        enRetard ? 'EN RETARD' : echeance ? `pour le ${fmtDate(echeance)}` : 'sans échéance',
+        LIBELLES_STATUT_TACHE[t.statut as keyof typeof LIBELLES_STATUT_TACHE] || t.statut,
+      ].join(' · '),
+      lien: '#/taches',
+      dateLimite: echeance,
+      dateReception: t.creeLe?.slice(0, 10),
+      pour: t.responsable || undefined,
+      marqueur: enRetard ? 'triangle' : 'circle',
+    })
   }
   return items
 }

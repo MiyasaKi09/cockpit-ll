@@ -491,6 +491,33 @@ const projets = () => [
   )
 }
 
+// --- B.12 : les tâches dans la file du matin, et le doublon fermé ----------
+
+{
+  const cockpit = lire('src/modules/Cockpit.tsx')
+
+  // Le point du livrable : le bloc des notes « à faire » a DISPARU de la
+  // file. Le palier v21 a repris ces notes en tâches ; les garder toutes
+  // les deux afficherait chaque note reprise DEUX FOIS.
+  assert.doesNotMatch(
+    cockpit,
+    /n\.tags\.includes\('a-faire'\)/,
+    'le bloc des notes « à faire » doit avoir quitté la file : le palier v21 les a reprises en tâches, ' +
+      'et les garder toutes les deux afficherait chaque note reprise deux fois',
+  )
+  assert.match(cockpit, /id: `tache-\$\{t\.id\}`/, 'les tâches entrent dans la file comme un ItemAFaire de plus')
+
+  // La gravité vient de `graviteDePriorite`, pas d'un barème réinventé :
+  // l'échelle des alertes a un seul propriétaire, et une tâche « normale »
+  // ne doit pas entrer dans les urgences — le fil cesserait d’être lu.
+  assert.match(cockpit, /graviteDePriorite\(t\.priorite\)/, 'la priorité se projette par la fonction du référentiel')
+  assert.match(cockpit, /estOuverte\(t\)/, 'une tâche terminée ou annulée n’entre pas dans la file du matin')
+
+  // Un retard passe en gravité 3 quelle que soit la priorité : une tâche
+  // dont l'échéance est dépassée n'est plus une question de priorité.
+  assert.match(cockpit, /enRetard \? 3 :/, 'une échéance dépassée prime sur la priorité')
+}
+
 // --- 5. le temps enregistré ne s'écrit pas ici -----------------------------
 
 const source = lire('src/taches.ts')

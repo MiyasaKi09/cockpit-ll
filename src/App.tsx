@@ -1,6 +1,6 @@
 // Coquille de l'application : barre latérale + routage hash.
 
-import { useEffect, useState } from 'react'
+import { Suspense, lazy, useEffect, useState } from 'react'
 import { useStore } from './store'
 import { Btn, ConfirmHost, Icon, Select, ToastHost, useRoute, useToday } from './ui'
 import { alertesActives } from './alerts'
@@ -12,33 +12,57 @@ import type { InstantaneSession } from './sync'
 import { SurveillanceCtx, useSurveillance } from './surveillance'
 import { diffDays } from './util'
 import type { AppState } from './types'
+import { appliquerMiseAJour, surMiseAJour } from './majApp'
 
 import Cockpit from './modules/Cockpit'
-import Taches from './modules/Taches'
-import Parite from './modules/Parite'
-import RechercheOverlay from './modules/RechercheOverlay'
-import Pilotage from './modules/Pilotage'
-import Projets from './modules/Projets'
-import Situations from './modules/Situations'
-import Facturation from './modules/Facturation'
-import Contrats from './modules/Contrats'
-import Finance from './modules/Finance'
-import Achats from './modules/Achats'
-import Banque from './modules/Banque'
-import Comptable from './modules/Comptable'
-import FinanceRevue from './modules/FinanceRevue'
-import Previsions from './modules/Previsions'
-import Connecteurs from './modules/Connecteurs'
-import Temps from './modules/Temps'
-import VeilleAO from './modules/VeilleAO'
-import Claude from './modules/Claude'
-import Classement from './modules/Classement'
-import Ressources from './modules/Ressources'
-import Agenda from './modules/Agenda'
-import Parametres from './modules/Parametres'
-import Planning from './modules/Planning'
-import Documents from './modules/Documents'
-import { AssistantPage } from './modules/Assistant'
+
+/**
+ * M.1 — « une nouvelle version est prête ».
+ *
+ * Elle ne s'applique JAMAIS toute seule. On saisit des heures et des
+ * commentaires dans cette application : un rechargement décidé par la
+ * machine au milieu d'une saisie perd ce qui n'est pas enregistré, et la
+ * personne croit avoir perdu son travail par sa faute.
+ */
+function BanniereMiseAJour() {
+  const [dispo, setDispo] = useState(false)
+  useEffect(() => surMiseAJour(setDispo), [])
+  if (!dispo) return null
+  return (
+    <div className="pill-note" role="status" style={{ marginBottom: 12 }}>
+      <strong>Nouvelle version disponible.</strong> Elle s’appliquera au rechargement — terminez
+      votre saisie d’abord, rien ne presse.{' '}
+      <Btn small kind="primary" onClick={appliquerMiseAJour}>
+        Recharger
+      </Btn>
+    </div>
+  )
+}
+const Taches = lazy(() => import('./modules/Taches'))
+const Parite = lazy(() => import('./modules/Parite'))
+const RechercheOverlay = lazy(() => import('./modules/RechercheOverlay'))
+const Pilotage = lazy(() => import('./modules/Pilotage'))
+const Projets = lazy(() => import('./modules/Projets'))
+const Situations = lazy(() => import('./modules/Situations'))
+const Facturation = lazy(() => import('./modules/Facturation'))
+const Contrats = lazy(() => import('./modules/Contrats'))
+const Finance = lazy(() => import('./modules/Finance'))
+const Achats = lazy(() => import('./modules/Achats'))
+const Banque = lazy(() => import('./modules/Banque'))
+const Comptable = lazy(() => import('./modules/Comptable'))
+const FinanceRevue = lazy(() => import('./modules/FinanceRevue'))
+const Previsions = lazy(() => import('./modules/Previsions'))
+const Connecteurs = lazy(() => import('./modules/Connecteurs'))
+const Temps = lazy(() => import('./modules/Temps'))
+const VeilleAO = lazy(() => import('./modules/VeilleAO'))
+const Claude = lazy(() => import('./modules/Claude'))
+const Classement = lazy(() => import('./modules/Classement'))
+const Ressources = lazy(() => import('./modules/Ressources'))
+const Agenda = lazy(() => import('./modules/Agenda'))
+const Parametres = lazy(() => import('./modules/Parametres'))
+const Planning = lazy(() => import('./modules/Planning'))
+const Documents = lazy(() => import('./modules/Documents'))
+const AssistantPage = lazy(() => import('./modules/Assistant').then((m) => ({ default: m.AssistantPage })))
 
 // Menu recomposé (audit simplification) : « une page = un objectif ».
 // Travail et Gestion restent ouverts ; Agence et Outils se replient,
@@ -413,10 +437,22 @@ export default function App() {
             <strong>Synchronisation suspendue.</strong> {syncError}
           </div>
         )}
-        {page}
+        {/* M.1 — le découpage par route rend le chargement d'un écran
+            asynchrone. Le repli reste DISCRET et sans mise en page propre :
+            une grande pancarte « chargement » qui clignote entre chaque
+            écran donne l'impression d'une application lente, alors que le
+            morceau arrive en général avant d'être vu. */}
+        <BanniereMiseAJour />
+        <Suspense fallback={<p className="muted small" role="status">Chargement de l’écran…</p>}>
+          {page}
+        </Suspense>
       </main>
     </div>
-    {rechercheOuverte && <RechercheOverlay onClose={() => setRechercheOuverte(false)} />}
+    {rechercheOuverte && (
+      <Suspense fallback={null}>
+        <RechercheOverlay onClose={() => setRechercheOuverte(false)} />
+      </Suspense>
+    )}
     <ToastHost />
     <ConfirmHost />
     </SurveillanceCtx.Provider>

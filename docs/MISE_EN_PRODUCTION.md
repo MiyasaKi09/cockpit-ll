@@ -1,14 +1,19 @@
 # Mise en production
 
-> **État du projet `rxwnbscmmgflvwxafbek` au 31/07/2026, 23 h.**
+> **État du projet `rxwnbscmmgflvwxafbek` au 03/08/2026.**
 >
-> **Base : à jour.** Les dix migrations sont appliquées, journal d'audit compris,
-> et vérifiées : registre à deux membres actifs rattachés à leurs comptes, zéro
-> politique comparant à une adresse littérale, `communications` avec ses quatre
-> colonnes générées, `propositions` avec ses sept contraintes, et le journal
-> d'audit exercé de bout en bout — un changement de rôle y laisse une ligne, un
-> changement hors liste blanche n'y laisse rien, et la suppression est refusée
-> même en `service_role`.
+> **Base : à jour, onze migrations appliquées et vérifiées.** Registre à deux
+> membres actifs rattachés à leurs comptes, zéro politique comparant à une
+> adresse littérale, `communications` avec ses quatre colonnes générées,
+> `propositions` avec ses sept contraintes, journal d'audit en ajout seul, et
+> depuis le 03/08 les deux tables du temps — `pointages` et `chrono_actif`.
+>
+> Les garanties de `20260801090000` ont été **exercées en production**, pas
+> seulement posées : une durée négative, une fin antérieure à son début, une
+> activité hors référentiel et un second chrono pour la même personne ont tous
+> été refusés. Une correction de durée laisse dans le journal une ligne portant
+> le seul champ modifié, avec ses valeurs avant et après ; le commentaire libre
+> y figure par son NOM, jamais par sa valeur.
 >
 > **Fonctions Edge : PAS à jour.** Les six déployées datent du 30/07 et
 > continuent de fonctionner — les migrations sont additives, c'est leur raison
@@ -37,11 +42,6 @@
 > mesure la condition de coupure de B.15** : jours consécutifs sans écart
 > entre les deux mémoires du courrier. C'est lui qui dira quand
 > `state.courriers` peut cesser d'être alimenté — pas une impression.
->
-> **Une migration de plus attend** : `20260801090000_pointages_et_chrono.sql`
-> (livrables B.4, B.6, B.7, B.16). Elle crée `pointages` et `chrono_actif`,
-> et étend le journal d'audit aux deux. Elle s'applique après le registre
-> des membres, dont elle appelle `est_membre_actif()`.
 >
 > Ce déploiement se fait par la CLI et non autrement : elle envoie les fichiers
 > relus, octet pour octet. Les retaper à travers un outil, ce serait déployer

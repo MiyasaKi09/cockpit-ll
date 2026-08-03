@@ -89,10 +89,21 @@ Quatre défauts, dont aucun n'aurait produit d'erreur visible.
 | B.10 / B.11 / B.13 / B.14 | Logique pure + tests livrés ; **écrans de revue à monter** | Les règles sont là et vérifiées en CI. Les écrans se posent dessus sans les redéfinir — c'est la partie qui ne peut plus se tromper |
 | B.5 | `derive.ts` **n'est pas touché** | La marge continue de lire `state.temps` sans savoir d'où il vient. Deux chemins vers la marge finissent toujours par diverger |
 
-## 5. Une migration de plus à appliquer
+## 5. La migration du temps est appliquée — et exercée
 
-`20260801090000_pointages_et_chrono.sql` n'est **pas** appliquée. Elle crée
-`pointages` et `chrono_actif`, et étend le journal d'audit (B.16).
+`20260801090000_pointages_et_chrono.sql` a été appliquée en production le
+03/08/2026. Elle crée `pointages` et `chrono_actif`, et étend le journal
+d'audit (B.16).
+
+Ses garanties ont été **vérifiées en refusant**, pas en constatant leur
+présence. Quatre écritures fautives ont été tentées et rejetées : durée
+négative, fin antérieure au début, activité hors référentiel, second chrono
+pour la même personne. Une correction de durée (90 → 75 min) laisse dans le
+journal une ligne portant le seul champ modifié, avec ses valeurs avant et
+après ; le commentaire libre y figure **par son nom**, jamais par sa valeur.
+
+Les lignes d'audit de cette vérification restent en base : le journal est en
+ajout seul, et c'est le comportement voulu. Elles documentent le contrôle.
 
 Trois garanties qu'elle pose et qu'un écran ne peut pas poser :
 

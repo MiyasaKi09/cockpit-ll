@@ -8,7 +8,7 @@
 
 import { createContext, useContext, useEffect, useState } from 'react'
 import type { AppState } from './types'
-import { estConnecte, listerEvenements, listerMailsRecents, mailsDejaVus, marquerVus } from './google'
+import { assurerJeton, estConnecte, listerEvenements, listerMailsRecents, mailsDejaVus, marquerVus } from './google'
 import type { EvenementAgenda } from './google'
 import { rattacherMessage, reperesDe } from './rattachement'
 import { todayISO, uid } from './util'
@@ -138,10 +138,15 @@ export function useSurveillance(state: AppState, update: (fn: (draft: AppState) 
   useEffect(() => {
     let arret = false
     const tick = async () => {
-      if (!estConnecte()) {
+      // `assurerJeton` reprend la main en silence quand le jeton a disparu —
+      // au rechargement de la page comme à l'expiration horaire. Tester
+      // `estConnecte()` seul rendait ces deux coupures définitives jusqu'au
+      // prochain clic, alors que Google sait ré-émettre sans rien demander.
+      if (!(await assurerJeton(sv?.clientId))) {
         setDirect(false)
         return
       }
+      if (arret) return
       setDirect(true)
       try {
         const r = await scannerUneFois(state, update)

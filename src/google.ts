@@ -5,6 +5,31 @@
 // navigateur interroge directement Google tant que l'onglet est
 // ouvert (~1 min de latence). Le jeton reste en mémoire, rien
 // n'est envoyé ailleurs.
+//
+// POURQUOI LE JETON N'EST PAS CONSERVÉ, ET CE QU'ON FAIT À LA PLACE
+// -------------------------------------------------------------------
+// `token` est une variable de MODULE. Un rechargement de page ré-évalue
+// le module, donc le jeton disparaît — et la connexion Google paraissait
+// se défaire à chaque F5.
+//
+// Le réflexe serait de le ranger dans `localStorage`. Ce serait un mauvais
+// échange : un jeton d'accès y est lisible par n'importe quel script de la
+// page, il survit à la fermeture de l'onglet sur un poste partagé, et il
+// expire de toute façon au bout d'une heure — on aurait donc à la fois le
+// risque ET la coupure.
+//
+// La bonne réponse est ailleurs. Google sait RÉ-ÉMETTRE un jeton sans
+// aucune interaction quand le consentement a déjà été accordé et qu'une
+// session Google est ouverte dans le navigateur : c'est `prompt: ''`.
+// `assurerJeton()` l'appelle en silence. Rien n'est stocké, et la
+// connexion se rétablit toute seule — au rechargement comme à l'expiration
+// horaire, qui coupait la surveillance de la même façon.
+//
+// Quand la reprise silencieuse échoue (jamais consenti, session Google
+// fermée, consentement révoqué), il FAUT un geste humain : c'est le bouton
+// « Connecter Google » des Paramètres. On ne réessaie alors qu'espacé —
+// marteler Google toutes les minutes ne ferait pas apparaître une session
+// qui n'existe pas.
 // ============================================================
 
 const SCOPES = 'https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/calendar.readonly'
@@ -19,6 +44,7 @@ interface GoogleGis {
         client_id: string
         scope: string
         callback: (r: { access_token?: string; expires_in?: number; error?: string }) => void
+        error_callback?: (e: { type?: string }) => void
       }): TokenClient
     }
   }
@@ -27,6 +53,15 @@ interface GoogleGis {
 let token: string | null = null
 let expireA = 0
 let scriptCharge: Promise<void> | null = null
+
+/** Reprise silencieuse en cours — partagée, pour ne pas la lancer deux fois. */
+let repriseEnCours: Promise<boolean> | null = null
+/** Instant du dernier échec silencieux : on ne réessaie pas en boucle. */
+let dernierEchecSilencieux = 0
+const DELAI_AVANT_NOUVEL_ESSAI_MS = 5 * 60 * 1000
+/** Si Google ne rappelle jamais, la promesse doit quand même se résoudre —
+ *  sinon la boucle de surveillance resterait suspendue pour de bon. */
+const DELAI_REPRISE_MS = 8000
 
 function chargerGIS(): Promise<void> {
   if (!scriptCharge) {
@@ -64,6 +99,10 @@ export async function connecterGoogle(clientId: string): Promise<void> {
         }
         token = r.access_token
         expireA = Date.now() + (r.expires_in || 3600) * 1000
+        // Une connexion réussie efface la mémoire de l'échec : sans ça, la
+        // reprise silencieuse resterait bridée cinq minutes après un
+        // rétablissement, et l'agence croirait le bouton sans effet.
+        dernierEchecSilencieux = 0
         res()
       },
     })
@@ -71,9 +110,86 @@ export async function connecterGoogle(clientId: string): Promise<void> {
   })
 }
 
+/**
+ * Tente de retrouver un jeton SANS rien demander à personne.
+ *
+ * Ne rejette jamais : un échec est une réponse normale (« pas de session
+ * Google ici »), pas une panne. L'appelant lit le booléen.
+ */
+function repriseSilencieuse(clientId: string): Promise<boolean> {
+  if (repriseEnCours) return repriseEnCours
+
+  repriseEnCours = (async () => {
+    try {
+      await chargerGIS()
+      const google = (window as unknown as { google: GoogleGis }).google
+      return await new Promise<boolean>((res) => {
+        let repondu = false
+        const finir = (ok: boolean) => {
+          if (repondu) return
+          repondu = true
+          if (!ok) dernierEchecSilencieux = Date.now()
+          res(ok)
+        }
+        // Google ne garantit pas de rappeler : sans ce minuteur, la boucle de
+        // surveillance resterait suspendue sur une promesse éternelle, et le
+        // badge afficherait « en direct » pendant que plus rien n'est scruté.
+        const minuteur = setTimeout(() => finir(false), DELAI_REPRISE_MS)
+        const client = google.accounts.oauth2.initTokenClient({
+          client_id: clientId,
+          scope: SCOPES,
+          callback: (r) => {
+            clearTimeout(minuteur)
+            if (r.error || !r.access_token) return finir(false)
+            token = r.access_token
+            expireA = Date.now() + (r.expires_in || 3600) * 1000
+            finir(true)
+          },
+          error_callback: () => {
+            clearTimeout(minuteur)
+            finir(false)
+          },
+        })
+        // `prompt: ''` = aucune fenêtre, aucun clic. Google rend un jeton si
+        // le consentement est déjà donné et qu'une session est ouverte ;
+        // sinon il rend une erreur, et c'est très bien.
+        client.requestAccessToken({ prompt: '' })
+      })
+    } catch {
+      dernierEchecSilencieux = Date.now()
+      return false
+    } finally {
+      repriseEnCours = null
+    }
+  })()
+
+  return repriseEnCours
+}
+
+/**
+ * Un jeton valide, quitte à le redemander en silence.
+ *
+ * C'est le point d'entrée de la surveillance : il referme d'un coup les
+ * deux coupures visibles — celle du rechargement de page et celle de
+ * l'expiration horaire.
+ */
+export async function assurerJeton(clientId: string | null | undefined): Promise<boolean> {
+  if (estConnecte()) return true
+  const id = (clientId || '').trim()
+  if (!id) return false
+  // Réessayer chaque minute ne ferait pas apparaître une session Google qui
+  // n'existe pas : après un échec, on laisse passer du temps.
+  if (dernierEchecSilencieux && Date.now() - dernierEchecSilencieux < DELAI_AVANT_NOUVEL_ESSAI_MS) return false
+  return repriseSilencieuse(id)
+}
+
 export function deconnecter(): void {
   token = null
   expireA = 0
+  // Se déconnecter volontairement doit TENIR : sans ce marqueur, la reprise
+  // silencieuse rebrancherait la surveillance au tick suivant, et le bouton
+  // « Déconnecter » n'aurait aucun effet visible.
+  dernierEchecSilencieux = Date.now()
 }
 
 async function apiGet<T>(url: string): Promise<T> {

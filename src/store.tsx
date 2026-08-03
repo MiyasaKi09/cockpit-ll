@@ -84,6 +84,10 @@ function migrate(parsed: AppState): AppState {
   if (versionAncienne < 21) {
     etat.taches = [...etat.taches, ...tachesDepuisNotes(etat.projets, etat.taches)]
   }
+  // M.3 — champ ajouté sans palier : un état antérieur n'a simplement pas de
+  // chrono en cours, ce qui est la vérité. Rien à reprendre, rien à inventer.
+  etat.chronos = Array.isArray(parsed.chronos) ? parsed.chronos : []
+  etat.pointages = Array.isArray(parsed.pointages) ? parsed.pointages : []
   etat.reunions = Array.isArray(parsed.reunions) ? parsed.reunions : []
   // v18 → v19 : les trois axes du §5.2 (src/categorisation.ts). Le palier
   // REPREND les courriers existants sans rien inventer : le type d'échange

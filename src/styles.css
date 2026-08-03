@@ -1243,3 +1243,77 @@ button.etoile:hover { color: var(--warn); }
   input[type='checkbox'], input[type='radio'] { width: 18px; height: 18px; }
   .etoile { font-size: 19px; padding: 2px; }
 }
+
+/* ---------- M.3 — le chrono, deux emplacements, un composant ----------
+   Il ne paraît que lorsqu'un chrono tourne : un bouton mort se clique deux
+   fois, puis on cesse de faire confiance à l'écran. */
+
+.chrono-barre {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 4px 6px 4px 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--accent-soft);
+}
+
+/* La pastille bat : c'est ce qui distingue « le chrono tourne » de « voici
+   une durée ». Sans elle, un chrono arrêté par erreur passe inaperçu. */
+.chrono-pastille {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex: none;
+  animation: chrono-bat 2s ease-in-out infinite;
+}
+
+@keyframes chrono-bat {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+.chrono-duree {
+  font-variant-numeric: tabular-nums; /* la largeur ne saute pas à chaque seconde */
+  font-weight: 700;
+  font-size: 13px;
+  flex: none;
+}
+
+.chrono-nom {
+  font-size: 12px;
+  color: var(--muted, #5a6478);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* 44 px : la cible tactile du §17. Le carré est dessiné dans le composant —
+   une croix voudrait dire « fermer », comme partout ailleurs. */
+.chrono-stop {
+  flex: none;
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-ink);
+  cursor: pointer;
+}
+
+.chrono-stop:hover { filter: brightness(1.1); }
+
+@media (pointer: coarse) {
+  .chrono-stop { width: 44px; height: 44px; }
+}
+
+/* En barre latérale il a la place de respirer ; en barre supérieure il
+   partage la ligne avec la marque et les actions. */
+.chrono-laterale { margin: 0 0 10px; }
+.chrono-topbar { max-width: 46vw; }

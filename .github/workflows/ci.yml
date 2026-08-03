@@ -144,6 +144,18 @@ jobs:
       - name: Task templates preview before creating
         run: npm run test:modeles
 
+      - name: Chrono switchover, minimum duration and single timer per person
+        run: npm run test:chrono
+
+      - name: Offline app shell precache and update policy
+        run: npm run test:coquille
+
+      - name: Week total is computed once for both time views
+        run: npm run test:temps-mobile
+
+      - name: No raw JSX tables outside the recensed files
+        run: npm run test:tableaux
+
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 

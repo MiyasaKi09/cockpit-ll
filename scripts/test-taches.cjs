@@ -482,12 +482,25 @@ const projets = () => [
     'la fiche n’écrit PAS le temps enregistré : c’est une projection des pointages (B.9)',
   )
 
-  // Le chrono est B.6 : la fiche doit le DIRE, pas offrir un bouton mort.
-  assert.match(
+  // Cette assertion exigeait que la fiche ANNONCE le chrono comme à venir.
+  // Elle était juste tant que B.6 n'avait livré que sa table : un bouton mort
+  // se clique deux fois, puis on cesse de faire confiance à l'écran. M.3 est
+  // le livrable qui la lève, et l'exigence s'inverse — la fiche doit
+  // maintenant offrir le bouton, et ne plus promettre pour plus tard ce
+  // qu'elle fait déjà. Le comportement du chrono lui-même est vérifié par
+  // `test:chrono` ; ici on ne garde que ce qui concerne la FICHE.
+  assert.doesNotMatch(
     fiche,
     /livrable B\.6/,
-    'la fiche doit dire que le chrono n’existe pas encore — un bouton mort se clique deux fois, ' +
-      'puis on cesse de faire confiance à l’écran',
+    'la fiche promet encore le chrono « à venir » alors qu’il est livré : une promesse tenue et ' +
+      'toujours affichée comme promesse fait douter du reste de l’écran',
+  )
+  assert.match(fiche, /Démarrer le chrono/, 'le §19.3 point 2 est servi : on démarre depuis la fiche')
+  assert.match(
+    fiche,
+    /basculerChrono/,
+    'le démarrage passe par la BASCULE : démarrer sans arrêter le chrono en cours perdrait le temps ' +
+      'déjà écoulé, ou le compterait deux fois',
   )
 }
 

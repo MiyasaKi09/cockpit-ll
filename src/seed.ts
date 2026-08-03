@@ -996,6 +996,8 @@ export function seedState(): AppState {
     // ouverture, et il faudrait la fermer avant de comprendre d'où elle vient.
     // Le palier v21 la remplit depuis les notes « à faire » réelles.
     taches: [],
+    chronos: [],
+    pointages: [],
 
     courriers: [
       {

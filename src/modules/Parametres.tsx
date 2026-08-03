@@ -29,7 +29,8 @@ import {
   useToday, RowMenu } from '../ui'
 import { DOMAINE_AGENCE, download, fmtDate, fmtMoney, fmtPct, fold, todayISO, uid } from '../util'
 import { coefSuggere, coutAgenceAnnuel, coutAnnuelPersonne, coutHorairePersonne, coutHoraireMoyen, coutJourObjectif, objectifCA, tauxVente, tauxVenteObjectif } from '../derive'
-import { connecterGoogle, deconnecter, estConnecte } from '../google'
+import { assurerJeton, connecterGoogle, deconnecter, estConnecte } from '../google'
+import { useSurveillanceCtx } from '../surveillance'
 import {
   connecterSync,
   deconnecterSync,
@@ -332,6 +333,25 @@ function CarteSurveillance() {
   const sv = state.settings.surveillance || { email: '', clientId: '' }
   const [message, setMessage] = useState('')
   const [, forcer] = useState(0)
+
+  // Le badge lit `estConnecte()` au rendu. La reprise silencieuse, elle, a
+  // lieu dans la boucle de surveillance, HORS de ce composant : sans ces
+  // deux branchements, la carte afficherait « non connecté » pendant que la
+  // surveillance tourne — et on recliquerait « Connecter Google » pour rien.
+  //
+  // 1. lire le contexte suffit à re-rendre quand la boucle change d'état ;
+  const { direct } = useSurveillanceCtx()
+  // 2. et on tente la reprise à l'ouverture de l'écran, pour que la carte
+  //    dise vrai même avant le premier tick.
+  useEffect(() => {
+    let vivant = true
+    void assurerJeton(sv.clientId).then((ok) => {
+      if (ok && vivant) forcer((x) => x + 1)
+    })
+    return () => {
+      vivant = false
+    }
+  }, [sv.clientId, direct])
 
   const majSv = (champ: 'email' | 'clientId', v: string) =>
     update((d) => {

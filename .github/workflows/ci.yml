@@ -141,6 +141,9 @@ jobs:
       - name: Member departure transfers instead of orphaning
         run: npm run test:depart
 
+      - name: Task templates preview before creating
+        run: npm run test:modeles
+
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 

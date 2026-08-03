@@ -24,6 +24,7 @@ import {
   useToday,
 } from '../ui'
 import { addDays, fmtDate, fmtHeures, mondayOf, todayISO, uid } from '../util'
+import { LIBELLES_ETAT, TONS_ETAT, bilanSemaines, etatSemaine, projetsDeLaSemaine, totalSemaine } from '../temps'
 import { syncActif } from '../sync'
 import { LIBELLES_PHASES, PHASES_ORDRE } from '../miqcp'
 import { STATUTS_ACTIFS, equipeDuProjet, heuresPrevues, heuresReelles } from '../derive'
@@ -192,13 +193,10 @@ function TableauPersonne({
     setAjoutees((ls) => [...ls, { projetId: projetSel, phase: phaseSel }])
   }
 
-  const totalColonne = (semaine: string): number =>
-    state.temps
-      .filter((t) => t.semaine === semaine && t.personne === personne)
-      .reduce((s, t) => s + t.heures, 0) +
-    state.tempsHorsProjet
-      .filter((t) => t.semaine === semaine && t.personne === personne)
-      .reduce((s, t) => s + t.heures, 0)
+  // Le même calcul que la fiche du téléphone, parce que c'est la même
+  // fonction. Deux totaux divergents sur une feuille de temps, et c'est la
+  // feuille entière qu'on cesse de croire.
+  const totalColonne = (semaine: string): number => totalSemaine(state, personne, semaine)
 
   const totalLigne = (c: Couple): number =>
     semaines.reduce((s, sem) => s + (heuresDe(sem, c) ?? 0), 0)
@@ -581,10 +579,9 @@ function SaisieSemaine({ today }: { today: string }) {
     )
   }
 
-  const total =
-    state.temps.filter((t) => t.semaine === semaine && t.personne === personne).reduce((s, t) => s + t.heures, 0) +
-    state.tempsHorsProjet.filter((t) => t.semaine === semaine && t.personne === personne).reduce((s, t) => s + t.heures, 0)
+  const total = totalSemaine(state, personne, semaine)
   const theorique = state.settings.heuresParJour * 5
+  const etat = etatSemaine(total, theorique)
   const projetsHorsListe = actifs.filter((p) => !couples.some((c) => c.projetId === p.id))
 
   const ligneStyle: React.CSSProperties = {
@@ -620,9 +617,7 @@ function SaisieSemaine({ today }: { today: string }) {
       <p className="small" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', margin: '4px 0 8px' }}>
         <strong>{fmtHeures(total)} saisies</strong>
         <span className="muted">sur {fmtHeures(theorique)} théoriques</span>
-        <Badge tone={total === 0 ? 'muted' : Math.abs(total - theorique) < 0.5 ? 'ok' : 'warn'}>
-          {total === 0 ? 'à saisir' : total < theorique ? 'incomplète' : total > theorique + 0.5 ? 'surcharge' : 'complète'}
-        </Badge>
+        <Badge tone={TONS_ETAT[etat]}>{LIBELLES_ETAT[etat]}</Badge>
         <IndicateurEnregistrement />
         <span className="spacer" />
         <Btn small onClick={copierSemainePrecedente}>Copier la semaine précédente</Btn>
@@ -727,6 +722,66 @@ function IndicateurEnregistrement() {
   )
 }
 
+// ---------- historique au téléphone : le même total, lisible ----------
+
+/**
+ * Sous 700 px, la grille 6 semaines devient six colonnes de saisie
+ * numérique sans colonne figée : on fait défiler à l'horizontale et on ne
+ * sait plus de quelle personne on lit les chiffres. Cette fiche la
+ * remplace (`styles.css` échange `.temps-desktop` et `.temps-mobile`).
+ *
+ * Elle est en LECTURE. Ce n'est pas une capacité perdue : la saisie est
+ * l'onglet d'à côté, qui tient déjà au doigt et porte une seule semaine —
+ * la bonne granularité pour un téléphone. Monter ici une seconde saisie
+ * sur six semaines donnerait deux chemins d'écriture vers `state.temps`,
+ * et le second serait celui qu'on utilise en marchant. La fiche le dit à
+ * l'écran plutôt que de laisser chercher un champ qui n'existe pas.
+ */
+function FichePersonneMobile({ personne, semaines }: { personne: string; semaines: string[] }) {
+  const { state } = useStore()
+  const theorique = state.settings.heuresParJour * 5
+  const bilans = bilanSemaines(state, personne, semaines, theorique)
+  const total = bilans.reduce((s, b) => s + b.heures, 0)
+
+  return (
+    <Card
+      titre={personne}
+      actions={
+        <span className="small muted">
+          {fmtHeures(total)} sur {semaines.length} semaines
+        </span>
+      }
+    >
+      {bilans.map((b) => {
+        const projets = projetsDeLaSemaine(state, personne, b.semaine)
+        return (
+          <div
+            key={b.semaine}
+            style={{ padding: '8px 0', borderBottom: '1px solid var(--line)' }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span className="small" style={{ flex: 1, minWidth: 0 }}>
+                semaine du <strong>{fmtDate(b.semaine)}</strong>
+              </span>
+              <strong className="small">{fmtHeures(b.heures)}</strong>
+              <Badge tone={TONS_ETAT[b.etat]}>{LIBELLES_ETAT[b.etat]}</Badge>
+            </div>
+            {projets.length > 0 && (
+              <div className="muted small" style={{ marginTop: 2 }}>
+                {projets.map((p) => `${p.projetId} ${fmtHeures(p.heures)}`).join(' · ')}
+              </div>
+            )}
+          </div>
+        )
+      })}
+      <p className="muted small" style={{ marginTop: 8 }}>
+        Lecture seule : la saisie se fait dans l’onglet <strong>Ma semaine</strong>, une semaine à la
+        fois. Le détail par phase et l’affectation des projets restent sur la version bureau.
+      </p>
+    </Card>
+  )
+}
+
 // ---------- historique : la grille 6 semaines (vue secondaire) ----------
 
 function Historique({ today }: { today: string }) {
@@ -755,9 +810,19 @@ function Historique({ today }: { today: string }) {
         {fin === finCourante && <Badge tone="info">• = semaine en cours</Badge>}
         <IndicateurEnregistrement />
       </div>
-      {personnes.map((p) => (
-        <TableauPersonne key={p} personne={p} semaines={semaines} today={today} />
-      ))}
+      {/* Les deux vues sur les mêmes données, échangées par la CSS à 700 px.
+          Elles lisent le MÊME `totalSemaine()` : elles ne peuvent pas
+          afficher deux chiffres différents pour une même semaine. */}
+      <div className="temps-desktop">
+        {personnes.map((p) => (
+          <TableauPersonne key={p} personne={p} semaines={semaines} today={today} />
+        ))}
+      </div>
+      <div className="temps-mobile">
+        {personnes.map((p) => (
+          <FichePersonneMobile key={p} personne={p} semaines={semaines} />
+        ))}
+      </div>
       <p className="muted small">
         Les dérives heures par projet ont déménagé dans <a href="#/pilotage/missions">Pilotage → Missions</a>.
       </p>

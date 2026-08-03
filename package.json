@@ -12,7 +12,7 @@
     "lint": "eslint \"api/**/*.js\" \"scripts/**/*.cjs\"",
     "build": "npm run typecheck && vite build",
     "preview": "vite preview",
-    "test": "npm run test:assistant && npm run test:relais && npm run test:edge-security && npm run test:mise-en-production && npm run test:renommage && npm run test:lien-gmail && npm run test:sync-state && npm run test:facture-invariants && npm run test:identite && npm run test:champs && npm run test:registre && npm run test:categorisation && npm run test:baseline && npm run test:arborescence && npm run test:equipe && npm run test:accueil && npm run test:oauth && npm run test:propositions && npm run test:adresses && npm run test:ingestion-gmail && npm run test:communications && npm run test:hors-ligne && npm run test:rattachement && npm run test:resume && npm run test:classement && npm run test:selecteurs && npm run test:notifications && npm run test:boite && npm run test:audit && npm run test:detecteurs && npm run test:taches && npm run test:critere11 && npm run test:conservation && npm run test:revue-propositions && npm run test:depart && npm run test:modeles && npm run test:finance",
+    "test": "npm run test:assistant && npm run test:relais && npm run test:edge-security && npm run test:mise-en-production && npm run test:renommage && npm run test:lien-gmail && npm run test:sync-state && npm run test:facture-invariants && npm run test:identite && npm run test:champs && npm run test:registre && npm run test:categorisation && npm run test:baseline && npm run test:arborescence && npm run test:equipe && npm run test:accueil && npm run test:oauth && npm run test:propositions && npm run test:adresses && npm run test:ingestion-gmail && npm run test:communications && npm run test:hors-ligne && npm run test:rattachement && npm run test:resume && npm run test:classement && npm run test:selecteurs && npm run test:notifications && npm run test:boite && npm run test:audit && npm run test:detecteurs && npm run test:taches && npm run test:critere11 && npm run test:conservation && npm run test:revue-propositions && npm run test:depart && npm run test:modeles && npm run test:temps-mobile && npm run test:tableaux && npm run test:finance",
     "test:assistant": "node scripts/test-assistant.cjs",
     "test:relais": "node scripts/test-relais.cjs",
     "test:edge-security": "node scripts/test-edge-functions-security.cjs",
@@ -49,6 +49,8 @@
     "test:revue-propositions": "node scripts/test-revue-propositions.cjs",
     "test:depart": "node scripts/test-depart-membre.cjs",
     "test:modeles": "node scripts/test-modeles-taches.cjs",
+    "test:temps-mobile": "node scripts/test-temps-mobile.cjs",
+    "test:tableaux": "node scripts/test-tableaux.cjs",
     "test:finance": "node scripts/test-finance.cjs"
   },
   "dependencies": {

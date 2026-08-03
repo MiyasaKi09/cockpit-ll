@@ -13,7 +13,7 @@ import { creerJetonInitiationOAuth } from '../_shared/oauth-init.ts'
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, content-type',
+  'Access-Control-Allow-Headers': 'authorization, apikey, x-client-info, content-type',
   'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
 }
 

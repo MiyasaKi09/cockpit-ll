@@ -936,6 +936,40 @@ export interface Connecteur {
   dernierHealthcheck?: { date: string; ok: boolean; detail?: string } | null
 }
 
+/** M.3 — chrono en cours. Une entrée par personne : c'est la règle que la
+ *  clé primaire de `chrono_actif` tient en base, et que l'état local doit
+ *  tenir seul tant que la synchronisation des pointages n'est pas branchée. */
+/** Miroir local de `public.pointages` (B.4). Les noms suivent le TypeScript
+ *  du dépôt ; la correspondance avec les colonnes SQL se fait à l'envoi. */
+export interface PointageLocal {
+  id: string
+  personne: string
+  debut: string
+  fin: string | null
+  minutes: number
+  projetId: string | null
+  phase: PhaseCode | null
+  tacheId: string | null
+  activite: string
+  commentaire: string
+  facturable: boolean
+  validee: boolean
+  source: string
+  creeLe: string
+  majLe: string
+}
+
+export interface ChronoEnCours {
+  personne: string
+  debut: string
+  projetId: string | null
+  phase: PhaseCode | null
+  tacheId: string | null
+  activite: string
+  commentaire: string
+  libelle: string
+}
+
 export interface TempsEntry {
   id: string
   /** lundi de la semaine, ISO */
@@ -1564,6 +1598,21 @@ export interface AppState {
   /** B.1 — les tâches internes du §8.5. Restent dans le document JSONB :
    *  le volume est borné et la fréquence d'écriture est HUMAINE (§3.1). */
   taches: TacheInterne[]
+  /** M.3 — au plus un chrono par personne (cf. `poserChrono`) */
+  chronos: ChronoEnCours[]
+  /** M.3 — pointages produits par le chrono, EN LOCAL.
+   *
+   *  Le plan (§3.1) sort les pointages du document JSONB : leur place est la
+   *  table relationnelle `pointages`, livrée par B.4 avec sa file d'envoi.
+   *  Cette file n'est PAS branchée — B.4 a livré la table et la logique pure,
+   *  jamais le chemin d'écriture depuis le navigateur.
+   *
+   *  Un chrono qui perdrait son temps au rechargement serait pire que pas de
+   *  chrono : on ne s'aperçoit pas d'un temps qui n'a jamais été écrit. Cette
+   *  collection est donc le magasin d'aujourd'hui et deviendra la CORBEILLE
+   *  DE SORTIE le jour où la file sera branchée — les identifiants sont déjà
+   *  des uuid générés ici, donc un rejeu est idempotent par la clé primaire. */
+  pointages: PointageLocal[]
   tempsHorsProjet: TempsHorsProjet[]
   absences: Absence[]
   evaluations: EvaluationEntreprise[]

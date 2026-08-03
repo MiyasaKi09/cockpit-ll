@@ -14,13 +14,12 @@
 // résolution des dépendances et les cinq statuts au menu viennent de
 // `src/taches.ts`, exercés en CI.
 //
-// CE QUI MANQUE, ET POURQUOI C'EST DIT PLUTÔT QUE SIMULÉ
-// -------------------------------------------------------
-// Le §19.3 prévoit un bouton chrono. Le chrono est B.6 : la table
-// `chrono_actif` n'existe pas. Plutôt qu'un bouton qui ne ferait rien —
-// ou pire, qui écrirait un temps sans horloge — la fiche dit que le temps
-// se saisit ailleurs pour l'instant. Un bouton mort se clique deux fois,
-// puis on cesse de faire confiance à l'écran.
+// LE BOUTON CHRONO DU §19.3 EXISTE DEPUIS M.3
+// ---------------------------------------------
+// Il a longtemps manqué et la fiche le DISAIT, plutôt que de montrer un
+// bouton mort — qu'on clique deux fois avant de cesser de croire l'écran.
+// B.6 a livré la table, M.3 l'horloge et les deux emplacements de barre :
+// le démarrage se fait ici, où la cible est déjà connue.
 // ============================================================
 
 import { useState } from 'react'
@@ -29,6 +28,7 @@ import { useStore } from '../store'
 import { Btn, Modal, Select, TextInput, toast } from '../ui'
 import { useMoi } from '../moi'
 import { fmtDate, fmtHeures, lienGmail } from '../util'
+import { type ChronoActif, arreterChrono, basculerChrono, chronoDe, poserChrono } from '../chrono'
 import {
   LIBELLES_PRIORITE_TACHE,
   LIBELLES_SOURCE_TACHE,
@@ -73,6 +73,42 @@ export default function FicheTache({ tache, onClose }: { tache: TacheInterne; on
   // On relit la tâche dans l'état à chaque rendu : la prop est un
   // instantané, et une modification faite ici doit se voir ici.
   const t = state.taches.find((x) => x.id === tache.id) || tache
+
+  // --- M.3 : le chrono de cette tâche -------------------------------------
+  const qui = moi.nom || ''
+  const chronoCourant = chronoDe(state.chronos as ChronoActif[], qui) as ChronoActif | null
+  const enCoursIci = chronoCourant?.tacheId === t.id
+
+  const demarrerIci = () => {
+    if (!qui) {
+      toast('Indiquez d’abord qui vous êtes : un temps sans personne ne se rattache à rien.', { tone: 'warn' })
+      return
+    }
+    const maintenant = new Date().toISOString()
+    const { chrono, arret } = basculerChrono(chronoCourant, qui, {
+      projetId: t.projetId ?? null,
+      phase: t.phase ?? null,
+      tacheId: t.id,
+      libelle: t.titre,
+    }, maintenant)
+    update((d) => {
+      if (arret?.pointage) d.pointages = [...(d.pointages || []), arret.pointage]
+      d.chronos = poserChrono(d.chronos as ChronoActif[], chrono, qui)
+    })
+    // La bascule est silencieuse si on ne la dit pas : quelqu'un qui démarre
+    // une seconde tâche doit savoir que la première vient d'être enregistrée.
+    toast(arret ? `${arret.message} Chrono démarré sur « ${t.titre} ».` : `Chrono démarré sur « ${t.titre} ».`, { tone: 'ok' })
+  }
+
+  const arreterIci = () => {
+    if (!chronoCourant) return
+    const { pointage, message } = arreterChrono(chronoCourant, new Date().toISOString())
+    update((d) => {
+      d.chronos = poserChrono(d.chronos as ChronoActif[], null, qui)
+      if (pointage) d.pointages = [...(d.pointages || []), pointage]
+    })
+    toast(message, { tone: pointage ? 'ok' : 'warn' })
+  }
 
   const modifier = (fn: (cible: TacheInterne) => void) => {
     update((d) => {
@@ -289,12 +325,20 @@ export default function FicheTache({ tache, onClose }: { tache: TacheInterne; on
                 </>
               )}
             </div>
-            {/* Le chrono est B.6. Un bouton mort se clique deux fois, puis
-                on cesse de faire confiance à l'écran : on dit plutôt où le
-                temps se saisit aujourd'hui. */}
-            <div className="muted small" style={{ marginTop: 4 }}>
-              Le temps se saisit dans l’onglet Temps. Le chrono par tâche arrive avec le livrable B.6 ;
-              d’ici là ce compteur reste à zéro.
+            {/* M.3 — démarrage en un appui. La bascule est dans `chrono.ts` :
+                démarrer alors qu'un chrono tourne arrête le premier et
+                enregistre son pointage, en un seul geste. Sans cette règle,
+                il faudrait se souvenir d'arrêter avant de démarrer — on
+                oubliera, et deux chronos compteraient la même heure. */}
+            <div style={{ marginTop: 6, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              {enCoursIci ? (
+                <Btn small onClick={arreterIci}>Arrêter le chrono</Btn>
+              ) : (
+                <Btn small kind="primary" onClick={demarrerIci}>Démarrer le chrono</Btn>
+              )}
+              <span className="muted small">
+                Le temps saisi à la semaine reste dans l’onglet Temps.
+              </span>
             </div>
           </Bloc>
 

@@ -38,6 +38,7 @@ function BanniereMiseAJour() {
     </div>
   )
 }
+import ChronoBarre from './modules/ChronoBarre'
 const Taches = lazy(() => import('./modules/Taches'))
 const Parite = lazy(() => import('./modules/Parite'))
 const RechercheOverlay = lazy(() => import('./modules/RechercheOverlay'))
@@ -335,6 +336,10 @@ export default function App() {
         <Icon name="menu" size={19} />
       </button>
       <div className="brand">Cockpit L&L</div>
+      {/* M.3 — emplacement TÉLÉPHONE. Le §3.5 note qu'il n'y a pas de barre
+          supérieure au bureau : le second emplacement est la barre latérale,
+          ci-dessous. Un seul composant, deux montages. */}
+      <ChronoBarre emplacement="topbar" />
       <span className="spacer" />
       <button className="topbar-burger" onClick={() => setRechercheOuverte(true)} title="Recherche globale" aria-label="Recherche globale">
         <Icon name="search" size={17} />
@@ -344,6 +349,8 @@ export default function App() {
       {navOuverte && <div className="nav-back" onClick={() => setNavOuverte(false)} />}
       <aside className={`sidebar ${navOuverte ? 'ouverte' : ''}`}>
         <div className="brand">Cockpit L&L</div>
+        {/* M.3 — emplacement POSTE, en tête de la barre latérale (§3.5). */}
+        <ChronoBarre emplacement="laterale" />
         <button className="nav-search" onClick={() => setRechercheOuverte(true)} title="Recherche globale">
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
             <Icon name="search" size={14} />

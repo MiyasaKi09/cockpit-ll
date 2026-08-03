@@ -144,6 +144,9 @@ jobs:
       - name: Task templates preview before creating
         run: npm run test:modeles
 
+      - name: Chrono switchover, minimum duration and single timer per person
+        run: npm run test:chrono
+
       - name: Offline app shell precache and update policy
         run: npm run test:coquille
 

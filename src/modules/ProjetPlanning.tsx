@@ -21,9 +21,9 @@ import {
   confirmer,
   toast,
   useToday, RowMenu } from '../ui'
-import { diffDays, fmtDate, fmtMoney, fold, todayISO, uid } from '../util'
+import { diffDays, fmtDate, fmtMoney, fold, ouvrirGmail, todayISO, uid } from '../util'
 import { montantElement, sommeLignes } from '../dpgf'
-import { avancementLot, avancementTache, clampPourcent, tacheDeReprise } from '../chantier'
+import { avancementLot, avancementTache, clampPourcent, tacheAConfirmer, tacheDeReprise } from '../chantier'
 import { couleurPhase } from './Planning'
 
 const NOMS_MOIS = ['janv.', 'févr.', 'mars', 'avr.', 'mai', 'juin', 'juil.', 'août', 'sept.', 'oct.', 'nov.', 'déc.']
@@ -367,6 +367,21 @@ function CarteTaches({
   const marcheDuGroupe = (groupe: string): string | null =>
     taches.find((t) => t.lot === groupe && t.marcheId)?.marcheId ?? null
 
+  const marcheDe = (t: TacheChantier) =>
+    t.marcheId ? state.marches.find((m) => m.id === t.marcheId) ?? null : null
+
+  // 5.7 — « Relancer » ouvre un BROUILLON Gmail pré-rempli (entreprise, lot,
+  // dates) : l'envoi reste un clic humain, jamais un envoi direct (§15)
+  const relancer = (t: TacheChantier) => {
+    const m = marcheDe(t)
+    if (!m) return
+    ouvrirGmail(
+      m.contactEmail || '',
+      `${p.id} — ${t.lot} : confirmation de votre intervention`,
+      `Bonjour,\n\nVotre intervention « ${t.designation} » (${t.lot}) sur le chantier ${p.nom} est planifiée du ${fmtDate(t.debut)} au ${fmtDate(t.fin)}.\n\nMerci de nous confirmer ces dates par retour de mail, ainsi que vos éventuelles contraintes d'approvisionnement — sans confirmation de votre part, le planning du lot devra être revu.\n\nCordialement,\n${state.settings.nomAgence}`,
+    )
+  }
+
   if (taches.length === 0) {
     return (
       <Card titre="Planning travaux détaillé — les éléments prévus au DCE">
@@ -421,6 +436,8 @@ function CarteTaches({
               {duGroupe.map((t) => {
                 const retard = t.statut !== 'fait' && t.fin && t.fin < today
                 const montant = montantDe(t)
+                const marche = marcheDe(t)
+                const aConfirmer = tacheAConfirmer(t, marche, today)
                 return (
                   <tr key={t.id}>
                     <td style={{ maxWidth: 380 }}>
@@ -429,6 +446,14 @@ function CarteTaches({
                       {t.repriseDeId && <> <Badge tone="info">reprise</Badge></>}
                       {(!t.debut || !t.fin) && <> <Badge tone="warn">à dater</Badge></>}
                       {retard && <> <Badge tone="danger">en retard</Badge></>}
+                      {aConfirmer && (
+                        <>
+                          {' '}
+                          <span title={`${marche!.entreprise} n'a pas confirmé sa venue — « Entreprise confirmée » ou « Relancer » dans le menu de ligne`}>
+                            <Badge tone="warn">entreprise à confirmer</Badge>
+                          </span>
+                        </>
+                      )}
                     </td>
                     <td style={{ width: 140 }}>
                       <DateInput
@@ -465,6 +490,28 @@ function CarteTaches({
                     <td className="right" style={{ width: 54 }}>
                       <RowMenu
                         items={[
+                          // 5.7 — les deux gestes de la confirmation, seulement
+                          // quand un marché (donc une entreprise) est rattaché
+                          ...(marche
+                            ? [
+                                t.confirmeLe
+                                  ? {
+                                      label: `Annuler la confirmation (posée le ${fmtDate(t.confirmeLe)})`,
+                                      title: 'Retire confirmeLe — l’alerte « à confirmer » se relèvera si l’intervention est proche',
+                                      onClick: () => maj(t.id, (x) => { x.confirmeLe = null }),
+                                    }
+                                  : {
+                                      label: 'Entreprise confirmée',
+                                      title: `Pose la date du jour : ${marche.entreprise} a confirmé sa venue`,
+                                      onClick: () => maj(t.id, (x) => { x.confirmeLe = today }),
+                                    },
+                                {
+                                  label: 'Relancer l’entreprise (brouillon Gmail)',
+                                  title: 'Ouvre un brouillon pré-rempli (entreprise, lot, dates) — l’envoi reste votre clic',
+                                  onClick: () => relancer(t),
+                                },
+                              ]
+                            : []),
                           {
                             label: 'Faire revenir l’entreprise (reprise)',
                             title: 'Duplique la tâche en intervention de reprise, liée à celle-ci — dates à poser',
@@ -487,6 +534,8 @@ function CarteTaches({
         « Replanifier » (onglet DCE) recale tout un lot quand ses dates de marché changent.
         L'avancement (%) se saisit en réunion de chantier : il remplit la barre de la frise et
         donne l'avancement du lot, celui que la vérification des situations lira.
+        À l'approche d'une intervention (~30 j), l'entreprise non confirmée remonte dans le fil
+        d'urgences — « Entreprise confirmée » éteint l'alerte, « Relancer » ouvre un brouillon Gmail.
       </p>
 
       {modalAjout && <ModalAjoutTache projet={p} onClose={() => setModalAjout(false)} />}

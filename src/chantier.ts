@@ -11,7 +11,7 @@
 // compensent pas trois semaines de gros œuvre à l'arrêt. Une moyenne simple
 // dirait 50 % — un chiffre plausible et faux, le pire des deux.
 
-import type { TacheChantier } from './types'
+import type { MarcheTravaux, TacheChantier } from './types'
 import { diffDays } from './util'
 
 /** borne un pourcentage dans [0 ; 100] — une saisie à 150 ou à −20 est une
@@ -84,4 +84,33 @@ export function tacheDeReprise(origine: TacheChantier, id: string): TacheChantie
     statut: 'prevu',
     repriseDeId: origine.id,
   }
+}
+
+// ------------------------------------------------------------
+// 5.7 — « entreprise à confirmer » : le prédicat, pur, partagé
+// entre le producteur d'alertes (alerts.ts) et l'écran planning
+// — deux définitions divergeraient sans que rien ne le signale
+// ------------------------------------------------------------
+
+/** fenêtre de confirmation avant l'intervention (~1 mois). Une entreprise qui
+ *  découvre sa date deux semaines avant ne vient pas : à M−1 il reste le
+ *  temps de caler l'approvisionnement — ou de replanifier le lot. */
+export const SEUIL_CONFIRMATION_JOURS = 30
+
+/** vrai quand la tâche appelle une confirmation d'entreprise : elle démarre
+ *  sous `SEUIL_CONFIRMATION_JOURS`, personne n'a posé `confirmeLe`, et son
+ *  marché est ACTIF — relancer l'entreprise d'un marché soldé serait du
+ *  bruit. Une date déjà passée ne compte plus : la confirmation n'a plus
+ *  d'objet, c'est le suivi de retard qui prend le relais. Sans date ni
+ *  marché, rien — on ne relance pas dans le vide. */
+export function tacheAConfirmer(
+  t: Pick<TacheChantier, 'debut' | 'statut' | 'confirmeLe'>,
+  marche: Pick<MarcheTravaux, 'actif'> | null | undefined,
+  today: string,
+): boolean {
+  if (!t.debut || t.statut === 'fait') return false
+  if (t.confirmeLe) return false
+  if (!marche || !marche.actif) return false
+  const dj = diffDays(today, t.debut)
+  return dj >= 0 && dj <= SEUIL_CONFIRMATION_JOURS
 }

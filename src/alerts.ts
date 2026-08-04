@@ -18,6 +18,7 @@ import {
 } from './derive'
 import { addDays, diffDays, fmtDate, fmtMoney, fmtMois, monthKey } from './util'
 import { LIBELLES_IMPORTANCE, type NiveauImportance, estImportance, graviteDe } from './categorisation'
+import { tacheAConfirmer } from './chantier'
 
 // ------------------------------------------------------------
 // A.11 — notifier les personnes concernées (§12.3 pt 10)
@@ -233,6 +234,32 @@ export function computeAlertes(state: AppState, today: string, contexte?: Contex
         })
       }
     }
+  }
+
+  // --- 5.7 : entreprise à confirmer — tâche de chantier démarrant sous
+  // SEUIL_CONFIRMATION_JOURS (src/chantier.ts, même prédicat que l'écran
+  // planning) sans que l'entreprise ait confirmé sa venue, marché actif.
+  // Une entreprise qui découvre sa date deux semaines avant ne vient pas :
+  // c'est le mode de retard le plus courant, et le plus prévisible.
+  for (const t of state.tachesChantier) {
+    const marche = t.marcheId ? state.marches.find((m) => m.id === t.marcheId) : null
+    if (!marche || !tacheAConfirmer(t, marche, today)) continue
+    const dj = diffDays(today, t.debut!)
+    alertes.push({
+      id: `confirme:${t.id}`,
+      type: 'entreprise_a_confirmer',
+      // sous 14 jours on est DANS le mode de défaillance connu : rouge
+      gravite: dj <= 14 ? 3 : 2,
+      titre: `Entreprise à confirmer — ${marche.entreprise} (${t.lot})`,
+      detail: `${nomProjet(state, t.projetId)} · ${t.designation} · intervention le ${fmtDate(t.debut)} (J−${dj})`,
+      lien: `#/projets/${t.projetId}/planning`,
+      date: t.debut!,
+      projetId: t.projetId,
+      // l'humain confirme (confirmeLe posé), l'alerte s'éteint au recalcul ;
+      // « Relancer » vit à l'écran planning, en brouillon Gmail — jamais
+      // d'envoi automatique (§15)
+      action: { kind: 'confirmer_tache', refId: t.id, label: '✓ Confirmé' },
+    })
   }
 
   // --- Retenue de garantie arrivée à échéance (réception + 1 an) et non levée.

@@ -72,6 +72,9 @@ jobs:
       - name: Works progress weighted by task duration
         run: npm run test:chantier-avancement
 
+      - name: Contractor confirmation alert one month ahead
+        run: npm run test:alerte-entreprise
+
       - name: Current-user identity
         run: npm run test:identite
 

@@ -686,6 +686,12 @@ function CentreActions({ personne }: { personne: string }) {
       if (action.kind === 'valider_situation') {
         const s = d.situations.find((x) => x.id === action.refId)
         if (s) s.statut = 'validee'
+      } else if (action.kind === 'confirmer_tache') {
+        // 5.7 — la confirmation est un fait daté, pas une case cochée :
+        // la date dit QUAND l'entreprise a dit oui, ce qui compte si elle
+        // se dédit ensuite. L'alerte s'éteint d'elle-même au recalcul.
+        const t = d.tachesChantier.find((x) => x.id === action.refId)
+        if (t) t.confirmeLe = today
       } else if (action.kind === 'obligation_faite') {
         const o = d.obligations.find((x) => x.id === action.refId)
         if (!o) return
@@ -701,7 +707,12 @@ function CentreActions({ personne }: { personne: string }) {
         }
       }
     })
-    const libelle = action.kind === 'valider_situation' ? 'Situation validée.' : 'Obligation faite.'
+    const libelle =
+      action.kind === 'valider_situation'
+        ? 'Situation validée.'
+        : action.kind === 'confirmer_tache'
+          ? 'Entreprise confirmée.'
+          : 'Obligation faite.'
     toast(libelle, { undo: () => replace(snap) })
   }
 

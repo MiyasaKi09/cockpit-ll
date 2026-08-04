@@ -453,6 +453,11 @@ export interface TacheChantier {
    *  (« faire revenir l'entreprise ») : dupliquer en gardant le lien évite de
    *  ressaisir la ligne ET garde la trace de ce qui a dû être refait */
   repriseDeId?: string | null
+  /** 5.7 — date à laquelle l'entreprise a confirmé sa venue. Absent/null =
+   *  pas confirmé : à l'approche de `debut` (SEUIL_CONFIRMATION_JOURS,
+   *  src/chantier.ts), l'alerte « entreprise à confirmer » se lève — une
+   *  entreprise qui découvre sa date deux semaines avant ne vient pas */
+  confirmeLe?: string | null
   notes?: string
 }
 
@@ -1328,6 +1333,9 @@ export type TypeAlerte =
   | 'cr_en_attente'
   | 'sauvegarde'
   | 'rg_a_liberer'
+  // 5.7 — tâche de chantier démarrant sous ~30 jours sans confirmation de
+  // l'entreprise : le mode de retard le plus courant, et le plus prévisible
+  | 'entreprise_a_confirmer'
   // A.11 — les trois producteurs de la mémoire des échanges (§12.3 pt 10).
   // Ils ne sortent rien de l'application : ni e-mail, ni notification
   // poussée. Notifier, ici, c'est faire apparaître dans le fil de la
@@ -1342,6 +1350,9 @@ export type ActionAlerte =
   | { kind: 'emettre_facture'; refId: string; label: string }
   | { kind: 'valider_situation'; refId: string; label: string }
   | { kind: 'obligation_faite'; refId: string; label: string }
+  // 5.7 — pose `confirmeLe` sur la tâche de chantier : l'humain confirme,
+  // l'alerte s'éteint d'elle-même au recalcul
+  | { kind: 'confirmer_tache'; refId: string; label: string }
 
 export interface Alerte {
   /** identifiant stable (sert au snooze) */

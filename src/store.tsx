@@ -151,6 +151,10 @@ function migrate(parsed: AppState): AppState {
   etat.decisionsDirection = Array.isArray(parsed.decisionsDirection) ? parsed.decisionsDirection : []
   etat.simulations = Array.isArray(parsed.simulations) ? parsed.simulations : []
   etat.connecteurs = Array.isArray(parsed.connecteurs) ? parsed.connecteurs : []
+  // 5.4 — indices de révision BTP. Champ ajouté sans palier : un état
+  // antérieur n'a simplement aucune valeur saisie, ce qui est la vérité —
+  // et le calcul de révision répond alors null au lieu d'inventer un indice.
+  etat.indicesBTP = Array.isArray(parsed.indicesBTP) ? parsed.indicesBTP : []
   amorcerEntreprises(etat)
   // v5 → v6 : journal d'interactions CRM. On amorce depuis les
   // derniereInteraction existantes pour ne rien perdre de l'historique.

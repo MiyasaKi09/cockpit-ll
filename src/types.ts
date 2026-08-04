@@ -315,6 +315,17 @@ export interface MarcheTravaux {
   /** retenue de garantie (0.05 par défaut) */
   tauxRG: number
   revision: boolean
+  /** 5.4 — série de référence de la révision, telle qu'écrite au CCAP
+   *  (BT01, BT02, TP08…) : chaque entreprise a la sienne. Texte libre
+   *  court plutôt que liste fermée — l'INSEE publie des dizaines de séries
+   *  et un CCAP peut en citer n'importe laquelle ; une liste serait fausse
+   *  dès le premier marché qui en sortirait. */
+  indiceRevision?: string
+  /** mois d'établissement des prix ('AAAA-MM') — le I0 de la formule */
+  moisZero?: string
+  /** partie fixe de la formule du CCAP « partFixe + (1 − partFixe) × In/I0 »,
+   *  en fraction comme tauxRG (0,15 par défaut si absent — l'usage CCAG) */
+  partFixe?: number
   /** délai contractuel de vérification des situations par la MOE (jours) */
   delaiVerifJours: number
   contactNom?: string
@@ -339,6 +350,22 @@ export interface MarcheTravaux {
   /** retenue de garantie libérée à l'entreprise (levée effectuée) */
   rgLibere?: boolean
   notes?: string
+}
+
+/** 5.4 — valeur mensuelle d'un indice de révision BTP (BT01, BT02, TP08…).
+ *  Saisie À LA MAIN depuis les publications INSEE : elles paraissent à
+ *  ~3 mois, il n'existe aucun flux à brancher — et une valeur recopiée se
+ *  relit, là où une valeur « récupérée » se croirait juste. Le rapprochement
+ *  avec `Marche.indiceRevision` se fait sans casse ni espaces
+ *  (src/revisionPrix.ts) : « bt01 » saisi ici et « BT01 » au marché
+ *  désignent la même série. */
+export interface IndiceBTP {
+  id: string
+  /** code de la série, tel que publié (BT01, TP08…) */
+  indice: string
+  /** mois de la valeur ('AAAA-MM') */
+  mois: string
+  valeur: number
 }
 
 /** élément d'ouvrage prévu au CCTP d'un lot — un article numéroté du document */
@@ -1670,6 +1697,10 @@ export interface AppState {
   simulations: SimulationProjet[]
   /** connecteurs directs (F10) — passerelles serveur, sans secret */
   connecteurs: Connecteur[]
+  /** 5.4 — valeurs mensuelles des indices de révision BTP : référentiel
+   *  NATIONAL, transverse aux projets (une valeur BT01 sert tous les
+   *  marchés qui citent cette série) — saisi en Paramètres */
+  indicesBTP: IndiceBTP[]
 }
 
 /** document du corpus de l'assistant : texte réglementaire (Légifrance,

@@ -533,6 +533,12 @@ export function seedState(): AppState {
         avenantsHT: 12500,
         tauxRG: 0.05,
         revision: true,
+        // 5.4 — la série et le mois zéro viennent du CCAP ; les VALEURS de la
+        // série, elles, se saisissent en Paramètres (aucune ici : voir le
+        // commentaire de `indicesBTP` — le calcul répond null tant que la
+        // série n'est pas alimentée, et il le dit)
+        indiceRevision: 'BT01',
+        moisZero: '2025-10',
         delaiVerifJours: 15,
         contactNom: 'M. Martin',
         contactEmail: 'contact@martin-btp.example',
@@ -1048,6 +1054,12 @@ export function seedState(): AppState {
     tachesChantier: [],
     registreDocuments: [],
     entreprises: [],
+
+    // 5.4 — la collection naît VIDE, même dans le jeu d'exemple : une valeur
+    // d'indice inventée ressemblerait à une vraie publication INSEE et
+    // finirait dans un vrai certificat de paiement — contrairement aux
+    // marchés « EXEMPLE », le faux ne se verrait pas.
+    indicesBTP: [],
 
     // v14 — finance F0/F1 : remplies par l'amorçage ci-dessous
     // (les factures « prévues » du seed deviennent des échéances)

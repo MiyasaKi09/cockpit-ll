@@ -115,7 +115,22 @@ export function CarteMarches({ projet: p }: { projet: Projet }) {
                   </span>
                 )}
               </td>
-              <td>{m.revision ? 'oui' : '—'}</td>
+              <td>
+                {m.revision ? (
+                  m.indiceRevision ? (
+                    <span className="small">
+                      {m.indiceRevision}
+                      {m.moisZero ? <span className="muted"> · base {m.moisZero}</span> : ''}
+                    </span>
+                  ) : (
+                    // révisable mais sans série : la révision théorique (5.4)
+                    // répondra null — le manque doit se voir dans la liste
+                    <Badge tone="warn">indice ?</Badge>
+                  )
+                ) : (
+                  '—'
+                )}
+              </td>
               <td className="small">
                 {m.dateDebut || m.dateFin ? (
                   <>{m.dateDebut ? fmtDate(m.dateDebut) : '?'} → {m.dateFin ? fmtDate(m.dateFin) : '?'}</>
@@ -167,6 +182,12 @@ function ModalMarche({
   const [garantie, setGarantie] = useState<TypeGarantie>(garantieDuMarche(marche))
   const [garantieRecueLe, setGarantieRecueLe] = useState<string | null>(marche?.garantieRecueLe ?? null)
   const [revision, setRevision] = useState(marche?.revision ? 'oui' : 'non')
+  // 5.4 — paramètres de la révision, propres au marché (le CCAP de chaque
+  // entreprise cite SA série) ; les valeurs des séries, elles, se saisissent
+  // en Paramètres : elles sont nationales
+  const [indiceRevision, setIndiceRevision] = useState(marche?.indiceRevision || '')
+  const [moisZero, setMoisZero] = useState(marche?.moisZero || '')
+  const [partFixe, setPartFixe] = useState<number | null>(marche?.partFixe ?? null)
   const [delaiVerif, setDelaiVerif] = useState<number | null>(marche?.delaiVerifJours ?? 15)
   const [contactNom, setContactNom] = useState(marche?.contactNom || '')
   const [contactEmail, setContactEmail] = useState(marche?.contactEmail || '')
@@ -179,6 +200,12 @@ function ModalMarche({
 
   const enregistrer = () => {
     if (!valide) return
+    if (moisZero.trim() && !/^\d{4}-\d{2}$/.test(moisZero.trim())) {
+      // enregistrer un mois zéro illisible ferait répondre null au calcul de
+      // révision sans que la cause se voie jamais : on refuse à la saisie
+      toast('Mois zéro attendu au format AAAA-MM (ex. 2025-10).', { tone: 'danger' })
+      return
+    }
     update((d) => {
       const champs = {
         lot: lot.trim(),
@@ -191,6 +218,12 @@ function ModalMarche({
         garantie,
         garantieRecueLe: garantie === 'retenue' ? null : garantieRecueLe,
         revision: revision === 'oui',
+        // conservés même quand la révision passe à « non » : un aller-retour
+        // du sélecteur ne doit pas effacer une saisie — et le calcul (5.4)
+        // ne lit ces champs que si `revision` est vrai
+        indiceRevision: indiceRevision.trim().toUpperCase() || undefined,
+        moisZero: moisZero.trim() || undefined,
+        partFixe: partFixe ?? undefined,
         delaiVerifJours: delaiVerif ?? 15,
         contactNom: contactNom.trim() || undefined,
         contactEmail: contactEmail.trim() || undefined,
@@ -266,6 +299,19 @@ function ModalMarche({
           <NumInput value={delaiVerif} onChange={setDelaiVerif} />
         </Field>
       </div>
+      {revision === 'oui' && (
+        <div className="form-row">
+          <Field label="Indice (CCAP)" hint="la série de cette entreprise : BT01, BT02, TP08… — valeurs à saisir dans Paramètres">
+            <TextInput value={indiceRevision} onChange={setIndiceRevision} placeholder="BT01" />
+          </Field>
+          <Field label="Mois zéro" hint="mois d'établissement des prix — le I0 de la formule">
+            <TextInput value={moisZero} onChange={setMoisZero} placeholder="2025-10" />
+          </Field>
+          <Field label="Partie fixe" hint="formule CCAP : partie fixe + (1 − partie fixe) × In/I0 — 15 % si vide">
+            <PctInput value={partFixe} onChange={setPartFixe} placeholder="15" ariaLabel="Partie fixe de la formule de révision en pourcentage" />
+          </Field>
+        </div>
+      )}
       <div className="form-row">
         <Field label="Contact">
           <TextInput value={contactNom} onChange={setContactNom} />

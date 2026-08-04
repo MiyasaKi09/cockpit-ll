@@ -60,6 +60,9 @@ jobs:
       - name: Invoice invariant tests
         run: npm run test:facture-invariants
 
+      - name: VAT rounding rule and configurable tax mention
+        run: npm run test:tva
+
       - name: Market guarantee zeroes the retention
         run: npm run test:garantie-rg
 

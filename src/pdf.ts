@@ -3,6 +3,10 @@
 // PDF » (Ctrl+P). Déterministe, zéro service externe.
 
 import type { AppState, Facture, FactureFigee, Situation } from './types'
+// 5.15 — la mention d'exigibilité TVA est un RÉGLAGE (à confirmer avec le
+// cabinet), jamais une phrase codée en dur : la coder ici imprimerait un
+// régime fiscal faux le jour où le cabinet confirme l'option sur les débits.
+import { MENTION_TVA_DEFAUT } from './facture'
 import {
   LIBELLE_GARANTIE,
   analyserPeriode,
@@ -186,7 +190,7 @@ ${s.iban ? `<div class="bloc"><strong>Règlement par virement</strong><br>
   ${s.banque ? `${echapper(s.banque)}<br>` : ''}IBAN ${echapper(s.iban)}${s.bic ? ` · BIC ${echapper(s.bic)}` : ''}</div>` : ''}
 
 <div class="mentions">
-  TVA sur les encaissements (prestations de services). Paiement à ${f.delaiJours} jours.
+  ${echapper(s.mentionTVA || MENTION_TVA_DEFAUT)}. Paiement à ${f.delaiJours} jours.
   Tout retard de paiement entraîne de plein droit des pénalités au taux légal en vigueur ainsi
   qu'une indemnité forfaitaire de recouvrement de 40 € (art. L441-10 du Code de commerce) pour
   les professionnels. Escompte pour paiement anticipé : néant.<br>

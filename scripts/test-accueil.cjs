@@ -57,6 +57,9 @@ const achats = charger('src/achats.ts', { './util': util })
 const financeActions = charger('src/financeActions.ts', {
   './achats': achats,
   './comptable': { controlesCloture: () => ({ bloquants: 0 }) },
+  // 5.16 — `actionsATraiter` lit `derniereTransmission` pour signaler les
+  // rejets de portail : le graphe du chargeur doit suivre le vrai import.
+  './facture': facture,
   './util': util,
 })
 

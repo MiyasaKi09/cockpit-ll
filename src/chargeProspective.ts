@@ -66,8 +66,12 @@ export function chargeProjetee(state: AppState, personne: string, lundis: string
 }
 
 /** le projet hypothétique : X heures sur une fenêtre, éventuellement
- *  restreint à une personne */
-export interface SimulationProjet {
+ *  restreint à une personne. Nommé « SimulationCharge » et pas
+ *  « SimulationProjet » : ce dernier existe déjà dans types.ts (F9 —
+ *  simulation FINANCIÈRE sauvegardée dans AppState.simulations) et un
+ *  homonyme exporté ferait importer l'un pour l'autre sans que rien ne
+ *  le signale — celui-ci est jetable, jamais persisté. */
+export interface SimulationCharge {
   heures: number
   debut: string
   fin: string
@@ -115,7 +119,7 @@ export interface ResultatSimulation {
  *  semaine. Ne recommande rien, n'écrit rien : simuler n'est pas engager. */
 export function simulerProjet(
   state: AppState,
-  sim: SimulationProjet,
+  sim: SimulationCharge,
 ): ResultatSimulation | { erreur: string } {
   if (!(sim.heures > 0)) return { erreur: 'Indiquer un nombre d’heures positif : un projet de 0 h n’occupe personne.' }
   if (!sim.debut || !sim.fin) return { erreur: 'Indiquer le début et la fin de la fenêtre du projet.' }

@@ -96,6 +96,9 @@ jobs:
       - name: Project contacts sorted by call order
         run: npm run test:ordre-contacts
 
+      - name: Leave conflicts detected, transfers proposed never applied
+        run: npm run test:conges-report
+
       - name: Current-user identity
         run: npm run test:identite
 

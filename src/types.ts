@@ -444,6 +444,15 @@ export interface TacheChantier {
   debut: string | null // ISO 'AAAA-MM-JJ'
   fin: string | null
   statut: StatutTache
+  /** 5.6 — avancement constaté en réunion de chantier (0–100 %). Absent =
+   *  jamais saisi : `avancementTache` (src/chantier.ts) retombe alors sur le
+   *  statut — c'est LA saisie que la vérification des situations (5.5) lit,
+   *  elle se fait une fois, au chantier, et sert deux fois */
+  avancement?: number
+  /** 5.6 — tâche d'origine quand celle-ci est une intervention de reprise
+   *  (« faire revenir l'entreprise ») : dupliquer en gardant le lien évite de
+   *  ressaisir la ligne ET garde la trace de ce qui a dû être refait */
+  repriseDeId?: string | null
   notes?: string
 }
 

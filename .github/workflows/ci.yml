@@ -69,6 +69,9 @@ jobs:
       - name: Margin drift audited against hand-computed cases
         run: npm run test:derive-marge
 
+      - name: Works progress weighted by task duration
+        run: npm run test:chantier-avancement
+
       - name: Current-user identity
         run: npm run test:identite
 

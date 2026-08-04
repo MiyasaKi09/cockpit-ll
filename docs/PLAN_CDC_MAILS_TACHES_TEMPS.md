@@ -555,7 +555,24 @@ Le lot se livre en trois vagues. A et B sont séquentielles ; M est **paralléli
 
 **Ordre conseillé.** D'abord 5.1 (défaut réel qui retient de l'argent aux entreprises à tort) et 5.14 (vérifier avant de bâtir) ; puis 5.4 → 5.6 → 5.5, la chaîne de la révision et du contrôle des situations, qui rapporte chaque mois ; le reste se séquence librement avec le Lot 2.
 
-**Sous-total Lot 5 : 42,5 jours.**
+
+#### Complément du 04/08 — retours après livraison du lot
+
+Trois demandes arrivées à l'usage, dont deux RÉVISENT des décisions du lot :
+
+| # | Livrable | Réf. | Effort |
+|---|---|---|---|
+| 5.18 | **[révise 5.4]** Indices : historique COMPLET des séries (plus seulement 24 mois — l'application « pioche comme elle veut dedans ») et récupération AUTOMATIQUE au démarrage (au plus une fois par jour, silencieuse, jamais bloquante pour le démarrage hors ligne de M.1) — la décision « geste volontaire » de 5.4 est explicitement annulée par l'agence | retour 04/08 | 1,5 j |
+| 5.19 | **[nouveau]** Certificat de paiement mensuel (état d'acompte) : le document que la MOE émet depuis une situation validée — avance forfaitaire et sa résorption, décompte cumulé/antérieur, révision (5.4), TVA, pénalités (5.2), retenue ou GPD (5.1), net à payer, cumuls, reste HT — généré en PDF sur le patron des quatre générateurs de `src/pdf.ts`, chaque ligne calculée PROPOSÉE et corrigeable. La photo du certificat réel n° 4 (MAM de Chamant) sert de jeu d'essai : la RG y vaut 5 % de l'avenant en TTC alors que la GPD couvre la base — preuve qu'aucune ligne ne doit être verrouillée | retour 04/08, photo du 04/08 | 4 j |
+| 5.20 | **[nouveau]** Fiche entreprise transverse : par entreprise, tout ce qui la concerne — marchés (tous projets), situations en attente, certificats émis, RG retenue/à libérer, pénalités, désordres GPA, visas — avec l'objectif énoncé par l'agence : « simplifier la vie, pas la complexifier ». S'appuie sur le registre d'organisations existant, pas de nouvelle collection d'identité | retour 04/08 | 3 j |
+
+Décisions prises sur mandat (« je te laisse décider ») : la position TVA suit
+le régime de droit commun des services — collectée à l'encaissement,
+déductible au paiement — réglable, et le cabinet valide ou corrige ; l'écran
+d'entrée de la Finance devient « L'essentiel », six chiffres qui font agir,
+zéro suppression d'onglet.
+
+**Sous-total Lot 5 : 51 (42,5 + 8,5 du complément du 04/08) jours.**
 
 ---
 

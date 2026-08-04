@@ -224,6 +224,32 @@ Facture n° {{facture_numero}} — {{facture_libelle}} — {{facture_ttc}} TTC, 
 Rédige un courrier de MISE EN DEMEURE (courrier recommandé, pas un e-mail) : rappel chronologique des faits et relances, montant dû avec pénalités et indemnité de recouvrement chiffrées, délai de 15 jours avant saisine (référé-provision ou médiation selon le contrat), réserve de suspendre les prestations conformément au contrat. Ton strictement factuel. Document à relire avec attention avant tout envoi — signale-moi ce qu'un avocat devrait vérifier.`,
   },
   {
+    // 5.9 — la mise en demeure GPA. Le gabarit « mise en demeure » existant
+    // (tpl-relance-med) vise les HONORAIRES impayés d'un client : réutilisé
+    // tel quel, il réclamerait de l'argent à une entreprise au lieu d'exiger
+    // la levée d'un désordre. Celui-ci porte le fondement propre à la GPA
+    // (art. 44.1 CCAG, art. 1792-6 du code civil) et la menace utile :
+    // l'exécution par un tiers AUX FRAIS de l'entreprise défaillante.
+    id: 'tpl-med-gpa',
+    titre: 'GPA — mise en demeure de lever un désordre',
+    domaine: 'Chantier',
+    projetClaude: 'Secrétariat',
+    contexte: 'marche',
+    version: 1,
+    majLe: '2026-08-04',
+    corps: `Projet de mise en demeure — année de parfait achèvement (CCAG Travaux art. 44.1) — {{date}}.
+
+{{fiche_marche}}
+
+Désordre à lever :
+{{desordre}}
+
+Signalé le {{desordre_signale_le}} ; relances : {{desordre_relances}}.
+Fin de la garantie de parfait achèvement : {{fin_gpa}}.
+
+Rédige un courrier de MISE EN DEMEURE (courrier recommandé, pas un e-mail) à {{contact_entreprise}} : rappel de l'obligation de parfait achèvement (art. 1792-6 du code civil, art. 44.1 du CCAG Travaux), chronologie datée du signalement et des relances, délai d'exécution précis avant intervention d'une entreprise tierce AUX FRAIS de l'entreprise défaillante, réserve sur la retenue de garantie ou la caution. Ton strictement factuel. Document à relire avec attention avant tout envoi — signale-moi ce qu'un avocat devrait vérifier.`,
+  },
+  {
     id: 'tpl-tagging-photos',
     titre: 'Tagger un lot de photos (matériauthèque)',
     domaine: 'Matériauthèque',
@@ -1071,6 +1097,9 @@ export function seedState(): AppState {
     // 5.8 — vide : un visa « EXEMPLE » à l'état « à viser » lèverait une
     // alerte de responsabilité sur un document qui n'existe pas.
     visas: [],
+    // 5.9 — vide : un désordre inventé finirait dans une chronologie de
+    // relances opposable, voire dans une mise en demeure réelle.
+    desordresGPA: [],
 
     // v14 — finance F0/F1 : remplies par l'amorçage ci-dessous
     // (les factures « prévues » du seed deviennent des échéances)

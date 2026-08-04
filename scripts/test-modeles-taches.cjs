@@ -136,7 +136,14 @@ const modele = {
 // --- les gabarits d'amorce sont utilisables tels quels ----------------------
 
 {
-  assert.equal(M.MODELES_AMORCE.length, 2, 'deux gabarits, comme le plan le prévoit')
+  // livrable 5.9 : le gabarit « Année de parfait achèvement » rejoint les
+  // deux d'origine — l'exigence passe de deux à trois, et le gabarit GPA
+  // doit être PRÉSENT (c'est le support du registre des désordres)
+  assert.equal(M.MODELES_AMORCE.length, 3, 'trois gabarits : MOE de base, chantier, et GPA (livrable 5.9)')
+  assert.ok(
+    M.MODELES_AMORCE.some((g) => g.id === 'modele-gpa'),
+    'le gabarit « Année de parfait achèvement » fait partie de l’amorce (livrable 5.9)',
+  )
   for (const g of M.MODELES_AMORCE) {
     assert.ok(g.nom && g.perimetre, `${g.id} : un modèle se choisit sur son nom ET son périmètre`)
     assert.ok(g.lignes.length > 0 && g.lignes.length <= 8,

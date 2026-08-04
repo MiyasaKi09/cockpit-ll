@@ -468,6 +468,43 @@ export interface Visa {
   documentId?: string | null
 }
 
+/** 5.9 — statuts d'un désordre signalé pendant l'année de parfait
+ *  achèvement (CCAG Travaux art. 44.1). « Contesté » reste OUVERT : une
+ *  contestation ne lève rien — seule la levée constatée ferme le désordre. */
+export type StatutDesordreGPA = 'signale' | 'notifie_entreprise' | 'leve' | 'conteste'
+
+/** 5.9 — une relance tracée sur un désordre : quand, et par quel canal.
+ *  `mode` en texte libre court (e-mail, téléphone, courrier RAR…) — c'est
+ *  la chronologie qui compte le jour de la mise en demeure, pas une
+ *  taxonomie de canaux. */
+export interface RelanceDesordre {
+  date: string // ISO 'AAAA-MM-JJ'
+  mode: string
+}
+
+/** 5.9 — un désordre signalé pendant l'année de parfait achèvement.
+ *  Le registre CONSTATE et trace (signalement, notification, relances,
+ *  levée) : c'est cette chronologie datée qui rend la mise en demeure
+ *  opposable avant la fin de GPA — après, il est trop tard. */
+export interface DesordreGPA {
+  id: string
+  projetId: string
+  /** marché concerné — le lot en texte reste pour l'affichage et pour un
+   *  désordre dont l'entreprise n'est pas encore identifiée */
+  marcheId?: string | null
+  lot?: string
+  signaleLe: string // ISO 'AAAA-MM-JJ'
+  /** qui a signalé (MOA, occupant, visite MOE…) */
+  signalePar?: string
+  description: string
+  statut: StatutDesordreGPA
+  /** date de notification à l'entreprise (le point de départ de son délai) */
+  notifieLe?: string | null
+  /** date de levée constatée */
+  leveLe?: string | null
+  relances: RelanceDesordre[]
+}
+
 /** élément d'ouvrage prévu au CCTP d'un lot — un article numéroté du document */
 export interface ElementCCTP {
   id: string
@@ -1835,6 +1872,10 @@ export interface AppState {
    *  partout (échéancier, catégorisation) sans qu'aucun registre ne suive
    *  ce qui est à viser */
   visas: Visa[]
+  /** 5.9 — registre des désordres de l'année de parfait achèvement (GPA) :
+   *  signalement, notification, relances tracées, levée. La fin de GPA se
+   *  dérive de la réception du marché — UNE autorité, src/gpa.ts */
+  desordresGPA: DesordreGPA[]
 }
 
 /** document du corpus de l'assistant : texte réglementaire (Légifrance,

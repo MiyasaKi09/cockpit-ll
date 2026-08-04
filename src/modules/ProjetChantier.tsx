@@ -4,9 +4,11 @@
 
 import { useEffect, useRef, useState } from 'react'
 import type {
+  DesordreGPA,
   EvenementMarche,
   MarcheTravaux,
   NatureIntemperie,
+  PhaseCode,
   Projet,
   ReunionChantier,
   StatutReunion,
@@ -24,6 +26,13 @@ import {
   visasEnRetard,
   visasSousHuitaine,
 } from '../visas'
+import { LIBELLE_STATUT_DESORDRE, avecRelance, desordresOuverts, finGPA, joursAvantFinGPA } from '../gpa'
+import {
+  MODELES_AMORCE,
+  appliquerModele,
+  tachesDepuisApercu,
+  type ContexteApplication,
+} from '../modelesTaches'
 import {
   LIBELLE_EVENEMENT,
   LIBELLE_INTEMPERIE,
@@ -33,7 +42,7 @@ import {
   totalAppliqueMarche,
   totalEncouruMarche,
 } from '../penalites'
-import { assemble, contexteProjet } from '../prompts'
+import { assemble, contexteMarche, contexteProjet } from '../prompts'
 import {
   Badge,
   Btn,
@@ -53,7 +62,7 @@ import {
   confirmer,
   toast, RowMenu } from '../ui'
 import type { Tone } from '../ui'
-import { diffDays, fmtDate, fmtMoney, fmtPct, todayISO, uid } from '../util'
+import { diffDays, fmtDate, fmtMoney, fmtPct, ouvrirGmail, todayISO, uid } from '../util'
 import { MODELES_WHISPER, transcrireFichier, type ProgresTranscription } from '../transcription'
 import { CONTRAT_CR, genererDocxCR, parseRetourCR, retourVersTexte } from '../crdocx'
 import { lireRacine, nomConforme, rangerFichier, supporteFS, type ResultatRangement } from '../fsdrive'
@@ -1257,6 +1266,486 @@ export function CarteIntemperies({ projet: p }: { projet: Projet }) {
 }
 
 // ============================================================
+// 5.9 — GPA : l'année de parfait achèvement. Le registre trace
+// (signalement, notification, relances, levée), le compte à
+// rebours lit la MÊME fin de GPA que la levée de la RG
+// (src/gpa.ts), et les gestes restent humains : « Relancer »
+// ouvre un brouillon Gmail, « Mettre en demeure » copie un
+// prompt — rien ne part tout seul (§15).
+// ============================================================
+
+const TONE_STATUT_DESORDRE: Record<DesordreGPA['statut'], Tone> = {
+  signale: 'warn',
+  notifie_entreprise: 'info',
+  leve: 'ok',
+  conteste: 'danger',
+}
+
+/** corps de secours quand l'état ne porte pas encore le gabarit du seed
+ *  (états d'avant le livrable : `prompts` n'est pas re-fusionné au
+ *  chargement) — même trame courte que le fallback de l'assistant CR */
+const MED_GPA_SECOURS = `Projet de mise en demeure — année de parfait achèvement (CCAG Travaux art. 44.1) — {{date}}.
+
+{{fiche_marche}}
+
+Désordre à lever :
+{{desordre}}
+
+Signalé le {{desordre_signale_le}} ; relances : {{desordre_relances}} ; fin de GPA : {{fin_gpa}}.
+
+Rédige un courrier de MISE EN DEMEURE (courrier recommandé, pas un e-mail) : obligation de parfait achèvement (art. 1792-6 du code civil), chronologie datée du signalement et des relances, délai d'exécution avant intervention d'une entreprise tierce aux frais de l'entreprise défaillante. Ton strictement factuel — je relis avant tout envoi.`
+
+export function CarteGPA({ projet: p }: { projet: Projet }) {
+  const { state, update, replace } = useStore()
+  const moi = useMoi()
+  const signataire = moi.nom ?? state.settings.personnes[0]
+  const today = todayISO()
+  const [modal, setModal] = useState<{ desordre?: DesordreGPA } | null>(null)
+  const [modele, setModele] = useState(false)
+
+  const marches = state.marches.filter((m) => m.projetId === p.id)
+  // le compte à rebours ne se lit que sur les marchés RÉCEPTIONNÉS : avant
+  // la réception, la GPA n'a pas commencé — afficher un décompte serait faux
+  const recus = marches.filter((m) => m.dateReception)
+  const desordres = state.desordresGPA
+    .filter((e) => e.projetId === p.id)
+    .sort((a, b) => {
+      const ouvertA = a.statut === 'leve' ? 1 : 0
+      const ouvertB = b.statut === 'leve' ? 1 : 0
+      if (ouvertA !== ouvertB) return ouvertA - ouvertB
+      return b.signaleLe.localeCompare(a.signaleLe) || a.id.localeCompare(b.id)
+    })
+  const ouverts = desordresOuverts(desordres)
+  const marcheDe = (e: DesordreGPA) => (e.marcheId ? marches.find((m) => m.id === e.marcheId) : undefined)
+  const gabaritMED = state.prompts.find((t) => t.id === 'tpl-med-gpa')
+
+  const maj = (id: string, fn: (x: DesordreGPA) => void) =>
+    update((d) => {
+      const x = d.desordresGPA.find((y) => y.id === id)
+      if (x) fn(x)
+    })
+
+  /** « Relancer » : le brouillon s'ouvre, la relance se TRACE au même clic —
+   *  c'est la chronologie datée qui rend la mise en demeure opposable.
+   *  L'envoi, lui, reste le clic « Envoyer » de Gmail (§15). */
+  const relancer = (e: DesordreGPA) => {
+    const m = marcheDe(e)
+    const fin = m ? finGPA(m.dateReception ?? null) : null
+    ouvrirGmail(
+      m?.contactEmail || '',
+      `${p.id} — ${e.lot || m?.lot || 'GPA'} : désordre à lever (parfait achèvement)`,
+      `Bonjour,\n\nLe désordre suivant, signalé le ${fmtDate(e.signaleLe)} sur l'opération ${p.nom}, n'est pas levé à ce jour :\n\n« ${e.description} »\n\nAu titre de la garantie de parfait achèvement${fin ? ` (qui court jusqu'au ${fmtDate(fin)})` : ''}, merci de nous indiquer sous 8 jours la date de votre intervention.\n\nCordialement,\n${state.settings.nomAgence}`,
+    )
+    update((d) => {
+      const idx = d.desordresGPA.findIndex((y) => y.id === e.id)
+      if (idx >= 0) d.desordresGPA[idx] = avecRelance(d.desordresGPA[idx], todayISO(), 'e-mail')
+    })
+  }
+
+  /** « Mettre en demeure » : un PROMPT copié, pas un courrier envoyé — le
+   *  gabarit du seed (tpl-med-gpa) porte le fondement GPA ; celui des
+   *  honoraires (tpl-relance-med) réclamerait de l'argent au lieu d'exiger
+   *  la levée. Sans marché rattaché, pas de destinataire : bouton inerte. */
+  const mettreEnDemeure = async (e: DesordreGPA) => {
+    const m = marcheDe(e)
+    if (!m) return
+    const ctx = {
+      ...contexteMarche(state, m),
+      desordre: e.description,
+      desordre_signale_le: fmtDate(e.signaleLe),
+      desordre_relances: e.relances.length
+        ? e.relances.map((r) => `${fmtDate(r.date)} (${r.mode})`).join(', ')
+        : 'aucune tracée',
+      fin_gpa: m.dateReception ? fmtDate(finGPA(m.dateReception)) : '',
+    }
+    const ok = await copier(assemble(gabaritMED ? gabaritMED.corps : MED_GPA_SECOURS, ctx))
+    toast(
+      ok
+        ? `Prompt de mise en demeure copié — collez-le dans le Projet Claude « ${gabaritMED?.projetClaude || 'Secrétariat'} », relisez, envoyez en recommandé.`
+        : 'Copie impossible — ouvrez l’écran Prompts pour assembler la mise en demeure.',
+      { tone: ok ? 'ok' : 'danger' },
+    )
+  }
+
+  const supprimer = async (e: DesordreGPA) => {
+    const snap = state
+    if (!(await confirmer({ message: 'Retirer ce désordre du registre ?\nSa chronologie de relances sera perdue.', danger: true, confirmerLabel: 'Retirer' }))) return
+    update((d) => {
+      d.desordresGPA = d.desordresGPA.filter((x) => x.id !== e.id)
+    })
+    toast('Désordre retiré du registre.', { undo: () => replace(snap) })
+  }
+
+  return (
+    <Card
+      titre="GPA — année de parfait achèvement"
+      actions={
+        <>
+          <Btn
+            small
+            onClick={() => setModele(true)}
+            title="Aperçu décochable des tâches types de l'année de GPA (visite M+11, relances, mises en demeure) — rien n'est créé sans votre coche"
+          >
+            Préparer l'année de GPA (modèle)
+          </Btn>
+          <Btn small kind="primary" onClick={() => setModal({})}>Signaler un désordre</Btn>
+        </>
+      }
+    >
+      {recus.length > 0 && (
+        <p className="small" style={{ marginTop: 0 }}>
+          {recus.map((m) => {
+            const jours = joursAvantFinGPA(m.dateReception ?? null, today)
+            const fin = finGPA(m.dateReception ?? null)
+            if (jours === null || !fin) return null
+            return (
+              <span key={m.id} style={{ display: 'block' }}>
+                {m.lot} — {m.entreprise} : réception le {fmtDate(m.dateReception)}, fin de GPA le {fmtDate(fin)}{' '}
+                {jours < 0 ? (
+                  <Badge tone="muted">échue depuis {-jours} j</Badge>
+                ) : (
+                  // sous 60 jours, c'est la fenêtre de la visite M+11 et des
+                  // dernières mises en demeure utiles : rouge
+                  <Badge tone={jours <= 60 ? 'danger' : jours <= 120 ? 'warn' : 'ok'}>J−{jours}</Badge>
+                )}
+              </span>
+            )
+          })}
+        </p>
+      )}
+      {desordres.length === 0 ? (
+        <EmptyState>
+          Aucun désordre signalé — pendant l'année qui suit la réception, chaque désordre se
+          consigne ici : signalement daté, notification à l'entreprise, relances tracées, levée.
+          Passé la fin de GPA, plus rien n'est opposable — la visite à M+11 (modèle ci-dessus)
+          existe pour constater avant l'échéance.
+        </EmptyState>
+      ) : (
+        <>
+          <Table compact head={['Désordre', 'Lot / entreprise', 'Signalé', 'Statut', 'Relances', '']}>
+            {desordres.map((e) => {
+              const m = marcheDe(e)
+              return (
+                <tr key={e.id}>
+                  <td>
+                    {e.description}
+                    {e.leveLe && <div className="muted small">levé le {fmtDate(e.leveLe)}</div>}
+                  </td>
+                  <td className="small">
+                    {e.lot || m?.lot || <span className="muted">—</span>}
+                    {m && <div className="muted">{m.entreprise}</div>}
+                  </td>
+                  <td style={{ whiteSpace: 'nowrap' }}>
+                    {fmtDate(e.signaleLe)}
+                    {e.signalePar && <div className="muted small">par {e.signalePar}</div>}
+                  </td>
+                  <td>
+                    <Badge tone={TONE_STATUT_DESORDRE[e.statut]}>{LIBELLE_STATUT_DESORDRE[e.statut]}</Badge>
+                    {e.notifieLe && e.statut !== 'leve' && (
+                      <div className="muted small">notifié le {fmtDate(e.notifieLe)}</div>
+                    )}
+                  </td>
+                  <td className="small">
+                    {e.relances.length === 0 ? (
+                      <span className="muted">—</span>
+                    ) : (
+                      <span title={e.relances.map((r) => `${fmtDate(r.date)} — ${r.mode}`).join('\n')}>
+                        {e.relances.length} · dern. {fmtDate(e.relances[e.relances.length - 1].date)}
+                      </span>
+                    )}
+                  </td>
+                  <td className="right">
+                    <span style={{ display: 'inline-flex', gap: 6 }}>
+                      {e.statut === 'signale' && (
+                        <Btn
+                          small
+                          kind="primary"
+                          onClick={() => {
+                            maj(e.id, (x) => {
+                              x.statut = 'notifie_entreprise'
+                              x.notifieLe = todayISO()
+                            })
+                            toast('Notification datée — le délai de l’entreprise court.', { tone: 'ok' })
+                          }}
+                          title="Date la notification à l'entreprise : c'est le point de départ de son délai"
+                        >
+                          Notifier
+                        </Btn>
+                      )}
+                      {e.statut !== 'leve' && (
+                        <Btn
+                          small
+                          onClick={() => {
+                            maj(e.id, (x) => {
+                              x.statut = 'leve'
+                              x.leveLe = todayISO()
+                            })
+                            toast('Levée constatée et datée.', { tone: 'ok' })
+                          }}
+                          title="Constate la levée du désordre, datée du jour"
+                        >
+                          Levé
+                        </Btn>
+                      )}
+                      <RowMenu
+                        items={[
+                          ...(e.statut !== 'leve'
+                            ? [
+                                {
+                                  label: 'Relancer l’entreprise (brouillon Gmail)',
+                                  title: 'Ouvre un brouillon pré-rempli et trace la relance — l’envoi reste votre clic',
+                                  onClick: () => relancer(e),
+                                },
+                                {
+                                  label: 'Mettre en demeure (prompt à coller)',
+                                  title: m
+                                    ? 'Copie le prompt de mise en demeure (CCAG art. 44.1) — relecture humaine, envoi en recommandé'
+                                    : 'Rattachez d’abord le désordre à un marché : une mise en demeure a un destinataire',
+                                  onClick: () => {
+                                    if (!m) {
+                                      toast('Rattachez d’abord le désordre à un marché (« Modifier ») : une mise en demeure a un destinataire.', { tone: 'warn' })
+                                      return
+                                    }
+                                    void mettreEnDemeure(e)
+                                  },
+                                },
+                                {
+                                  label: e.statut === 'conteste' ? 'Lever la contestation (re-notifié)' : 'Marquer contesté par l’entreprise',
+                                  onClick: () =>
+                                    maj(e.id, (x) => {
+                                      x.statut = e.statut === 'conteste' ? (x.notifieLe ? 'notifie_entreprise' : 'signale') : 'conteste'
+                                    }),
+                                },
+                                { label: 'Modifier', onClick: () => setModal({ desordre: e }) },
+                              ]
+                            : [
+                                {
+                                  label: 'Rouvrir (désordre non levé)',
+                                  onClick: () =>
+                                    maj(e.id, (x) => {
+                                      x.statut = x.notifieLe ? 'notifie_entreprise' : 'signale'
+                                      x.leveLe = null
+                                    }),
+                                },
+                              ]),
+                          { label: 'Retirer du registre', onClick: () => void supprimer(e), danger: true },
+                        ]}
+                      />
+                    </span>
+                  </td>
+                </tr>
+              )
+            })}
+          </Table>
+          <p className="muted small" style={{ marginTop: 8 }}>
+            {ouverts.length} désordre{ouverts.length > 1 ? 's' : ''} ouvert{ouverts.length > 1 ? 's' : ''} — un
+            désordre contesté RESTE ouvert : seule la levée constatée le ferme.
+          </p>
+        </>
+      )}
+
+      {modal && (
+        <ModalDesordreGPA
+          projet={p}
+          marches={marches}
+          signataire={signataire}
+          desordre={modal.desordre}
+          onClose={() => setModal(null)}
+        />
+      )}
+      {modele && <ModalModeleGPA projet={p} signataire={signataire} onClose={() => setModele(false)} />}
+    </Card>
+  )
+}
+
+function ModalDesordreGPA({
+  projet: p,
+  marches,
+  signataire,
+  desordre,
+  onClose,
+}: {
+  projet: Projet
+  marches: MarcheTravaux[]
+  signataire: string
+  desordre?: DesordreGPA
+  onClose: () => void
+}) {
+  const { update } = useStore()
+  const creation = !desordre
+
+  const [marcheId, setMarcheId] = useState(desordre?.marcheId || '')
+  const [lot, setLot] = useState(desordre?.lot || '')
+  const [description, setDescription] = useState(desordre?.description || '')
+  const [signaleLe, setSignaleLe] = useState<string | null>(desordre?.signaleLe || todayISO())
+  const [signalePar, setSignalePar] = useState(desordre?.signalePar || signataire)
+
+  const valide = description.trim() !== '' && !!signaleLe
+
+  const choisirMarche = (id: string) => {
+    setMarcheId(id)
+    const m = marches.find((x) => x.id === id)
+    if (m) setLot(m.lot)
+  }
+
+  const enregistrer = () => {
+    if (!valide) return
+    update((d) => {
+      const champs = {
+        marcheId: marcheId || null,
+        lot: lot.trim() || undefined,
+        description: description.trim(),
+        signaleLe: signaleLe!,
+        signalePar: signalePar.trim() || undefined,
+      }
+      if (creation) {
+        // le statut naît « signalé » : notifier l'entreprise est un geste
+        // à part, daté — c'est lui qui fait courir le délai
+        d.desordresGPA.push({ id: uid('gpa'), projetId: p.id, statut: 'signale', relances: [], ...champs })
+      } else {
+        const x = d.desordresGPA.find((y) => y.id === desordre.id)
+        if (x) Object.assign(x, champs)
+      }
+    })
+    onClose()
+  }
+
+  return (
+    <Modal titre={creation ? 'Signaler un désordre (GPA)' : 'Modifier le désordre'} onClose={onClose}>
+      <div className="form-row">
+        <Field label="Marché concerné" hint="facultatif tant que l'entreprise n'est pas identifiée — requis pour la mise en demeure">
+          <Select
+            value={marcheId}
+            onChange={choisirMarche}
+            options={[
+              { value: '', label: '— à déterminer —' },
+              ...marches.map((m) => ({ value: m.id, label: `${m.lot} — ${m.entreprise}` })),
+            ]}
+          />
+        </Field>
+        <Field label="Lot">
+          <TextInput value={lot} onChange={setLot} placeholder="Ex. Lot 08 — Menuiseries ext." />
+        </Field>
+      </div>
+      <div className="form-row">
+        <Field label="Désordre constaté">
+          <TextArea value={description} onChange={setDescription} rows={2} placeholder="Ex. Infiltration en plafond du séjour, angle nord-ouest…" />
+        </Field>
+      </div>
+      <div className="form-row">
+        <Field label="Signalé le">
+          <DateInput value={signaleLe} onChange={setSignaleLe} />
+        </Field>
+        <Field label="Signalé par" hint="MOA, occupant, visite MOE…">
+          <TextInput value={signalePar} onChange={setSignalePar} />
+        </Field>
+      </div>
+      <div className="form-foot">
+        <Btn onClick={onClose}>Annuler</Btn>
+        <Btn kind="primary" onClick={enregistrer} disabled={!valide}>
+          {creation ? 'Consigner le désordre' : 'Enregistrer'}
+        </Btn>
+      </div>
+    </Modal>
+  )
+}
+
+/** le modèle « Année de parfait achèvement » appliqué par le moteur B.13 :
+ *  APERÇU décochable, puis création des seules lignes retenues — une ligne
+ *  décochée ne produit RIEN (ni tâche annulée, ni tâche masquée). */
+function ModalModeleGPA({
+  projet: p,
+  signataire,
+  onClose,
+}: {
+  projet: Projet
+  signataire: string
+  onClose: () => void
+}) {
+  const { update } = useStore()
+  const modele = MODELES_AMORCE.find((m) => m.id === 'modele-gpa')
+
+  // le contexte d'application : débuts de phase connus du projet, rôles
+  // résolus à l'application (le modèle nomme une place, pas une personne)
+  const debutDePhase: Partial<Record<PhaseCode, string>> = {}
+  for (const ph of p.phases) if (ph.debut) debutDePhase[ph.code] = ph.debut
+  const ctx: ContexteApplication = {
+    projetId: p.id,
+    debutDePhase,
+    responsable: p.responsable ?? null,
+    coResponsable: p.coResponsable ?? null,
+  }
+
+  // l'aperçu se calcule UNE fois à l'ouverture : recalculer à chaque rendu
+  // re-cocherait les lignes que l'utilisatrice vient de décocher
+  const [apercu] = useState(() => (modele ? appliquerModele(modele, ctx) : []))
+  const [retenues, setRetenues] = useState<Set<string>>(
+    () => new Set(apercu.filter((l) => l.retenueParDefaut).map((l) => l.ligneId)),
+  )
+
+  if (!modele) return null
+
+  const basculer = (ligneId: string) =>
+    setRetenues((prev) => {
+      const suivant = new Set(prev)
+      if (suivant.has(ligneId)) suivant.delete(ligneId)
+      else suivant.add(ligneId)
+      return suivant
+    })
+
+  const creer = () => {
+    const taches = tachesDepuisApercu(apercu, retenues, ctx, signataire)
+    if (taches.length === 0) return
+    update((d) => {
+      d.taches.push(...taches)
+    })
+    toast(`${taches.length} tâche${taches.length > 1 ? 's' : ''} créée${taches.length > 1 ? 's' : ''} — à retrouver dans l'écran Tâches.`, { tone: 'ok' })
+    onClose()
+  }
+
+  return (
+    <Modal titre={`${modele.nom} — aperçu avant création`} onClose={onClose}>
+      <p className="small muted" style={{ marginTop: 0 }}>
+        {modele.perimetre}. Les dates se comptent depuis le début d'AOR (la réception s'y prononce) —
+        décochez ce qui ne s'applique pas : une ligne décochée ne crée rien.
+      </p>
+      <Table compact head={['', 'Tâche', 'Échéance', 'Responsable', 'Priorité']}>
+        {apercu.map((l) => (
+          <tr key={l.ligneId}>
+            <td>
+              <input
+                type="checkbox"
+                checked={retenues.has(l.ligneId)}
+                onChange={() => basculer(l.ligneId)}
+                aria-label={`Retenir « ${l.libelle} »`}
+              />
+            </td>
+            <td>{l.libelle}</td>
+            <td style={{ whiteSpace: 'nowrap' }}>
+              {l.echeance ? (
+                fmtDate(l.echeance)
+              ) : (
+                <span className="muted" title="Sans début d'AOR posé au planning, le décalage ne se calcule pas — la ligne est décochée d'office">
+                  début d'AOR inconnu
+                </span>
+              )}
+            </td>
+            <td>{l.responsable || <span className="muted">—</span>}</td>
+            <td className="small">{l.priorite}</td>
+          </tr>
+        ))}
+      </Table>
+      <div className="form-foot">
+        <Btn onClick={onClose}>Annuler</Btn>
+        <Btn kind="primary" onClick={creer} disabled={retenues.size === 0}>
+          Créer {retenues.size} tâche{retenues.size > 1 ? 's' : ''}
+        </Btn>
+      </div>
+    </Modal>
+  )
+}
+
+// ============================================================
 // Réunions de chantier & assistant CR
 // ============================================================
 
@@ -1788,6 +2277,9 @@ export default function ProjetChantier({ projet }: { projet: Projet }) {
       {/* 5.3 — le registre des intempéries se lit AVEC le journal des
           pénalités : il prolonge les délais et neutralise les retards */}
       <CarteIntemperies projet={projet} />
+      {/* 5.9 — la GPA ferme la vie du chantier : réception, désordres,
+          relances tracées, mise en demeure avant la fin de l'année */}
+      <CarteGPA projet={projet} />
     </>
   )
 }

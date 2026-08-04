@@ -55,7 +55,9 @@ function charger(fichier, dependances = {}) {
 const util = charger('src/util.ts')
 const miqcp = charger('src/miqcp.ts')
 const facture = charger('src/facture.ts', { './util': util })
-const derive = charger('src/derive.ts', { './miqcp': miqcp, './facture': facture, './util': util })
+// 5.9 — derive consomme la fin de GPA de src/gpa.ts (une seule formule)
+const gpa = charger('src/gpa.ts', { './util': util })
+const derive = charger('src/derive.ts', { './miqcp': miqcp, './facture': facture, './util': util, './gpa': gpa })
 const echeancier = charger('src/echeancier.ts', { './util': util })
 const inventaire = charger('src/personnes.ts')
 

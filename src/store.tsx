@@ -166,6 +166,9 @@ function migrate(parsed: AppState): AppState {
   // n'avait aucun registre, donc rien à viser de consigné — la collection
   // naît vide, et les documents se saisissent au fil des réceptions.
   etat.visas = Array.isArray(parsed.visas) ? parsed.visas : []
+  // 5.9 — désordres de l'année de parfait achèvement. Même règle : aucun
+  // désordre consigné avant le livrable, la collection naît vide.
+  etat.desordresGPA = Array.isArray(parsed.desordresGPA) ? parsed.desordresGPA : []
   amorcerEntreprises(etat)
   // v5 → v6 : journal d'interactions CRM. On amorce depuis les
   // derniereInteraction existantes pour ne rien perdre de l'historique.

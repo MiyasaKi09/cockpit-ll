@@ -57,9 +57,33 @@ const javascriptDerive = ts.transpileModule(sourceDerive, {
   },
   fileName: 'derive.ts',
 }).outputText
+// 5.9 — derive.ts consomme la fin de GPA de src/gpa.ts (UNE formule pour la
+// levée de la RG et le compte à rebours GPA) : on charge le VRAI module —
+// bouchonner finGPA ici reviendrait à écrire la seconde formule que le
+// livrable interdit.
+const sourceGpa = fs.readFileSync(path.join(__dirname, '..', 'src', 'gpa.ts'), 'utf8')
+const javascriptGpa = ts.transpileModule(sourceGpa, {
+  compilerOptions: {
+    module: ts.ModuleKind.CommonJS,
+    target: ts.ScriptTarget.ES2021,
+  },
+  fileName: 'gpa.ts',
+}).outputText
+const moduleGpa = { exports: {} }
+const chargeurGpa = (id) => {
+  if (id === './util') return { diffDays: () => 0 }
+  throw new Error(`Import inattendu dans gpa.ts : ${id}`)
+}
+const enveloppeGpa = vm.runInNewContext(
+  `(function (exports, require, module) { ${javascriptGpa}\n})`,
+  { console },
+)
+enveloppeGpa(moduleGpa.exports, chargeurGpa, moduleGpa)
+
 const moduleDerive = { exports: {} }
 const chargeurDerive = (id) => {
   if (id === './facture') return moduleFacture.exports
+  if (id === './gpa') return moduleGpa.exports
   if (id === './miqcp') return { calculHonoraires: () => ({ honorairesTotauxHT: 0 }) }
   if (id === './util') {
     return {

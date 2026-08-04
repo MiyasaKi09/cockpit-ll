@@ -11,6 +11,7 @@ import {
   ttcFacture,
 } from './facture'
 import { addDays, diffDays, fmtDate, fmtMoney, fold } from './util'
+import { finGPA } from './gpa'
 
 export function projetById(state: AppState, id: string): Projet | undefined {
   return state.projets.find((p) => p.id === id)
@@ -735,8 +736,11 @@ export function retenueGarantieMarche(state: AppState, marche: MarcheTravaux, to
   const garantie = garantieDuMarche(marche)
   const retenueHT = garantie === 'retenue' ? travauxCumulHT * (marche.tauxRG || 0) : 0
   const dateReception = marche.dateReception || null
-  // réception + 1 an (même jour l'année suivante) — garantie de parfait achèvement
-  const dateLevee = dateReception ? `${Number(dateReception.slice(0, 4)) + 1}${dateReception.slice(4)}` : null
+  // réception + 1 an — fin de la garantie de parfait achèvement. La formule
+  // vit dans src/gpa.ts (5.9) et NULLE PART ailleurs : la levée de la RG et
+  // le compte à rebours GPA de l'écran chantier doivent tomber le même jour,
+  // deux formules divergeraient sans que rien ne le signale.
+  const dateLevee = finGPA(dateReception)
   const statut: StatutRG = marche.rgLibere
     ? 'liberee'
     : !dateReception

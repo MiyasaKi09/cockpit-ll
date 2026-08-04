@@ -15,6 +15,8 @@ import { LIBELLES_PHASES, PHASES_ORDRE } from '../miqcp'
 import { daterPhases, echeancesParDefaut } from '../echeancier'
 import { STATUTS_ACTIFS, capacitePersonneSemaine, capaciteSemaine, chargePlanifieeSemaine, heuresAbsenceSemaine } from '../derive'
 import { conflitsConges, propositionsReport, type ConflitConge } from '../conges'
+import { simulerProjet, type VerdictPersonne } from '../chargeProspective'
+import { personnesActives } from '../depart'
 import { EcheancesContenu } from './Calendrier'
 
 const COULEURS_PHASES = [
@@ -759,6 +761,109 @@ function PistesReport({ conflit: c }: { conflit: ConflitConge }) {
   )
 }
 
+// ============================================================
+// 5.13 — « Et si ? » : un projet de X heures sur une fenêtre,
+// qui peut le prendre, et ça passe ? Tout le calcul vit dans
+// src/chargeProspective.ts ; l'écran saisit trois chiffres et
+// montre le verdict CHIFFRÉ par personne — jamais de
+// recommandation d'attribution : décider reste humain (§15),
+// et rien n'est écrit, simuler n'est pas engager.
+// ============================================================
+
+/** verdict d'une personne, en toutes lettres et en chiffres */
+function BadgeVerdict({ v }: { v: VerdictPersonne }) {
+  if (v.passeChaqueSemaine) return <Badge tone="ok">ça passe, semaine par semaine</Badge>
+  if (v.passeAuTotal) {
+    const serrees = v.semaines.filter((s) => s.solde < -0.05).length
+    return <Badge tone="warn">passe en lissant — {serrees} semaine{serrees > 1 ? 's' : ''} trop courte{serrees > 1 ? 's' : ''}</Badge>
+  }
+  return <Badge tone="danger">ne passe pas : il manque {fmtHeures(v.manque)}</Badge>
+}
+
+function SimulateurEtSi() {
+  const { state } = useStore()
+  const [heures, setHeures] = useState<number | null>(null)
+  const [debut, setDebut] = useState<string | null>(null)
+  const [fin, setFin] = useState<string | null>(null)
+  const [personne, setPersonne] = useState('')
+  const [detailDe, setDetailDe] = useState('')
+
+  const actives = personnesActives(state)
+  const pret = heures != null && debut != null && fin != null
+  const res = pret ? simulerProjet(state, { heures, debut, fin, personne: personne || null }) : null
+
+  return (
+    <Card titre="Et si ? — simuler un projet avant de s'engager">
+      <p className="muted small" style={{ marginTop: 0, marginBottom: 8 }}>
+        Un projet de X heures sur une fenêtre : capacité restante par personne, congés déduits, semaine
+        par semaine. Des chiffres, pas une attribution — et rien n'est enregistré.
+      </p>
+      <div className="form-row" style={{ alignItems: 'flex-end' }}>
+        <Field label="Heures du projet">
+          <NumInput value={heures} onChange={setHeures} style={{ width: 90 }} />
+        </Field>
+        <Field label="Du">
+          <DateInput value={debut} onChange={setDebut} />
+        </Field>
+        <Field label="Au">
+          <DateInput value={fin} onChange={setFin} />
+        </Field>
+        <Field label="Personne">
+          <Select value={personne} onChange={setPersonne} options={[{ value: '', label: 'Toute l’équipe active' }, ...actives.map((n) => ({ value: n, label: n }))]} />
+        </Field>
+      </div>
+      {res && 'erreur' in res && <p className="small" style={{ color: 'var(--danger)', marginBottom: 0 }}>{res.erreur}</p>}
+      {res && !('erreur' in res) && (
+        <>
+          <p className="muted small" style={{ margin: '10px 0 8px' }}>
+            {res.lundis.length} semaine{res.lundis.length > 1 ? 's' : ''} ({fmtDate(res.lundis[0])} →{' '}
+            {fmtDate(addDays(res.lundis[res.lundis.length - 1], 6))}) · le projet demande{' '}
+            <strong>{fmtHeures(res.demandeParSemaine)}</strong> par semaine (réparti comme les phases réelles).
+          </p>
+          <Table compact head={['Personne', 'Libre sur la fenêtre', 'Demandé', 'Verdict', '']}>
+            {res.parPersonne.map((v) => (
+              <tr key={v.personne}>
+                <td><strong>{v.personne}</strong></td>
+                <td>{fmtHeures(v.heuresDisponibles)}</td>
+                <td>{fmtHeures(v.heuresDemandees)}</td>
+                <td><BadgeVerdict v={v} /></td>
+                <td className="right">
+                  <Btn small kind="ghost" onClick={() => setDetailDe(detailDe === v.personne ? '' : v.personne)}>
+                    {detailDe === v.personne ? 'fermer' : 'semaine par semaine'}
+                  </Btn>
+                </td>
+              </tr>
+            ))}
+          </Table>
+          {res.parPersonne
+            .filter((v) => v.personne === detailDe)
+            .map((v) => (
+              <div key={v.personne} style={{ marginTop: 10 }}>
+                <p className="small" style={{ margin: '0 0 6px' }}>
+                  <strong>{v.personne}</strong> — semaine par semaine :
+                </p>
+                <Table compact head={['Semaine', 'Capacité', 'Déjà planifié', 'Restant', 'Projet simulé', 'Solde']}>
+                  {v.semaines.map((s) => (
+                    <tr key={s.lundi}>
+                      <td>{fmtDate(s.lundi)}</td>
+                      <td>{fmtHeures(s.capacite)}</td>
+                      <td>{fmtHeures(s.planifie)}</td>
+                      <td>{fmtHeures(Math.max(0, s.restant))}</td>
+                      <td>{fmtHeures(s.demande)}</td>
+                      <td style={{ color: s.solde < -0.05 ? 'var(--danger)' : 'var(--ok)', fontWeight: 700 }}>
+                        {s.solde < -0.05 ? `manque ${fmtHeures(-s.solde)}` : 'tient'}
+                      </td>
+                    </tr>
+                  ))}
+                </Table>
+              </div>
+            ))}
+        </>
+      )}
+    </Card>
+  )
+}
+
 function GestionAbsences() {
   const { state, update, replace } = useStore()
   const equipe = state.settings.equipe
@@ -1101,6 +1206,7 @@ function GanttEtCharge({ vue }: { vue: 'etudes' | 'chantier' | 'charge' }) {
         )}
       </Card>
 
+      {mode === 'charge' && <SimulateurEtSi />}
       {mode === 'charge' && <GestionAbsences />}
       {projetSelectionne && mode === 'phases' && <EditionDates projet={projetSelectionne} />}
       {projetSelectionne && mode === 'chantier' && <EditionChantier projet={projetSelectionne} />}

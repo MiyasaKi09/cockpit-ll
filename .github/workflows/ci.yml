@@ -99,6 +99,9 @@ jobs:
       - name: Leave conflicts detected, transfers proposed never applied
         run: npm run test:conges-report
 
+      - name: Prospective workload simulated in figures, never assigned
+        run: npm run test:charge-prospective
+
       - name: Current-user identity
         run: npm run test:identite
 

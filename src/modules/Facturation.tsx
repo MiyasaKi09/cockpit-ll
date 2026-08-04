@@ -52,9 +52,11 @@ import {
   brouillonAvoir,
   construireFigee,
   controlerAvantEmission,
+  derniereTransmission,
   empreinteFigee,
   erreurInsertionFacture,
   erreurRapprochementHistorique,
+  estADeposer,
   etatPaiement,
   montantRestantAnnulableHT,
   nouveauPaiement,
@@ -107,6 +109,29 @@ function BadgeEtat({ state, f, today }: { state: AppState; f: Facture; today: st
   if (retard > 0) return <Badge tone="danger">en retard {retard} j</Badge>
   if (etat === 'partielle') return <Badge tone="warn">partiellement réglée</Badge>
   return <Badge tone="info">émise</Badge>
+}
+
+// ---------- cycle de vie portail (5.16) : le statut REMONTE dans l'écran ----------
+
+/** libellés français des statuts RÉELS du type EvenementTransmission —
+ *  jamais réinterprétés : le badge dit ce que la plateforme a dit */
+const LIBELLES_TRANSMISSION: Record<EvenementTransmission['statut'], string> = {
+  deposee: 'déposée',
+  rejetee: 'rejetée',
+  mise_a_disposition: 'mise à disposition',
+  approuvee: 'approuvée',
+  payee: 'payée (plateforme)',
+}
+
+/** badge du DERNIER statut portail (le plus récent par date — un import CSV
+ *  rejoué peut ajouter un événement ancien en fin de tableau) */
+function BadgeTransmission({ t }: { t: EvenementTransmission }) {
+  const tone = t.statut === 'rejetee' ? 'danger' : t.statut === 'approuvee' || t.statut === 'payee' ? 'ok' : 'info'
+  return (
+    <Badge tone={tone}>
+      {t.plateforme} · {LIBELLES_TRANSMISSION[t.statut]}
+    </Badge>
+  )
 }
 
 // ---------- modal d'échéance (prévision libre, sans numéro) ----------
@@ -1159,6 +1184,11 @@ export default function Facturation() {
   )
   const trous = trousNumerotation(state, today.slice(0, 4))
   const aControler = state.factures.filter((f) => f.historiqueAControler)
+  // 5.16 — cycle de vie portail : un rejet est une action urgente (corriger,
+  // redéposer), une facture publique jamais déposée est un encaissement qui
+  // n'arrivera pas — les deux doivent se voir SANS ouvrir chaque ligne.
+  const rejetees = state.factures.filter((f) => derniereTransmission(f)?.statut === 'rejetee')
+  const aDeposer = state.factures.filter((f) => estADeposer(f, projetById(state, f.projetId)))
 
   // ----- échéances (prévisions), triées par date prévue -----
   const echeances = useMemo(
@@ -1549,6 +1579,22 @@ export default function Facturation() {
           et le PDF envoyé n'a jamais été gelé — rapprochez-les (menu de la ligne) puis marquez-les contrôlées.
         </div>
       )}
+      {rejetees.length > 0 && (
+        <div className="pill-note" style={{ marginBottom: 12, borderColor: 'var(--danger)', color: 'var(--danger)' }}>
+          ⚠ {rejetees.length} facture(s) rejetée(s) sur le portail :{' '}
+          {rejetees
+            .map((f) => `${f.numero || f.id}${derniereTransmission(f)?.motif ? ` (${derniereTransmission(f)!.motif})` : ''}`)
+            .join(' · ')}{' '}
+          — corriger puis redéposer, et tracer le nouveau dépôt (« Suivi de transmission… », menu de la ligne).
+        </div>
+      )}
+      {aDeposer.length > 0 && (
+        <div className="pill-note" style={{ marginBottom: 12 }}>
+          {aDeposer.length} facture(s) émise(s) à un client public sans dépôt suivi (badge « à déposer ») —
+          déposer sur Chorus Pro, puis tracer le dépôt via « Suivi de transmission… » ou l'import CSV
+          (<a href="#/finance/connecteurs">Connecteurs</a>).
+        </div>
+      )}
 
       {/* ----- relances graduées ----- */}
       <CarteRelances state={state} today={today} />
@@ -1677,6 +1723,8 @@ export default function Facturation() {
               const retard = f.type !== 'avoir' ? retardFacture(state, f, today) : 0
               const solde = soldeFacture(state, f)
               const origine = f.factureOrigineId ? state.factures.find((x) => x.id === f.factureOrigineId) : undefined
+              const transmission = derniereTransmission(f)
+              const rappelDepot = estADeposer(f, projetById(state, f.projetId))
               return (
                 <tr key={f.id}>
                   <td className="mono">
@@ -1723,9 +1771,17 @@ export default function Facturation() {
                     {etatPaiement(state, f) === 'partielle' && (
                       <div className="muted small">solde {fmtMoney(solde, true)}</div>
                     )}
-                    {(f.transmissions || []).length > 0 && (
-                      <div className={`small ${f.transmissions![f.transmissions!.length - 1].statut === 'rejetee' ? 'danger-text' : 'muted'}`}>
-                        {f.transmissions![f.transmissions!.length - 1].plateforme} : {f.transmissions![f.transmissions!.length - 1].statut.replace(/_/g, ' ')}
+                    {transmission && (
+                      <div style={{ marginTop: 2 }}>
+                        <BadgeTransmission t={transmission} />
+                        {transmission.statut === 'rejetee' && transmission.motif && (
+                          <div className="danger-text small">{transmission.motif}</div>
+                        )}
+                      </div>
+                    )}
+                    {rappelDepot && (
+                      <div style={{ marginTop: 2 }} title="Client public : dépôt sur le portail attendu — aucune transmission suivie sur cette pièce">
+                        <Badge tone="warn">à déposer</Badge>
                       </div>
                     )}
                   </td>

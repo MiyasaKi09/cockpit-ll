@@ -13,6 +13,7 @@
 
 import type {
   AppState,
+  EvenementTransmission,
   Facture,
   FactureFigee,
   LigneFacture,
@@ -447,6 +448,36 @@ export function erreurRapprochementHistorique(
     return 'Cette facture historique possède déjà un paiement réel. Ses montants ne peuvent plus être modifiés.'
   }
   return null
+}
+
+// ---------- transmissions Chorus / PDP : le cycle de vie se LIT (5.16) ----------
+
+/** Dernière transmission = la plus récente PAR DATE, pas le dernier élément
+ * du tableau : l'import CSV Chorus/PDP (Connecteurs) ajoute les événements
+ * dans l'ordre du fichier et une saisie manuelle peut suivre — trier sur
+ * l'ordre d'arrivée afficherait « déposée » sur une facture déjà rejetée.
+ * À date égale (ou absente : certains CSV n'en portent pas), le dernier
+ * arrivé gagne — c'est l'information la plus fraîche. */
+export function derniereTransmission(f: Facture): EvenementTransmission | null {
+  const transmissions = f.transmissions || []
+  if (transmissions.length === 0) return null
+  let derniere = transmissions[0]
+  for (const t of transmissions) {
+    if ((t.date || '') >= (derniere.date || '')) derniere = t
+  }
+  return derniere
+}
+
+/** Rappel « à déposer » : une pièce ÉMISE vers un client PUBLIC doit passer
+ * par le portail (Chorus Pro — et la réforme 2026-2027 étendra l'obligation).
+ * L'avoir se dépose comme la facture qu'il corrige. Une pièce déjà soldée
+ * (statut « encaissee ») n'est plus une action : le dépôt a eu lieu hors
+ * suivi ou n'a plus d'objet. La machine SIGNALE ; le dépôt reste un geste
+ * humain sur le portail, jamais un envoi automatique. */
+export function estADeposer(f: Facture, projet: Projet | undefined): boolean {
+  if (!projet || projet.typeMO !== 'Public') return false
+  if (f.statut !== 'emise') return false
+  return (f.transmissions || []).length === 0
 }
 
 // ---------- avoirs : la correction TRAÇABLE ----------

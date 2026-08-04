@@ -63,6 +63,9 @@ jobs:
       - name: VAT rounding rule and configurable tax mention
         run: npm run test:tva
 
+      - name: Portal lifecycle surfaces per invoice with deposit reminder
+        run: npm run test:transmissions
+
       - name: Market guarantee zeroes the retention
         run: npm run test:garantie-rg
 

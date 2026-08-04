@@ -27,6 +27,7 @@ import {
   encaissementPrevu,
   enJours,
   factureHT,
+  heuresBaseline,
   heuresPrevues,
   heuresReelles,
   probaConsultation,
@@ -132,8 +133,18 @@ export function margeFinale(state: AppState, projet: Projet): {
   const rf = resteAFaireProjet(state, projet)
   const coutFinal = Math.round((coutReel + rf.cout) * 100) / 100
   const marge = Math.round((hs - coutFinal) * 100) / 100
-  // marge initiale : honoraires signés − budget prévu (temps prévu valorisé + budget externe)
-  const budgetInterne = heuresPrevues(projet) * coutHoraireMoyen(state)
+  // marge initiale : honoraires signés − budget prévu (temps prévu valorisé +
+  // budget externe). Les HEURES de référence sont la prévision FIGÉE dès
+  // qu'elle existe (audit 5.14) : calculée sur la répartition COURANTE, la
+  // « marge initiale » suivait « Recalculer la répartition », et la dérive se
+  // remettait à zéro à chaque recalcul — 100 h ajoutées au recalcul effaçaient
+  // 100 h × coût moyen de dérive sans trace, alors qu'un recalcul n'est pas un
+  // acte contractuel. Les honoraires restent ceux d'AUJOURD'HUI des deux
+  // côtés : un avenant déplace la marge et sa référence ensemble — la dérive
+  // mesure l'exécution, pas la renégociation ; les heures qu'un avenant
+  // ajoute se re-figent par le geste « figer la référence » (origine
+  // 'revision'), jamais toutes seules.
+  const budgetInterne = (heuresBaseline(projet) ?? heuresPrevues(projet)) * coutHoraireMoyen(state)
   const budgetExterne = projet.phases.reduce((s, ph) => s + (ph.coutExterneHT || 0), 0)
   const margeInitiale = Math.round((hs - budgetInterne - budgetExterne) * 100) / 100
   return {

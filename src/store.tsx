@@ -151,6 +151,29 @@ function migrate(parsed: AppState): AppState {
   etat.decisionsDirection = Array.isArray(parsed.decisionsDirection) ? parsed.decisionsDirection : []
   etat.simulations = Array.isArray(parsed.simulations) ? parsed.simulations : []
   etat.connecteurs = Array.isArray(parsed.connecteurs) ? parsed.connecteurs : []
+  // 5.4 — indices de révision BTP. Champ ajouté sans palier : un état
+  // antérieur n'a simplement aucune valeur saisie, ce qui est la vérité —
+  // et le calcul de révision répond alors null au lieu d'inventer un indice.
+  etat.indicesBTP = Array.isArray(parsed.indicesBTP) ? parsed.indicesBTP : []
+  // 5.2 — journal des pénalités de marché. Champ ajouté sans palier : un
+  // état antérieur n'a simplement constaté aucun événement, ce qui est la
+  // vérité — rien à reprendre, rien à inventer.
+  etat.evenementsMarche = Array.isArray(parsed.evenementsMarche) ? parsed.evenementsMarche : []
+  // 5.3 — registre des intempéries. Même règle : aucun jour constaté avant
+  // le livrable, la collection naît vide sur un état antérieur.
+  etat.intemperies = Array.isArray(parsed.intemperies) ? parsed.intemperies : []
+  // 5.8 — registre des visas. Champ ajouté sans palier : un état antérieur
+  // n'avait aucun registre, donc rien à viser de consigné — la collection
+  // naît vide, et les documents se saisissent au fil des réceptions.
+  etat.visas = Array.isArray(parsed.visas) ? parsed.visas : []
+  // 5.9 — désordres de l'année de parfait achèvement. Même règle : aucun
+  // désordre consigné avant le livrable, la collection naît vide.
+  etat.desordresGPA = Array.isArray(parsed.desordresGPA) ? parsed.desordresGPA : []
+  // 5.10 — cotraitants et notes d'honoraires entrantes. Champ ajouté sans
+  // palier : un état antérieur n'avait consigné ni partenaire ni note, la
+  // collection naît vide — et sans note consignée, aucune relance ne part.
+  etat.cotraitants = Array.isArray(parsed.cotraitants) ? parsed.cotraitants : []
+  etat.notesHonoraires = Array.isArray(parsed.notesHonoraires) ? parsed.notesHonoraires : []
   amorcerEntreprises(etat)
   // v5 → v6 : journal d'interactions CRM. On amorce depuis les
   // derniereInteraction existantes pour ne rien perdre de l'historique.

@@ -3,7 +3,12 @@
 // PDF » (Ctrl+P). Déterministe, zéro service externe.
 
 import type { AppState, Facture, FactureFigee, Situation } from './types'
+// 5.15 — la mention d'exigibilité TVA est un RÉGLAGE (à confirmer avec le
+// cabinet), jamais une phrase codée en dur : la coder ici imprimerait un
+// régime fiscal faux le jour où le cabinet confirme l'option sur les débits.
+import { MENTION_TVA_DEFAUT } from './facture'
 import {
+  LIBELLE_GARANTIE,
   analyserPeriode,
   caCible,
   caParMois,
@@ -185,7 +190,7 @@ ${s.iban ? `<div class="bloc"><strong>Règlement par virement</strong><br>
   ${s.banque ? `${echapper(s.banque)}<br>` : ''}IBAN ${echapper(s.iban)}${s.bic ? ` · BIC ${echapper(s.bic)}` : ''}</div>` : ''}
 
 <div class="mentions">
-  TVA sur les encaissements (prestations de services). Paiement à ${f.delaiJours} jours.
+  ${echapper(s.mentionTVA || MENTION_TVA_DEFAUT)}. Paiement à ${f.delaiJours} jours.
   Tout retard de paiement entraîne de plein droit des pénalités au taux légal en vigueur ainsi
   qu'une indemnité forfaitaire de recouvrement de 40 € (art. L441-10 du Code de commerce) pour
   les professionnels. Escompte pour paiement anticipé : néant.<br>
@@ -246,7 +251,7 @@ export function ouvrirDecompteSituationPDF(state: AppState, sit: Situation): voi
 </header>
 
 <div class="bloc">
-  <strong>Entreprise</strong> — ${echapper(sit.entreprise)}${sit.lot ? ` · ${echapper(sit.lot)}` : ''}${d.marche ? `<br><span class="muted">Marché : ${fmtMoney(d.marche.montantInitialHT + d.marche.avenantsHT, false)} HT (RG ${fmtPct(d.tauxRG, 0)}${d.marche.revision ? ' · révisable' : ''})</span>` : '<br><span class="muted">Situation non rattachée à un marché — RG à 0 %.</span>'}
+  <strong>Entreprise</strong> — ${echapper(sit.entreprise)}${sit.lot ? ` · ${echapper(sit.lot)}` : ''}${d.marche ? `<br><span class="muted">Marché : ${fmtMoney(d.marche.montantInitialHT + d.marche.avenantsHT, false)} HT (RG ${fmtPct(d.tauxRG, 0)}${d.garantie !== 'retenue' ? ` — ${LIBELLE_GARANTIE[d.garantie]} fournie` : ''}${d.marche.revision ? ' · révisable' : ''})</span>` : '<br><span class="muted">Situation non rattachée à un marché — RG à 0 %.</span>'}
 </div>
 <div class="bloc">
   <strong>Opération</strong> — ${echapper(p ? `${p.id} — ${p.nom}` : nomProjet(state, sit.projetId))}${p?.adresse ? `<br><span class="muted">${echapper(p.adresse)}</span>` : ''}
@@ -256,7 +261,7 @@ export function ouvrirDecompteSituationPDF(state: AppState, sit: Situation): voi
   ${ligne('Travaux exécutés cumulés HT', d.travauxCumulHT)}
   ${d.revisionHT ? ligne('Révision de prix HT', d.revisionHT) : ''}
   ${ligne('Montant cumulé HT (base)', d.baseHT, { fort: true })}
-  ${ligne(`Retenue de garantie (${fmtPct(d.tauxRG, 0)})`, -d.retenueGarantieHT, { retrait: true })}
+  ${ligne(`Retenue de garantie (${d.garantie !== 'retenue' ? `0 % — ${LIBELLE_GARANTIE[d.garantie]}` : fmtPct(d.tauxRG, 0)})`, -d.retenueGarantieHT, { retrait: true })}
   ${ligne('Cumul net de RG HT', d.cumulNetHT, { fort: true })}
   ${ligne('À déduire : situations précédentes (net)', -d.precedentNetHT, { retrait: true })}
   ${ligne('Net à payer ce mois HT', d.netAPayerHT, { fort: true })}

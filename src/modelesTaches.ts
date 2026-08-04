@@ -143,7 +143,7 @@ export function tachesDepuisApercu(
 }
 
 // ------------------------------------------------------------
-// Deux gabarits d'amorce
+// Trois gabarits d'amorce
 // ------------------------------------------------------------
 //
 // Ils sont volontairement COURTS. Un modèle de trente lignes se décoche
@@ -172,6 +172,22 @@ export const MODELES_AMORCE: ModeleTaches[] = [
       { id: 'c2', libelle: 'Mise en place du compte prorata', phase: 'DET', decalageJours: 7, role: 'coResponsable', priorite: 'normale', tempsEstime: 3 },
       { id: 'c3', libelle: 'Préparation des OPR', phase: 'AOR', decalageJours: -14, role: 'responsable', priorite: 'haute', tempsEstime: 7 },
       { id: 'c4', libelle: 'Levée des réserves et DOE', phase: 'AOR', decalageJours: 30, role: 'responsable', priorite: 'normale', tempsEstime: 10 },
+    ],
+  },
+  // 5.9 — l'année de parfait achèvement. Le moteur ne connaît que les
+  // débuts de PHASE : les décalages se comptent depuis le début d'AOR, où
+  // la réception se prononce — l'aperçu reste décochable et les dates
+  // s'ajustent à l'application si la réception a glissé. La visite à M+11
+  // est la ligne qui compte : après la fin de GPA, plus rien n'est
+  // opposable à l'entreprise.
+  {
+    id: 'modele-gpa',
+    nom: 'Année de parfait achèvement',
+    perimetre: 'À appliquer à la réception — la GPA court un an (CCAG Travaux art. 44.1)',
+    lignes: [
+      { id: 'g1', libelle: 'Point réserves et désordres GPA — relancer les levées en cours', phase: 'AOR', decalageJours: 180, role: 'coResponsable', priorite: 'normale', tempsEstime: 2 },
+      { id: 'g2', libelle: 'Visite de fin de GPA (M+11) — constater les désordres avant l’échéance', phase: 'AOR', decalageJours: 335, role: 'responsable', priorite: 'haute', tempsEstime: 4 },
+      { id: 'g3', libelle: 'Mises en demeure des levées non faites — avant la fin de GPA', phase: 'AOR', decalageJours: 350, role: 'responsable', priorite: 'critique', tempsEstime: 3 },
     ],
   },
 ]

@@ -48,13 +48,18 @@ function charger(fichier, dependances = {}) {
 const util = charger('src/util.ts')
 const miqcp = charger('src/miqcp.ts')
 const facture = charger('src/facture.ts', { './util': util })
-const derive = charger('src/derive.ts', { './miqcp': miqcp, './facture': facture, './util': util })
+// 5.9 — derive consomme la fin de GPA de src/gpa.ts (une seule formule)
+const gpa = charger('src/gpa.ts', { './util': util })
+const derive = charger('src/derive.ts', { './miqcp': miqcp, './facture': facture, './util': util, './gpa': gpa })
 const achats = charger('src/achats.ts', { './util': util })
 // `controlesCloture` traîne fflate et facturx derrière elle : la clôture
 // n'est pas l'invariant testé ici, seules les familles d'actions le sont.
 const financeActions = charger('src/financeActions.ts', {
   './achats': achats,
   './comptable': { controlesCloture: () => ({ bloquants: 0 }) },
+  // 5.16 — `actionsATraiter` lit `derniereTransmission` pour signaler les
+  // rejets de portail : le graphe du chargeur doit suivre le vrai import.
+  './facture': facture,
   './util': util,
 })
 

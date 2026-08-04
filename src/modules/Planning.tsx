@@ -14,6 +14,9 @@ import { addDays, diffDays, fmtDate, fmtHeures, mondayOf, todayISO, uid } from '
 import { LIBELLES_PHASES, PHASES_ORDRE } from '../miqcp'
 import { daterPhases, echeancesParDefaut } from '../echeancier'
 import { STATUTS_ACTIFS, capacitePersonneSemaine, capaciteSemaine, chargePlanifieeSemaine, heuresAbsenceSemaine } from '../derive'
+import { conflitsConges, propositionsReport, type ConflitConge } from '../conges'
+import { simulerProjet, type VerdictPersonne } from '../chargeProspective'
+import { personnesActives } from '../depart'
 import { EcheancesContenu } from './Calendrier'
 
 const COULEURS_PHASES = [
@@ -568,6 +571,16 @@ function PlanDeCharge({ debutLundi, nbSemaines }: { debutLundi: string; nbSemain
   const lundis = lundisDe(debutLundi, nbSemaines)
   const lundiCourant = mondayOf(today)
 
+  // 5.12 — les congés confrontés aux heures planifiées : chaque conflit
+  // (charge > capacité congés déduits) se voit, et un clic montre les
+  // pistes de report. Le calcul vit dans src/conges.ts ; ici on AFFICHE,
+  // et le report reste un geste humain sur le Gantt ou l'équipe du projet.
+  const [conflitOuvert, setConflitOuvert] = useState<ConflitConge | null>(null)
+  const tousConflits = equipe.flatMap((pers) => conflitsConges(state, pers.nom))
+  const conflitsParCle = new Map(tousConflits.map((c) => [`${c.personne}|${c.lundi}`, c]))
+  const basculerConflit = (c: ConflitConge) =>
+    setConflitOuvert(conflitOuvert && conflitOuvert.personne === c.personne && conflitOuvert.lundi === c.lundi ? null : c)
+
   if (equipe.length === 0) {
     return (
       <EmptyState>
@@ -587,7 +600,18 @@ function PlanDeCharge({ debutLundi, nbSemaines }: { debutLundi: string; nbSemain
   const totalSemaine = (l: string) => equipe.reduce((s, pers) => s + chargePlanifieeSemaine(state, pers.nom, l), 0)
 
   return (
-    <div style={{ overflowX: 'auto' }}>
+    <>
+      {tousConflits.length > 0 && (
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10, alignItems: 'center' }}>
+          <span className="muted small">Congés à confronter :</span>
+          {tousConflits.map((c) => (
+            <Btn small key={`${c.personne}|${c.lundi}`} kind={conflitOuvert && conflitOuvert.personne === c.personne && conflitOuvert.lundi === c.lundi ? 'danger' : 'default'} onClick={() => basculerConflit(c)} title={`${c.personne} · semaine du ${fmtDate(c.lundi)} — ${fmtHeures(c.planifie)} planifiées, capacité ${fmtHeures(c.capacite)} (${fmtHeures(c.absence)} de congé)`}>
+              congé : {fmtHeures(c.excedent)} à replacer — {c.personne}, sem. du {fmtDate(c.lundi)}
+            </Btn>
+          ))}
+        </div>
+      )}
+      <div style={{ overflowX: 'auto' }}>
       <table className="table table-compact" style={{ minWidth: 620, borderCollapse: 'separate', borderSpacing: 0 }}>
         <thead>
           <tr>
@@ -624,13 +648,18 @@ function PlanDeCharge({ debutLundi, nbSemaines }: { debutLundi: string; nbSemain
                 const h = chargePlanifieeSemaine(state, pers.nom, l)
                 const absH = heuresAbsenceSemaine(state, pers.nom, l)
                 const capP = capacitePersonneSemaine(state, pers.nom, l)
+                // 5.12 : la cellule en conflit se voit et s'ouvre — le badge
+                // au-dessus dit la même chose, les deux mènent aux pistes
+                const conflit = conflitsParCle.get(`${pers.nom}|${l}`)
                 if (capP <= 0) {
-                  // semaine entièrement en congé
+                  // semaine entièrement en congé — s'il y restait des heures
+                  // planifiées, TOUT est à replacer : c'est un conflit aussi
                   return (
                     <td
                       key={l}
-                      style={{ textAlign: 'center', background: 'var(--bg-soft)', color: 'var(--ink-3)', fontSize: 10, fontStyle: 'italic', padding: '4px 2px' }}
-                      title={`${pers.nom} · semaine du ${fmtDate(l)}\nCongé toute la semaine`}
+                      style={{ textAlign: 'center', background: 'var(--bg-soft)', color: conflit ? 'var(--danger)' : 'var(--ink-3)', fontSize: 10, fontStyle: 'italic', fontWeight: conflit ? 800 : undefined, padding: '4px 2px', outline: conflit ? '2px solid var(--danger)' : undefined, outlineOffset: -2, cursor: conflit ? 'pointer' : undefined }}
+                      title={`${pers.nom} · semaine du ${fmtDate(l)}\nCongé toute la semaine${conflit ? ` — congé : ${fmtHeures(conflit.excedent)} à replacer` : ''}`}
+                      onClick={conflit ? () => basculerConflit(conflit) : undefined}
                     >
                       congé
                     </td>
@@ -638,13 +667,13 @@ function PlanDeCharge({ debutLundi, nbSemaines }: { debutLundi: string; nbSemain
                 }
                 const ratio = capP > 0 ? h / capP : 0
                 const { bg, fg } = couleurCharge(ratio)
-                const detail = `${pers.nom} · semaine du ${fmtDate(l)} — ${fmtHeures(h)} planifiées / ${Math.round(capP)} h capacité${absH > 0 ? ` (${Math.round(absH)} h de congé)` : ''} (${Math.round(ratio * 100)} %)`
+                const detail = `${pers.nom} · semaine du ${fmtDate(l)} — ${fmtHeures(h)} planifiées / ${Math.round(capP)} h capacité${absH > 0 ? ` (${Math.round(absH)} h de congé)` : ''} (${Math.round(ratio * 100)} %)${conflit ? ` — congé : ${fmtHeures(conflit.excedent)} à replacer` : ''}`
                 return (
                   <td
                     key={l}
-                    style={{ textAlign: 'center', background: bg, color: fg, fontSize: 11, fontWeight: ratio > 1.001 ? 800 : 600, padding: '4px 2px', boxShadow: absH > 0 ? 'inset 0 -3px 0 var(--ink-3)' : undefined, cursor: 'pointer' }}
+                    style={{ textAlign: 'center', background: bg, color: fg, fontSize: 11, fontWeight: ratio > 1.001 ? 800 : 600, padding: '4px 2px', boxShadow: absH > 0 ? 'inset 0 -3px 0 var(--ink-3)' : undefined, outline: conflit ? '2px solid var(--danger)' : undefined, outlineOffset: -2, cursor: 'pointer' }}
                     title={detail}
-                    onClick={() => toast(detail)}
+                    onClick={() => (conflit ? basculerConflit(conflit) : toast(detail))}
                   >
                     {h < 0.05 ? '·' : Math.round(h)}
                   </td>
@@ -670,14 +699,168 @@ function PlanDeCharge({ debutLundi, nbSemaines }: { debutLundi: string; nbSemain
           </tr>
         </tbody>
       </table>
+      </div>
       <p className="muted small" style={{ marginTop: 10, display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
         Heures planifiées / semaine (phases datées réparties dans le temps et entre l'équipe affectée).
         <span><span style={{ display: 'inline-block', width: 11, height: 11, borderRadius: 2, background: 'var(--ok-soft)', marginRight: 4, verticalAlign: 'middle' }} />marge</span>
         <span><span style={{ display: 'inline-block', width: 11, height: 11, borderRadius: 2, background: 'var(--warn-soft)', marginRight: 4, verticalAlign: 'middle' }} />presque plein</span>
         <span><span style={{ display: 'inline-block', width: 11, height: 11, borderRadius: 2, background: 'var(--danger-soft)', marginRight: 4, verticalAlign: 'middle' }} />surcharge</span>
-        <span className="muted"><em>congé</em> = semaine indisponible ; capacité réduite les semaines partiellement en congé.</span>
+        <span className="muted"><em>congé</em> = semaine indisponible ; capacité réduite les semaines partiellement en congé ; liseré rouge = congé en conflit avec la charge, cliquer pour les pistes de report.</span>
+      </p>
+      {conflitOuvert && <PistesReport conflit={conflitOuvert} />}
+    </>
+  )
+}
+
+/** 5.12 — les pistes de report d'un conflit congé × charge. Tout est
+ *  calculé par src/conges.ts ; ce bloc MONTRE et n'écrit rien : décaler
+ *  une phase (onglet Études) ou changer l'équipe du projet reste le geste
+ *  de l'humain — la machine propose, elle n'applique pas (§15). */
+function PistesReport({ conflit: c }: { conflit: ConflitConge }) {
+  const { state } = useStore()
+  const pistes = propositionsReport(state, c)
+  return (
+    <div style={{ marginTop: 12, border: '1px solid var(--danger)', borderRadius: 8, padding: '10px 12px' }}>
+      <strong>Congé de {c.personne} — semaine du {fmtDate(c.lundi)}</strong>
+      <p className="muted small" style={{ margin: '6px 0 8px' }}>
+        {fmtHeures(c.planifie)} planifiées pour {fmtHeures(c.capacite)} de capacité ({fmtHeures(c.absence)} de
+        congé) : <strong>{fmtHeures(c.excedent)} à replacer</strong>.
+      </p>
+      {pistes.length === 0 ? (
+        <EmptyState>
+          Aucune marge dans les semaines voisines ni chez l'autre personne — il faudra décaler une phase
+          (onglet Études) ou revoir le congé.
+        </EmptyState>
+      ) : (
+        <Table compact head={['Piste', 'Semaine', 'Capacité restante', 'Peut reprendre']}>
+          {pistes.map((p) => (
+            <tr key={`${p.cible}|${p.personne}|${p.lundi}`}>
+              <td>
+                {p.cible === 'semaine-voisine' ? (
+                  <>
+                    <strong>{p.personne}</strong> <span className="muted small">semaine {p.lundi < c.lundi ? 'd’avant' : 'd’après'}</span>
+                  </>
+                ) : (
+                  <>
+                    <strong>{p.personne}</strong> <span className="muted small">autre personne, même semaine</span>
+                  </>
+                )}
+              </td>
+              <td>{fmtDate(p.lundi)}</td>
+              <td>{fmtHeures(p.capaciteRestante)}</td>
+              <td><strong>{fmtHeures(p.heures)}</strong>{p.heures < c.excedent - 0.05 ? <span className="muted small"> sur {fmtHeures(c.excedent)}</span> : null}</td>
+            </tr>
+          ))}
+        </Table>
+      )}
+      <p className="muted small" style={{ margin: '8px 0 0' }}>
+        Rien n'est appliqué automatiquement : pour reporter, décalez la phase (onglet Études), ajustez ses
+        heures prévues, ou modifiez l'équipe du projet (fiche projet).
       </p>
     </div>
+  )
+}
+
+// ============================================================
+// 5.13 — « Et si ? » : un projet de X heures sur une fenêtre,
+// qui peut le prendre, et ça passe ? Tout le calcul vit dans
+// src/chargeProspective.ts ; l'écran saisit trois chiffres et
+// montre le verdict CHIFFRÉ par personne — jamais de
+// recommandation d'attribution : décider reste humain (§15),
+// et rien n'est écrit, simuler n'est pas engager.
+// ============================================================
+
+/** verdict d'une personne, en toutes lettres et en chiffres */
+function BadgeVerdict({ v }: { v: VerdictPersonne }) {
+  if (v.passeChaqueSemaine) return <Badge tone="ok">ça passe, semaine par semaine</Badge>
+  if (v.passeAuTotal) {
+    const serrees = v.semaines.filter((s) => s.solde < -0.05).length
+    return <Badge tone="warn">passe en lissant — {serrees} semaine{serrees > 1 ? 's' : ''} trop courte{serrees > 1 ? 's' : ''}</Badge>
+  }
+  return <Badge tone="danger">ne passe pas : il manque {fmtHeures(v.manque)}</Badge>
+}
+
+function SimulateurEtSi() {
+  const { state } = useStore()
+  const [heures, setHeures] = useState<number | null>(null)
+  const [debut, setDebut] = useState<string | null>(null)
+  const [fin, setFin] = useState<string | null>(null)
+  const [personne, setPersonne] = useState('')
+  const [detailDe, setDetailDe] = useState('')
+
+  const actives = personnesActives(state)
+  const pret = heures != null && debut != null && fin != null
+  const res = pret ? simulerProjet(state, { heures, debut, fin, personne: personne || null }) : null
+
+  return (
+    <Card titre="Et si ? — simuler un projet avant de s'engager">
+      <p className="muted small" style={{ marginTop: 0, marginBottom: 8 }}>
+        Un projet de X heures sur une fenêtre : capacité restante par personne, congés déduits, semaine
+        par semaine. Des chiffres, pas une attribution — et rien n'est enregistré.
+      </p>
+      <div className="form-row" style={{ alignItems: 'flex-end' }}>
+        <Field label="Heures du projet">
+          <NumInput value={heures} onChange={setHeures} style={{ width: 90 }} />
+        </Field>
+        <Field label="Du">
+          <DateInput value={debut} onChange={setDebut} />
+        </Field>
+        <Field label="Au">
+          <DateInput value={fin} onChange={setFin} />
+        </Field>
+        <Field label="Personne">
+          <Select value={personne} onChange={setPersonne} options={[{ value: '', label: 'Toute l’équipe active' }, ...actives.map((n) => ({ value: n, label: n }))]} />
+        </Field>
+      </div>
+      {res && 'erreur' in res && <p className="small" style={{ color: 'var(--danger)', marginBottom: 0 }}>{res.erreur}</p>}
+      {res && !('erreur' in res) && (
+        <>
+          <p className="muted small" style={{ margin: '10px 0 8px' }}>
+            {res.lundis.length} semaine{res.lundis.length > 1 ? 's' : ''} ({fmtDate(res.lundis[0])} →{' '}
+            {fmtDate(addDays(res.lundis[res.lundis.length - 1], 6))}) · le projet demande{' '}
+            <strong>{fmtHeures(res.demandeParSemaine)}</strong> par semaine (réparti comme les phases réelles).
+          </p>
+          <Table compact head={['Personne', 'Libre sur la fenêtre', 'Demandé', 'Verdict', '']}>
+            {res.parPersonne.map((v) => (
+              <tr key={v.personne}>
+                <td><strong>{v.personne}</strong></td>
+                <td>{fmtHeures(v.heuresDisponibles)}</td>
+                <td>{fmtHeures(v.heuresDemandees)}</td>
+                <td><BadgeVerdict v={v} /></td>
+                <td className="right">
+                  <Btn small kind="ghost" onClick={() => setDetailDe(detailDe === v.personne ? '' : v.personne)}>
+                    {detailDe === v.personne ? 'fermer' : 'semaine par semaine'}
+                  </Btn>
+                </td>
+              </tr>
+            ))}
+          </Table>
+          {res.parPersonne
+            .filter((v) => v.personne === detailDe)
+            .map((v) => (
+              <div key={v.personne} style={{ marginTop: 10 }}>
+                <p className="small" style={{ margin: '0 0 6px' }}>
+                  <strong>{v.personne}</strong> — semaine par semaine :
+                </p>
+                <Table compact head={['Semaine', 'Capacité', 'Déjà planifié', 'Restant', 'Projet simulé', 'Solde']}>
+                  {v.semaines.map((s) => (
+                    <tr key={s.lundi}>
+                      <td>{fmtDate(s.lundi)}</td>
+                      <td>{fmtHeures(s.capacite)}</td>
+                      <td>{fmtHeures(s.planifie)}</td>
+                      <td>{fmtHeures(Math.max(0, s.restant))}</td>
+                      <td>{fmtHeures(s.demande)}</td>
+                      <td style={{ color: s.solde < -0.05 ? 'var(--danger)' : 'var(--ok)', fontWeight: 700 }}>
+                        {s.solde < -0.05 ? `manque ${fmtHeures(-s.solde)}` : 'tient'}
+                      </td>
+                    </tr>
+                  ))}
+                </Table>
+              </div>
+            ))}
+        </>
+      )}
+    </Card>
   )
 }
 
@@ -1023,6 +1206,7 @@ function GanttEtCharge({ vue }: { vue: 'etudes' | 'chantier' | 'charge' }) {
         )}
       </Card>
 
+      {mode === 'charge' && <SimulateurEtSi />}
       {mode === 'charge' && <GestionAbsences />}
       {projetSelectionne && mode === 'phases' && <EditionDates projet={projetSelectionne} />}
       {projetSelectionne && mode === 'chantier' && <EditionChantier projet={projetSelectionne} />}

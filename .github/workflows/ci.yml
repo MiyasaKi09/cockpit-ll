@@ -60,6 +60,54 @@ jobs:
       - name: Invoice invariant tests
         run: npm run test:facture-invariants
 
+      - name: VAT rounding rule and configurable tax mention
+        run: npm run test:tva
+
+      - name: Portal lifecycle surfaces per invoice with deposit reminder
+        run: npm run test:transmissions
+
+      - name: Market guarantee zeroes the retention
+        run: npm run test:garantie-rg
+
+      - name: Theoretical price revision from BTP indices
+        run: npm run test:revision-prix
+
+      - name: Margin drift audited against hand-computed cases
+        run: npm run test:derive-marge
+
+      - name: Works progress weighted by task duration
+        run: npm run test:chantier-avancement
+
+      - name: Contractor confirmation alert one month ahead
+        run: npm run test:alerte-entreprise
+
+      - name: Situation claims checked against site reality
+        run: npm run test:controle-situation
+
+      - name: Market penalties incurred, applied only by a signed human decision
+        run: npm run test:penalites
+
+      - name: Weather days registry offsets delays in distinct working days
+        run: npm run test:intemperies
+
+      - name: Execution documents visa registry with signed dated approvals
+        run: npm run test:visas
+
+      - name: Defects liability year registry with one authoritative end date
+        run: npm run test:gpa
+
+      - name: Co-contractor fee notes chased per overdue month
+        run: npm run test:cotraitants
+
+      - name: Project contacts sorted by call order
+        run: npm run test:ordre-contacts
+
+      - name: Leave conflicts detected, transfers proposed never applied
+        run: npm run test:conges-report
+
+      - name: Prospective workload simulated in figures, never assigned
+        run: npm run test:charge-prospective
+
       - name: Current-user identity
         run: npm run test:identite
 

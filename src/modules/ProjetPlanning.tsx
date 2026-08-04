@@ -21,8 +21,9 @@ import {
   confirmer,
   toast,
   useToday, RowMenu } from '../ui'
-import { diffDays, fmtDate, fmtMoney, fold, todayISO, uid } from '../util'
+import { diffDays, fmtDate, fmtMoney, fold, ouvrirGmail, todayISO, uid } from '../util'
 import { montantElement, sommeLignes } from '../dpgf'
+import { avancementLot, avancementTache, clampPourcent, tacheAConfirmer, tacheDeReprise } from '../chantier'
 import { couleurPhase } from './Planning'
 
 const NOMS_MOIS = ['janv.', 'févr.', 'mars', 'avr.', 'mai', 'juin', 'juil.', 'août', 'sept.', 'oct.', 'nov.', 'déc.']
@@ -240,10 +241,11 @@ export default function ProjetPlanning({ projet: p }: { projet: Projet }) {
                   {duGroupe.map((t) => {
                     const gauche = pos(debut, fin, t.debut!)
                     const largeur = Math.max(0.8, pos(debut, fin, t.fin!) - gauche)
+                    const av = avancementTache(t)
                     return (
                       <div
                         key={t.id}
-                        title={`${t.designation} · ${fmtDate(t.debut)} → ${fmtDate(t.fin)} (${LIBELLE_STATUT_TACHE[t.statut]})`}
+                        title={`${t.designation} · ${fmtDate(t.debut)} → ${fmtDate(t.fin)} (${LIBELLE_STATUT_TACHE[t.statut]} · ${av} %)`}
                         style={{
                           position: 'absolute',
                           left: `${gauche}%`,
@@ -253,8 +255,18 @@ export default function ProjetPlanning({ projet: p }: { projet: Projet }) {
                           background: couleurTache(t, today),
                           borderRadius: 2,
                           opacity: t.statut === 'fait' ? 0.55 : 0.9,
+                          overflow: 'hidden',
                         }}
-                      />
+                      >
+                        {/* 5.6 — remplissage proportionnel : la part assombrie est la
+                            part FAITE, constatée en réunion de chantier. L'avancement
+                            se lit dans la barre sans descendre au tableau. */}
+                        {av > 0 && (
+                          <div
+                            style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${av}%`, background: 'rgba(0, 0, 0, 0.35)' }}
+                          />
+                        )}
+                      </div>
                     )
                   })}
                 </>,
@@ -340,6 +352,36 @@ function CarteTaches({
     toast('Tâche supprimée.', { undo: () => replace(snap) })
   }
 
+  // 5.6 — « faire revenir l'entreprise » : la reprise se crée liée à
+  // l'originale (repriseDeId), dates vides — plutôt que ressaisir la ligne
+  // et perdre le lien avec ce qui a dû être refait
+  const faireRevenir = (t: TacheChantier) => {
+    update((d) => {
+      d.tachesChantier.push(tacheDeReprise(t, uid('tache')))
+    })
+    toast('Intervention de reprise créée — dates à poser avec l’entreprise.', { tone: 'ok' })
+  }
+
+  /** marché du groupe (pour l'avancement du lot) : les tâches d'un même
+   *  libellé de lot portent le même marché — la première rattachée suffit */
+  const marcheDuGroupe = (groupe: string): string | null =>
+    taches.find((t) => t.lot === groupe && t.marcheId)?.marcheId ?? null
+
+  const marcheDe = (t: TacheChantier) =>
+    t.marcheId ? state.marches.find((m) => m.id === t.marcheId) ?? null : null
+
+  // 5.7 — « Relancer » ouvre un BROUILLON Gmail pré-rempli (entreprise, lot,
+  // dates) : l'envoi reste un clic humain, jamais un envoi direct (§15)
+  const relancer = (t: TacheChantier) => {
+    const m = marcheDe(t)
+    if (!m) return
+    ouvrirGmail(
+      m.contactEmail || '',
+      `${p.id} — ${t.lot} : confirmation de votre intervention`,
+      `Bonjour,\n\nVotre intervention « ${t.designation} » (${t.lot}) sur le chantier ${p.nom} est planifiée du ${fmtDate(t.debut)} au ${fmtDate(t.fin)}.\n\nMerci de nous confirmer ces dates par retour de mail, ainsi que vos éventuelles contraintes d'approvisionnement — sans confirmation de votre part, le planning du lot devra être revu.\n\nCordialement,\n${state.settings.nomAgence}`,
+    )
+  }
+
   if (taches.length === 0) {
     return (
       <Card titre="Planning travaux détaillé — les éléments prévus au DCE">
@@ -367,34 +409,51 @@ function CarteTaches({
       <div className="toolbar">
         <TextInput value={filtre} onChange={setFiltre} placeholder="Filtrer (désignation, lot)…" style={{ maxWidth: 280 }} />
       </div>
-      <Table compact head={['Élément', 'Début', 'Fin', 'Statut', '']}>
+      <Table compact head={['Élément', 'Début', 'Fin', 'Statut', 'Avancement', '']}>
         {groupes.map((g) => {
           const duGroupe = taches
             .filter((t) => t.lot === g)
             .filter((t) => !filtre.trim() || fold(t.designation + ' ' + t.lot).includes(fold(filtre)))
             .sort((a, b) => (a.debut || '9999').localeCompare(b.debut || '9999') || a.designation.localeCompare(b.designation))
           if (duGroupe.length === 0) return null
+          // avancement du LOT : le chiffre que la vérification des situations
+          // (5.5) posera face à ce que l'entreprise demande — même fonction,
+          // même pondération, pour que l'écran et le contrôle disent pareil
+          const marcheId = marcheDuGroupe(g)
+          const avLot = marcheId ? avancementLot(taches, marcheId) : null
           return (
             <Fragment key={g}>
               <tr>
-                <td colSpan={5} style={{ background: 'var(--bg-soft)', fontWeight: 700 }}>
+                <td colSpan={6} style={{ background: 'var(--bg-soft)', fontWeight: 700 }}>
                   {g}
                   <span className="muted small" style={{ fontWeight: 400 }}>
                     {' '}— {duGroupe.length} élément(s)
                     {totalDpgfDe(g) !== null && <> · DPGF {fmtMoney(totalDpgfDe(g))}</>}
+                    {avLot !== null && <> · avancement {avLot} %</>}
                   </span>
                 </td>
               </tr>
               {duGroupe.map((t) => {
                 const retard = t.statut !== 'fait' && t.fin && t.fin < today
                 const montant = montantDe(t)
+                const marche = marcheDe(t)
+                const aConfirmer = tacheAConfirmer(t, marche, today)
                 return (
                   <tr key={t.id}>
                     <td style={{ maxWidth: 380 }}>
                       {t.designation}
                       {montant !== null && <span className="muted small"> · {fmtMoney(montant, true)}</span>}
+                      {t.repriseDeId && <> <Badge tone="info">reprise</Badge></>}
                       {(!t.debut || !t.fin) && <> <Badge tone="warn">à dater</Badge></>}
                       {retard && <> <Badge tone="danger">en retard</Badge></>}
+                      {aConfirmer && (
+                        <>
+                          {' '}
+                          <span title={`${marche!.entreprise} n'a pas confirmé sa venue — « Entreprise confirmée » ou « Relancer » dans le menu de ligne`}>
+                            <Badge tone="warn">entreprise à confirmer</Badge>
+                          </span>
+                        </>
+                      )}
                     </td>
                     <td style={{ width: 140 }}>
                       <DateInput
@@ -421,8 +480,46 @@ function CarteTaches({
                         options={Object.entries(LIBELLE_STATUT_TACHE).map(([value, label]) => ({ value, label }))}
                       />
                     </td>
+                    <td style={{ width: 96 }}>
+                      <ChampAvancement
+                        key={`${t.id}:${t.avancement ?? 'vide'}`}
+                        tache={t}
+                        onPoser={(v) => maj(t.id, (x) => { x.avancement = v })}
+                      />
+                    </td>
                     <td className="right" style={{ width: 54 }}>
-                      <RowMenu items={[{ label: 'Supprimer la tâche', onClick: () => void supprimer(t), danger: true }]} />
+                      <RowMenu
+                        items={[
+                          // 5.7 — les deux gestes de la confirmation, seulement
+                          // quand un marché (donc une entreprise) est rattaché
+                          ...(marche
+                            ? [
+                                t.confirmeLe
+                                  ? {
+                                      label: `Annuler la confirmation (posée le ${fmtDate(t.confirmeLe)})`,
+                                      title: 'Retire confirmeLe — l’alerte « à confirmer » se relèvera si l’intervention est proche',
+                                      onClick: () => maj(t.id, (x) => { x.confirmeLe = null }),
+                                    }
+                                  : {
+                                      label: 'Entreprise confirmée',
+                                      title: `Pose la date du jour : ${marche.entreprise} a confirmé sa venue`,
+                                      onClick: () => maj(t.id, (x) => { x.confirmeLe = today }),
+                                    },
+                                {
+                                  label: 'Relancer l’entreprise (brouillon Gmail)',
+                                  title: 'Ouvre un brouillon pré-rempli (entreprise, lot, dates) — l’envoi reste votre clic',
+                                  onClick: () => relancer(t),
+                                },
+                              ]
+                            : []),
+                          {
+                            label: 'Faire revenir l’entreprise (reprise)',
+                            title: 'Duplique la tâche en intervention de reprise, liée à celle-ci — dates à poser',
+                            onClick: () => faireRevenir(t),
+                          },
+                          { label: 'Supprimer la tâche', onClick: () => void supprimer(t), danger: true },
+                        ]}
+                      />
                     </td>
                   </tr>
                 )
@@ -435,10 +532,54 @@ function CarteTaches({
         Généré depuis les CCTP (onglet <a href={`#/projets/${p.id}/dce`}>DCE & CCTP</a>) — dates posées
         sur la fenêtre du marché rattaché (sinon phase DET), à affiner ici au fil du chantier.
         « Replanifier » (onglet DCE) recale tout un lot quand ses dates de marché changent.
+        L'avancement (%) se saisit en réunion de chantier : il remplit la barre de la frise et
+        donne l'avancement du lot, celui que la vérification des situations lira.
+        À l'approche d'une intervention (~30 j), l'entreprise non confirmée remonte dans le fil
+        d'urgences — « Entreprise confirmée » éteint l'alerte, « Relancer » ouvre un brouillon Gmail.
       </p>
 
       {modalAjout && <ModalAjoutTache projet={p} onClose={() => setModalAjout(false)} />}
     </Card>
+  )
+}
+
+/** saisie de l'avancement (%) d'une tâche — validée au blur/Entrée pour ne
+ *  pas réécrire le document à chaque frappe, bornée par `clampPourcent` : la
+ *  valeur stockée est celle que la moyenne du lot lira, une frappe à 150 n'a
+ *  pas à y entrer. Vider le champ RETIRE la saisie (le statut reprend la
+ *  main), ce qui n'est pas la même chose que poser 0. */
+function ChampAvancement({ tache: t, onPoser }: { tache: TacheChantier; onPoser: (v: number | undefined) => void }) {
+  const [texte, setTexte] = useState(t.avancement != null ? String(t.avancement) : '')
+  const valider = (v: string) => {
+    const brut = v.replace(',', '.').trim()
+    if (!brut) {
+      setTexte('')
+      onPoser(undefined)
+      return
+    }
+    const n = Number(brut)
+    if (!Number.isFinite(n)) {
+      // une saisie illisible ne s'enregistre pas ET ne reste pas affichée :
+      // la laisser à l'écran ferait croire qu'elle a été prise
+      setTexte(t.avancement != null ? String(t.avancement) : '')
+      return
+    }
+    const borne = Math.round(clampPourcent(n))
+    setTexte(String(borne))
+    onPoser(borne)
+  }
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+      <TextInput
+        value={texte}
+        onChange={setTexte}
+        onCommit={valider}
+        placeholder="—"
+        ariaLabel={`Avancement de « ${t.designation} » (%)`}
+        style={{ width: 58, textAlign: 'right' }}
+      />
+      <span className="muted small">%</span>
+    </span>
   )
 }
 

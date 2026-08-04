@@ -33,6 +33,7 @@ import {
   caCible,
   caRealiseAnnee,
   meteoFinanciere,
+  nomProjet,
   phasesEnCours,
   prochainesEcheances,
   reunionsDuJour,
@@ -40,6 +41,7 @@ import {
   situationsAVerifier,
   validationsAttendues,
 } from '../derive'
+import { corpsRelanceNote, sujetRelanceNote } from '../cotraitants'
 import type { ActionFinance } from '../financeActions'
 import { actionsATraiter } from '../financeActions'
 import { useNbEntrantsDistants } from '../entrants'
@@ -674,6 +676,19 @@ function CentreActions({ personne }: { personne: string }) {
       navigate(`/facturation/emettre/${action.refId}`)
       return
     }
+    if (action.kind === 'relancer_cotraitant') {
+      // 5.10 — un BROUILLON s'ouvre, rien ne s'écrit ni ne part (§15) : le
+      // texte vient de src/cotraitants.ts, le même que l'écran projet — deux
+      // rédactions divergeraient sans que rien ne le signale
+      const c = state.cotraitants.find((x) => x.id === action.refId)
+      if (!c?.email) return
+      ouvrirGmail(
+        c.email,
+        sujetRelanceNote(c, action.mois),
+        corpsRelanceNote(c, action.mois, nomProjet(state, c.projetId), state.settings.nomAgence),
+      )
+      return
+    }
     if (action.kind === 'valider_situation') {
       const ok = await confirmer({
         message: `${a.titre}\n\nMarquer comme VALIDÉE sans ouvrir la fiche ?`,
@@ -686,6 +701,12 @@ function CentreActions({ personne }: { personne: string }) {
       if (action.kind === 'valider_situation') {
         const s = d.situations.find((x) => x.id === action.refId)
         if (s) s.statut = 'validee'
+      } else if (action.kind === 'confirmer_tache') {
+        // 5.7 — la confirmation est un fait daté, pas une case cochée :
+        // la date dit QUAND l'entreprise a dit oui, ce qui compte si elle
+        // se dédit ensuite. L'alerte s'éteint d'elle-même au recalcul.
+        const t = d.tachesChantier.find((x) => x.id === action.refId)
+        if (t) t.confirmeLe = today
       } else if (action.kind === 'obligation_faite') {
         const o = d.obligations.find((x) => x.id === action.refId)
         if (!o) return
@@ -701,7 +722,12 @@ function CentreActions({ personne }: { personne: string }) {
         }
       }
     })
-    const libelle = action.kind === 'valider_situation' ? 'Situation validée.' : 'Obligation faite.'
+    const libelle =
+      action.kind === 'valider_situation'
+        ? 'Situation validée.'
+        : action.kind === 'confirmer_tache'
+          ? 'Entreprise confirmée.'
+          : 'Obligation faite.'
     toast(libelle, { undo: () => replace(snap) })
   }
 

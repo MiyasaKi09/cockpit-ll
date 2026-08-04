@@ -5,8 +5,9 @@
 import { useState } from 'react'
 import type { Projet } from '../types'
 import { useStore } from '../store'
-import { Badge, Btn, Card, EmptyState, Etoiles, Field, Modal, Select, Table, TextInput, toast, RowMenu } from '../ui'
+import { Badge, Btn, Card, EmptyState, Etoiles, Field, Modal, NumInput, Select, Table, TextInput, toast, RowMenu } from '../ui'
 import { fmtDate, fold, todayISO, uid } from '../util'
+import { trierContactsAppel } from '../organisations'
 
 export default function ProjetRessources({ projet: p }: { projet: Projet }) {
   const { state, update } = useStore()
@@ -353,7 +354,10 @@ function CarteArtisansLies({ projet: p, maj }: { projet: Projet; maj: Maj }) {
 function CarteContactsLies({ projet: p }: { projet: Projet }) {
   const { state, update } = useStore()
 
-  const lies = state.contacts.filter((c) => c.projetsIds?.includes(p.id))
+  // 5.11 — l'ordre d'APPEL gouverne la liste : qui appeler en premier chez
+  // le client se lisait de tête, il se lit désormais ici. Le tri est la
+  // fonction pure de src/organisations.ts — l'écran ne redit pas la règle.
+  const lies = trierContactsAppel(state.contacts.filter((c) => c.projetsIds?.includes(p.id)))
   const disponibles = state.contacts.filter((c) => !c.projetsIds?.includes(p.id))
 
   return (
@@ -361,9 +365,26 @@ function CarteContactsLies({ projet: p }: { projet: Projet }) {
       {lies.length === 0 ? (
         <EmptyState>Aucun contact rattaché — MOA, BET, mairie… tapez un nom ci-dessous.</EmptyState>
       ) : (
-        <Table compact head={['Contact', 'Type', 'Joindre', '']}>
+        <Table compact head={[<span key="a" title="1 = à appeler d'abord ; sans rang : en fin de liste">Appel</span>, 'Contact', 'Type', 'Joindre', '']}>
           {lies.map((c) => (
             <tr key={c.id}>
+              <td>
+                {/* saisie du rang plutôt que monter/descendre : le rang se
+                    voit, se dicte au téléphone (« il est 2e »), et deux
+                    contacts peuvent partager un rang sans casse */}
+                <NumInput
+                  value={c.ordreAppel ?? null}
+                  onChange={(v) =>
+                    update((d) => {
+                      const x = d.contacts.find((y) => y.id === c.id)
+                      if (x) x.ordreAppel = v
+                    })
+                  }
+                  placeholder="—"
+                  style={{ width: 52 }}
+                  ariaLabel={`Ordre d'appel de ${c.nom} (1 = à appeler d'abord)`}
+                />
+              </td>
               <td>
                 <strong>{c.nom}</strong>
                 {c.organisme && <div className="muted small">{c.organisme}</div>}
@@ -414,7 +435,9 @@ function CarteContactsLies({ projet: p }: { projet: Projet }) {
         }}
       />
       <p className="muted small" style={{ marginTop: 6 }}>
-        Relances, journal d'échanges et fiches complètes : <a href="#/agenda">Contacts & obligations →</a>
+        « Appel » : 1 = à appeler d'abord, vide = fin de liste. Le rang suit le contact — partagé
+        s'il est rattaché à plusieurs projets. Relances, journal d'échanges et fiches complètes :{' '}
+        <a href="#/agenda">Contacts & obligations →</a>
       </p>
     </Card>
   )

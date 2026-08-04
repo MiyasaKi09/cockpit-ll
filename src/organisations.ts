@@ -120,6 +120,22 @@ export function contactsDe(state: AppState, org: Organisation): Contact[] {
   )
 }
 
+/** 5.11 — les contacts dans l'ordre d'APPEL : qui appeler en premier chez le
+ *  client ne doit plus se savoir de tête. Rang croissant (1 = d'abord), les
+ *  non-classés (null, absent, illisible) en DERNIER — un contact sans rang
+ *  n'est pas le premier venu ; à rang égal, le nom départage (plié : les
+ *  accents ne font pas deux alphabets) ; à rang ET nom égaux, l'ordre
+ *  d'origine tient (tri stable). Ne mute jamais la liste reçue : elle vient
+ *  du store, la trier en place réordonnerait l'état sans passer par update. */
+export function trierContactsAppel<T extends Pick<Contact, 'nom' | 'ordreAppel'>>(contacts: T[]): T[] {
+  const rang = (c: T): number =>
+    typeof c.ordreAppel === 'number' && Number.isFinite(c.ordreAppel) ? c.ordreAppel : Infinity
+  return [...(Array.isArray(contacts) ? contacts : [])].sort(
+    // deux non-classés : Infinity − Infinity = NaN, faux — le nom prend le relais
+    (a, b) => rang(a) - rang(b) || fold(a.nom || '').localeCompare(fold(b.nom || ''), 'fr'),
+  )
+}
+
 /** interactions liées à l'organisation (via ses contacts ou ses consultations) */
 export function interactionsDe(state: AppState, org: Organisation): Interaction[] {
   const contacts = new Set(contactsDe(state, org).map((c) => c.id))

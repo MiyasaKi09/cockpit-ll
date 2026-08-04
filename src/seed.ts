@@ -224,6 +224,32 @@ Facture n° {{facture_numero}} — {{facture_libelle}} — {{facture_ttc}} TTC, 
 Rédige un courrier de MISE EN DEMEURE (courrier recommandé, pas un e-mail) : rappel chronologique des faits et relances, montant dû avec pénalités et indemnité de recouvrement chiffrées, délai de 15 jours avant saisine (référé-provision ou médiation selon le contrat), réserve de suspendre les prestations conformément au contrat. Ton strictement factuel. Document à relire avec attention avant tout envoi — signale-moi ce qu'un avocat devrait vérifier.`,
   },
   {
+    // 5.9 — la mise en demeure GPA. Le gabarit « mise en demeure » existant
+    // (tpl-relance-med) vise les HONORAIRES impayés d'un client : réutilisé
+    // tel quel, il réclamerait de l'argent à une entreprise au lieu d'exiger
+    // la levée d'un désordre. Celui-ci porte le fondement propre à la GPA
+    // (art. 44.1 CCAG, art. 1792-6 du code civil) et la menace utile :
+    // l'exécution par un tiers AUX FRAIS de l'entreprise défaillante.
+    id: 'tpl-med-gpa',
+    titre: 'GPA — mise en demeure de lever un désordre',
+    domaine: 'Chantier',
+    projetClaude: 'Secrétariat',
+    contexte: 'marche',
+    version: 1,
+    majLe: '2026-08-04',
+    corps: `Projet de mise en demeure — année de parfait achèvement (CCAG Travaux art. 44.1) — {{date}}.
+
+{{fiche_marche}}
+
+Désordre à lever :
+{{desordre}}
+
+Signalé le {{desordre_signale_le}} ; relances : {{desordre_relances}}.
+Fin de la garantie de parfait achèvement : {{fin_gpa}}.
+
+Rédige un courrier de MISE EN DEMEURE (courrier recommandé, pas un e-mail) à {{contact_entreprise}} : rappel de l'obligation de parfait achèvement (art. 1792-6 du code civil, art. 44.1 du CCAG Travaux), chronologie datée du signalement et des relances, délai d'exécution précis avant intervention d'une entreprise tierce AUX FRAIS de l'entreprise défaillante, réserve sur la retenue de garantie ou la caution. Ton strictement factuel. Document à relire avec attention avant tout envoi — signale-moi ce qu'un avocat devrait vérifier.`,
+  },
+  {
     id: 'tpl-tagging-photos',
     titre: 'Tagger un lot de photos (matériauthèque)',
     domaine: 'Matériauthèque',
@@ -533,6 +559,12 @@ export function seedState(): AppState {
         avenantsHT: 12500,
         tauxRG: 0.05,
         revision: true,
+        // 5.4 — la série et le mois zéro viennent du CCAP ; les VALEURS de la
+        // série, elles, se saisissent en Paramètres (aucune ici : voir le
+        // commentaire de `indicesBTP` — le calcul répond null tant que la
+        // série n'est pas alimentée, et il le dit)
+        indiceRevision: 'BT01',
+        moisZero: '2025-10',
         delaiVerifJours: 15,
         contactNom: 'M. Martin',
         contactEmail: 'contact@martin-btp.example',
@@ -1048,6 +1080,31 @@ export function seedState(): AppState {
     tachesChantier: [],
     registreDocuments: [],
     entreprises: [],
+
+    // 5.4 — la collection naît VIDE, même dans le jeu d'exemple : une valeur
+    // d'indice inventée ressemblerait à une vraie publication INSEE et
+    // finirait dans un vrai certificat de paiement — contrairement aux
+    // marchés « EXEMPLE », le faux ne se verrait pas.
+    indicesBTP: [],
+
+    // 5.2 — la collection naît VIDE : un événement de pénalité d'exemple
+    // ressemblerait à un constat contractuel réel, et une pénalité « EXEMPLE »
+    // appliquée traînerait dans les totaux d'un vrai marché.
+    evenementsMarche: [],
+    // 5.3 — vide pour la même raison : un jour d'intempérie inventé
+    // prolongerait un délai contractuel réel et excuserait un vrai retard.
+    intemperies: [],
+    // 5.8 — vide : un visa « EXEMPLE » à l'état « à viser » lèverait une
+    // alerte de responsabilité sur un document qui n'existe pas.
+    visas: [],
+    // 5.9 — vide : un désordre inventé finirait dans une chronologie de
+    // relances opposable, voire dans une mise en demeure réelle.
+    desordresGPA: [],
+    // 5.10 — vides : un cotraitant d'exemple déclencherait des relances
+    // mensuelles sur un partenaire qui n'existe pas, et une note inventée
+    // fausserait le reçu affiché face au convenu.
+    cotraitants: [],
+    notesHonoraires: [],
 
     // v14 — finance F0/F1 : remplies par l'amorçage ci-dessous
     // (les factures « prévues » du seed deviennent des échéances)

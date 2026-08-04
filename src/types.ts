@@ -147,6 +147,11 @@ export interface Projet {
   /** durées mémorisées pour la datation auto des phases (planning) */
   dureeEtudesMois?: number | null
   dureeChantierMois?: number | null
+  /** 5.8 — délai de visa des documents d'exécution du CCAP (jours
+   *  calendaires) : pré-remplit chaque nouveau visa du registre ; absent =
+   *  15 j (DELAI_VISA_DEFAUT). Sur le PROJET et non le marché : le CCAP
+   *  fixe le plus souvent un délai unique pour toute l'opération */
+  delaiVisaJours?: number | null
   /** objet à rappeler sur les factures (ex. « Création d'une pension de famille au… ») */
   objetFacture?: string
   siretClient?: string
@@ -294,6 +299,14 @@ export interface ReunionChantier {
   notes?: string
 }
 
+/** Garantie d'un marché de travaux (CCAG Travaux art. 33) :
+ *  - 'retenue' : la retenue de garantie est prélevée sur chaque situation (défaut) ;
+ *  - 'caution' : caution bancaire de substitution — rien n'est retenu ;
+ *  - 'gpd' : garantie à première demande — rien n'est retenu non plus.
+ *  Retenir 5 % à une entreprise qui a fourni caution ou GPD lui ferait payer
+ *  sa garantie deux fois — c'était le défaut 5.1. */
+export type TypeGarantie = 'retenue' | 'caution' | 'gpd'
+
 /** Marché de travaux (une entreprise, un lot) — support des situations */
 export interface MarcheTravaux {
   id: string
@@ -307,6 +320,17 @@ export interface MarcheTravaux {
   /** retenue de garantie (0.05 par défaut) */
   tauxRG: number
   revision: boolean
+  /** 5.4 — série de référence de la révision, telle qu'écrite au CCAP
+   *  (BT01, BT02, TP08…) : chaque entreprise a la sienne. Texte libre
+   *  court plutôt que liste fermée — l'INSEE publie des dizaines de séries
+   *  et un CCAP peut en citer n'importe laquelle ; une liste serait fausse
+   *  dès le premier marché qui en sortirait. */
+  indiceRevision?: string
+  /** mois d'établissement des prix ('AAAA-MM') — le I0 de la formule */
+  moisZero?: string
+  /** partie fixe de la formule du CCAP « partFixe + (1 − partFixe) × In/I0 »,
+   *  en fraction comme tauxRG (0,15 par défaut si absent — l'usage CCAG) */
+  partFixe?: number
   /** délai contractuel de vérification des situations par la MOE (jours) */
   delaiVerifJours: number
   contactNom?: string
@@ -318,11 +342,212 @@ export interface MarcheTravaux {
   dateFin?: string | null
   /** date de réception des travaux — point de départ de la garantie de parfait achèvement */
   dateReception?: string | null
-  /** retenue de garantie remplacée par une caution bancaire (pas d'argent retenu) */
+  /** type de garantie — absent sur les documents d'avant le Lot 5 : c'est
+   *  alors `cautionRG` qui tranche. `garantieDuMarche` (derive.ts) est la
+   *  SEULE lecture autorisée de ces deux champs ensemble : lire l'un sans
+   *  l'autre recrée le défaut 5.1 (décompte et cycle de vie divergents). */
+  garantie?: TypeGarantie
+  /** date de réception du document de garantie (caution ou GPD) */
+  garantieRecueLe?: string | null
+  /** [hérité] retenue remplacée par une caution bancaire — conservé pour les
+   *  documents existants ; `garantie` le remplace et prime quand il est posé */
   cautionRG?: boolean
   /** retenue de garantie libérée à l'entreprise (levée effectuée) */
   rgLibere?: boolean
+  /** 5.2 — taux de pénalités du CCAP, propres au marché (chaque CCAP écrit
+   *  les siens). `null`/absent = non saisi : le calcul répond alors null,
+   *  jamais 0 — un « 0 € de pénalité » affirmerait que le CCAP a été lu */
+  penalites?: {
+    /** € HT par jour de retard d'exécution */
+    retardParJourHT?: number | null
+    /** € HT par absence à une réunion de chantier */
+    absenceReunionHT?: number | null
+    /** € HT par jour de retard d'un document contractuel (DOE, PPSPS…) */
+    documentRetardParJourHT?: number | null
+  }
   notes?: string
+}
+
+/** 5.4 — valeur mensuelle d'un indice de révision BTP (BT01, BT02, TP08…).
+ *  Saisie À LA MAIN depuis les publications INSEE : elles paraissent à
+ *  ~3 mois, il n'existe aucun flux à brancher — et une valeur recopiée se
+ *  relit, là où une valeur « récupérée » se croirait juste. Le rapprochement
+ *  avec `Marche.indiceRevision` se fait sans casse ni espaces
+ *  (src/revisionPrix.ts) : « bt01 » saisi ici et « BT01 » au marché
+ *  désignent la même série. */
+export interface IndiceBTP {
+  id: string
+  /** code de la série, tel que publié (BT01, TP08…) */
+  indice: string
+  /** mois de la valeur ('AAAA-MM') */
+  mois: string
+  valeur: number
+}
+
+/** 5.2 — les trois faits générateurs de pénalité du CCAG Travaux (art. 19-20) */
+export type TypeEvenementMarche = 'retard_execution' | 'absence_reunion' | 'document_retard'
+
+/** 5.2 — événement du journal de pénalités d'un marché. L'événement CONSTATE
+ *  (un retard, une absence, un document manquant) ; il n'applique rien :
+ *  une pénalité est un acte contractuel, pas un calcul. Le montant encouru
+ *  se recalcule à l'affichage (src/penalites.ts) ; seule la décision humaine
+ *  « Appliquer » fige `penaliteMontantHT` et la signe (decidePar/decideLe). */
+export interface EvenementMarche {
+  id: string
+  marcheId: string
+  projetId: string
+  type: TypeEvenementMarche
+  /** date du constat (retard, réunion manquée, échéance du document) */
+  date: string // ISO 'AAAA-MM-JJ'
+  /** jours de retard constatés (retard d'exécution, document en retard) —
+   *  sans objet pour une absence de réunion */
+  jours?: number | null
+  /** document concerné quand type = 'document_retard' (DOE, PPSPS, agrément…) */
+  document?: string
+  commentaire: string
+  /** décision humaine prise — jamais posée par le module de calcul */
+  penaliteAppliquee: boolean
+  /** montant HT FIGÉ à la décision : un taux corrigé ou une intempérie
+   *  saisie après coup ne réécrit pas ce qui a été signifié à l'entreprise */
+  penaliteMontantHT?: number | null
+  decidePar?: string | null
+  decideLe?: string | null
+}
+
+/** 5.3 — natures d'intempéries reconnues (CCAG art. 19.2.3 ; chaleur : code du travail) */
+export type NatureIntemperie = 'pluie' | 'neige' | 'vent' | 'chaleur' | 'gel'
+
+/** 5.3 — un jour d'intempérie constaté sur un chantier. Double effet, lu
+ *  par src/penalites.ts : prolongation du délai contractuel du marché ET
+ *  déduction des jours de retard (5.2) — les deux registres se lisent
+ *  ensemble, sinon on pénalise un retard que la pluie excuse. Le décompte
+ *  se fait en jours OUVRÉS DISTINCTS : deux natures le même jour font un
+ *  seul jour d'arrêt. */
+export interface Intemperie {
+  id: string
+  projetId: string
+  date: string // ISO 'AAAA-MM-JJ'
+  nature: NatureIntemperie
+  /** le constat opposable : seuil du CCAP atteint, CR de chantier, relevé météo… */
+  commentaire: string
+}
+
+/** 5.8 — statuts d'un document d'exécution au registre des visas. Trois
+ *  issues possibles du geste (CCAG MOE) : visé, visé avec observations,
+ *  refusé — « à viser » est l'état d'attente, celui qui engage la MOE si
+ *  le délai du CCAP passe. */
+export type StatutVisa = 'a_viser' | 'vise' | 'vise_observations' | 'refuse'
+
+/** 5.8 — un document d'exécution reçu d'une entreprise en phase VISA.
+ *  Le registre CONSTATE (reçu le, délai du CCAP) ; viser reste un geste
+ *  humain, daté (`viseLe`) et signé (`visePar`) : un visa en retard engage
+ *  la responsabilité de la MOE, il faut pouvoir dire qui a visé quoi et
+ *  quand — un statut changé sans date ni signature ne prouverait rien. */
+export interface Visa {
+  id: string
+  projetId: string
+  /** marché émetteur — le lot en texte reste pour l'affichage et pour les
+   *  documents reçus avant la signature du marché */
+  marcheId?: string | null
+  lot: string
+  /** le document lui-même (ex. « Plans EXE R+1 — indice B ») */
+  document: string
+  recuLe: string // ISO 'AAAA-MM-JJ'
+  /** délai contractuel de visa du CCAP, en jours CALENDAIRES — pré-rempli
+   *  par le défaut du projet (`Projet.delaiVisaJours`), ajustable visa par
+   *  visa : un CCAP peut prévoir un délai propre à certains documents */
+  delaiJours: number
+  statut: StatutVisa
+  /** date du geste (visé / visé avec observations / refusé) */
+  viseLe?: string | null
+  /** qui a visé — la responsabilité se signe, comme la décision de pénalité */
+  visePar?: string | null
+  /** observations du visa, ou motif du refus */
+  observations?: string
+  /** lien au registre documentaire, quand le document y est classé */
+  documentId?: string | null
+}
+
+/** 5.9 — statuts d'un désordre signalé pendant l'année de parfait
+ *  achèvement (CCAG Travaux art. 44.1). « Contesté » reste OUVERT : une
+ *  contestation ne lève rien — seule la levée constatée ferme le désordre. */
+export type StatutDesordreGPA = 'signale' | 'notifie_entreprise' | 'leve' | 'conteste'
+
+/** 5.9 — une relance tracée sur un désordre : quand, et par quel canal.
+ *  `mode` en texte libre court (e-mail, téléphone, courrier RAR…) — c'est
+ *  la chronologie qui compte le jour de la mise en demeure, pas une
+ *  taxonomie de canaux. */
+export interface RelanceDesordre {
+  date: string // ISO 'AAAA-MM-JJ'
+  mode: string
+}
+
+/** 5.9 — un désordre signalé pendant l'année de parfait achèvement.
+ *  Le registre CONSTATE et trace (signalement, notification, relances,
+ *  levée) : c'est cette chronologie datée qui rend la mise en demeure
+ *  opposable avant la fin de GPA — après, il est trop tard. */
+export interface DesordreGPA {
+  id: string
+  projetId: string
+  /** marché concerné — le lot en texte reste pour l'affichage et pour un
+   *  désordre dont l'entreprise n'est pas encore identifiée */
+  marcheId?: string | null
+  lot?: string
+  signaleLe: string // ISO 'AAAA-MM-JJ'
+  /** qui a signalé (MOA, occupant, visite MOE…) */
+  signalePar?: string
+  description: string
+  statut: StatutDesordreGPA
+  /** date de notification à l'entreprise (le point de départ de son délai) */
+  notifieLe?: string | null
+  /** date de levée constatée */
+  leveLe?: string | null
+  relances: RelanceDesordre[]
+}
+
+/** 5.10 — nature d'un partenaire de maîtrise d'œuvre (chaîne d'honoraires
+ *  ENTRANTE : c'est lui qui facture l'agence, pas l'inverse) */
+export type TypeCotraitant = 'bet' | 'agence' | 'autre'
+
+/** 5.10 — cotraitant ou sous-traitant de maîtrise d'œuvre d'un projet (BET,
+ *  autre agence). Porte le CONVENU (honoraires de la convention de
+ *  groupement) ; le RÉEL se lit dans ses notes d'honoraires mensuelles
+ *  (`NoteHonoraires`) — les deux chiffres s'affichent face à face, jamais
+ *  confondus : le budget externe des phases (`Phase.coutExterneHT`) reste la
+ *  base de la marge (audit 5.14 : on n'étend pas un calcul tout juste
+ *  vérifié, on met le réel à côté). */
+export interface Cotraitant {
+  id: string
+  projetId: string
+  nom: string
+  type: TypeCotraitant
+  /** mission confiée (structure, fluides, économie, OPC…) */
+  mission: string
+  /** honoraires convenus HT (convention de groupement / contrat) —
+   *  null = pas encore contractualisé : le reste à payer répond alors null,
+   *  jamais 0, un « 0 € restant » affirmerait qu'un contrat a été lu */
+  honorairesConvenusHT: number | null
+  email?: string
+  notes?: string
+  /** mission en cours : seuls les cotraitants actifs attendent une note
+   *  chaque mois — relancer une mission terminée serait du bruit */
+  actif: boolean
+}
+
+/** 5.10 — note d'honoraires MENSUELLE d'un cotraitant : une attendue par
+ *  mois actif. La note peut être consignée avant réception (`recueLe` null =
+ *  attendue, elle compte manquante) ; `reglee` suit le paiement, pas la
+ *  réception — une note reçue non payée n'est pas une note manquante. */
+export interface NoteHonoraires {
+  id: string
+  cotraitantId: string
+  projetId: string
+  /** mois de la prestation ('AAAA-MM') */
+  mois: string
+  montantHT: number | null
+  /** date de réception effective — null tant que la note n'est pas arrivée */
+  recueLe: string | null
+  reglee: boolean
 }
 
 /** élément d'ouvrage prévu au CCTP d'un lot — un article numéroté du document */
@@ -401,6 +626,20 @@ export interface TacheChantier {
   debut: string | null // ISO 'AAAA-MM-JJ'
   fin: string | null
   statut: StatutTache
+  /** 5.6 — avancement constaté en réunion de chantier (0–100 %). Absent =
+   *  jamais saisi : `avancementTache` (src/chantier.ts) retombe alors sur le
+   *  statut — c'est LA saisie que la vérification des situations (5.5) lit,
+   *  elle se fait une fois, au chantier, et sert deux fois */
+  avancement?: number
+  /** 5.6 — tâche d'origine quand celle-ci est une intervention de reprise
+   *  (« faire revenir l'entreprise ») : dupliquer en gardant le lien évite de
+   *  ressaisir la ligne ET garde la trace de ce qui a dû être refait */
+  repriseDeId?: string | null
+  /** 5.7 — date à laquelle l'entreprise a confirmé sa venue. Absent/null =
+   *  pas confirmé : à l'approche de `debut` (SEUIL_CONFIRMATION_JOURS,
+   *  src/chantier.ts), l'alerte « entreprise à confirmer » se lève — une
+   *  entreprise qui découvre sa date deux semaines avant ne vient pas */
+  confirmeLe?: string | null
   notes?: string
 }
 
@@ -1112,6 +1351,12 @@ export interface Contact {
   /** projets rattachés (liens manuels, en plus des liens dérivés des interactions) */
   projetsIds?: string[]
   dateProchaineAction?: string | null
+  /** 5.11 — ordre d'appel : 1 = à appeler d'abord, null/absent = pas classé
+   *  (affiché en fin de liste). Le rang suit le CONTACT, pas le projet — un
+   *  contact partagé entre deux projets garde le même rang partout : c'est
+   *  le prix d'un champ simple, assumé pour une agence de deux personnes
+   *  dont les contacts sont presque tous propres à un projet. */
+  ordreAppel?: number | null
   notes?: string
 }
 
@@ -1276,6 +1521,16 @@ export type TypeAlerte =
   | 'cr_en_attente'
   | 'sauvegarde'
   | 'rg_a_liberer'
+  // 5.7 — tâche de chantier démarrant sous ~30 jours sans confirmation de
+  // l'entreprise : le mode de retard le plus courant, et le plus prévisible
+  | 'entreprise_a_confirmer'
+  // 5.8 — document d'exécution non visé à J−3 de l'échéance du CCAP : un
+  // visa en retard engage la responsabilité de la MOE
+  | 'visa_a_rendre'
+  // 5.10 — note d'honoraires de cotraitance attendue et non reçue pour un
+  // mois échu : sans elle, le réel de la chaîne entrante s'écarte du convenu
+  // sans que personne ne le voie avant le bilan
+  | 'note_honoraires_manquante'
   // A.11 — les trois producteurs de la mémoire des échanges (§12.3 pt 10).
   // Ils ne sortent rien de l'application : ni e-mail, ni notification
   // poussée. Notifier, ici, c'est faire apparaître dans le fil de la
@@ -1290,6 +1545,14 @@ export type ActionAlerte =
   | { kind: 'emettre_facture'; refId: string; label: string }
   | { kind: 'valider_situation'; refId: string; label: string }
   | { kind: 'obligation_faite'; refId: string; label: string }
+  // 5.7 — pose `confirmeLe` sur la tâche de chantier : l'humain confirme,
+  // l'alerte s'éteint d'elle-même au recalcul
+  | { kind: 'confirmer_tache'; refId: string; label: string }
+  // 5.10 — ouvre un BROUILLON Gmail de relance (gmailComposeUrl) pour la
+  // note d'honoraires du mois manquant : n'écrit rien dans l'état, n'envoie
+  // rien (§15) — `mois` accompagne refId parce que la relance vise UN mois,
+  // pas le cotraitant en général
+  | { kind: 'relancer_cotraitant'; refId: string; mois: string; label: string }
 
 export interface Alerte {
   /** identifiant stable (sert au snooze) */
@@ -1654,6 +1917,32 @@ export interface AppState {
   simulations: SimulationProjet[]
   /** connecteurs directs (F10) — passerelles serveur, sans secret */
   connecteurs: Connecteur[]
+  /** 5.4 — valeurs mensuelles des indices de révision BTP : référentiel
+   *  NATIONAL, transverse aux projets (une valeur BT01 sert tous les
+   *  marchés qui citent cette série) — saisi en Paramètres */
+  indicesBTP: IndiceBTP[]
+  /** 5.2 — journal des événements de pénalité par marché : la machine
+   *  calcule l'ENCOURU, l'humain décide l'application (§15) */
+  evenementsMarche: EvenementMarche[]
+  /** 5.3 — registre des intempéries par chantier : prolonge les délais et
+   *  neutralise les retards de 5.2 — trace opposable pour le décompte général */
+  intemperies: Intemperie[]
+  /** 5.8 — registre des visas : documents d'exécution reçus en phase VISA,
+   *  délai du CCAP, geste de visa daté et signé — la phase VISA existait
+   *  partout (échéancier, catégorisation) sans qu'aucun registre ne suive
+   *  ce qui est à viser */
+  visas: Visa[]
+  /** 5.9 — registre des désordres de l'année de parfait achèvement (GPA) :
+   *  signalement, notification, relances tracées, levée. La fin de GPA se
+   *  dérive de la réception du marché — UNE autorité, src/gpa.ts */
+  desordresGPA: DesordreGPA[]
+  /** 5.10 — partenaires de maîtrise d'œuvre (BET, agences) par projet :
+   *  le CONVENU de la chaîne d'honoraires entrante */
+  cotraitants: Cotraitant[]
+  /** 5.10 — notes d'honoraires mensuelles des cotraitants : le RÉEL reçu,
+   *  affiché FACE au convenu et au budget externe des phases — jamais versé
+   *  dans le calcul de marge (audit 5.14) */
+  notesHonoraires: NoteHonoraires[]
 }
 
 /** document du corpus de l'assistant : texte réglementaire (Légifrance,

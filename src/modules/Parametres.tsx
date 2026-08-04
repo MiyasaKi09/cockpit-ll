@@ -27,7 +27,8 @@ import {
   toast,
   useRoute,
   useToday, RowMenu } from '../ui'
-import { DOMAINE_AGENCE, download, fmtDate, fmtMoney, fmtPct, fold, todayISO, uid } from '../util'
+import { DOMAINE_AGENCE, download, fmtDate, fmtMois, fmtMoney, fmtPct, fold, todayISO, uid } from '../util'
+import { cleSerie } from '../revisionPrix'
 import { coefSuggere, coutAgenceAnnuel, coutAnnuelPersonne, coutHorairePersonne, coutHoraireMoyen, coutJourObjectif, objectifCA, tauxVente, tauxVenteObjectif } from '../derive'
 import { assurerJeton, connecterGoogle, deconnecter, estConnecte } from '../google'
 import { useSurveillanceCtx } from '../surveillance'
@@ -782,6 +783,103 @@ function CarteSync() {
   )
 }
 
+/** 5.4 — référentiel des valeurs d'indices de révision BTP (BT01, BT02, TP08…).
+ *  ICI et pas dans l'onglet Chantier d'un projet : une série INSEE est
+ *  NATIONALE — la même valeur BT01 sert tous les marchés de tous les
+ *  chantiers qui la citent. La ranger dans un projet laisserait croire
+ *  qu'elle lui appartient, et il faudrait choisir arbitrairement lequel.
+ *  Le marché, lui, garde ce qui est à lui : série, mois zéro, partie fixe
+ *  (onglet Chantier du projet, modal du marché). */
+function CarteIndicesBTP() {
+  const { state, update, replace } = useStore()
+  const [indice, setIndice] = useState('BT01')
+  const [mois, setMois] = useState('')
+  const [valeur, setValeur] = useState<number | null>(null)
+
+  // série puis mois DÉCROISSANT : la question du quotidien est « quel est le
+  // dernier BT01 saisi ? », pas l'historique complet
+  const lignes = [...state.indicesBTP].sort(
+    (a, b) => cleSerie(a.indice).localeCompare(cleSerie(b.indice)) || b.mois.localeCompare(a.mois),
+  )
+
+  // les séries que les marchés révisables citent : la saisie part de la
+  // demande réelle du carnet de marchés, pas d'une liste théorique
+  const seriesAttendues = [
+    ...new Set(
+      state.marches.filter((m) => m.revision && cleSerie(m.indiceRevision)).map((m) => cleSerie(m.indiceRevision)),
+    ),
+  ].sort()
+
+  const ajouter = () => {
+    const code = cleSerie(indice)
+    if (!code) return toast('Indiquer la série (BT01, BT02, TP08…).', { tone: 'danger' })
+    const m = mois.trim()
+    if (!/^\d{4}-\d{2}$/.test(m)) return toast('Mois attendu au format AAAA-MM (ex. 2026-03).', { tone: 'danger' })
+    if (valeur === null || valeur <= 0) return toast('Indiquer la valeur publiée (> 0).', { tone: 'danger' })
+    update((d) => {
+      // ressaisir le même mois est une CORRECTION : la valeur se remplace —
+      // deux lignes pour un même mois rendraient « le dernier indice connu »
+      // ambigu dans le calcul de révision
+      const existant = d.indicesBTP.find((i) => cleSerie(i.indice) === code && i.mois === m)
+      if (existant) {
+        existant.indice = code
+        existant.valeur = valeur
+      } else {
+        d.indicesBTP.push({ id: uid('idx'), indice: code, mois: m, valeur })
+      }
+    })
+    setMois('')
+    setValeur(null)
+  }
+
+  const retirer = (id: string) => {
+    const snap = state
+    update((d) => {
+      d.indicesBTP = d.indicesBTP.filter((i) => i.id !== id)
+    })
+    toast('Valeur d’indice retirée.', { undo: () => replace(snap) })
+  }
+
+  return (
+    <Card titre="Indices de révision BTP (BT01, BT02, TP08…)">
+      <p className="small muted" style={{ marginBottom: 8 }}>
+        Valeurs saisies à la main depuis les publications INSEE (parution à ~3 mois). La révision
+        théorique d'un marché prend le dernier mois publié de sa série et se marque « approximative »
+        tant que l'indice du mois demandé n'est pas paru — jamais en silence.
+      </p>
+      {seriesAttendues.length > 0 && (
+        <p className="small muted" style={{ marginBottom: 8 }}>
+          Séries citées par les marchés révisables : <strong>{seriesAttendues.join(', ')}</strong>.
+        </p>
+      )}
+      <div className="toolbar" style={{ marginBottom: 10 }}>
+        <TextInput value={indice} onChange={setIndice} placeholder="BT01" style={{ maxWidth: 110 }} ariaLabel="Série de l'indice" />
+        <TextInput value={mois} onChange={setMois} placeholder="2026-03" style={{ maxWidth: 110 }} ariaLabel="Mois de la valeur (AAAA-MM)" />
+        <NumInput value={valeur} onChange={setValeur} placeholder="valeur publiée" style={{ maxWidth: 140 }} ariaLabel="Valeur publiée de l'indice" />
+        <Btn small kind="primary" onClick={ajouter}>Enregistrer la valeur</Btn>
+      </div>
+      {lignes.length === 0 ? (
+        <p className="small muted">
+          Aucune valeur saisie — sans elles, aucune révision théorique ne peut se calculer.
+        </p>
+      ) : (
+        <Table compact head={['Série', 'Mois', <span key="v" className="right">Valeur</span>, '']}>
+          {lignes.map((i) => (
+            <tr key={i.id}>
+              <td><strong>{i.indice}</strong></td>
+              <td>{fmtMois(i.mois)}</td>
+              <td className="num right">{i.valeur}</td>
+              <td className="right">
+                <Btn small kind="ghost" onClick={() => retirer(i.id)}>Retirer</Btn>
+              </td>
+            </tr>
+          ))}
+        </Table>
+      )}
+    </Card>
+  )
+}
+
 export default function Parametres({ ongletInitial = 'agence' }: { ongletInitial?: string }) {
   const route = useRoute()
   const { state, update, replace } = useStore()
@@ -1137,6 +1235,8 @@ export default function Parametres({ ongletInitial = 'agence' }: { ongletInitial
           actualisés, le guide renvoie au chiffrage en temps passé.
         </p>
       </Card>
+
+      <CarteIndicesBTP />
 
       <Card titre="Coordonnées légales & bancaires — imprimées sur les factures">
         <p className="small muted" style={{ marginBottom: 10 }}>

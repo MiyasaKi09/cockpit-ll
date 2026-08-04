@@ -18,6 +18,9 @@ import {
 } from './derive'
 import { addDays, diffDays, fmtDate, fmtMoney, fmtMois, monthKey } from './util'
 import { LIBELLES_IMPORTANCE, type NiveauImportance, estImportance, graviteDe } from './categorisation'
+import { tacheAConfirmer } from './chantier'
+import { SEUIL_ALERTE_VISA_JOURS, echeanceVisa } from './visas'
+import { ecartMois, notesManquantes } from './cotraitants'
 
 // ------------------------------------------------------------
 // A.11 — notifier les personnes concernées (§12.3 pt 10)
@@ -233,6 +236,86 @@ export function computeAlertes(state: AppState, today: string, contexte?: Contex
         })
       }
     }
+  }
+
+  // --- 5.7 : entreprise à confirmer — tâche de chantier démarrant sous
+  // SEUIL_CONFIRMATION_JOURS (src/chantier.ts, même prédicat que l'écran
+  // planning) sans que l'entreprise ait confirmé sa venue, marché actif.
+  // Une entreprise qui découvre sa date deux semaines avant ne vient pas :
+  // c'est le mode de retard le plus courant, et le plus prévisible.
+  for (const t of state.tachesChantier) {
+    const marche = t.marcheId ? state.marches.find((m) => m.id === t.marcheId) : null
+    if (!marche || !tacheAConfirmer(t, marche, today)) continue
+    const dj = diffDays(today, t.debut!)
+    alertes.push({
+      id: `confirme:${t.id}`,
+      type: 'entreprise_a_confirmer',
+      // sous 14 jours on est DANS le mode de défaillance connu : rouge
+      gravite: dj <= 14 ? 3 : 2,
+      titre: `Entreprise à confirmer — ${marche.entreprise} (${t.lot})`,
+      detail: `${nomProjet(state, t.projetId)} · ${t.designation} · intervention le ${fmtDate(t.debut)} (J−${dj})`,
+      lien: `#/projets/${t.projetId}/planning`,
+      date: t.debut!,
+      projetId: t.projetId,
+      // l'humain confirme (confirmeLe posé), l'alerte s'éteint au recalcul ;
+      // « Relancer » vit à l'écran planning, en brouillon Gmail — jamais
+      // d'envoi automatique (§15)
+      action: { kind: 'confirmer_tache', refId: t.id, label: '✓ Confirmé' },
+    })
+  }
+
+  // --- 5.8 : visa non traité à J−SEUIL_ALERTE_VISA_JOURS de l'échéance du
+  // CCAP (src/visas.ts — même calcul d'échéance que l'écran). Un document
+  // déjà visé, même tardivement, ne s'alerte plus : le geste a été fait,
+  // c'est lui qui compte. Le retard reste alertant tant que rien n'est visé
+  // — un visa en retard engage la responsabilité de la MOE, le silence
+  // serait exactement le défaut que ce registre corrige.
+  for (const v of state.visas) {
+    if (v.statut !== 'a_viser') continue
+    const echeance = echeanceVisa(v)
+    if (!echeance) continue
+    const dj = diffDays(today, echeance)
+    if (dj > SEUIL_ALERTE_VISA_JOURS) continue
+    alertes.push({
+      id: `visa:${v.id}`,
+      type: 'visa_a_rendre',
+      // échéance dépassée : la responsabilité court, rouge
+      gravite: dj < 0 ? 3 : 2,
+      titre:
+        dj < 0
+          ? `Visa en retard de ${-dj} j — ${v.document} (${v.lot})`
+          : `Visa à rendre ${dj === 0 ? 'aujourd’hui' : `sous ${dj} j`} — ${v.document} (${v.lot})`,
+      detail: `${nomProjet(state, v.projetId)} · reçu le ${fmtDate(v.recuLe)} · délai CCAP ${v.delaiJours} j — viser dans l'onglet Chantier`,
+      lien: `#/projets/${v.projetId}/chantier`,
+      date: echeance,
+      projetId: v.projetId,
+      // pas d'action rapide : viser demande de LIRE le document — un
+      // « ✓ Visé » depuis le fil d'urgences inviterait à signer sans lire
+    })
+  }
+
+  // --- 5.10 : note d'honoraires de cotraitance manquante — une alerte par
+  // cotraitant ACTIF et par mois échu sans note reçue (src/cotraitants.ts :
+  // même prédicat que l'écran projet — deux définitions divergeraient sans
+  // que rien ne le signale). « Relancer » ouvre un BROUILLON Gmail : la
+  // machine propose, l'envoi reste un clic humain (§15) — et sans adresse,
+  // pas d'action : un brouillon sans destinataire n'irait nulle part.
+  for (const { cotraitant, mois } of notesManquantes(state.cotraitants, state.notesHonoraires, moisCourant)) {
+    // un mois de retard est un oubli de fin de mois ; deux mois, un signal —
+    // le reçu s'écarte du convenu sans que personne ne le voie avant le bilan
+    const retard = ecartMois(mois, moisCourant)
+    alertes.push({
+      id: `noteh:${cotraitant.id}:${mois}`,
+      type: 'note_honoraires_manquante',
+      gravite: retard >= 2 ? 3 : 2,
+      titre: `Note d'honoraires manquante — ${cotraitant.nom} (${fmtMois(mois)})`,
+      detail: `${nomProjet(state, cotraitant.projetId)}${cotraitant.mission ? ` · ${cotraitant.mission}` : ''} · aucune note reçue pour ${fmtMois(mois)}`,
+      lien: `#/projets/${cotraitant.projetId}/finances`,
+      projetId: cotraitant.projetId,
+      action: cotraitant.email
+        ? { kind: 'relancer_cotraitant', refId: cotraitant.id, mois, label: 'Relancer' }
+        : undefined,
+    })
   }
 
   // --- Retenue de garantie arrivée à échéance (réception + 1 an) et non levée.

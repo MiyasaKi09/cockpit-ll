@@ -8,6 +8,7 @@
 import type { AppState } from './types'
 import { attendusOuverts } from './achats'
 import { controlesCloture } from './comptable'
+import { derniereTransmission } from './facture'
 import { addMonths, fmtDate, fmtMoney, monthKey } from './util'
 
 /** famille d'une action — l'accueil SÉLECTIONNE dans cette liste au lieu
@@ -89,9 +90,11 @@ export function actionsATraiter(state: AppState, today: string): ActionFinance[]
       kind: 'encaissement',
     })
   }
-  // transmissions rejetées (Chorus/PDP) — action précise avec le motif
+  // transmissions rejetées (Chorus/PDP) — action précise avec le motif.
+  // La plus récente PAR DATE (5.16) : le dernier élément du tableau peut
+  // être un événement ancien ajouté par un import CSV rejoué.
   for (const f of state.factures) {
-    const derniere = f.transmissions?.[f.transmissions.length - 1]
+    const derniere = derniereTransmission(f)
     if (!derniere || derniere.statut !== 'rejetee') continue
     actions.push({
       id: `rejet:${f.id}`,

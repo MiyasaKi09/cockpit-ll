@@ -3,9 +3,46 @@
 // sans API → CR au style de l'agence → relecture → diffusion).
 
 import { useEffect, useRef, useState } from 'react'
-import type { MarcheTravaux, Projet, ReunionChantier, StatutReunion } from '../types'
+import type {
+  DesordreGPA,
+  EvenementMarche,
+  MarcheTravaux,
+  NatureIntemperie,
+  PhaseCode,
+  Projet,
+  ReunionChantier,
+  StatutReunion,
+  TypeEvenementMarche,
+  TypeGarantie,
+  Visa,
+} from '../types'
 import { useStore } from '../store'
-import { assemble, contexteProjet } from '../prompts'
+import { useMoi } from '../moi'
+import { LIBELLE_GARANTIE, garantieDuMarche } from '../derive'
+import {
+  DELAI_VISA_DEFAUT,
+  LIBELLE_STATUT_VISA,
+  echeanceVisa,
+  visasEnRetard,
+  visasSousHuitaine,
+} from '../visas'
+import { LIBELLE_STATUT_DESORDRE, avecRelance, desordresOuverts, finGPA, joursAvantFinGPA } from '../gpa'
+import {
+  MODELES_AMORCE,
+  appliquerModele,
+  tachesDepuisApercu,
+  type ContexteApplication,
+} from '../modelesTaches'
+import {
+  LIBELLE_EVENEMENT,
+  LIBELLE_INTEMPERIE,
+  estJourOuvre,
+  penaliteEncourue,
+  prolongationDelai,
+  totalAppliqueMarche,
+  totalEncouruMarche,
+} from '../penalites'
+import { assemble, contexteMarche, contexteProjet } from '../prompts'
 import {
   Badge,
   Btn,
@@ -25,7 +62,7 @@ import {
   confirmer,
   toast, RowMenu } from '../ui'
 import type { Tone } from '../ui'
-import { fmtDate, fmtMoney, fmtPct, todayISO, uid } from '../util'
+import { diffDays, fmtDate, fmtMoney, fmtPct, ouvrirGmail, todayISO, uid } from '../util'
 import { MODELES_WHISPER, transcrireFichier, type ProgresTranscription } from '../transcription'
 import { CONTRAT_CR, genererDocxCR, parseRetourCR, retourVersTexte } from '../crdocx'
 import { lireRacine, nomConforme, rangerFichier, supporteFS, type ResultatRangement } from '../fsdrive'
@@ -104,8 +141,32 @@ export function CarteMarches({ projet: p }: { projet: Projet }) {
                   <div className="muted small">dont avenants {fmtMoney(m.avenantsHT)}</div>
                 )}
               </td>
-              <td className="num">{fmtPct(m.tauxRG, 0)}</td>
-              <td>{m.revision ? 'oui' : '—'}</td>
+              <td className="num">
+                {garantieDuMarche(m) === 'retenue' ? (
+                  fmtPct(m.tauxRG, 0)
+                ) : (
+                  // la raison du 0 % doit se lire dans la liste, pas se deviner
+                  <span title={`RG 0 % — ${LIBELLE_GARANTIE[garantieDuMarche(m)]}${m.garantieRecueLe ? ` reçue le ${fmtDate(m.garantieRecueLe)}` : ''}`}>
+                    {garantieDuMarche(m) === 'caution' ? 'caution' : 'GPD'}
+                  </span>
+                )}
+              </td>
+              <td>
+                {m.revision ? (
+                  m.indiceRevision ? (
+                    <span className="small">
+                      {m.indiceRevision}
+                      {m.moisZero ? <span className="muted"> · base {m.moisZero}</span> : ''}
+                    </span>
+                  ) : (
+                    // révisable mais sans série : la révision théorique (5.4)
+                    // répondra null — le manque doit se voir dans la liste
+                    <Badge tone="warn">indice ?</Badge>
+                  )
+                ) : (
+                  '—'
+                )}
+              </td>
               <td className="small">
                 {m.dateDebut || m.dateFin ? (
                   <>{m.dateDebut ? fmtDate(m.dateDebut) : '?'} → {m.dateFin ? fmtDate(m.dateFin) : '?'}</>
@@ -152,8 +213,24 @@ function ModalMarche({
   const [montantInitial, setMontantInitial] = useState<number | null>(marche?.montantInitialHT ?? null)
   const [avenants, setAvenants] = useState<number | null>(marche?.avenantsHT ?? 0)
   const [tauxRG, setTauxRG] = useState<number | null>(marche?.tauxRG ?? 0.05)
+  // `garantieDuMarche` et non `marche?.garantie` : un marché d'avant le Lot 5
+  // ne porte que `cautionRG`, et le formulaire doit montrer la valeur EFFECTIVE
+  const [garantie, setGarantie] = useState<TypeGarantie>(garantieDuMarche(marche))
+  const [garantieRecueLe, setGarantieRecueLe] = useState<string | null>(marche?.garantieRecueLe ?? null)
   const [revision, setRevision] = useState(marche?.revision ? 'oui' : 'non')
+  // 5.4 — paramètres de la révision, propres au marché (le CCAP de chaque
+  // entreprise cite SA série) ; les valeurs des séries, elles, se saisissent
+  // en Paramètres : elles sont nationales
+  const [indiceRevision, setIndiceRevision] = useState(marche?.indiceRevision || '')
+  const [moisZero, setMoisZero] = useState(marche?.moisZero || '')
+  const [partFixe, setPartFixe] = useState<number | null>(marche?.partFixe ?? null)
   const [delaiVerif, setDelaiVerif] = useState<number | null>(marche?.delaiVerifJours ?? 15)
+  // 5.2 — taux de pénalités du CCAP, propres au marché (comme la révision :
+  // chaque CCAP écrit les siens). null = non relevé : l'encouru répondra
+  // null, jamais 0 — pas de « pénalité nulle » par défaut de saisie.
+  const [penRetard, setPenRetard] = useState<number | null>(marche?.penalites?.retardParJourHT ?? null)
+  const [penAbsence, setPenAbsence] = useState<number | null>(marche?.penalites?.absenceReunionHT ?? null)
+  const [penDocument, setPenDocument] = useState<number | null>(marche?.penalites?.documentRetardParJourHT ?? null)
   const [contactNom, setContactNom] = useState(marche?.contactNom || '')
   const [contactEmail, setContactEmail] = useState(marche?.contactEmail || '')
   const [actif, setActif] = useState(marche?.actif ? 'oui' : 'non')
@@ -165,6 +242,12 @@ function ModalMarche({
 
   const enregistrer = () => {
     if (!valide) return
+    if (moisZero.trim() && !/^\d{4}-\d{2}$/.test(moisZero.trim())) {
+      // enregistrer un mois zéro illisible ferait répondre null au calcul de
+      // révision sans que la cause se voie jamais : on refuse à la saisie
+      toast('Mois zéro attendu au format AAAA-MM (ex. 2025-10).', { tone: 'danger' })
+      return
+    }
     update((d) => {
       const champs = {
         lot: lot.trim(),
@@ -172,8 +255,28 @@ function ModalMarche({
         montantInitialHT: montantInitial ?? 0,
         avenantsHT: avenants ?? 0,
         tauxRG: tauxRG ?? 0.05,
+        // le champ typé prime sur l'ancien `cautionRG` (voir garantieDuMarche) ;
+        // la date n'a de sens que si un document couvre le marché
+        garantie,
+        garantieRecueLe: garantie === 'retenue' ? null : garantieRecueLe,
         revision: revision === 'oui',
+        // conservés même quand la révision passe à « non » : un aller-retour
+        // du sélecteur ne doit pas effacer une saisie — et le calcul (5.4)
+        // ne lit ces champs que si `revision` est vrai
+        indiceRevision: indiceRevision.trim().toUpperCase() || undefined,
+        moisZero: moisZero.trim() || undefined,
+        partFixe: partFixe ?? undefined,
         delaiVerifJours: delaiVerif ?? 15,
+        // 5.2 — undefined quand rien n'est relevé : un objet vide laisserait
+        // croire que les taux du CCAP ont été lus et valent zéro
+        penalites:
+          penRetard == null && penAbsence == null && penDocument == null
+            ? undefined
+            : {
+                retardParJourHT: penRetard,
+                absenceReunionHT: penAbsence,
+                documentRetardParJourHT: penDocument,
+              },
         contactNom: contactNom.trim() || undefined,
         contactEmail: contactEmail.trim() || undefined,
         actif: actif === 'oui',
@@ -210,9 +313,33 @@ function ModalMarche({
         </Field>
       </div>
       <div className="form-row">
-        <Field label="Retenue de garantie" hint="5 % par défaut sur les marchés publics">
+        <Field
+          label="Garantie (CCAG art. 33)"
+          hint="caution ou première demande : rien n'est retenu sur les situations"
+        >
+          <Select
+            value={garantie}
+            onChange={(v) => setGarantie(v as TypeGarantie)}
+            options={[
+              { value: 'retenue', label: 'Retenue de garantie' },
+              { value: 'caution', label: 'Caution bancaire' },
+              { value: 'gpd', label: 'Garantie à première demande' },
+            ]}
+          />
+        </Field>
+        <Field
+          label="Taux de retenue"
+          hint={garantie === 'retenue' ? '5 % par défaut sur les marchés publics' : 'sans effet : le document couvre le marché'}
+        >
           <PctInput value={tauxRG} onChange={setTauxRG} ariaLabel="Taux de retenue de garantie en pourcentage" />
         </Field>
+        {garantie !== 'retenue' && (
+          <Field label="Document reçu le" hint="date de réception de la caution / GPD">
+            <DateInput value={garantieRecueLe} onChange={setGarantieRecueLe} />
+          </Field>
+        )}
+      </div>
+      <div className="form-row">
         <Field label="Révision de prix">
           <Select
             value={revision}
@@ -222,6 +349,30 @@ function ModalMarche({
         </Field>
         <Field label="Délai de vérification (j)" hint="Délai contractuel MOE sur les situations.">
           <NumInput value={delaiVerif} onChange={setDelaiVerif} />
+        </Field>
+      </div>
+      {revision === 'oui' && (
+        <div className="form-row">
+          <Field label="Indice (CCAP)" hint="la série de cette entreprise : BT01, BT02, TP08… — valeurs à saisir dans Paramètres">
+            <TextInput value={indiceRevision} onChange={setIndiceRevision} placeholder="BT01" />
+          </Field>
+          <Field label="Mois zéro" hint="mois d'établissement des prix — le I0 de la formule">
+            <TextInput value={moisZero} onChange={setMoisZero} placeholder="2025-10" />
+          </Field>
+          <Field label="Partie fixe" hint="formule CCAP : partie fixe + (1 − partie fixe) × In/I0 — 15 % si vide">
+            <PctInput value={partFixe} onChange={setPartFixe} placeholder="15" ariaLabel="Partie fixe de la formule de révision en pourcentage" />
+          </Field>
+        </div>
+      )}
+      <div className="form-row">
+        <Field label="Pénalité retard (€ HT/jour)" hint="taux du CCAP — vide : l'encouru ne se calcule pas">
+          <NumInput value={penRetard} onChange={setPenRetard} ariaLabel="Pénalité de retard d'exécution en euros HT par jour" />
+        </Field>
+        <Field label="Pénalité absence réunion (€ HT)">
+          <NumInput value={penAbsence} onChange={setPenAbsence} ariaLabel="Pénalité d'absence à une réunion de chantier en euros HT" />
+        </Field>
+        <Field label="Pénalité document (€ HT/jour)" hint="DOE, PPSPS, décomptes, agréments en retard">
+          <NumInput value={penDocument} onChange={setPenDocument} ariaLabel="Pénalité de document contractuel en retard en euros HT par jour" />
         </Field>
       </div>
       <div className="form-row">
@@ -256,6 +407,1338 @@ function ModalMarche({
         <Btn onClick={onClose}>Annuler</Btn>
         <Btn kind="primary" onClick={enregistrer} disabled={!valide}>
           {creation ? 'Ajouter le marché' : 'Enregistrer'}
+        </Btn>
+      </div>
+    </Modal>
+  )
+}
+
+// ============================================================
+// 5.8 — Registre des visas : les documents d'exécution reçus en
+// phase VISA, le délai du CCAP qui court, et le geste de visa —
+// daté et signé, parce qu'un visa en retard engage la
+// responsabilité de la MOE.
+// ============================================================
+
+/** tons d'affichage des statuts de visa — le référentiel des libellés
+ *  vit dans src/visas.ts, seule la couleur est une affaire d'écran */
+const TONE_STATUT_VISA: Record<Visa['statut'], Tone> = {
+  a_viser: 'info',
+  vise: 'ok',
+  vise_observations: 'warn',
+  refuse: 'danger',
+}
+
+export function CarteVisas({ projet: p }: { projet: Projet }) {
+  const { state, update, replace } = useStore()
+  // qui signe le visa : même règle que la décision de pénalité — la
+  // personne reconnue, à défaut la première de la liste (pas de signature vide)
+  const moi = useMoi()
+  const signataire = moi.nom ?? state.settings.personnes[0]
+  const today = todayISO()
+  const [modal, setModal] = useState<{ visa?: Visa } | null>(null)
+  const [geste, setGeste] = useState<{ visa: Visa; statut: 'vise_observations' | 'refuse' } | null>(null)
+
+  const marches = state.marches.filter((m) => m.projetId === p.id)
+  const visas = state.visas
+    .filter((v) => v.projetId === p.id)
+    .sort((a, b) => {
+      // les visas en attente d'abord, échéance la plus proche en tête —
+      // c'est l'ordre dans lequel la responsabilité court
+      const attenteA = a.statut === 'a_viser' ? 0 : 1
+      const attenteB = b.statut === 'a_viser' ? 0 : 1
+      if (attenteA !== attenteB) return attenteA - attenteB
+      if (attenteA === 0) return (echeanceVisa(a) || '9999').localeCompare(echeanceVisa(b) || '9999')
+      return (b.viseLe || '').localeCompare(a.viseLe || '') || a.id.localeCompare(b.id)
+    })
+  const marcheDe = (v: Visa) => (v.marcheId ? marches.find((m) => m.id === v.marcheId) : undefined)
+  const docDe = (v: Visa) =>
+    v.documentId ? state.registreDocuments.find((d) => d.id === v.documentId) : undefined
+
+  const retards = visasEnRetard(visas, today)
+  const huitaine = visasSousHuitaine(visas, today)
+
+  /** le geste : statut + date + signature en une seule écriture — un statut
+   *  changé sans viseLe/visePar ne prouverait rien le jour où on demande
+   *  qui a visé quoi et quand */
+  const viser = (v: Visa, statut: Visa['statut'], observations?: string) => {
+    const snap = state
+    update((d) => {
+      const x = d.visas.find((y) => y.id === v.id)
+      if (!x) return
+      x.statut = statut
+      x.viseLe = todayISO()
+      x.visePar = signataire
+      if (observations !== undefined) x.observations = observations
+    })
+    toast(`${LIBELLE_STATUT_VISA[statut][0].toUpperCase()}${LIBELLE_STATUT_VISA[statut].slice(1)} — daté et signé « ${signataire} ».`, {
+      tone: statut === 'refuse' ? 'warn' : 'ok',
+      undo: () => replace(snap),
+    })
+  }
+
+  const rouvrir = async (v: Visa) => {
+    if (
+      !(await confirmer({
+        message:
+          `Rouvrir le visa « ${v.document} » (${LIBELLE_STATUT_VISA[v.statut]} le ${fmtDate(v.viseLe)} par ${v.visePar || '?'}) ?\n` +
+          `Le geste sera effacé et le délai du CCAP recommencera à compter depuis la réception.`,
+        danger: true,
+        confirmerLabel: 'Rouvrir le visa',
+      }))
+    )
+      return
+    update((d) => {
+      const x = d.visas.find((y) => y.id === v.id)
+      if (!x) return
+      x.statut = 'a_viser'
+      x.viseLe = null
+      x.visePar = null
+    })
+  }
+
+  const supprimer = async (v: Visa) => {
+    const snap = state
+    if (!(await confirmer({ message: `Retirer « ${v.document} » du registre des visas ?`, danger: true, confirmerLabel: 'Retirer' }))) return
+    update((d) => {
+      d.visas = d.visas.filter((x) => x.id !== v.id)
+    })
+    toast('Document retiré du registre.', { undo: () => replace(snap) })
+  }
+
+  return (
+    <Card
+      titre="Visas des documents d'exécution"
+      actions={<Btn small kind="primary" onClick={() => setModal({})}>Consigner un document reçu</Btn>}
+    >
+      <div className="toolbar">
+        <span className="small muted">Délai de visa du CCAP (jours calendaires), défaut du projet :</span>
+        <NumInput
+          value={p.delaiVisaJours ?? null}
+          onChange={(v) =>
+            update((d) => {
+              const x = d.projets.find((y) => y.id === p.id)
+              if (x) x.delaiVisaJours = v
+            })
+          }
+          placeholder={String(DELAI_VISA_DEFAUT)}
+          style={{ maxWidth: 90 }}
+          ariaLabel="Délai de visa par défaut du projet en jours calendaires"
+        />
+        {(retards.length > 0 || huitaine.length > 0) && (
+          <span className="small">
+            {retards.length > 0 && <Badge tone="danger">{retards.length} en retard</Badge>}{' '}
+            {huitaine.length > 0 && <Badge tone="warn">{huitaine.length} sous huitaine</Badge>}
+          </span>
+        )}
+      </div>
+      {visas.length === 0 ? (
+        <EmptyState>
+          Aucun document consigné — chaque document d'exécution reçu (plans EXE, notes de calcul,
+          fiches techniques) entre ici avec sa date de réception : le délai du CCAP court, une
+          alerte se lève à J−3, et le visa se signe. Un visa en retard engage la responsabilité de
+          la MOE.
+        </EmptyState>
+      ) : (
+        <Table
+          compact
+          head={['Document', 'Lot / entreprise', 'Reçu le', 'Échéance', 'Statut', '']}
+        >
+          {visas.map((v) => {
+            const m = marcheDe(v)
+            const doc = docDe(v)
+            const echeance = echeanceVisa(v)
+            const dj = echeance ? diffDays(today, echeance) : null
+            const enAttente = v.statut === 'a_viser'
+            return (
+              <tr key={v.id}>
+                <td>
+                  <strong>{v.document}</strong>
+                  {doc && <div className="muted small">au registre : {doc.titre}</div>}
+                </td>
+                <td className="small">
+                  {v.lot}
+                  {m && <div className="muted">{m.entreprise}</div>}
+                </td>
+                <td style={{ whiteSpace: 'nowrap' }}>{fmtDate(v.recuLe)}</td>
+                <td style={{ whiteSpace: 'nowrap' }}>
+                  {echeance ? (
+                    <span title={`délai CCAP : ${v.delaiJours} jours calendaires`}>
+                      {fmtDate(echeance)}
+                      {enAttente && dj !== null && dj < 0 && (
+                        <>
+                          {' '}
+                          <Badge tone="danger">retard de {-dj} j</Badge>
+                        </>
+                      )}
+                      {enAttente && dj !== null && dj >= 0 && dj <= 7 && (
+                        <>
+                          {' '}
+                          <Badge tone="warn">J−{dj}</Badge>
+                        </>
+                      )}
+                    </span>
+                  ) : (
+                    <span className="muted">?</span>
+                  )}
+                </td>
+                <td>
+                  <Badge tone={TONE_STATUT_VISA[v.statut]}>{LIBELLE_STATUT_VISA[v.statut]}</Badge>
+                  {v.viseLe && (
+                    <div className="muted small">
+                      le {fmtDate(v.viseLe)} — {v.visePar || '?'}
+                    </div>
+                  )}
+                  {v.observations && <div className="muted small">{v.observations}</div>}
+                </td>
+                <td className="right">
+                  <span style={{ display: 'inline-flex', gap: 6 }}>
+                    {enAttente && (
+                      <Btn
+                        small
+                        kind="primary"
+                        onClick={() => viser(v, 'vise')}
+                        title={`Vise le document sans observation — daté et signé « ${signataire} »`}
+                      >
+                        Viser
+                      </Btn>
+                    )}
+                    <RowMenu
+                      items={[
+                        ...(enAttente
+                          ? [
+                              {
+                                label: 'Viser avec observations',
+                                onClick: () => setGeste({ visa: v, statut: 'vise_observations' as const }),
+                              },
+                              {
+                                label: 'Refuser le document',
+                                onClick: () => setGeste({ visa: v, statut: 'refuse' as const }),
+                              },
+                              { label: 'Modifier', onClick: () => setModal({ visa: v }) },
+                            ]
+                          : [{ label: 'Rouvrir le visa (annuler le geste)', onClick: () => void rouvrir(v) }]),
+                        { label: 'Retirer du registre', onClick: () => void supprimer(v), danger: true },
+                      ]}
+                    />
+                  </span>
+                </td>
+              </tr>
+            )
+          })}
+        </Table>
+      )}
+
+      {modal && (
+        <ModalVisa projet={p} marches={marches} visa={modal.visa} onClose={() => setModal(null)} />
+      )}
+      {geste && (
+        <ModalGesteVisa
+          visa={geste.visa}
+          statut={geste.statut}
+          onConfirmer={(obs) => {
+            viser(geste.visa, geste.statut, obs)
+            setGeste(null)
+          }}
+          onClose={() => setGeste(null)}
+        />
+      )}
+    </Card>
+  )
+}
+
+function ModalVisa({
+  projet: p,
+  marches,
+  visa,
+  onClose,
+}: {
+  projet: Projet
+  marches: MarcheTravaux[]
+  visa?: Visa
+  onClose: () => void
+}) {
+  const { state, update } = useStore()
+  const creation = !visa
+
+  const [marcheId, setMarcheId] = useState(visa?.marcheId || '')
+  const [lot, setLot] = useState(visa?.lot || '')
+  const [document, setDocument] = useState(visa?.document || '')
+  const [recuLe, setRecuLe] = useState<string | null>(visa?.recuLe || todayISO())
+  // le défaut du PROJET pré-remplit, le visa peut porter le sien : le CCAP
+  // fixe un délai d'opération, mais certains documents ont le leur
+  const [delai, setDelai] = useState<number | null>(visa?.delaiJours ?? p.delaiVisaJours ?? DELAI_VISA_DEFAUT)
+  const [documentId, setDocumentId] = useState(visa?.documentId || '')
+
+  const docsProjet = state.registreDocuments.filter((d) => d.projetId === p.id)
+  const valide = document.trim() !== '' && lot.trim() !== '' && !!recuLe
+
+  const choisirMarche = (id: string) => {
+    setMarcheId(id)
+    const m = marches.find((x) => x.id === id)
+    if (m) setLot(m.lot)
+  }
+
+  const enregistrer = () => {
+    if (!valide) return
+    update((d) => {
+      const champs = {
+        marcheId: marcheId || null,
+        lot: lot.trim(),
+        document: document.trim(),
+        recuLe: recuLe!,
+        delaiJours: delai ?? p.delaiVisaJours ?? DELAI_VISA_DEFAUT,
+        documentId: documentId || null,
+      }
+      if (creation) {
+        // le statut naît « à viser » : consigner la réception n'est pas viser
+        d.visas.push({ id: uid('visa'), projetId: p.id, statut: 'a_viser', ...champs })
+      } else {
+        const x = d.visas.find((y) => y.id === visa.id)
+        // un visa signé ne se modifie plus sans être rouvert : la date de
+        // réception et le délai fondent une échéance déjà opposée
+        if (x && x.statut === 'a_viser') Object.assign(x, champs)
+      }
+    })
+    onClose()
+  }
+
+  return (
+    <Modal titre={creation ? 'Consigner un document reçu' : `Modifier — ${visa.document}`} onClose={onClose}>
+      <div className="form-row">
+        <Field label="Marché émetteur" hint="facultatif — un document peut précéder la signature du marché">
+          <Select
+            value={marcheId}
+            onChange={choisirMarche}
+            options={[
+              { value: '', label: '— hors marché —' },
+              ...marches.map((m) => ({ value: m.id, label: `${m.lot} — ${m.entreprise}` })),
+            ]}
+          />
+        </Field>
+        <Field label="Lot">
+          <TextInput value={lot} onChange={setLot} placeholder="Ex. Lot 03 — Charpente" />
+        </Field>
+      </div>
+      <div className="form-row">
+        <Field label="Document">
+          <TextInput value={document} onChange={setDocument} placeholder="Ex. Plans EXE R+1 — indice B" />
+        </Field>
+      </div>
+      <div className="form-row">
+        <Field label="Reçu le">
+          <DateInput value={recuLe} onChange={setRecuLe} />
+        </Field>
+        <Field label="Délai de visa (jours calendaires)" hint="délai du CCAP — pré-rempli par le défaut du projet">
+          <NumInput value={delai} onChange={setDelai} ariaLabel="Délai de visa de ce document en jours calendaires" />
+        </Field>
+      </div>
+      {docsProjet.length > 0 && (
+        <div className="form-row">
+          <Field label="Pièce au registre documentaire" hint="facultatif — relie le visa au fichier classé">
+            <Select
+              value={documentId}
+              onChange={setDocumentId}
+              options={[
+                { value: '', label: '— aucune —' },
+                ...docsProjet.map((d) => ({ value: d.id, label: d.titre })),
+              ]}
+            />
+          </Field>
+        </div>
+      )}
+      <div className="form-foot">
+        <Btn onClick={onClose}>Annuler</Btn>
+        <Btn kind="primary" onClick={enregistrer} disabled={!valide}>
+          {creation ? 'Consigner le document' : 'Enregistrer'}
+        </Btn>
+      </div>
+    </Modal>
+  )
+}
+
+/** viser avec observations / refuser : le motif s'écrit AVANT le geste —
+ *  un refus sans motif n'est pas opposable, et c'est le motif que
+ *  l'entreprise lira */
+function ModalGesteVisa({
+  visa,
+  statut,
+  onConfirmer,
+  onClose,
+}: {
+  visa: Visa
+  statut: 'vise_observations' | 'refuse'
+  onConfirmer: (observations: string) => void
+  onClose: () => void
+}) {
+  const [observations, setObservations] = useState(visa.observations || '')
+  const refus = statut === 'refuse'
+  return (
+    <Modal titre={`${refus ? 'Refuser' : 'Viser avec observations'} — ${visa.document}`} onClose={onClose}>
+      <Field label={refus ? 'Motif du refus' : 'Observations du visa'}>
+        <TextArea
+          value={observations}
+          onChange={setObservations}
+          rows={3}
+          placeholder={refus ? 'Ce que l’entreprise doit corriger avant nouvelle présentation…' : 'Réserves à lever, sans bloquer l’exécution…'}
+        />
+      </Field>
+      <div className="form-foot">
+        <Btn onClick={onClose}>Annuler</Btn>
+        <Btn kind={refus ? 'danger' : 'primary'} onClick={() => onConfirmer(observations.trim())} disabled={!observations.trim()}>
+          {refus ? 'Refuser le document' : 'Viser avec observations'}
+        </Btn>
+      </div>
+    </Modal>
+  )
+}
+
+// ============================================================
+// 5.2 — Pénalités de marché : le journal CONSTATE, le calcul
+// chiffre l'encouru, et l'application reste un geste humain
+// daté et signé (§15) — jamais un automatisme.
+// ============================================================
+
+export function CartePenalites({ projet: p }: { projet: Projet }) {
+  const { state, update, replace } = useStore()
+  // qui signe la décision : la personne reconnue, à défaut la première de
+  // la liste — même règle qu'au registre documentaire (pas de signature vide)
+  const moi = useMoi()
+  const signataire = moi.nom ?? state.settings.personnes[0]
+  const [modal, setModal] = useState<{ evenement?: EvenementMarche } | null>(null)
+
+  const marches = state.marches.filter((m) => m.projetId === p.id)
+  const evenements = state.evenementsMarche
+    .filter((e) => e.projetId === p.id)
+    .sort((a, b) => b.date.localeCompare(a.date) || a.id.localeCompare(b.id))
+  const marcheDe = (e: EvenementMarche) => marches.find((m) => m.id === e.marcheId)
+
+  // 5.3 — les jours d'intempéries reconnues sur la fenêtre d'intervention
+  // du marché : le MÊME chiffre que la prolongation du délai (une seule
+  // source, `prolongationDelai`), déduit ici des retards d'exécution — les
+  // deux registres se lisent ensemble, sinon on pénalise un retard que la
+  // pluie excuse.
+  const deductionDe = (m: MarcheTravaux | undefined): number =>
+    m ? prolongationDelai(m, state.intemperies) : 0
+
+  const appliquer = async (e: EvenementMarche) => {
+    const m = marcheDe(e)
+    const encouru = penaliteEncourue(e, m?.penalites, deductionDe(m))
+    if (!encouru) return
+    if (
+      !(await confirmer({
+        message:
+          `Appliquer la pénalité de ${fmtMoney(encouru.montantHT, true)} HT — ${LIBELLE_EVENEMENT[e.type]}` +
+          `${m ? ` (${m.lot} — ${m.entreprise})` : ''} ?\n` +
+          `Le montant sera figé et la décision signée « ${signataire} ». Le report sur la situation reste à faire à la main : ` +
+          `une pénalité est un acte contractuel.`,
+        danger: true,
+        confirmerLabel: 'Appliquer la pénalité',
+      }))
+    )
+      return
+    update((d) => {
+      const x = d.evenementsMarche.find((y) => y.id === e.id)
+      if (!x) return
+      x.penaliteAppliquee = true
+      // FIGÉ : un taux corrigé ou une intempérie saisie après coup ne
+      // réécrit pas ce qui a été signifié à l'entreprise
+      x.penaliteMontantHT = encouru.montantHT
+      x.decidePar = signataire
+      x.decideLe = todayISO()
+    })
+    toast('Pénalité appliquée — montant figé, décision signée.', { tone: 'ok' })
+  }
+
+  const annulerApplication = async (e: EvenementMarche) => {
+    if (
+      !(await confirmer({
+        message:
+          `Annuler l'application de la pénalité de ${fmtMoney(e.penaliteMontantHT ?? 0, true)} HT ` +
+          `(décidée le ${fmtDate(e.decideLe)} par ${e.decidePar || '?'}) ?\nL'événement reste au journal, le montant redevient un simple encouru.`,
+        danger: true,
+        confirmerLabel: "Annuler l'application",
+      }))
+    )
+      return
+    update((d) => {
+      const x = d.evenementsMarche.find((y) => y.id === e.id)
+      if (!x) return
+      x.penaliteAppliquee = false
+      x.penaliteMontantHT = null
+      x.decidePar = null
+      x.decideLe = null
+    })
+  }
+
+  const supprimer = async (e: EvenementMarche) => {
+    const snap = state
+    if (
+      !(await confirmer({
+        message: e.penaliteAppliquee
+          ? `Supprimer cet événement ?\nLa pénalité APPLIQUÉE de ${fmtMoney(e.penaliteMontantHT ?? 0, true)} HT disparaîtra du total — préférez « Annuler l'application » pour garder la trace.`
+          : 'Supprimer cet événement du journal ?',
+        danger: true,
+        confirmerLabel: 'Supprimer',
+      }))
+    )
+      return
+    update((d) => {
+      d.evenementsMarche = d.evenementsMarche.filter((x) => x.id !== e.id)
+    })
+    toast('Événement supprimé.', { undo: () => replace(snap) })
+  }
+
+  // marchés qui ont au moins un événement : la ligne de synthèse par marché
+  const marchesAvecEvenements = marches.filter((m) => evenements.some((e) => e.marcheId === m.id))
+
+  return (
+    <Card
+      titre="Pénalités de marché"
+      actions={
+        marches.length > 0 && (
+          <Btn small kind="primary" onClick={() => setModal({})}>
+            Constater un événement
+          </Btn>
+        )
+      }
+    >
+      {marches.length === 0 ? (
+        <EmptyState>
+          Ajoutez d'abord les marchés de travaux : les taux de pénalités du CCAP se saisissent
+          sur chaque marché, et le journal des événements s'y rattache.
+        </EmptyState>
+      ) : evenements.length === 0 ? (
+        <EmptyState>
+          Aucun événement constaté — retard d'exécution, absence à une réunion de chantier, document
+          contractuel en retard (DOE, PPSPS…). Le Cockpit chiffre l'encouru d'après les taux du CCAP
+          saisis sur le marché ; l'application reste votre décision, datée et signée.
+        </EmptyState>
+      ) : (
+        <>
+          <Table
+            compact
+            head={[
+              'Marché',
+              'Événement',
+              'Date',
+              'Jours',
+              <span key="e" className="right">Encouru HT</span>,
+              'Décision',
+              '',
+            ]}
+          >
+            {evenements.map((e) => {
+              const m = marcheDe(e)
+              const encouru = penaliteEncourue(e, m?.penalites, deductionDe(m))
+              return (
+                <tr key={e.id}>
+                  <td>
+                    {m ? (
+                      <>
+                        <strong>{m.lot}</strong>
+                        <div className="muted small">{m.entreprise}</div>
+                      </>
+                    ) : (
+                      <span className="muted">marché supprimé</span>
+                    )}
+                  </td>
+                  <td>
+                    {LIBELLE_EVENEMENT[e.type]}
+                    {e.type === 'document_retard' && e.document && (
+                      <span className="muted"> · {e.document}</span>
+                    )}
+                    {e.commentaire && <div className="muted small">{e.commentaire}</div>}
+                  </td>
+                  <td style={{ whiteSpace: 'nowrap' }}>{fmtDate(e.date)}</td>
+                  <td className="num">
+                    {e.type === 'absence_reunion' ? (
+                      '—'
+                    ) : e.jours == null ? (
+                      '?'
+                    ) : encouru && encouru.joursDeduits > 0 ? (
+                      // 5.3 — la déduction se LIT là où elle agit : « 10 − 3 = 7 j »,
+                      // pas un résultat sec dont personne ne saurait d'où il vient
+                      <span title={`${encouru.joursDeduits} jour(s) ouvré(s) d'intempéries reconnues sur la fenêtre du marché, déduits du retard (registre ci-dessous)`}>
+                        {e.jours} − {encouru.joursDeduits} = {encouru.joursRetenus} j
+                      </span>
+                    ) : (
+                      `${e.jours} j`
+                    )}
+                  </td>
+                  <td className="right">
+                    {e.penaliteAppliquee ? (
+                      <Money v={e.penaliteMontantHT} cents />
+                    ) : encouru ? (
+                      <Money v={encouru.montantHT} cents />
+                    ) : (
+                      // taux non saisi ou jours illisibles : le manque doit se
+                      // voir dans la liste, pas se confondre avec « 0 € »
+                      <span title="Encouru non calculable : saisissez le taux du CCAP sur le marché (« Modifier ») et les jours de l'événement.">
+                        <Badge tone="warn">taux CCAP ?</Badge>
+                      </span>
+                    )}
+                  </td>
+                  <td>
+                    {e.penaliteAppliquee ? (
+                      <span title={`Décision du ${fmtDate(e.decideLe)} — ${e.decidePar || '?'}`}>
+                        <Badge tone="danger">appliquée le {fmtDate(e.decideLe)}</Badge>
+                      </span>
+                    ) : (
+                      <Btn
+                        small
+                        kind="primary"
+                        disabled={!encouru}
+                        onClick={() => void appliquer(e)}
+                        title="Fige le montant encouru et signe la décision — le report sur la situation reste manuel"
+                      >
+                        Appliquer
+                      </Btn>
+                    )}
+                  </td>
+                  <td className="right">
+                    <RowMenu
+                      items={[
+                        ...(e.penaliteAppliquee
+                          ? [
+                              {
+                                label: "Annuler l'application",
+                                onClick: () => void annulerApplication(e),
+                              },
+                            ]
+                          : [{ label: 'Modifier l’événement', onClick: () => setModal({ evenement: e }) }]),
+                        { label: 'Supprimer l’événement', onClick: () => void supprimer(e), danger: true },
+                      ]}
+                    />
+                  </td>
+                </tr>
+              )
+            })}
+          </Table>
+          {marchesAvecEvenements.length > 0 && (
+            <p className="muted small" style={{ marginTop: 8 }}>
+              {marchesAvecEvenements.map((m) => (
+                <span key={m.id} style={{ display: 'block' }}>
+                  {m.lot} — {m.entreprise} : encouru{' '}
+                  <strong>{fmtMoney(totalEncouruMarche(evenements, m.id, m.penalites, deductionDe(m)), true)}</strong> HT
+                  {' · '}appliqué <strong>{fmtMoney(totalAppliqueMarche(evenements, m.id), true)}</strong> HT
+                </span>
+              ))}
+            </p>
+          )}
+        </>
+      )}
+
+      {modal && (
+        <ModalEvenement
+          projetId={p.id}
+          marches={marches}
+          evenement={modal.evenement}
+          onClose={() => setModal(null)}
+        />
+      )}
+    </Card>
+  )
+}
+
+function ModalEvenement({
+  projetId,
+  marches,
+  evenement,
+  onClose,
+}: {
+  projetId: string
+  marches: MarcheTravaux[]
+  evenement?: EvenementMarche
+  onClose: () => void
+}) {
+  const { update } = useStore()
+  const creation = !evenement
+
+  const [marcheId, setMarcheId] = useState(evenement?.marcheId || marches[0]?.id || '')
+  const [type, setType] = useState<TypeEvenementMarche>(evenement?.type || 'retard_execution')
+  const [date, setDate] = useState<string | null>(evenement?.date || todayISO())
+  const [jours, setJours] = useState<number | null>(evenement?.jours ?? null)
+  const [doc, setDoc] = useState(evenement?.document || '')
+  const [commentaire, setCommentaire] = useState(evenement?.commentaire || '')
+
+  const valide = marcheId !== '' && !!date
+
+  const enregistrer = () => {
+    if (!valide) return
+    update((d) => {
+      const champs = {
+        marcheId,
+        type,
+        date: date!,
+        // une absence de réunion ne se compte pas en jours : ne pas garder
+        // une saisie faite avant un changement de type
+        jours: type === 'absence_reunion' ? null : jours,
+        document: type === 'document_retard' ? doc.trim() || undefined : undefined,
+        commentaire: commentaire.trim(),
+      }
+      if (creation) {
+        // penaliteAppliquee naît FAUX : constater n'est pas décider (§15)
+        d.evenementsMarche.push({ id: uid('evt'), projetId, penaliteAppliquee: false, ...champs })
+      } else {
+        const e = d.evenementsMarche.find((x) => x.id === evenement.id)
+        // un événement appliqué ne se modifie plus : sa pénalité est figée
+        if (e && !e.penaliteAppliquee) Object.assign(e, champs)
+      }
+    })
+    onClose()
+  }
+
+  return (
+    <Modal titre={creation ? 'Constater un événement' : 'Modifier l’événement'} onClose={onClose}>
+      <div className="form-row">
+        <Field label="Marché">
+          <Select
+            value={marcheId}
+            onChange={setMarcheId}
+            options={marches.map((m) => ({ value: m.id, label: `${m.lot} — ${m.entreprise}` }))}
+          />
+        </Field>
+        <Field label="Événement (CCAG art. 19-20)">
+          <Select
+            value={type}
+            onChange={(v) => setType(v as TypeEvenementMarche)}
+            options={(Object.keys(LIBELLE_EVENEMENT) as TypeEvenementMarche[]).map((t) => ({
+              value: t,
+              label: LIBELLE_EVENEMENT[t],
+            }))}
+          />
+        </Field>
+      </div>
+      <div className="form-row">
+        <Field label="Date du constat">
+          <DateInput value={date} onChange={setDate} />
+        </Field>
+        {type !== 'absence_reunion' && (
+          <Field label="Jours de retard" hint="l'encouru = jours × taux du CCAP saisi sur le marché">
+            <NumInput value={jours} onChange={setJours} ariaLabel="Jours de retard constatés" />
+          </Field>
+        )}
+        {type === 'document_retard' && (
+          <Field label="Document">
+            <TextInput value={doc} onChange={setDoc} placeholder="DOE, PPSPS, agrément, décompte…" />
+          </Field>
+        )}
+      </div>
+      <div className="form-row">
+        <Field label="Commentaire" hint="le constat tel qu'il sera opposable : réunion, OS, courrier…">
+          <TextArea value={commentaire} onChange={setCommentaire} rows={2} />
+        </Field>
+      </div>
+      <div className="form-foot">
+        <Btn onClick={onClose}>Annuler</Btn>
+        <Btn kind="primary" onClick={enregistrer} disabled={!valide}>
+          {creation ? 'Consigner l’événement' : 'Enregistrer'}
+        </Btn>
+      </div>
+    </Modal>
+  )
+}
+
+// ============================================================
+// 5.3 — Registre des intempéries : des jours datés, constatés,
+// opposables. Double effet, affiché là où il agit : prolongation
+// du délai des marchés (ici) et déduction des retards (journal
+// des pénalités ci-dessus) — même chiffre, même fonction.
+// ============================================================
+
+export function CarteIntemperies({ projet: p }: { projet: Projet }) {
+  const { state, update, replace } = useStore()
+  const [date, setDate] = useState<string | null>(todayISO())
+  const [nature, setNature] = useState<NatureIntemperie>('pluie')
+  const [commentaire, setCommentaire] = useState('')
+
+  const intemperies = state.intemperies
+    .filter((i) => i.projetId === p.id)
+    .sort((a, b) => b.date.localeCompare(a.date) || a.id.localeCompare(b.id))
+
+  // l'effet « prolongation » se lit sur les marchés dont la fenêtre
+  // d'intervention est posée — les autres n'ont pas de période à confronter
+  const marchesAvecFenetre = state.marches.filter(
+    (m) => m.projetId === p.id && (m.dateDebut || m.dateFin),
+  )
+
+  const ajouter = () => {
+    if (!date) return
+    update((d) => {
+      d.intemperies.push({
+        id: uid('intemp'),
+        projetId: p.id,
+        date,
+        nature,
+        commentaire: commentaire.trim(),
+      })
+    })
+    setCommentaire('')
+  }
+
+  const supprimer = (i: (typeof intemperies)[number]) => {
+    const snap = state
+    update((d) => {
+      d.intemperies = d.intemperies.filter((x) => x.id !== i.id)
+    })
+    toast('Jour d’intempérie retiré du registre.', { undo: () => replace(snap) })
+  }
+
+  return (
+    <Card titre="Registre des intempéries">
+      <div className="toolbar">
+        <DateInput value={date} onChange={setDate} style={{ maxWidth: 170 }} />
+        <Select
+          value={nature}
+          onChange={(v) => setNature(v as NatureIntemperie)}
+          options={(Object.keys(LIBELLE_INTEMPERIE) as NatureIntemperie[]).map((n) => ({
+            value: n,
+            label: LIBELLE_INTEMPERIE[n],
+          }))}
+          style={{ maxWidth: 140 }}
+        />
+        <TextInput
+          value={commentaire}
+          onChange={setCommentaire}
+          placeholder="Constat opposable : seuil du CCAP atteint, CR n°…, relevé météo…"
+          style={{ maxWidth: 420 }}
+        />
+        <Btn small kind="primary" onClick={ajouter} disabled={!date}>
+          Consigner le jour
+        </Btn>
+      </div>
+      {intemperies.length === 0 ? (
+        <EmptyState>
+          Aucun jour consigné — chaque jour d'intempérie (seuils du CCAP) prolonge le délai
+          contractuel des marchés et se déduit des retards du journal de pénalités : c'est la trace
+          opposable du décompte général.
+        </EmptyState>
+      ) : (
+        <>
+          <Table compact head={['Date', 'Nature', 'Commentaire', '']}>
+            {intemperies.map((i) => (
+              <tr key={i.id}>
+                <td style={{ whiteSpace: 'nowrap' }}>
+                  {fmtDate(i.date)}
+                  {!estJourOuvre(i.date) && (
+                    <>
+                      {' '}
+                      {/* consigné quand même (le constat est vrai), mais dit :
+                          un samedi ne prolonge pas un délai en jours ouvrés */}
+                      <span title="Jour non ouvré : consigné pour mémoire, il ne compte ni dans la prolongation ni dans la déduction des retards">
+                        <Badge tone="muted">week-end — non compté</Badge>
+                      </span>
+                    </>
+                  )}
+                </td>
+                <td>{LIBELLE_INTEMPERIE[i.nature]}</td>
+                <td>{i.commentaire || <span className="muted">—</span>}</td>
+                <td className="right">
+                  <RowMenu
+                    items={[{ label: 'Retirer ce jour', onClick: () => supprimer(i), danger: true }]}
+                  />
+                </td>
+              </tr>
+            ))}
+          </Table>
+          {marchesAvecFenetre.length > 0 && (
+            <p className="muted small" style={{ marginTop: 8 }}>
+              Prolongation du délai contractuel (jours ouvrés distincts sur la fenêtre
+              d'intervention — CCAG art. 19.2.3) :{' '}
+              {marchesAvecFenetre.map((m, idx) => (
+                <span key={m.id}>
+                  {idx > 0 && ' · '}
+                  {m.lot} <strong>+{prolongationDelai(m, state.intemperies)} j</strong>
+                </span>
+              ))}
+              . Le même chiffre se déduit des retards d'exécution du journal de pénalités.
+            </p>
+          )}
+          <p className="muted small" style={{ marginTop: 4 }}>
+            Deux natures le même jour comptent UN jour ; les week-ends sont consignés mais non
+            comptés.
+          </p>
+        </>
+      )}
+    </Card>
+  )
+}
+
+// ============================================================
+// 5.9 — GPA : l'année de parfait achèvement. Le registre trace
+// (signalement, notification, relances, levée), le compte à
+// rebours lit la MÊME fin de GPA que la levée de la RG
+// (src/gpa.ts), et les gestes restent humains : « Relancer »
+// ouvre un brouillon Gmail, « Mettre en demeure » copie un
+// prompt — rien ne part tout seul (§15).
+// ============================================================
+
+const TONE_STATUT_DESORDRE: Record<DesordreGPA['statut'], Tone> = {
+  signale: 'warn',
+  notifie_entreprise: 'info',
+  leve: 'ok',
+  conteste: 'danger',
+}
+
+/** corps de secours quand l'état ne porte pas encore le gabarit du seed
+ *  (états d'avant le livrable : `prompts` n'est pas re-fusionné au
+ *  chargement) — même trame courte que le fallback de l'assistant CR */
+const MED_GPA_SECOURS = `Projet de mise en demeure — année de parfait achèvement (CCAG Travaux art. 44.1) — {{date}}.
+
+{{fiche_marche}}
+
+Désordre à lever :
+{{desordre}}
+
+Signalé le {{desordre_signale_le}} ; relances : {{desordre_relances}} ; fin de GPA : {{fin_gpa}}.
+
+Rédige un courrier de MISE EN DEMEURE (courrier recommandé, pas un e-mail) : obligation de parfait achèvement (art. 1792-6 du code civil), chronologie datée du signalement et des relances, délai d'exécution avant intervention d'une entreprise tierce aux frais de l'entreprise défaillante. Ton strictement factuel — je relis avant tout envoi.`
+
+export function CarteGPA({ projet: p }: { projet: Projet }) {
+  const { state, update, replace } = useStore()
+  const moi = useMoi()
+  const signataire = moi.nom ?? state.settings.personnes[0]
+  const today = todayISO()
+  const [modal, setModal] = useState<{ desordre?: DesordreGPA } | null>(null)
+  const [modele, setModele] = useState(false)
+
+  const marches = state.marches.filter((m) => m.projetId === p.id)
+  // le compte à rebours ne se lit que sur les marchés RÉCEPTIONNÉS : avant
+  // la réception, la GPA n'a pas commencé — afficher un décompte serait faux
+  const recus = marches.filter((m) => m.dateReception)
+  const desordres = state.desordresGPA
+    .filter((e) => e.projetId === p.id)
+    .sort((a, b) => {
+      const ouvertA = a.statut === 'leve' ? 1 : 0
+      const ouvertB = b.statut === 'leve' ? 1 : 0
+      if (ouvertA !== ouvertB) return ouvertA - ouvertB
+      return b.signaleLe.localeCompare(a.signaleLe) || a.id.localeCompare(b.id)
+    })
+  const ouverts = desordresOuverts(desordres)
+  const marcheDe = (e: DesordreGPA) => (e.marcheId ? marches.find((m) => m.id === e.marcheId) : undefined)
+  const gabaritMED = state.prompts.find((t) => t.id === 'tpl-med-gpa')
+
+  const maj = (id: string, fn: (x: DesordreGPA) => void) =>
+    update((d) => {
+      const x = d.desordresGPA.find((y) => y.id === id)
+      if (x) fn(x)
+    })
+
+  /** « Relancer » : le brouillon s'ouvre, la relance se TRACE au même clic —
+   *  c'est la chronologie datée qui rend la mise en demeure opposable.
+   *  L'envoi, lui, reste le clic « Envoyer » de Gmail (§15). */
+  const relancer = (e: DesordreGPA) => {
+    const m = marcheDe(e)
+    const fin = m ? finGPA(m.dateReception ?? null) : null
+    ouvrirGmail(
+      m?.contactEmail || '',
+      `${p.id} — ${e.lot || m?.lot || 'GPA'} : désordre à lever (parfait achèvement)`,
+      `Bonjour,\n\nLe désordre suivant, signalé le ${fmtDate(e.signaleLe)} sur l'opération ${p.nom}, n'est pas levé à ce jour :\n\n« ${e.description} »\n\nAu titre de la garantie de parfait achèvement${fin ? ` (qui court jusqu'au ${fmtDate(fin)})` : ''}, merci de nous indiquer sous 8 jours la date de votre intervention.\n\nCordialement,\n${state.settings.nomAgence}`,
+    )
+    update((d) => {
+      const idx = d.desordresGPA.findIndex((y) => y.id === e.id)
+      if (idx >= 0) d.desordresGPA[idx] = avecRelance(d.desordresGPA[idx], todayISO(), 'e-mail')
+    })
+  }
+
+  /** « Mettre en demeure » : un PROMPT copié, pas un courrier envoyé — le
+   *  gabarit du seed (tpl-med-gpa) porte le fondement GPA ; celui des
+   *  honoraires (tpl-relance-med) réclamerait de l'argent au lieu d'exiger
+   *  la levée. Sans marché rattaché, pas de destinataire : bouton inerte. */
+  const mettreEnDemeure = async (e: DesordreGPA) => {
+    const m = marcheDe(e)
+    if (!m) return
+    const ctx = {
+      ...contexteMarche(state, m),
+      desordre: e.description,
+      desordre_signale_le: fmtDate(e.signaleLe),
+      desordre_relances: e.relances.length
+        ? e.relances.map((r) => `${fmtDate(r.date)} (${r.mode})`).join(', ')
+        : 'aucune tracée',
+      fin_gpa: m.dateReception ? fmtDate(finGPA(m.dateReception)) : '',
+    }
+    const ok = await copier(assemble(gabaritMED ? gabaritMED.corps : MED_GPA_SECOURS, ctx))
+    toast(
+      ok
+        ? `Prompt de mise en demeure copié — collez-le dans le Projet Claude « ${gabaritMED?.projetClaude || 'Secrétariat'} », relisez, envoyez en recommandé.`
+        : 'Copie impossible — ouvrez l’écran Prompts pour assembler la mise en demeure.',
+      { tone: ok ? 'ok' : 'danger' },
+    )
+  }
+
+  const supprimer = async (e: DesordreGPA) => {
+    const snap = state
+    if (!(await confirmer({ message: 'Retirer ce désordre du registre ?\nSa chronologie de relances sera perdue.', danger: true, confirmerLabel: 'Retirer' }))) return
+    update((d) => {
+      d.desordresGPA = d.desordresGPA.filter((x) => x.id !== e.id)
+    })
+    toast('Désordre retiré du registre.', { undo: () => replace(snap) })
+  }
+
+  return (
+    <Card
+      titre="GPA — année de parfait achèvement"
+      actions={
+        <>
+          <Btn
+            small
+            onClick={() => setModele(true)}
+            title="Aperçu décochable des tâches types de l'année de GPA (visite M+11, relances, mises en demeure) — rien n'est créé sans votre coche"
+          >
+            Préparer l'année de GPA (modèle)
+          </Btn>
+          <Btn small kind="primary" onClick={() => setModal({})}>Signaler un désordre</Btn>
+        </>
+      }
+    >
+      {recus.length > 0 && (
+        <p className="small" style={{ marginTop: 0 }}>
+          {recus.map((m) => {
+            const jours = joursAvantFinGPA(m.dateReception ?? null, today)
+            const fin = finGPA(m.dateReception ?? null)
+            if (jours === null || !fin) return null
+            return (
+              <span key={m.id} style={{ display: 'block' }}>
+                {m.lot} — {m.entreprise} : réception le {fmtDate(m.dateReception)}, fin de GPA le {fmtDate(fin)}{' '}
+                {jours < 0 ? (
+                  <Badge tone="muted">échue depuis {-jours} j</Badge>
+                ) : (
+                  // sous 60 jours, c'est la fenêtre de la visite M+11 et des
+                  // dernières mises en demeure utiles : rouge
+                  <Badge tone={jours <= 60 ? 'danger' : jours <= 120 ? 'warn' : 'ok'}>J−{jours}</Badge>
+                )}
+              </span>
+            )
+          })}
+        </p>
+      )}
+      {desordres.length === 0 ? (
+        <EmptyState>
+          Aucun désordre signalé — pendant l'année qui suit la réception, chaque désordre se
+          consigne ici : signalement daté, notification à l'entreprise, relances tracées, levée.
+          Passé la fin de GPA, plus rien n'est opposable — la visite à M+11 (modèle ci-dessus)
+          existe pour constater avant l'échéance.
+        </EmptyState>
+      ) : (
+        <>
+          <Table compact head={['Désordre', 'Lot / entreprise', 'Signalé', 'Statut', 'Relances', '']}>
+            {desordres.map((e) => {
+              const m = marcheDe(e)
+              return (
+                <tr key={e.id}>
+                  <td>
+                    {e.description}
+                    {e.leveLe && <div className="muted small">levé le {fmtDate(e.leveLe)}</div>}
+                  </td>
+                  <td className="small">
+                    {e.lot || m?.lot || <span className="muted">—</span>}
+                    {m && <div className="muted">{m.entreprise}</div>}
+                  </td>
+                  <td style={{ whiteSpace: 'nowrap' }}>
+                    {fmtDate(e.signaleLe)}
+                    {e.signalePar && <div className="muted small">par {e.signalePar}</div>}
+                  </td>
+                  <td>
+                    <Badge tone={TONE_STATUT_DESORDRE[e.statut]}>{LIBELLE_STATUT_DESORDRE[e.statut]}</Badge>
+                    {e.notifieLe && e.statut !== 'leve' && (
+                      <div className="muted small">notifié le {fmtDate(e.notifieLe)}</div>
+                    )}
+                  </td>
+                  <td className="small">
+                    {e.relances.length === 0 ? (
+                      <span className="muted">—</span>
+                    ) : (
+                      <span title={e.relances.map((r) => `${fmtDate(r.date)} — ${r.mode}`).join('\n')}>
+                        {e.relances.length} · dern. {fmtDate(e.relances[e.relances.length - 1].date)}
+                      </span>
+                    )}
+                  </td>
+                  <td className="right">
+                    <span style={{ display: 'inline-flex', gap: 6 }}>
+                      {e.statut === 'signale' && (
+                        <Btn
+                          small
+                          kind="primary"
+                          onClick={() => {
+                            maj(e.id, (x) => {
+                              x.statut = 'notifie_entreprise'
+                              x.notifieLe = todayISO()
+                            })
+                            toast('Notification datée — le délai de l’entreprise court.', { tone: 'ok' })
+                          }}
+                          title="Date la notification à l'entreprise : c'est le point de départ de son délai"
+                        >
+                          Notifier
+                        </Btn>
+                      )}
+                      {e.statut !== 'leve' && (
+                        <Btn
+                          small
+                          onClick={() => {
+                            maj(e.id, (x) => {
+                              x.statut = 'leve'
+                              x.leveLe = todayISO()
+                            })
+                            toast('Levée constatée et datée.', { tone: 'ok' })
+                          }}
+                          title="Constate la levée du désordre, datée du jour"
+                        >
+                          Levé
+                        </Btn>
+                      )}
+                      <RowMenu
+                        items={[
+                          ...(e.statut !== 'leve'
+                            ? [
+                                {
+                                  label: 'Relancer l’entreprise (brouillon Gmail)',
+                                  title: 'Ouvre un brouillon pré-rempli et trace la relance — l’envoi reste votre clic',
+                                  onClick: () => relancer(e),
+                                },
+                                {
+                                  label: 'Mettre en demeure (prompt à coller)',
+                                  title: m
+                                    ? 'Copie le prompt de mise en demeure (CCAG art. 44.1) — relecture humaine, envoi en recommandé'
+                                    : 'Rattachez d’abord le désordre à un marché : une mise en demeure a un destinataire',
+                                  onClick: () => {
+                                    if (!m) {
+                                      toast('Rattachez d’abord le désordre à un marché (« Modifier ») : une mise en demeure a un destinataire.', { tone: 'warn' })
+                                      return
+                                    }
+                                    void mettreEnDemeure(e)
+                                  },
+                                },
+                                {
+                                  label: e.statut === 'conteste' ? 'Lever la contestation (re-notifié)' : 'Marquer contesté par l’entreprise',
+                                  onClick: () =>
+                                    maj(e.id, (x) => {
+                                      x.statut = e.statut === 'conteste' ? (x.notifieLe ? 'notifie_entreprise' : 'signale') : 'conteste'
+                                    }),
+                                },
+                                { label: 'Modifier', onClick: () => setModal({ desordre: e }) },
+                              ]
+                            : [
+                                {
+                                  label: 'Rouvrir (désordre non levé)',
+                                  onClick: () =>
+                                    maj(e.id, (x) => {
+                                      x.statut = x.notifieLe ? 'notifie_entreprise' : 'signale'
+                                      x.leveLe = null
+                                    }),
+                                },
+                              ]),
+                          { label: 'Retirer du registre', onClick: () => void supprimer(e), danger: true },
+                        ]}
+                      />
+                    </span>
+                  </td>
+                </tr>
+              )
+            })}
+          </Table>
+          <p className="muted small" style={{ marginTop: 8 }}>
+            {ouverts.length} désordre{ouverts.length > 1 ? 's' : ''} ouvert{ouverts.length > 1 ? 's' : ''} — un
+            désordre contesté RESTE ouvert : seule la levée constatée le ferme.
+          </p>
+        </>
+      )}
+
+      {modal && (
+        <ModalDesordreGPA
+          projet={p}
+          marches={marches}
+          signataire={signataire}
+          desordre={modal.desordre}
+          onClose={() => setModal(null)}
+        />
+      )}
+      {modele && <ModalModeleGPA projet={p} signataire={signataire} onClose={() => setModele(false)} />}
+    </Card>
+  )
+}
+
+function ModalDesordreGPA({
+  projet: p,
+  marches,
+  signataire,
+  desordre,
+  onClose,
+}: {
+  projet: Projet
+  marches: MarcheTravaux[]
+  signataire: string
+  desordre?: DesordreGPA
+  onClose: () => void
+}) {
+  const { update } = useStore()
+  const creation = !desordre
+
+  const [marcheId, setMarcheId] = useState(desordre?.marcheId || '')
+  const [lot, setLot] = useState(desordre?.lot || '')
+  const [description, setDescription] = useState(desordre?.description || '')
+  const [signaleLe, setSignaleLe] = useState<string | null>(desordre?.signaleLe || todayISO())
+  const [signalePar, setSignalePar] = useState(desordre?.signalePar || signataire)
+
+  const valide = description.trim() !== '' && !!signaleLe
+
+  const choisirMarche = (id: string) => {
+    setMarcheId(id)
+    const m = marches.find((x) => x.id === id)
+    if (m) setLot(m.lot)
+  }
+
+  const enregistrer = () => {
+    if (!valide) return
+    update((d) => {
+      const champs = {
+        marcheId: marcheId || null,
+        lot: lot.trim() || undefined,
+        description: description.trim(),
+        signaleLe: signaleLe!,
+        signalePar: signalePar.trim() || undefined,
+      }
+      if (creation) {
+        // le statut naît « signalé » : notifier l'entreprise est un geste
+        // à part, daté — c'est lui qui fait courir le délai
+        d.desordresGPA.push({ id: uid('gpa'), projetId: p.id, statut: 'signale', relances: [], ...champs })
+      } else {
+        const x = d.desordresGPA.find((y) => y.id === desordre.id)
+        if (x) Object.assign(x, champs)
+      }
+    })
+    onClose()
+  }
+
+  return (
+    <Modal titre={creation ? 'Signaler un désordre (GPA)' : 'Modifier le désordre'} onClose={onClose}>
+      <div className="form-row">
+        <Field label="Marché concerné" hint="facultatif tant que l'entreprise n'est pas identifiée — requis pour la mise en demeure">
+          <Select
+            value={marcheId}
+            onChange={choisirMarche}
+            options={[
+              { value: '', label: '— à déterminer —' },
+              ...marches.map((m) => ({ value: m.id, label: `${m.lot} — ${m.entreprise}` })),
+            ]}
+          />
+        </Field>
+        <Field label="Lot">
+          <TextInput value={lot} onChange={setLot} placeholder="Ex. Lot 08 — Menuiseries ext." />
+        </Field>
+      </div>
+      <div className="form-row">
+        <Field label="Désordre constaté">
+          <TextArea value={description} onChange={setDescription} rows={2} placeholder="Ex. Infiltration en plafond du séjour, angle nord-ouest…" />
+        </Field>
+      </div>
+      <div className="form-row">
+        <Field label="Signalé le">
+          <DateInput value={signaleLe} onChange={setSignaleLe} />
+        </Field>
+        <Field label="Signalé par" hint="MOA, occupant, visite MOE…">
+          <TextInput value={signalePar} onChange={setSignalePar} />
+        </Field>
+      </div>
+      <div className="form-foot">
+        <Btn onClick={onClose}>Annuler</Btn>
+        <Btn kind="primary" onClick={enregistrer} disabled={!valide}>
+          {creation ? 'Consigner le désordre' : 'Enregistrer'}
+        </Btn>
+      </div>
+    </Modal>
+  )
+}
+
+/** le modèle « Année de parfait achèvement » appliqué par le moteur B.13 :
+ *  APERÇU décochable, puis création des seules lignes retenues — une ligne
+ *  décochée ne produit RIEN (ni tâche annulée, ni tâche masquée). */
+function ModalModeleGPA({
+  projet: p,
+  signataire,
+  onClose,
+}: {
+  projet: Projet
+  signataire: string
+  onClose: () => void
+}) {
+  const { update } = useStore()
+  const modele = MODELES_AMORCE.find((m) => m.id === 'modele-gpa')
+
+  // le contexte d'application : débuts de phase connus du projet, rôles
+  // résolus à l'application (le modèle nomme une place, pas une personne)
+  const debutDePhase: Partial<Record<PhaseCode, string>> = {}
+  for (const ph of p.phases) if (ph.debut) debutDePhase[ph.code] = ph.debut
+  const ctx: ContexteApplication = {
+    projetId: p.id,
+    debutDePhase,
+    responsable: p.responsable ?? null,
+    coResponsable: p.coResponsable ?? null,
+  }
+
+  // l'aperçu se calcule UNE fois à l'ouverture : recalculer à chaque rendu
+  // re-cocherait les lignes que l'utilisatrice vient de décocher
+  const [apercu] = useState(() => (modele ? appliquerModele(modele, ctx) : []))
+  const [retenues, setRetenues] = useState<Set<string>>(
+    () => new Set(apercu.filter((l) => l.retenueParDefaut).map((l) => l.ligneId)),
+  )
+
+  if (!modele) return null
+
+  const basculer = (ligneId: string) =>
+    setRetenues((prev) => {
+      const suivant = new Set(prev)
+      if (suivant.has(ligneId)) suivant.delete(ligneId)
+      else suivant.add(ligneId)
+      return suivant
+    })
+
+  const creer = () => {
+    const taches = tachesDepuisApercu(apercu, retenues, ctx, signataire)
+    if (taches.length === 0) return
+    update((d) => {
+      d.taches.push(...taches)
+    })
+    toast(`${taches.length} tâche${taches.length > 1 ? 's' : ''} créée${taches.length > 1 ? 's' : ''} — à retrouver dans l'écran Tâches.`, { tone: 'ok' })
+    onClose()
+  }
+
+  return (
+    <Modal titre={`${modele.nom} — aperçu avant création`} onClose={onClose}>
+      <p className="small muted" style={{ marginTop: 0 }}>
+        {modele.perimetre}. Les dates se comptent depuis le début d'AOR (la réception s'y prononce) —
+        décochez ce qui ne s'applique pas : une ligne décochée ne crée rien.
+      </p>
+      <Table compact head={['', 'Tâche', 'Échéance', 'Responsable', 'Priorité']}>
+        {apercu.map((l) => (
+          <tr key={l.ligneId}>
+            <td>
+              <input
+                type="checkbox"
+                checked={retenues.has(l.ligneId)}
+                onChange={() => basculer(l.ligneId)}
+                aria-label={`Retenir « ${l.libelle} »`}
+              />
+            </td>
+            <td>{l.libelle}</td>
+            <td style={{ whiteSpace: 'nowrap' }}>
+              {l.echeance ? (
+                fmtDate(l.echeance)
+              ) : (
+                <span className="muted" title="Sans début d'AOR posé au planning, le décalage ne se calcule pas — la ligne est décochée d'office">
+                  début d'AOR inconnu
+                </span>
+              )}
+            </td>
+            <td>{l.responsable || <span className="muted">—</span>}</td>
+            <td className="small">{l.priorite}</td>
+          </tr>
+        ))}
+      </Table>
+      <div className="form-foot">
+        <Btn onClick={onClose}>Annuler</Btn>
+        <Btn kind="primary" onClick={creer} disabled={retenues.size === 0}>
+          Créer {retenues.size} tâche{retenues.size > 1 ? 's' : ''}
         </Btn>
       </div>
     </Modal>
@@ -784,6 +2267,19 @@ export default function ProjetChantier({ projet }: { projet: Projet }) {
     <>
       <CarteReunions projet={projet} />
       <CarteMarches projet={projet} />
+      {/* 5.8 — le registre des visas vit sous les marchés : les documents
+          d'exécution arrivent des entreprises titulaires, et le délai du
+          CCAP court dès leur réception */}
+      <CarteVisas projet={projet} />
+      {/* 5.2 — le journal des pénalités vit sous les marchés : les taux du
+          CCAP se saisissent sur le marché, les événements se constatent ici */}
+      <CartePenalites projet={projet} />
+      {/* 5.3 — le registre des intempéries se lit AVEC le journal des
+          pénalités : il prolonge les délais et neutralise les retards */}
+      <CarteIntemperies projet={projet} />
+      {/* 5.9 — la GPA ferme la vie du chantier : réception, désordres,
+          relances tracées, mise en demeure avant la fin de l'année */}
+      <CarteGPA projet={projet} />
     </>
   )
 }

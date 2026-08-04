@@ -60,6 +60,10 @@ const financeActions = charger('src/financeActions.ts', {
   // 5.16 — `actionsATraiter` lit `derniereTransmission` pour signaler les
   // rejets de portail : le graphe du chargeur doit suivre le vrai import.
   './facture': facture,
+  // livrable « L'essentiel » (04/08) — les sélecteurs des tuiles
+  // (aEncaisser) lisent `retardFacture` dans derive : même autorité que
+  // les relances de Ventes, le chargeur suit ce nouvel import réel.
+  './derive': derive,
   './util': util,
 })
 

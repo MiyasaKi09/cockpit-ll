@@ -213,6 +213,9 @@ jobs:
       - name: No raw JSX tables outside the recensed files
         run: npm run test:tableaux
 
+      - name: Finance entry screen reuses existing selectors, nine destinations kept
+        run: npm run test:finance-essentiel
+
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 

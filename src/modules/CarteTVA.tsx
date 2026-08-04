@@ -1,8 +1,9 @@
 // ============================================================
 // Carte TVA — « ce qu'on doit à l'État », lisible en un regard.
-// Carte AUTONOME (un import, aucune prop) : posée en tête de
-// l'onglet Comptable en attendant son montage dans l'écran
-// Finance. Tout le calcul vit dans src/tva.ts (pur) ; la carte
+// Carte AUTONOME (un import, aucune prop), posée en tête de la vue
+// Comptable — SA place depuis le 04/08 : l'écran d'entrée de la
+// Finance (« L'essentiel ») reprend son chiffre via positionTVA et
+// sa tuile mène ici. Tout le calcul vit dans src/tva.ts (pur) ; la carte
 // affiche, et porte UN geste : « Marquer déclarée », qui fige le
 // solde d'un mois échu (§15 — la machine calcule, l'humain
 // déclare). La convention affichée vient de libelleConvention —

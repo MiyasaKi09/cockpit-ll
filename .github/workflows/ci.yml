@@ -63,6 +63,9 @@ jobs:
       - name: VAT rounding rule and configurable tax mention
         run: npm run test:tva
 
+      - name: VAT position from real pieces, declared months frozen by a human gesture
+        run: npm run test:position-tva
+
       - name: Portal lifecycle surfaces per invoice with deposit reminder
         run: npm run test:transmissions
 

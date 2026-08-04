@@ -961,6 +961,21 @@ export interface NoteFrais {
   evenements?: { date: string; type: string; detail?: string }[]
 }
 
+/** déclaration de TVA d'un mois échu, marquée par un GESTE humain (§15) :
+ *  le solde (collectée − déductible) est FIGÉ au moment du geste — le
+ *  « dû à l'État » de src/tva.ts ne recompte plus ce mois, même si une
+ *  pièce bouge ensuite. L'écart éventuel se VOIT alors face au solde
+ *  recalculé (CarteTVA) au lieu de déplacer en silence un montant déjà
+ *  déclaré au SIE. */
+export interface TvaDeclaration {
+  id: string
+  /** mois déclaré, 'AAAA-MM' */
+  mois: string
+  /** solde figé au moment du geste (euros — négatif : crédit de TVA) */
+  montant: number
+  declareLe: string // ISO
+}
+
 // --- moteur de complétude (audit §8) : une absence attendue devient une
 // exception à confirmer, jamais une erreur silencieuse.
 // La liste des attendus se DÉRIVE (contrats récurrents, banque, historique) ;
@@ -1639,6 +1654,15 @@ export interface Settings {
    *  le cabinet (encaissements par défaut pour les prestations de services,
    *  option possible sur les débits) ; un réglage, pas une phrase codée en dur */
   mentionTVA?: string
+  /** régime d'exigibilité de la TVA collectée pour la POSITION CALCULÉE
+   *  (src/tva.ts) : 'encaissements' — droit commun des prestations de
+   *  services, la TVA d'un paiement reçu devient due — ou 'debits' (option
+   *  formulée au SIE : la TVA naît à l'ÉMISSION de la facture). Défaut
+   *  'encaissements' ; à valider avec le cabinet
+   *  (docs/QUESTIONS_CABINET_TVA.md). Distinct de `mentionTVA` (la phrase
+   *  IMPRIMÉE sur les pièces) et de `profilComptable.regimeTVA` (champ libre
+   *  de mémoire) : celui-ci pilote un CALCUL, pas un texte. */
+  regimeTVA?: 'encaissements' | 'debits'
   /** alerteId → ISO « en sommeil jusqu'au » */
   snoozes: Record<string, string>
   /** jumeau de `snoozes` : identifiant d'alerte → date où on l'a VUE.
@@ -1906,6 +1930,9 @@ export interface AppState {
   importsBancaires: ImportBancaire[]
   /** lots d'export comptable versionnés (F4) */
   lotsComptables: LotComptable[]
+  /** mois de TVA marqués « déclarée » — un geste humain fige le solde et
+   *  sort le mois du « dû à l'État » calculé (src/tva.ts, §15) */
+  tvaDeclarations: TvaDeclaration[]
   // --- Finance F6-F10 : pilotage unique ---
   /** reste à faire révisé par phase (base de la marge finale, F6) */
   revisionsResteAFaire: RevisionResteAFaire[]

@@ -1161,6 +1161,9 @@ export function seedState(): AppState {
     transactionsBancaires: [],
     importsBancaires: [],
     lotsComptables: [],
+    // Position TVA — vide : un mois « déclaré » d'exemple sortirait un mois
+    // RÉEL du « dû à l'État » sans qu'aucun humain n'ait fait le geste.
+    tvaDeclarations: [],
 
     // v16 — finance F6-F10 : pilotage unique (aucune donnée métier inventée)
     revisionsResteAFaire: [],

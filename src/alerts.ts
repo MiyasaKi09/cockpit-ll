@@ -20,6 +20,7 @@ import { addDays, diffDays, fmtDate, fmtMoney, fmtMois, monthKey } from './util'
 import { LIBELLES_IMPORTANCE, type NiveauImportance, estImportance, graviteDe } from './categorisation'
 import { tacheAConfirmer } from './chantier'
 import { SEUIL_ALERTE_VISA_JOURS, echeanceVisa } from './visas'
+import { ecartMois, notesManquantes } from './cotraitants'
 
 // ------------------------------------------------------------
 // A.11 — notifier les personnes concernées (§12.3 pt 10)
@@ -290,6 +291,30 @@ export function computeAlertes(state: AppState, today: string, contexte?: Contex
       projetId: v.projetId,
       // pas d'action rapide : viser demande de LIRE le document — un
       // « ✓ Visé » depuis le fil d'urgences inviterait à signer sans lire
+    })
+  }
+
+  // --- 5.10 : note d'honoraires de cotraitance manquante — une alerte par
+  // cotraitant ACTIF et par mois échu sans note reçue (src/cotraitants.ts :
+  // même prédicat que l'écran projet — deux définitions divergeraient sans
+  // que rien ne le signale). « Relancer » ouvre un BROUILLON Gmail : la
+  // machine propose, l'envoi reste un clic humain (§15) — et sans adresse,
+  // pas d'action : un brouillon sans destinataire n'irait nulle part.
+  for (const { cotraitant, mois } of notesManquantes(state.cotraitants, state.notesHonoraires, moisCourant)) {
+    // un mois de retard est un oubli de fin de mois ; deux mois, un signal —
+    // le reçu s'écarte du convenu sans que personne ne le voie avant le bilan
+    const retard = ecartMois(mois, moisCourant)
+    alertes.push({
+      id: `noteh:${cotraitant.id}:${mois}`,
+      type: 'note_honoraires_manquante',
+      gravite: retard >= 2 ? 3 : 2,
+      titre: `Note d'honoraires manquante — ${cotraitant.nom} (${fmtMois(mois)})`,
+      detail: `${nomProjet(state, cotraitant.projetId)}${cotraitant.mission ? ` · ${cotraitant.mission}` : ''} · aucune note reçue pour ${fmtMois(mois)}`,
+      lien: `#/projets/${cotraitant.projetId}/finances`,
+      projetId: cotraitant.projetId,
+      action: cotraitant.email
+        ? { kind: 'relancer_cotraitant', refId: cotraitant.id, mois, label: 'Relancer' }
+        : undefined,
     })
   }
 

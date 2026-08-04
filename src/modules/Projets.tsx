@@ -5,9 +5,9 @@
 // (matériaux, artisans, liens), journal, finances & temps.
 // ============================================================
 
-import { useState } from 'react'
+import { Fragment, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { BaselineHeures, Phase, PhaseCode, Projet, StatutProjet, TypeMO } from '../types'
+import type { BaselineHeures, Cotraitant, Phase, PhaseCode, Projet, StatutProjet, TypeCotraitant, TypeMO } from '../types'
 import { useStore } from '../store'
 import { useMoi } from '../moi'
 import { ligneActivable,
@@ -37,7 +37,7 @@ import { ligneActivable,
   useToday,
 } from '../ui'
 import type { Tone } from '../ui'
-import { adresseProjetProposee, adresseProjetValide, fmtDate, fmtHeures, fmtMoney, fmtPct, fold, todayISO, uid } from '../util'
+import { adresseProjetProposee, adresseProjetValide, fmtDate, fmtHeures, fmtMois, fmtMoney, fmtPct, fold, monthKey, ouvrirGmail, todayISO, uid } from '../util'
 import {
   CRITERES_COMPLEXITE,
   LIBELLES_PHASES,
@@ -49,7 +49,8 @@ import {
   seuilPlancherActualise,
   totalPointsComplexite,
 } from '../miqcp'
-import { baselineDepuisPhases, coutHoraireMoyen, coutJourObjectif, coutReelTemps, coutsExternes, ecartHeures, encaisseHT, encaissementPrevu, enJours, equipeDuProjet, factureHT, heuresBaseline, heuresPrevues, heuresReelles, retardFacture, tauxVente, ttc } from '../derive'
+import { baselineDepuisPhases, coutHoraireMoyen, coutJourObjectif, coutReelTemps, coutsExternes, ecartHeures, encaisseHT, encaissementPrevu, enJours, equipeDuProjet, factureHT, heuresBaseline, heuresPrevues, heuresReelles, nomProjet, retardFacture, tauxVente, ttc } from '../derive'
+import { LIBELLE_TYPE_COTRAITANT, corpsRelanceNote, cumulRecuHT, moisManquants, recuProjetHT, convenuProjetHT, resteAPayer, sujetRelanceNote } from '../cotraitants'
 import { assemble, contexteProjet, copier } from '../prompts'
 import { echeancesParDefaut } from '../echeancier'
 import { contratDuProjet, totalContratHT } from '../contrats'
@@ -681,6 +682,378 @@ function EconomieProjet({ projet: p }: { projet: Projet }) {
 }
 
 // ============================================================
+// 5.10 — Cotraitance : la chaîne d'honoraires ENTRANTE.
+// Le bloc vit dans l'onglet Finance de la fiche projet, pas dans
+// Chantier : un BET facture la maîtrise d'œuvre dès l'ESQ, bien
+// avant tout marché de travaux — et c'est ici que la marge lit
+// les coûts externes, donc ici que le réel reçu doit se lire
+// FACE au convenu (affiché, jamais versé dans le calcul : 5.14).
+// ============================================================
+
+const TYPES_COTRAITANT: TypeCotraitant[] = ['bet', 'agence', 'autre']
+const MOIS_SAISIE_VALIDE = /^\d{4}-\d{2}$/
+
+function CarteCotraitance({ projet: p }: { projet: Projet }) {
+  const { state, update, replace } = useStore()
+  const today = useToday()
+  const moisCourant = monthKey(today)
+  /** cotraitant dont les notes sont dépliées */
+  const [ouvert, setOuvert] = useState<string | null>(null)
+
+  const cotraitants = state.cotraitants
+    .filter((c) => c.projetId === p.id)
+    // actifs d'abord (ce sont eux qu'on surveille), puis par nom
+    .sort((a, b) => (a.actif === b.actif ? a.nom.localeCompare(b.nom, 'fr') : a.actif ? -1 : 1))
+  const notes = state.notesHonoraires
+
+  const convenuTotal = convenuProjetHT(state.cotraitants, p.id)
+  const recuTotal = recuProjetHT(state.notesHonoraires, p.id)
+  const budgetPhases = coutsExternes(state, p.id)
+
+  /** le MÊME brouillon que l'action rapide du fil d'urgences (Cockpit) :
+   *  le texte vient de src/cotraitants.ts, l'envoi reste le clic « Envoyer »
+   *  de Gmail (§15) */
+  const relancer = (c: Cotraitant, mois: string) =>
+    ouvrirGmail(
+      c.email || '',
+      sujetRelanceNote(c, mois),
+      corpsRelanceNote(c, mois, nomProjet(state, p.id), state.settings.nomAgence),
+    )
+
+  const majCotraitant = (id: string, fn: (x: Cotraitant) => void) =>
+    update((d) => {
+      const x = d.cotraitants.find((y) => y.id === id)
+      if (x) fn(x)
+    })
+
+  const retirer = async (c: Cotraitant) => {
+    const nbNotes = state.notesHonoraires.filter((n) => n.cotraitantId === c.id).length
+    const snap = state
+    if (
+      !(await confirmer({
+        message:
+          `Retirer ${c.nom} de la cotraitance de ${p.id} ?` +
+          (nbNotes > 0 ? `\nSes ${nbNotes} note(s) d'honoraires consignée(s) seront retirées aussi.` : ''),
+        danger: true,
+        confirmerLabel: 'Retirer',
+      }))
+    )
+      return
+    update((d) => {
+      d.cotraitants = d.cotraitants.filter((x) => x.id !== c.id)
+      d.notesHonoraires = d.notesHonoraires.filter((n) => n.cotraitantId !== c.id)
+    })
+    toast(`${c.nom} retiré de la cotraitance.`, { undo: () => replace(snap) })
+  }
+
+  return (
+    <Card titre="Cotraitance (BET, agences) — honoraires entrants">
+      {cotraitants.length === 0 ? (
+        <EmptyState>
+          Aucun partenaire de maîtrise d'œuvre — BET structure, fluides, économiste, OPC… Chacun
+          porte ses honoraires convenus, et sa note d'honoraires mensuelle se consigne à réception :
+          le mois qui manque se relance en un clic.
+        </EmptyState>
+      ) : (
+        <Table
+          compact
+          head={[
+            'Cotraitant',
+            'Mission',
+            <span key="c" className="right" title="convention de groupement / contrat">Convenu HT</span>,
+            <span key="r" className="right" title="cumul des notes d'honoraires reçues">Reçu HT</span>,
+            <span key="s" className="right">Reste</span>,
+            'Notes',
+            '',
+          ]}
+        >
+          {cotraitants.map((c) => {
+            const manquants = moisManquants(c, notes, moisCourant)
+            const siennes = notes
+              .filter((n) => n.cotraitantId === c.id)
+              .sort((a, b) => b.mois.localeCompare(a.mois))
+            const reste = resteAPayer(c, notes)
+            const deplie = ouvert === c.id
+            return (
+              // Fragment de React, pas un composant local : le composant
+              // Table ne sait étiqueter (data-label, rendu téléphone) qu'à
+              // travers un vrai Fragment — un intermédiaire perdrait les
+              // libellés de colonnes sur mobile
+              <Fragment key={c.id}>
+                <tr>
+                  <td>
+                    <strong>{c.nom}</strong> <Badge tone="muted">{LIBELLE_TYPE_COTRAITANT[c.type]}</Badge>
+                    {!c.actif && <Badge tone="muted">mission terminée</Badge>}
+                    {c.email && <div className="muted small">{c.email}</div>}
+                  </td>
+                  <td className="small">{c.mission || '—'}</td>
+                  <td className="right">{c.honorairesConvenusHT !== null ? <Money v={c.honorairesConvenusHT} /> : <span className="muted">—</span>}</td>
+                  <td className="right"><Money v={cumulRecuHT(c.id, notes)} /></td>
+                  <td className="right">
+                    {reste === null ? (
+                      <span className="muted" title="honoraires convenus non saisis : le reste ne s'invente pas">—</span>
+                    ) : (
+                      <span style={reste < 0 ? { color: 'var(--danger)' } : undefined} title={reste < 0 ? 'le reçu dépasse le convenu — avenant à régulariser ?' : undefined}>
+                        {fmtMoney(reste)}
+                      </span>
+                    )}
+                  </td>
+                  <td>
+                    {siennes.filter((n) => n.recueLe).length > 0 && (
+                      <span className="small">{siennes.filter((n) => n.recueLe).length} reçue{siennes.filter((n) => n.recueLe).length > 1 ? 's' : ''}</span>
+                    )}{' '}
+                    {manquants.length > 0 && (
+                      <Badge tone="warn">
+                        {manquants.length > 1 ? `${manquants.length} mois manquent` : `${fmtMois(manquants[0])} manque`}
+                      </Badge>
+                    )}
+                    {c.actif && siennes.length === 0 && (
+                      <span className="muted small" title="les mois échus se comptent depuis la première note consignée">
+                        aucune note consignée
+                      </span>
+                    )}
+                  </td>
+                  <td className="right">
+                    <span style={{ display: 'inline-flex', gap: 6 }}>
+                      <Btn small onClick={() => setOuvert(deplie ? null : c.id)}>
+                        {deplie ? 'Replier' : 'Notes'}
+                      </Btn>
+                      <RowMenu
+                        items={[
+                          ...(c.email && manquants.length > 0
+                            ? [{
+                                label: `Relancer (${fmtMois(manquants[0])}) — brouillon Gmail`,
+                                onClick: () => relancer(c, manquants[0]),
+                              }]
+                            : []),
+                          {
+                            label: c.actif ? 'Marquer la mission terminée' : 'Réactiver la mission',
+                            onClick: () => majCotraitant(c.id, (x) => { x.actif = !x.actif }),
+                          },
+                          { label: 'Retirer de la cotraitance', onClick: () => void retirer(c), danger: true },
+                        ]}
+                      />
+                    </span>
+                  </td>
+                </tr>
+                {deplie && (
+                  <tr>
+                    <td colSpan={7} style={{ background: 'var(--bg-soft)' }}>
+                      <NotesCotraitant cotraitant={c} manquants={manquants} onRelancer={relancer} />
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
+            )
+          })}
+        </Table>
+      )}
+      <AjoutCotraitant projet={p} />
+      {(cotraitants.length > 0 || budgetPhases > 0) && (
+        <p className="muted small" style={{ margin: '8px 2px 0' }}>
+          Convenu {fmtMoney(convenuTotal)} · reçu {fmtMoney(recuTotal)} — face au budget externe des
+          phases ({fmtMoney(budgetPhases)}), qui reste la base de la marge : le réel s'affiche ici,
+          il ne remplace pas le calcul (audit 5.14).
+        </p>
+      )}
+    </Card>
+  )
+}
+
+/** notes d'honoraires d'UN cotraitant : mois manquants relançables, notes
+ *  consignées (montant, réception, règlement), consignation d'une nouvelle */
+function NotesCotraitant({
+  cotraitant: c,
+  manquants,
+  onRelancer,
+}: {
+  cotraitant: Cotraitant
+  manquants: string[]
+  onRelancer: (c: Cotraitant, mois: string) => void
+}) {
+  const { state, update, replace } = useStore()
+  const today = useToday()
+  // par défaut on consigne la note du mois DERNIER : c'est elle qu'on attend
+  const [mois, setMois] = useState('')
+  const [montant, setMontant] = useState<number | null>(null)
+
+  const siennes = state.notesHonoraires
+    .filter((n) => n.cotraitantId === c.id)
+    .sort((a, b) => b.mois.localeCompare(a.mois))
+
+  const majNote = (id: string, fn: (n: (typeof siennes)[number]) => void) =>
+    update((d) => {
+      const n = d.notesHonoraires.find((x) => x.id === id)
+      if (n) fn(n)
+    })
+
+  const consigner = () => {
+    const m = mois.trim()
+    if (!MOIS_SAISIE_VALIDE.test(m)) {
+      toast('Mois attendu au format AAAA-MM (ex. 2026-07).', { tone: 'danger' })
+      return
+    }
+    if (siennes.some((n) => n.mois === m)) {
+      toast(`Une note ${fmtMois(m)} est déjà consignée pour ${c.nom} — une attendue par mois.`, { tone: 'danger' })
+      return
+    }
+    update((d) => {
+      d.notesHonoraires.push({
+        id: uid('nh'),
+        cotraitantId: c.id,
+        projetId: c.projetId,
+        mois: m,
+        montantHT: montant,
+        recueLe: todayISO(),
+        reglee: false,
+      })
+    })
+    setMois('')
+    setMontant(null)
+  }
+
+  return (
+    <div style={{ padding: '4px 2px' }}>
+      {manquants.length > 0 && (
+        <p className="small" style={{ margin: '4px 0 8px' }}>
+          {manquants.map((m) => (
+            <span key={m} style={{ marginRight: 10 }}>
+              <Badge tone="warn">{fmtMois(m)} manque</Badge>{' '}
+              {c.email && (
+                <Btn small kind="ghost" onClick={() => onRelancer(c, m)} title="ouvre un brouillon Gmail — l'envoi reste votre clic">
+                  Relancer
+                </Btn>
+              )}
+            </span>
+          ))}
+        </p>
+      )}
+      {siennes.length > 0 && (
+        <Table
+          compact
+          head={['Mois', <span key="m" className="right">Montant HT</span>, 'Reçue', 'Réglée', '']}
+        >
+          {siennes.map((n) => (
+            <tr key={n.id}>
+              <td>{fmtMois(n.mois)}</td>
+              <td className="right">
+                <NumInput
+                  value={n.montantHT}
+                  onChange={(v) => majNote(n.id, (x) => { x.montantHT = v })}
+                  style={{ width: 100 }}
+                  ariaLabel={`Montant HT de la note ${fmtMois(n.mois)} — ${c.nom}`}
+                />
+              </td>
+              <td>
+                {n.recueLe ? (
+                  <span className="small">le {fmtDate(n.recueLe)}</span>
+                ) : (
+                  <Btn small onClick={() => majNote(n.id, (x) => { x.recueLe = todayISO() })}>
+                    Reçue aujourd'hui
+                  </Btn>
+                )}
+              </td>
+              <td>
+                {/* le règlement suit la réception : régler une note jamais
+                    reçue n'a pas de sens, le bouton n'apparaît pas */}
+                {n.reglee ? (
+                  <Badge tone="ok">réglée</Badge>
+                ) : n.recueLe ? (
+                  <Btn small kind="ghost" onClick={() => majNote(n.id, (x) => { x.reglee = true })}>
+                    Marquer réglée
+                  </Btn>
+                ) : (
+                  <span className="muted small">—</span>
+                )}
+              </td>
+              <td className="right">
+                <RowMenu
+                  items={[
+                    ...(n.reglee
+                      ? [{ label: 'Annuler le règlement', onClick: () => majNote(n.id, (x) => { x.reglee = false }) }]
+                      : []),
+                    ...(n.recueLe && !n.reglee
+                      ? [{ label: 'Annuler la réception', onClick: () => majNote(n.id, (x) => { x.recueLe = null }) }]
+                      : []),
+                    {
+                      label: 'Retirer la note',
+                      danger: true,
+                      onClick: () => {
+                        const snap = state
+                        update((d) => {
+                          d.notesHonoraires = d.notesHonoraires.filter((x) => x.id !== n.id)
+                        })
+                        toast(`Note ${fmtMois(n.mois)} retirée.`, { undo: () => replace(snap) })
+                      },
+                    },
+                  ]}
+                />
+              </td>
+            </tr>
+          ))}
+        </Table>
+      )}
+      <div className="toolbar" style={{ marginTop: 8, marginBottom: 0 }}>
+        <TextInput value={mois} onChange={setMois} placeholder={`Mois (ex. ${monthKey(today)})`} style={{ width: 130 }} ariaLabel={`Mois de la note à consigner — ${c.nom}`} />
+        <NumInput value={montant} onChange={setMontant} placeholder="Montant HT" style={{ width: 110 }} ariaLabel={`Montant HT de la note à consigner — ${c.nom}`} />
+        <Btn small kind="primary" onClick={consigner} disabled={!mois.trim()}>
+          Consigner la note reçue
+        </Btn>
+        {siennes.length === 0 && (
+          <span className="muted small">
+            La première note consignée fixe le début de mission : les mois échus se comptent depuis elle.
+          </span>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/** ajout d'un cotraitant — le convenu peut rester vide (pas encore
+ *  contractualisé) : le reste à payer répondra « — », jamais 0 */
+function AjoutCotraitant({ projet: p }: { projet: Projet }) {
+  const { update } = useStore()
+  const [nom, setNom] = useState('')
+  const [type, setType] = useState<TypeCotraitant>('bet')
+  const [mission, setMission] = useState('')
+  const [convenu, setConvenu] = useState<number | null>(null)
+  const [email, setEmail] = useState('')
+
+  const ajouter = () => {
+    if (!nom.trim()) return
+    update((d) => {
+      d.cotraitants.push({
+        id: uid('cot'),
+        projetId: p.id,
+        nom: nom.trim(),
+        type,
+        mission: mission.trim(),
+        honorairesConvenusHT: convenu,
+        email: email.trim() || undefined,
+        actif: true,
+      })
+    })
+    setNom('')
+    setMission('')
+    setConvenu(null)
+    setEmail('')
+  }
+
+  return (
+    <div className="toolbar" style={{ marginTop: 10, marginBottom: 0, flexWrap: 'wrap' }}>
+      <TextInput value={nom} onChange={setNom} placeholder="Nom (ex. BET Structure Nord)" style={{ width: 200 }} />
+      <Select value={type} onChange={(v) => setType(v as TypeCotraitant)} options={TYPES_COTRAITANT.map((t) => ({ value: t, label: LIBELLE_TYPE_COTRAITANT[t] }))} />
+      <TextInput value={mission} onChange={setMission} placeholder="Mission (structure, fluides…)" style={{ width: 180 }} />
+      <NumInput value={convenu} onChange={setConvenu} placeholder="Convenu HT" style={{ width: 110 }} ariaLabel="Honoraires convenus HT du cotraitant" />
+      <TextInput value={email} onChange={setEmail} placeholder="contact@bet.example (pour les relances)" style={{ width: 200 }} />
+      <Btn small kind="primary" onClick={ajouter} disabled={!nom.trim()}>
+        Ajouter
+      </Btn>
+    </div>
+  )
+}
+
+// ============================================================
 // Onglet Finances — factures du projet (auto) + temps
 // ============================================================
 
@@ -721,6 +1094,9 @@ function OngletFinances({ projet: p }: { projet: Projet }) {
   const contrat = contratDuProjet(state, p.id)
   const coutTemps = coutReelTemps(state, p.id)
   const externes = coutsExternes(state, p.id)
+  // 5.10 — la cotraitance en face du budget externe (affichage seul)
+  const convenuCotraitance = convenuProjetHT(state.cotraitants, p.id)
+  const recuCotraitance = recuProjetHT(state.notesHonoraires, p.id)
   const factTotal = factureHT(state, p.id)
   const margeReelle = factTotal - coutTemps - externes
   const joursPointes = enJours(state, heuresReelles(state, p.id))
@@ -745,7 +1121,19 @@ function OngletFinances({ projet: p }: { projet: Projet }) {
           value={<Money v={coutTemps} />}
           sub="heures pointées × coût horaire de chaque personne"
         />
-        <Stat label="Budget externe (saisi)" value={<Money v={externes} />} sub="BET, sous-traitance — un budget, pas un coût réel (lot F2)" />
+        <Stat
+          label="Budget externe (saisi)"
+          value={<Money v={externes} />}
+          sub={
+            // 5.10 — le RÉEL de la cotraitance s'affiche FACE au budget que
+            // la marge lit : affiché, jamais soustrait (audit 5.14)
+            convenuCotraitance > 0 || recuCotraitance > 0 ? (
+              <>budget des phases — cotraitance : reçu {fmtMoney(recuCotraitance)} / convenu {fmtMoney(convenuCotraitance)}</>
+            ) : (
+              'BET, sous-traitance — un budget, pas un coût réel (lot F2)'
+            )
+          }
+        />
         <Stat
           label="Marge estimée à date"
           value={<Money v={margeReelle} />}
@@ -768,6 +1156,9 @@ function OngletFinances({ projet: p }: { projet: Projet }) {
         <Stat label="Marge finale prévue" value={<Money v={mf.marge} />} tone={mf.marge < 0 ? 'danger' : 'ok'} sub={<>signés {fmtMoney(mf.honorairesSignes)} − coût final {fmtMoney(mf.coutFinal)}</>} />
         <Stat label="Dérive de marge" value={<Money v={mf.derive} />} tone={mf.derive < -0.01 ? 'danger' : 'ok'} sub={<>vs marge initiale {fmtMoney(mf.margeInitiale)}</>} />
       </div>
+
+      {/* ---------- 5.10 : cotraitance, honoraires entrants ---------- */}
+      <CarteCotraitance projet={p} />
 
       <Card
         titre={`Échéancier du projet (${factures.length} facture${factures.length > 1 ? 's' : ''} · ${echeances.length} prévue${echeances.length > 1 ? 's' : ''})`}

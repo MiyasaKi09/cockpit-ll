@@ -505,6 +505,51 @@ export interface DesordreGPA {
   relances: RelanceDesordre[]
 }
 
+/** 5.10 — nature d'un partenaire de maîtrise d'œuvre (chaîne d'honoraires
+ *  ENTRANTE : c'est lui qui facture l'agence, pas l'inverse) */
+export type TypeCotraitant = 'bet' | 'agence' | 'autre'
+
+/** 5.10 — cotraitant ou sous-traitant de maîtrise d'œuvre d'un projet (BET,
+ *  autre agence). Porte le CONVENU (honoraires de la convention de
+ *  groupement) ; le RÉEL se lit dans ses notes d'honoraires mensuelles
+ *  (`NoteHonoraires`) — les deux chiffres s'affichent face à face, jamais
+ *  confondus : le budget externe des phases (`Phase.coutExterneHT`) reste la
+ *  base de la marge (audit 5.14 : on n'étend pas un calcul tout juste
+ *  vérifié, on met le réel à côté). */
+export interface Cotraitant {
+  id: string
+  projetId: string
+  nom: string
+  type: TypeCotraitant
+  /** mission confiée (structure, fluides, économie, OPC…) */
+  mission: string
+  /** honoraires convenus HT (convention de groupement / contrat) —
+   *  null = pas encore contractualisé : le reste à payer répond alors null,
+   *  jamais 0, un « 0 € restant » affirmerait qu'un contrat a été lu */
+  honorairesConvenusHT: number | null
+  email?: string
+  notes?: string
+  /** mission en cours : seuls les cotraitants actifs attendent une note
+   *  chaque mois — relancer une mission terminée serait du bruit */
+  actif: boolean
+}
+
+/** 5.10 — note d'honoraires MENSUELLE d'un cotraitant : une attendue par
+ *  mois actif. La note peut être consignée avant réception (`recueLe` null =
+ *  attendue, elle compte manquante) ; `reglee` suit le paiement, pas la
+ *  réception — une note reçue non payée n'est pas une note manquante. */
+export interface NoteHonoraires {
+  id: string
+  cotraitantId: string
+  projetId: string
+  /** mois de la prestation ('AAAA-MM') */
+  mois: string
+  montantHT: number | null
+  /** date de réception effective — null tant que la note n'est pas arrivée */
+  recueLe: string | null
+  reglee: boolean
+}
+
 /** élément d'ouvrage prévu au CCTP d'un lot — un article numéroté du document */
 export interface ElementCCTP {
   id: string
@@ -1476,6 +1521,10 @@ export type TypeAlerte =
   // 5.8 — document d'exécution non visé à J−3 de l'échéance du CCAP : un
   // visa en retard engage la responsabilité de la MOE
   | 'visa_a_rendre'
+  // 5.10 — note d'honoraires de cotraitance attendue et non reçue pour un
+  // mois échu : sans elle, le réel de la chaîne entrante s'écarte du convenu
+  // sans que personne ne le voie avant le bilan
+  | 'note_honoraires_manquante'
   // A.11 — les trois producteurs de la mémoire des échanges (§12.3 pt 10).
   // Ils ne sortent rien de l'application : ni e-mail, ni notification
   // poussée. Notifier, ici, c'est faire apparaître dans le fil de la
@@ -1493,6 +1542,11 @@ export type ActionAlerte =
   // 5.7 — pose `confirmeLe` sur la tâche de chantier : l'humain confirme,
   // l'alerte s'éteint d'elle-même au recalcul
   | { kind: 'confirmer_tache'; refId: string; label: string }
+  // 5.10 — ouvre un BROUILLON Gmail de relance (gmailComposeUrl) pour la
+  // note d'honoraires du mois manquant : n'écrit rien dans l'état, n'envoie
+  // rien (§15) — `mois` accompagne refId parce que la relance vise UN mois,
+  // pas le cotraitant en général
+  | { kind: 'relancer_cotraitant'; refId: string; mois: string; label: string }
 
 export interface Alerte {
   /** identifiant stable (sert au snooze) */
@@ -1876,6 +1930,13 @@ export interface AppState {
    *  signalement, notification, relances tracées, levée. La fin de GPA se
    *  dérive de la réception du marché — UNE autorité, src/gpa.ts */
   desordresGPA: DesordreGPA[]
+  /** 5.10 — partenaires de maîtrise d'œuvre (BET, agences) par projet :
+   *  le CONVENU de la chaîne d'honoraires entrante */
+  cotraitants: Cotraitant[]
+  /** 5.10 — notes d'honoraires mensuelles des cotraitants : le RÉEL reçu,
+   *  affiché FACE au convenu et au budget externe des phases — jamais versé
+   *  dans le calcul de marge (audit 5.14) */
+  notesHonoraires: NoteHonoraires[]
 }
 
 /** document du corpus de l'assistant : texte réglementaire (Légifrance,

@@ -169,6 +169,11 @@ function migrate(parsed: AppState): AppState {
   // 5.9 — désordres de l'année de parfait achèvement. Même règle : aucun
   // désordre consigné avant le livrable, la collection naît vide.
   etat.desordresGPA = Array.isArray(parsed.desordresGPA) ? parsed.desordresGPA : []
+  // 5.10 — cotraitants et notes d'honoraires entrantes. Champ ajouté sans
+  // palier : un état antérieur n'avait consigné ni partenaire ni note, la
+  // collection naît vide — et sans note consignée, aucune relance ne part.
+  etat.cotraitants = Array.isArray(parsed.cotraitants) ? parsed.cotraitants : []
+  etat.notesHonoraires = Array.isArray(parsed.notesHonoraires) ? parsed.notesHonoraires : []
   amorcerEntreprises(etat)
   // v5 → v6 : journal d'interactions CRM. On amorce depuis les
   // derniereInteraction existantes pour ne rien perdre de l'historique.

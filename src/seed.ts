@@ -1100,6 +1100,11 @@ export function seedState(): AppState {
     // 5.9 — vide : un désordre inventé finirait dans une chronologie de
     // relances opposable, voire dans une mise en demeure réelle.
     desordresGPA: [],
+    // 5.10 — vides : un cotraitant d'exemple déclencherait des relances
+    // mensuelles sur un partenaire qui n'existe pas, et une note inventée
+    // fausserait le reçu affiché face au convenu.
+    cotraitants: [],
+    notesHonoraires: [],
 
     // v14 — finance F0/F1 : remplies par l'amorçage ci-dessous
     // (les factures « prévues » du seed deviennent des échéances)

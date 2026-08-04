@@ -90,6 +90,9 @@ jobs:
       - name: Defects liability year registry with one authoritative end date
         run: npm run test:gpa
 
+      - name: Co-contractor fee notes chased per overdue month
+        run: npm run test:cotraitants
+
       - name: Current-user identity
         run: npm run test:identite
 

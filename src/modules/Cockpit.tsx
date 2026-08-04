@@ -33,6 +33,7 @@ import {
   caCible,
   caRealiseAnnee,
   meteoFinanciere,
+  nomProjet,
   phasesEnCours,
   prochainesEcheances,
   reunionsDuJour,
@@ -40,6 +41,7 @@ import {
   situationsAVerifier,
   validationsAttendues,
 } from '../derive'
+import { corpsRelanceNote, sujetRelanceNote } from '../cotraitants'
 import type { ActionFinance } from '../financeActions'
 import { actionsATraiter } from '../financeActions'
 import { useNbEntrantsDistants } from '../entrants'
@@ -672,6 +674,19 @@ function CentreActions({ personne }: { personne: string }) {
     if (action.kind === 'emettre_facture') {
       // parcours contrôlé (numéro légal, contrôles, gel) — audit F0
       navigate(`/facturation/emettre/${action.refId}`)
+      return
+    }
+    if (action.kind === 'relancer_cotraitant') {
+      // 5.10 — un BROUILLON s'ouvre, rien ne s'écrit ni ne part (§15) : le
+      // texte vient de src/cotraitants.ts, le même que l'écran projet — deux
+      // rédactions divergeraient sans que rien ne le signale
+      const c = state.cotraitants.find((x) => x.id === action.refId)
+      if (!c?.email) return
+      ouvrirGmail(
+        c.email,
+        sujetRelanceNote(c, action.mois),
+        corpsRelanceNote(c, action.mois, nomProjet(state, c.projetId), state.settings.nomAgence),
+      )
       return
     }
     if (action.kind === 'valider_situation') {

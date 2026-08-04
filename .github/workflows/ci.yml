@@ -75,6 +75,9 @@ jobs:
       - name: Contractor confirmation alert one month ahead
         run: npm run test:alerte-entreprise
 
+      - name: Situation claims checked against site reality
+        run: npm run test:controle-situation
+
       - name: Current-user identity
         run: npm run test:identite
 

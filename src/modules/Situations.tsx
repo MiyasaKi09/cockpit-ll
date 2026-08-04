@@ -43,6 +43,7 @@ import {
   retenueGarantieMarche,
 } from '../derive'
 import type { StatutRG } from '../derive'
+import { SEUIL_ECART_AVANCEMENT_PTS, controleSituation } from '../controleSituation'
 import { ouvrirDecompteSituationPDF } from '../pdf'
 import { assemble, contexteMarche } from '../prompts'
 import {
@@ -105,6 +106,68 @@ function NetAPayer({ state, sit }: { state: AppState; sit: Situation }) {
     <span title={titre}>
       <Money v={dc.netAPayerHT} />
     </span>
+  )
+}
+
+/** formate un nombre de points déjà arrondi au dixième (5.5) — virgule
+ *  française, sans passer par fmtPct qui attend une fraction */
+const pts = (v: number) => String(v).replace('.', ',')
+
+/** 5.5 — le bloc « Contrôle » : la situation FACE AU réel du chantier et
+ *  des indices. Des chiffres côte à côte, un badge quand l'écart
+ *  d'avancement dépasse le seuil nommé — et jamais un verdict : valider ou
+ *  non reste le clic humain, au-dessus. Quand un terme manque, le bloc DIT
+ *  ce qui manque (`manques`) au lieu de se taire — un bloc muet ressemble
+ *  à un bloc qui a vérifié. */
+function BlocControle({ state, sit }: { state: AppState; sit: Situation }) {
+  // pas de marché rattaché ⇒ pas de bloc : le contrôle est vide par
+  // construction, et la fiche demande déjà le rattachement juste au-dessus
+  if (!marcheDeSituation(state, sit)) return null
+  const ctl = controleSituation(state, sit)
+  return (
+    <div style={{ marginTop: 8, padding: 12, background: 'var(--bg-soft, #f6f7fa)', borderRadius: 8 }}>
+      <div className="small" style={{ fontWeight: 700, marginBottom: 4 }}>
+        Contrôle — la situation face au réel
+      </div>
+      {ctl.pctDemande !== null && ctl.pctChantier !== null && (
+        <div className="small" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <span>
+            l’entreprise demande <strong>{pts(ctl.pctDemande)} %</strong> · le chantier dit{' '}
+            <strong>{pts(ctl.pctChantier)} %</strong>
+          </span>
+          {ctl.ecartPts !== null && Math.abs(ctl.ecartPts) > SEUIL_ECART_AVANCEMENT_PTS && (
+            <Badge tone="warn">écart {pts(Math.abs(ctl.ecartPts))} pts</Badge>
+          )}
+        </div>
+      )}
+      {(ctl.revisionDemandee !== null || ctl.revisionTheorique !== null) && (
+        <div className="small">
+          révision demandée <strong>{fmtMoney(ctl.revisionDemandee)}</strong> · théorique{' '}
+          <strong>{ctl.revisionTheorique ? fmtMoney(ctl.revisionTheorique.montant) : '—'}</strong>
+          {ctl.revisionTheorique && (
+            <span className="muted">
+              {' '}
+              (indice de {fmtMois(ctl.revisionTheorique.indiceUtilise.mois)}
+              {ctl.revisionTheorique.approximatif ? ', approximatif' : ''})
+            </span>
+          )}
+          {ctl.ecartRevision !== null && (
+            <>
+              {' '}
+              · écart {ctl.ecartRevision > 0 ? '+' : ''}
+              {fmtMoney(ctl.ecartRevision, true)}
+            </>
+          )}
+        </div>
+      )}
+      {ctl.manques.length > 0 && (
+        <div className="muted small" style={{ marginTop: 4 }}>
+          {ctl.manques.map((m, i) => (
+            <div key={i}>· {m}</div>
+          ))}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -460,7 +523,9 @@ function ModalEdition({ sit, onClose }: { sit: Situation; onClose: () => void })
         </Field>
       </div>
 
-      {/* décompte « net à payer » recalculé en direct */}
+      {/* décompte « net à payer » et contrôle (5.5) recalculés en direct :
+          le bloc lit les valeurs EN COURS d'édition, pas l'état enregistré —
+          corriger un cumul doit faire bouger l'écart sous les yeux */}
       {(() => {
         const sitTemp: Situation = {
           ...sit,
@@ -473,11 +538,12 @@ function ModalEdition({ sit, onClose }: { sit: Situation; onClose: () => void })
         }
         const dc = decompteSituation(state, sitTemp)
         return (
+          <>
           <div style={{ marginTop: 4, padding: 12, background: 'var(--bg-soft, #f6f7fa)', borderRadius: 8 }}>
             <div className="form-row" style={{ alignItems: 'flex-start' }}>
               <Field
                 label="Révision de prix HT"
-                hint={marche ? (marche.revision ? 'marché révisable' : 'marché non révisable') : 'rattachez un marché pour la RG'}
+                hint={marche ? (marche.revision ? 'marché révisable' : 'marché non révisable') : 'rattachez un marché pour la RG et le contrôle'}
               >
                 <NumInput value={revision} onChange={setRevision} placeholder="0" />
               </Field>
@@ -522,6 +588,8 @@ function ModalEdition({ sit, onClose }: { sit: Situation; onClose: () => void })
               </p>
             )}
           </div>
+          <BlocControle state={state} sit={sitTemp} />
+          </>
         )
       })()}
 

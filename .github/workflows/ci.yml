@@ -93,6 +93,9 @@ jobs:
       - name: Co-contractor fee notes chased per overdue month
         run: npm run test:cotraitants
 
+      - name: Project contacts sorted by call order
+        run: npm run test:ordre-contacts
+
       - name: Current-user identity
         run: npm run test:identite
 

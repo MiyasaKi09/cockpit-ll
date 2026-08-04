@@ -1351,6 +1351,12 @@ export interface Contact {
   /** projets rattachés (liens manuels, en plus des liens dérivés des interactions) */
   projetsIds?: string[]
   dateProchaineAction?: string | null
+  /** 5.11 — ordre d'appel : 1 = à appeler d'abord, null/absent = pas classé
+   *  (affiché en fin de liste). Le rang suit le CONTACT, pas le projet — un
+   *  contact partagé entre deux projets garde le même rang partout : c'est
+   *  le prix d'un champ simple, assumé pour une agence de deux personnes
+   *  dont les contacts sont presque tous propres à un projet. */
+  ordreAppel?: number | null
   notes?: string
 }
 

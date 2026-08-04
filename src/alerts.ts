@@ -19,6 +19,7 @@ import {
 import { addDays, diffDays, fmtDate, fmtMoney, fmtMois, monthKey } from './util'
 import { LIBELLES_IMPORTANCE, type NiveauImportance, estImportance, graviteDe } from './categorisation'
 import { tacheAConfirmer } from './chantier'
+import { SEUIL_ALERTE_VISA_JOURS, echeanceVisa } from './visas'
 
 // ------------------------------------------------------------
 // A.11 — notifier les personnes concernées (§12.3 pt 10)
@@ -259,6 +260,36 @@ export function computeAlertes(state: AppState, today: string, contexte?: Contex
       // « Relancer » vit à l'écran planning, en brouillon Gmail — jamais
       // d'envoi automatique (§15)
       action: { kind: 'confirmer_tache', refId: t.id, label: '✓ Confirmé' },
+    })
+  }
+
+  // --- 5.8 : visa non traité à J−SEUIL_ALERTE_VISA_JOURS de l'échéance du
+  // CCAP (src/visas.ts — même calcul d'échéance que l'écran). Un document
+  // déjà visé, même tardivement, ne s'alerte plus : le geste a été fait,
+  // c'est lui qui compte. Le retard reste alertant tant que rien n'est visé
+  // — un visa en retard engage la responsabilité de la MOE, le silence
+  // serait exactement le défaut que ce registre corrige.
+  for (const v of state.visas) {
+    if (v.statut !== 'a_viser') continue
+    const echeance = echeanceVisa(v)
+    if (!echeance) continue
+    const dj = diffDays(today, echeance)
+    if (dj > SEUIL_ALERTE_VISA_JOURS) continue
+    alertes.push({
+      id: `visa:${v.id}`,
+      type: 'visa_a_rendre',
+      // échéance dépassée : la responsabilité court, rouge
+      gravite: dj < 0 ? 3 : 2,
+      titre:
+        dj < 0
+          ? `Visa en retard de ${-dj} j — ${v.document} (${v.lot})`
+          : `Visa à rendre ${dj === 0 ? 'aujourd’hui' : `sous ${dj} j`} — ${v.document} (${v.lot})`,
+      detail: `${nomProjet(state, v.projetId)} · reçu le ${fmtDate(v.recuLe)} · délai CCAP ${v.delaiJours} j — viser dans l'onglet Chantier`,
+      lien: `#/projets/${v.projetId}/chantier`,
+      date: echeance,
+      projetId: v.projetId,
+      // pas d'action rapide : viser demande de LIRE le document — un
+      // « ✓ Visé » depuis le fil d'urgences inviterait à signer sans lire
     })
   }
 

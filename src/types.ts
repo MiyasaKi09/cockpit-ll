@@ -147,6 +147,11 @@ export interface Projet {
   /** durées mémorisées pour la datation auto des phases (planning) */
   dureeEtudesMois?: number | null
   dureeChantierMois?: number | null
+  /** 5.8 — délai de visa des documents d'exécution du CCAP (jours
+   *  calendaires) : pré-remplit chaque nouveau visa du registre ; absent =
+   *  15 j (DELAI_VISA_DEFAUT). Sur le PROJET et non le marché : le CCAP
+   *  fixe le plus souvent un délai unique pour toute l'opération */
+  delaiVisaJours?: number | null
   /** objet à rappeler sur les factures (ex. « Création d'une pension de famille au… ») */
   objetFacture?: string
   siretClient?: string
@@ -425,6 +430,42 @@ export interface Intemperie {
   nature: NatureIntemperie
   /** le constat opposable : seuil du CCAP atteint, CR de chantier, relevé météo… */
   commentaire: string
+}
+
+/** 5.8 — statuts d'un document d'exécution au registre des visas. Trois
+ *  issues possibles du geste (CCAG MOE) : visé, visé avec observations,
+ *  refusé — « à viser » est l'état d'attente, celui qui engage la MOE si
+ *  le délai du CCAP passe. */
+export type StatutVisa = 'a_viser' | 'vise' | 'vise_observations' | 'refuse'
+
+/** 5.8 — un document d'exécution reçu d'une entreprise en phase VISA.
+ *  Le registre CONSTATE (reçu le, délai du CCAP) ; viser reste un geste
+ *  humain, daté (`viseLe`) et signé (`visePar`) : un visa en retard engage
+ *  la responsabilité de la MOE, il faut pouvoir dire qui a visé quoi et
+ *  quand — un statut changé sans date ni signature ne prouverait rien. */
+export interface Visa {
+  id: string
+  projetId: string
+  /** marché émetteur — le lot en texte reste pour l'affichage et pour les
+   *  documents reçus avant la signature du marché */
+  marcheId?: string | null
+  lot: string
+  /** le document lui-même (ex. « Plans EXE R+1 — indice B ») */
+  document: string
+  recuLe: string // ISO 'AAAA-MM-JJ'
+  /** délai contractuel de visa du CCAP, en jours CALENDAIRES — pré-rempli
+   *  par le défaut du projet (`Projet.delaiVisaJours`), ajustable visa par
+   *  visa : un CCAP peut prévoir un délai propre à certains documents */
+  delaiJours: number
+  statut: StatutVisa
+  /** date du geste (visé / visé avec observations / refusé) */
+  viseLe?: string | null
+  /** qui a visé — la responsabilité se signe, comme la décision de pénalité */
+  visePar?: string | null
+  /** observations du visa, ou motif du refus */
+  observations?: string
+  /** lien au registre documentaire, quand le document y est classé */
+  documentId?: string | null
 }
 
 /** élément d'ouvrage prévu au CCTP d'un lot — un article numéroté du document */
@@ -1395,6 +1436,9 @@ export type TypeAlerte =
   // 5.7 — tâche de chantier démarrant sous ~30 jours sans confirmation de
   // l'entreprise : le mode de retard le plus courant, et le plus prévisible
   | 'entreprise_a_confirmer'
+  // 5.8 — document d'exécution non visé à J−3 de l'échéance du CCAP : un
+  // visa en retard engage la responsabilité de la MOE
+  | 'visa_a_rendre'
   // A.11 — les trois producteurs de la mémoire des échanges (§12.3 pt 10).
   // Ils ne sortent rien de l'application : ni e-mail, ni notification
   // poussée. Notifier, ici, c'est faire apparaître dans le fil de la
@@ -1786,6 +1830,11 @@ export interface AppState {
   /** 5.3 — registre des intempéries par chantier : prolonge les délais et
    *  neutralise les retards de 5.2 — trace opposable pour le décompte général */
   intemperies: Intemperie[]
+  /** 5.8 — registre des visas : documents d'exécution reçus en phase VISA,
+   *  délai du CCAP, geste de visa daté et signé — la phase VISA existait
+   *  partout (échéancier, catégorisation) sans qu'aucun registre ne suive
+   *  ce qui est à viser */
+  visas: Visa[]
 }
 
 /** document du corpus de l'assistant : texte réglementaire (Légifrance,

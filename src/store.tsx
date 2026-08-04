@@ -162,6 +162,10 @@ function migrate(parsed: AppState): AppState {
   // 5.3 — registre des intempéries. Même règle : aucun jour constaté avant
   // le livrable, la collection naît vide sur un état antérieur.
   etat.intemperies = Array.isArray(parsed.intemperies) ? parsed.intemperies : []
+  // 5.8 — registre des visas. Champ ajouté sans palier : un état antérieur
+  // n'avait aucun registre, donc rien à viser de consigné — la collection
+  // naît vide, et les documents se saisissent au fil des réceptions.
+  etat.visas = Array.isArray(parsed.visas) ? parsed.visas : []
   amorcerEntreprises(etat)
   // v5 → v6 : journal d'interactions CRM. On amorce depuis les
   // derniereInteraction existantes pour ne rien perdre de l'historique.

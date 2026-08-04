@@ -1068,6 +1068,9 @@ export function seedState(): AppState {
     // 5.3 — vide pour la même raison : un jour d'intempérie inventé
     // prolongerait un délai contractuel réel et excuserait un vrai retard.
     intemperies: [],
+    // 5.8 — vide : un visa « EXEMPLE » à l'état « à viser » lèverait une
+    // alerte de responsabilité sur un document qui n'existe pas.
+    visas: [],
 
     // v14 — finance F0/F1 : remplies par l'amorçage ci-dessous
     // (les factures « prévues » du seed deviennent des échéances)

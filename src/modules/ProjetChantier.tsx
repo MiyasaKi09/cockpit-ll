@@ -12,10 +12,18 @@ import type {
   StatutReunion,
   TypeEvenementMarche,
   TypeGarantie,
+  Visa,
 } from '../types'
 import { useStore } from '../store'
 import { useMoi } from '../moi'
 import { LIBELLE_GARANTIE, garantieDuMarche } from '../derive'
+import {
+  DELAI_VISA_DEFAUT,
+  LIBELLE_STATUT_VISA,
+  echeanceVisa,
+  visasEnRetard,
+  visasSousHuitaine,
+} from '../visas'
 import {
   LIBELLE_EVENEMENT,
   LIBELLE_INTEMPERIE,
@@ -45,7 +53,7 @@ import {
   confirmer,
   toast, RowMenu } from '../ui'
 import type { Tone } from '../ui'
-import { fmtDate, fmtMoney, fmtPct, todayISO, uid } from '../util'
+import { diffDays, fmtDate, fmtMoney, fmtPct, todayISO, uid } from '../util'
 import { MODELES_WHISPER, transcrireFichier, type ProgresTranscription } from '../transcription'
 import { CONTRAT_CR, genererDocxCR, parseRetourCR, retourVersTexte } from '../crdocx'
 import { lireRacine, nomConforme, rangerFichier, supporteFS, type ResultatRangement } from '../fsdrive'
@@ -390,6 +398,386 @@ function ModalMarche({
         <Btn onClick={onClose}>Annuler</Btn>
         <Btn kind="primary" onClick={enregistrer} disabled={!valide}>
           {creation ? 'Ajouter le marché' : 'Enregistrer'}
+        </Btn>
+      </div>
+    </Modal>
+  )
+}
+
+// ============================================================
+// 5.8 — Registre des visas : les documents d'exécution reçus en
+// phase VISA, le délai du CCAP qui court, et le geste de visa —
+// daté et signé, parce qu'un visa en retard engage la
+// responsabilité de la MOE.
+// ============================================================
+
+/** tons d'affichage des statuts de visa — le référentiel des libellés
+ *  vit dans src/visas.ts, seule la couleur est une affaire d'écran */
+const TONE_STATUT_VISA: Record<Visa['statut'], Tone> = {
+  a_viser: 'info',
+  vise: 'ok',
+  vise_observations: 'warn',
+  refuse: 'danger',
+}
+
+export function CarteVisas({ projet: p }: { projet: Projet }) {
+  const { state, update, replace } = useStore()
+  // qui signe le visa : même règle que la décision de pénalité — la
+  // personne reconnue, à défaut la première de la liste (pas de signature vide)
+  const moi = useMoi()
+  const signataire = moi.nom ?? state.settings.personnes[0]
+  const today = todayISO()
+  const [modal, setModal] = useState<{ visa?: Visa } | null>(null)
+  const [geste, setGeste] = useState<{ visa: Visa; statut: 'vise_observations' | 'refuse' } | null>(null)
+
+  const marches = state.marches.filter((m) => m.projetId === p.id)
+  const visas = state.visas
+    .filter((v) => v.projetId === p.id)
+    .sort((a, b) => {
+      // les visas en attente d'abord, échéance la plus proche en tête —
+      // c'est l'ordre dans lequel la responsabilité court
+      const attenteA = a.statut === 'a_viser' ? 0 : 1
+      const attenteB = b.statut === 'a_viser' ? 0 : 1
+      if (attenteA !== attenteB) return attenteA - attenteB
+      if (attenteA === 0) return (echeanceVisa(a) || '9999').localeCompare(echeanceVisa(b) || '9999')
+      return (b.viseLe || '').localeCompare(a.viseLe || '') || a.id.localeCompare(b.id)
+    })
+  const marcheDe = (v: Visa) => (v.marcheId ? marches.find((m) => m.id === v.marcheId) : undefined)
+  const docDe = (v: Visa) =>
+    v.documentId ? state.registreDocuments.find((d) => d.id === v.documentId) : undefined
+
+  const retards = visasEnRetard(visas, today)
+  const huitaine = visasSousHuitaine(visas, today)
+
+  /** le geste : statut + date + signature en une seule écriture — un statut
+   *  changé sans viseLe/visePar ne prouverait rien le jour où on demande
+   *  qui a visé quoi et quand */
+  const viser = (v: Visa, statut: Visa['statut'], observations?: string) => {
+    const snap = state
+    update((d) => {
+      const x = d.visas.find((y) => y.id === v.id)
+      if (!x) return
+      x.statut = statut
+      x.viseLe = todayISO()
+      x.visePar = signataire
+      if (observations !== undefined) x.observations = observations
+    })
+    toast(`${LIBELLE_STATUT_VISA[statut][0].toUpperCase()}${LIBELLE_STATUT_VISA[statut].slice(1)} — daté et signé « ${signataire} ».`, {
+      tone: statut === 'refuse' ? 'warn' : 'ok',
+      undo: () => replace(snap),
+    })
+  }
+
+  const rouvrir = async (v: Visa) => {
+    if (
+      !(await confirmer({
+        message:
+          `Rouvrir le visa « ${v.document} » (${LIBELLE_STATUT_VISA[v.statut]} le ${fmtDate(v.viseLe)} par ${v.visePar || '?'}) ?\n` +
+          `Le geste sera effacé et le délai du CCAP recommencera à compter depuis la réception.`,
+        danger: true,
+        confirmerLabel: 'Rouvrir le visa',
+      }))
+    )
+      return
+    update((d) => {
+      const x = d.visas.find((y) => y.id === v.id)
+      if (!x) return
+      x.statut = 'a_viser'
+      x.viseLe = null
+      x.visePar = null
+    })
+  }
+
+  const supprimer = async (v: Visa) => {
+    const snap = state
+    if (!(await confirmer({ message: `Retirer « ${v.document} » du registre des visas ?`, danger: true, confirmerLabel: 'Retirer' }))) return
+    update((d) => {
+      d.visas = d.visas.filter((x) => x.id !== v.id)
+    })
+    toast('Document retiré du registre.', { undo: () => replace(snap) })
+  }
+
+  return (
+    <Card
+      titre="Visas des documents d'exécution"
+      actions={<Btn small kind="primary" onClick={() => setModal({})}>Consigner un document reçu</Btn>}
+    >
+      <div className="toolbar">
+        <span className="small muted">Délai de visa du CCAP (jours calendaires), défaut du projet :</span>
+        <NumInput
+          value={p.delaiVisaJours ?? null}
+          onChange={(v) =>
+            update((d) => {
+              const x = d.projets.find((y) => y.id === p.id)
+              if (x) x.delaiVisaJours = v
+            })
+          }
+          placeholder={String(DELAI_VISA_DEFAUT)}
+          style={{ maxWidth: 90 }}
+          ariaLabel="Délai de visa par défaut du projet en jours calendaires"
+        />
+        {(retards.length > 0 || huitaine.length > 0) && (
+          <span className="small">
+            {retards.length > 0 && <Badge tone="danger">{retards.length} en retard</Badge>}{' '}
+            {huitaine.length > 0 && <Badge tone="warn">{huitaine.length} sous huitaine</Badge>}
+          </span>
+        )}
+      </div>
+      {visas.length === 0 ? (
+        <EmptyState>
+          Aucun document consigné — chaque document d'exécution reçu (plans EXE, notes de calcul,
+          fiches techniques) entre ici avec sa date de réception : le délai du CCAP court, une
+          alerte se lève à J−3, et le visa se signe. Un visa en retard engage la responsabilité de
+          la MOE.
+        </EmptyState>
+      ) : (
+        <Table
+          compact
+          head={['Document', 'Lot / entreprise', 'Reçu le', 'Échéance', 'Statut', '']}
+        >
+          {visas.map((v) => {
+            const m = marcheDe(v)
+            const doc = docDe(v)
+            const echeance = echeanceVisa(v)
+            const dj = echeance ? diffDays(today, echeance) : null
+            const enAttente = v.statut === 'a_viser'
+            return (
+              <tr key={v.id}>
+                <td>
+                  <strong>{v.document}</strong>
+                  {doc && <div className="muted small">au registre : {doc.titre}</div>}
+                </td>
+                <td className="small">
+                  {v.lot}
+                  {m && <div className="muted">{m.entreprise}</div>}
+                </td>
+                <td style={{ whiteSpace: 'nowrap' }}>{fmtDate(v.recuLe)}</td>
+                <td style={{ whiteSpace: 'nowrap' }}>
+                  {echeance ? (
+                    <span title={`délai CCAP : ${v.delaiJours} jours calendaires`}>
+                      {fmtDate(echeance)}
+                      {enAttente && dj !== null && dj < 0 && (
+                        <>
+                          {' '}
+                          <Badge tone="danger">retard de {-dj} j</Badge>
+                        </>
+                      )}
+                      {enAttente && dj !== null && dj >= 0 && dj <= 7 && (
+                        <>
+                          {' '}
+                          <Badge tone="warn">J−{dj}</Badge>
+                        </>
+                      )}
+                    </span>
+                  ) : (
+                    <span className="muted">?</span>
+                  )}
+                </td>
+                <td>
+                  <Badge tone={TONE_STATUT_VISA[v.statut]}>{LIBELLE_STATUT_VISA[v.statut]}</Badge>
+                  {v.viseLe && (
+                    <div className="muted small">
+                      le {fmtDate(v.viseLe)} — {v.visePar || '?'}
+                    </div>
+                  )}
+                  {v.observations && <div className="muted small">{v.observations}</div>}
+                </td>
+                <td className="right">
+                  <span style={{ display: 'inline-flex', gap: 6 }}>
+                    {enAttente && (
+                      <Btn
+                        small
+                        kind="primary"
+                        onClick={() => viser(v, 'vise')}
+                        title={`Vise le document sans observation — daté et signé « ${signataire} »`}
+                      >
+                        Viser
+                      </Btn>
+                    )}
+                    <RowMenu
+                      items={[
+                        ...(enAttente
+                          ? [
+                              {
+                                label: 'Viser avec observations',
+                                onClick: () => setGeste({ visa: v, statut: 'vise_observations' as const }),
+                              },
+                              {
+                                label: 'Refuser le document',
+                                onClick: () => setGeste({ visa: v, statut: 'refuse' as const }),
+                              },
+                              { label: 'Modifier', onClick: () => setModal({ visa: v }) },
+                            ]
+                          : [{ label: 'Rouvrir le visa (annuler le geste)', onClick: () => void rouvrir(v) }]),
+                        { label: 'Retirer du registre', onClick: () => void supprimer(v), danger: true },
+                      ]}
+                    />
+                  </span>
+                </td>
+              </tr>
+            )
+          })}
+        </Table>
+      )}
+
+      {modal && (
+        <ModalVisa projet={p} marches={marches} visa={modal.visa} onClose={() => setModal(null)} />
+      )}
+      {geste && (
+        <ModalGesteVisa
+          visa={geste.visa}
+          statut={geste.statut}
+          onConfirmer={(obs) => {
+            viser(geste.visa, geste.statut, obs)
+            setGeste(null)
+          }}
+          onClose={() => setGeste(null)}
+        />
+      )}
+    </Card>
+  )
+}
+
+function ModalVisa({
+  projet: p,
+  marches,
+  visa,
+  onClose,
+}: {
+  projet: Projet
+  marches: MarcheTravaux[]
+  visa?: Visa
+  onClose: () => void
+}) {
+  const { state, update } = useStore()
+  const creation = !visa
+
+  const [marcheId, setMarcheId] = useState(visa?.marcheId || '')
+  const [lot, setLot] = useState(visa?.lot || '')
+  const [document, setDocument] = useState(visa?.document || '')
+  const [recuLe, setRecuLe] = useState<string | null>(visa?.recuLe || todayISO())
+  // le défaut du PROJET pré-remplit, le visa peut porter le sien : le CCAP
+  // fixe un délai d'opération, mais certains documents ont le leur
+  const [delai, setDelai] = useState<number | null>(visa?.delaiJours ?? p.delaiVisaJours ?? DELAI_VISA_DEFAUT)
+  const [documentId, setDocumentId] = useState(visa?.documentId || '')
+
+  const docsProjet = state.registreDocuments.filter((d) => d.projetId === p.id)
+  const valide = document.trim() !== '' && lot.trim() !== '' && !!recuLe
+
+  const choisirMarche = (id: string) => {
+    setMarcheId(id)
+    const m = marches.find((x) => x.id === id)
+    if (m) setLot(m.lot)
+  }
+
+  const enregistrer = () => {
+    if (!valide) return
+    update((d) => {
+      const champs = {
+        marcheId: marcheId || null,
+        lot: lot.trim(),
+        document: document.trim(),
+        recuLe: recuLe!,
+        delaiJours: delai ?? p.delaiVisaJours ?? DELAI_VISA_DEFAUT,
+        documentId: documentId || null,
+      }
+      if (creation) {
+        // le statut naît « à viser » : consigner la réception n'est pas viser
+        d.visas.push({ id: uid('visa'), projetId: p.id, statut: 'a_viser', ...champs })
+      } else {
+        const x = d.visas.find((y) => y.id === visa.id)
+        // un visa signé ne se modifie plus sans être rouvert : la date de
+        // réception et le délai fondent une échéance déjà opposée
+        if (x && x.statut === 'a_viser') Object.assign(x, champs)
+      }
+    })
+    onClose()
+  }
+
+  return (
+    <Modal titre={creation ? 'Consigner un document reçu' : `Modifier — ${visa.document}`} onClose={onClose}>
+      <div className="form-row">
+        <Field label="Marché émetteur" hint="facultatif — un document peut précéder la signature du marché">
+          <Select
+            value={marcheId}
+            onChange={choisirMarche}
+            options={[
+              { value: '', label: '— hors marché —' },
+              ...marches.map((m) => ({ value: m.id, label: `${m.lot} — ${m.entreprise}` })),
+            ]}
+          />
+        </Field>
+        <Field label="Lot">
+          <TextInput value={lot} onChange={setLot} placeholder="Ex. Lot 03 — Charpente" />
+        </Field>
+      </div>
+      <div className="form-row">
+        <Field label="Document">
+          <TextInput value={document} onChange={setDocument} placeholder="Ex. Plans EXE R+1 — indice B" />
+        </Field>
+      </div>
+      <div className="form-row">
+        <Field label="Reçu le">
+          <DateInput value={recuLe} onChange={setRecuLe} />
+        </Field>
+        <Field label="Délai de visa (jours calendaires)" hint="délai du CCAP — pré-rempli par le défaut du projet">
+          <NumInput value={delai} onChange={setDelai} ariaLabel="Délai de visa de ce document en jours calendaires" />
+        </Field>
+      </div>
+      {docsProjet.length > 0 && (
+        <div className="form-row">
+          <Field label="Pièce au registre documentaire" hint="facultatif — relie le visa au fichier classé">
+            <Select
+              value={documentId}
+              onChange={setDocumentId}
+              options={[
+                { value: '', label: '— aucune —' },
+                ...docsProjet.map((d) => ({ value: d.id, label: d.titre })),
+              ]}
+            />
+          </Field>
+        </div>
+      )}
+      <div className="form-foot">
+        <Btn onClick={onClose}>Annuler</Btn>
+        <Btn kind="primary" onClick={enregistrer} disabled={!valide}>
+          {creation ? 'Consigner le document' : 'Enregistrer'}
+        </Btn>
+      </div>
+    </Modal>
+  )
+}
+
+/** viser avec observations / refuser : le motif s'écrit AVANT le geste —
+ *  un refus sans motif n'est pas opposable, et c'est le motif que
+ *  l'entreprise lira */
+function ModalGesteVisa({
+  visa,
+  statut,
+  onConfirmer,
+  onClose,
+}: {
+  visa: Visa
+  statut: 'vise_observations' | 'refuse'
+  onConfirmer: (observations: string) => void
+  onClose: () => void
+}) {
+  const [observations, setObservations] = useState(visa.observations || '')
+  const refus = statut === 'refuse'
+  return (
+    <Modal titre={`${refus ? 'Refuser' : 'Viser avec observations'} — ${visa.document}`} onClose={onClose}>
+      <Field label={refus ? 'Motif du refus' : 'Observations du visa'}>
+        <TextArea
+          value={observations}
+          onChange={setObservations}
+          rows={3}
+          placeholder={refus ? 'Ce que l’entreprise doit corriger avant nouvelle présentation…' : 'Réserves à lever, sans bloquer l’exécution…'}
+        />
+      </Field>
+      <div className="form-foot">
+        <Btn onClick={onClose}>Annuler</Btn>
+        <Btn kind={refus ? 'danger' : 'primary'} onClick={() => onConfirmer(observations.trim())} disabled={!observations.trim()}>
+          {refus ? 'Refuser le document' : 'Viser avec observations'}
         </Btn>
       </div>
     </Modal>
@@ -1390,6 +1778,10 @@ export default function ProjetChantier({ projet }: { projet: Projet }) {
     <>
       <CarteReunions projet={projet} />
       <CarteMarches projet={projet} />
+      {/* 5.8 — le registre des visas vit sous les marchés : les documents
+          d'exécution arrivent des entreprises titulaires, et le délai du
+          CCAP court dès leur réception */}
+      <CarteVisas projet={projet} />
       {/* 5.2 — le journal des pénalités vit sous les marchés : les taux du
           CCAP se saisissent sur le marché, les événements se constatent ici */}
       <CartePenalites projet={projet} />

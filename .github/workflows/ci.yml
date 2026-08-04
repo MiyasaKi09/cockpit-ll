@@ -84,6 +84,9 @@ jobs:
       - name: Weather days registry offsets delays in distinct working days
         run: npm run test:intemperies
 
+      - name: Execution documents visa registry with signed dated approvals
+        run: npm run test:visas
+
       - name: Current-user identity
         run: npm run test:identite
 

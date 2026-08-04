@@ -501,6 +501,64 @@ Le lot se livre en trois vagues. A et B sont séquentielles ; M est **paralléli
 
 ---
 
+### Lot 5 — Retours d'usage du 03/08/2026 : marchés, chantier et pilotage
+
+> **Origine.** Cette section ne vient pas du CDC : elle vient de l'exploitation
+> réelle du Cockpit par l'agence, consignée le 03/08/2026. Les demandes portent
+> sur le suivi des marchés de travaux, le chantier et le pilotage d'agence —
+> le versant que le CDC « mails, tâches, temps » ne couvrait pas. Chaque
+> prémisse a été vérifiée dans le dépôt avant d'être écrite, selon la règle de
+> ce plan : dire ce qui existe, ce qui manque, et ne pas confondre les deux.
+>
+> **Un des points signalés est un défaut réel, pas une demande :** le décompte
+> des situations retient la RG même quand une garantie à première demande est
+> enregistrée (5.1). Il passe en tête.
+
+#### A. Marchés et situations — là où l'argent se joue chaque mois
+
+| # | Livrable | Réf. | Effort |
+|---|---|---|---|
+| 5.1 | **[défaut réel]** RG à 0 % quand une garantie à première demande couvre le marché. `Marche.cautionRG` existe (`types.ts:322`) et `retenueGarantieMarche` le lit (`derive.ts:708`) — mais **`decompteSituation` l'ignore** : `tauxRG = marche?.tauxRG ?? 0` (`derive.ts:612`), donc le décompte net à payer retient 5 % à une entreprise qui a fourni sa garantie. Correction : `cautionRG` ⇒ taux effectif 0 % dans le décompte ; le champ devient un type de garantie (`retenue` / `caution bancaire` / `garantie à première demande`) avec la date de réception du document et son lien au registre documentaire. Verrouillé par extension de `test:facture-invariants` | CCAG Travaux art. 33 ; retour 03/08 | 1,5 j |
+| 5.2 | **[nouveau]** Pénalités de marché : journal d'événements par marché — retard d'exécution, absence à une réunion de chantier, document contractuel en retard (DOE, PPSPS, décomptes, agréments) — avec les taux du CCAP saisis par marché, le calcul du montant encouru, et l'application **décidée par un humain** sur la situation, jamais automatique : une pénalité est un acte contractuel, pas un calcul. Rien n'existe aujourd'hui (seuls les modèles de relance de `seed.ts` mentionnent le mot) | CCAG Travaux art. 19-20 | 4 j |
+| 5.3 | **[nouveau]** Registre des intempéries par chantier : chaleur, pluie, neige, vent, avec les seuils du CCAP, en jours datés. Double effet : prolongation du délai contractuel (les jours d'intempéries **neutralisent** les retards de 5.2 — les deux registres se lisent ensemble, sinon on pénalise un retard que la pluie excuse) et trace opposable pour le décompte général | CCAG Travaux art. 19.2.3 ; code du travail (chaleur) | 2 j |
+| 5.4 | **[nouveau]** Indices de révision par marché : `indiceRevision` (BT01, BT02, TP…, chaque entreprise a le sien), mois zéro d'établissement des prix, formule du CCAP (défaut paramétrable `0,15 + 0,85 × In/I0`). Les valeurs d'indices se saisissent à la main ou s'importent (l'INSEE publie à ~3 mois ; le calcul prend le dernier indice connu **et le dit**). À tout moment : révision théorique du mois, pré-calculée — pour ne plus jamais vérifier à la main ce qu'une entreprise a envoyé. `Marche.revision` n'est aujourd'hui qu'un booléen (`types.ts:309`) et `Situation.revisionHT` une saisie libre (`Situations.tsx:336`) : rien ne calcule | retour 03/08 | 3,5 j |
+| 5.5 | **[nouveau]** Vérification des situations contre le réel : la situation de l'entreprise s'affiche **face à** l'avancement du Gantt de son lot (5.6) — « elle demande 60 %, le chantier dit 40 % » — et face à la révision pré-calculée de 5.4. Deux écarts côte à côte, décision humaine. Dépend de 5.4 et 5.6 | §9 CCAG ; retour 03/08 | 3 j |
+
+#### B. Chantier — visa, GPA, planning travaux
+
+| # | Livrable | Réf. | Effort |
+|---|---|---|---|
+| 5.6 | **[nouveau]** Avancement du Gantt : `TacheChantier.avancement` (0–100 %, saisi en réunion de chantier — le champ n'existe pas, `types.ts:389-405`), rendu dans la barre ; et « faire revenir une entreprise » en un geste — duplication d'une tâche en intervention de reprise, liée à l'originale, plutôt que recréer la ligne à la main. C'est cet avancement qui nourrit la vérification des situations (5.5) : il est saisi une fois, au chantier, et sert deux fois | §19.3 ; retour 03/08 | 3 j |
+| 5.7 | **[nouveau]** Alerte « entreprise à confirmer » : toute tâche de chantier démarrant sous ~30 jours dont l'entreprise n'a pas été confirmée produit une alerte (producteur A.11), avec l'action « relancer » en brouillon pré-rempli et un `confirmeLe` posé au clic. Une entreprise qui découvre sa date deux semaines avant ne vient pas — c'est le mode de retard le plus courant, et il est entièrement prévisible | retour 03/08 | 2 j |
+| 5.8 | **[nouveau]** Visas par projet : registre des documents d'exécution reçus en phase VISA — entreprise/lot, reçu le, statut (à viser / visé / visé avec observations / refusé), délai contractuel du CCAP avec alerte à l'approche, lien au registre documentaire. La phase VISA existe partout (échéancier, catégorisation) mais **aucun registre ne suit ce qui est à viser** ; or un visa en retard engage la responsabilité de la MOE | CCAG MOE ; retour 03/08 (cité deux fois) | 3,5 j |
+| 5.9 | **[nouveau]** GPA par projet avec modèles préfaits : registre des désordres signalés pendant l'année de parfait achèvement — désordre, entreprise concernée, relances, levée — s'appuyant sur ce qui existe déjà : la date de fin de GPA est dérivée (`derive.ts:673-699`), la phase SAV existe (`categorisation.ts:72`), et **le moteur de modèles de B.13 (`modelesTaches.ts`) fournit les modèles préfaits** — un gabarit « année de GPA » (visite à M+11, relances types, mise en demeure avant échéance) s'applique en aperçu décochable, comme tout modèle | CCAG Travaux art. 44.1 ; retour 03/08 | 3 j |
+
+#### C. Honoraires entrants et partenaires
+
+| # | Livrable | Réf. | Effort |
+|---|---|---|---|
+| 5.10 | **[nouveau]** Cotraitants et BET : par projet, les partenaires de maîtrise d'œuvre (BET, autre agence) avec leur mission, leurs honoraires convenus et la répartition ; suivi des **notes d'honoraires reçues chaque mois**, relance mensuelle proposée (alerte + brouillon) quand la note n'est pas arrivée ; rapprochement avec `coutsExternes` des phases (`types.ts:33`) pour que la marge lise le réel et non le convenu. Aujourd'hui seul le coût prévisionnel existe, en chiffre libre | retour 03/08 | 4 j |
+| 5.11 | **[nouveau]** Ordre d'appel des contacts du projet : `Contact` n'a aucun champ d'ordre (`types.ts:1095-1109`) — qui appeler en premier chez le client se sait de tête. Un ordre numérique par projet, affiché trié dans la fiche, réordonnable | §12.1 ; retour 03/08 | 1 j |
+
+#### D. Pilotage d'agence
+
+| # | Livrable | Réf. | Effort |
+|---|---|---|---|
+| 5.12 | **[compléter]** Congés et report des heures planifiées : les absences existent et la capacité les déduit (`heuresAbsenceSemaine`, `capacitePersonneSemaine`, `derive.ts:469-484`) — mais rien ne **confronte** un congé posé aux heures déjà planifiées cette semaine-là. Détection du conflit (charge > capacité réelle), proposition de report sur les semaines voisines ou l'autre personne — proposé, jamais appliqué seul | §9 ; retour 03/08 | 2 j |
+| 5.13 | **[compléter]** Plan de charge prospectif : la vue « qui bosse sur quoi, quelle semaine » existe (`Planning.tsx:533`) mais regarde le présent. Projection à 3-6 mois — heures planifiées des phases à venir contre capacité, congés déduits — et la question qui motive tout : « un projet de X heures démarrant en juin : qui peut le prendre, et ça passe ? », en simulation simple avant engagement | §11 ; retour 03/08 | 3 j |
+| 5.14 | **[audit]** Vérification des calculs de dérive de marge : `derivePrevision` (`derive.ts:212`) et la chaîne baseline → prévu → réel, recalculés à la main sur des cas connus de l'agence (reprise en cours de phase, coûts externes, temps non facturable, avenants). Le livrable est la recette chiffrée ET sa version en test statique — un calcul de marge qui dérive ne se voit pas à l'écran, il se voit au bilan. À faire **avant** 5.10, qui modifie la lecture des coûts externes | §11.3 ; retour 03/08 | 2 j |
+| 5.15 | **[audit]** TVA : vérification du régime avec le cabinet — exigibilité (la mention imprimée est marquée « à confirmer », `types.ts:1375`), décaissements prévisionnels (`types.ts:1371`), et le cas du **crédit de TVA remboursable** que rien ne suit aujourd'hui. Recette chiffrée sur un trimestre réel | retour 03/08 | 1,5 j |
+| 5.16 | **[compléter]** Cycle de vie des factures sur portail agréé : l'import CSV Chorus/PDP existe (`Connecteurs.tsx:36-37`, `Facture.transmissions`) mais le statut ne remonte pas dans l'écran Facturation. Statut visible par facture (déposée / validée / rejetée / payée), alerte sur rejet, rappel de dépôt pour tout client public sans transmission — et le socle est prêt pour la facturation électronique obligatoire | retour 03/08 ; réforme 2026-2027 | 2 j |
+| 5.17 | **[audit d'usage]** Finance : « trop compliqué et plein de trucs inutiles ». La méthode est un inventaire écran par écran fait AVEC les deux utilisatrices — chaque carte marquée utilisée / jamais ouverte — puis masquage (jamais suppression) des cartes non utilisées derrière un repli, une décision documentée par carte. Simplifier sans mesurer l'usage reviendrait à supprimer ce que l'une des deux utilise en silence | retour 03/08 | 2 j |
+
+**Dépendances du Lot 5.** 5.5 dépend de 5.4 et 5.6. 5.3 se lit avec 5.2 (les intempéries neutralisent des pénalités). 5.9 s'appuie sur B.13 (livré). 5.7 s'appuie sur A.11 (livré). **5.14 précède 5.10** — on n'étend pas un calcul de marge qu'on n'a pas vérifié. 5.12 et 5.13 s'appuient sur l'existant du plan de charge ; ils profiteront de B.4/B.5 branchés (pointages réels) sans en dépendre. Le reste est indépendant.
+
+**Ordre conseillé.** D'abord 5.1 (défaut réel qui retient de l'argent aux entreprises à tort) et 5.14 (vérifier avant de bâtir) ; puis 5.4 → 5.6 → 5.5, la chaîne de la révision et du contrôle des situations, qui rapporte chaque mois ; le reste se séquence librement avec le Lot 2.
+
+**Sous-total Lot 5 : 42,5 jours.**
+
+---
+
 ### 4.6 **[nouveau]** Chiffrage et calendrier réaliste
 
 **Ce que la version 1 ne disait pas.** Elle chiffrait chaque ligne et ne totalisait rien — ni lot, ni projet — ne nommait aucun exécutant et ne posait aucun calendrier. Pour une agence de deux architectes qui ne codent pas, c'est le manque le plus lourd du document, parce que c'est celui qui empêche de décider.
@@ -517,6 +575,7 @@ Le lot se livre en trois vagues. A et B sont séquentielles ; M est **paralléli
 | **Lot 2** | Décisions, risques, recherche, fin de journée, critère 15, carte des liens, recette mobile | **47,5** |
 | **Lot 3** | Workspace, mémoire projet interrogeable, exports, encours comptable | **32,5** |
 | **Total engagé** | Lots 0 à 3, hors conditionnels | **224,5 jours** |
+| **Lot 5** | Retours d'usage du 03/08 — marchés, chantier, pilotage (**hors CDC**) | **42,5** |
 | Lot 3 conditionnel | 3.11 pgvector, si et seulement si le plein texte échoue | +7 |
 | Lot 4 | Non chiffré — dépend d'un troisième collaborateur | — |
 

@@ -63,6 +63,9 @@ jobs:
       - name: Market guarantee zeroes the retention
         run: npm run test:garantie-rg
 
+      - name: Margin drift audited against hand-computed cases
+        run: npm run test:derive-marge
+
       - name: Current-user identity
         run: npm run test:identite
 

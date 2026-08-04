@@ -1061,6 +1061,11 @@ export function seedState(): AppState {
     // marchés « EXEMPLE », le faux ne se verrait pas.
     indicesBTP: [],
 
+    // 5.2 — la collection naît VIDE : un événement de pénalité d'exemple
+    // ressemblerait à un constat contractuel réel, et une pénalité « EXEMPLE »
+    // appliquée traînerait dans les totaux d'un vrai marché.
+    evenementsMarche: [],
+
     // v14 — finance F0/F1 : remplies par l'amorçage ci-dessous
     // (les factures « prévues » du seed deviennent des échéances)
     echeancesFacturation: [],

@@ -155,6 +155,10 @@ function migrate(parsed: AppState): AppState {
   // antérieur n'a simplement aucune valeur saisie, ce qui est la vérité —
   // et le calcul de révision répond alors null au lieu d'inventer un indice.
   etat.indicesBTP = Array.isArray(parsed.indicesBTP) ? parsed.indicesBTP : []
+  // 5.2 — journal des pénalités de marché. Champ ajouté sans palier : un
+  // état antérieur n'a simplement constaté aucun événement, ce qui est la
+  // vérité — rien à reprendre, rien à inventer.
+  etat.evenementsMarche = Array.isArray(parsed.evenementsMarche) ? parsed.evenementsMarche : []
   amorcerEntreprises(etat)
   // v5 → v6 : journal d'interactions CRM. On amorce depuis les
   // derniereInteraction existantes pour ne rien perdre de l'historique.

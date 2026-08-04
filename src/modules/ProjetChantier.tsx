@@ -3,9 +3,24 @@
 // sans API → CR au style de l'agence → relecture → diffusion).
 
 import { useEffect, useRef, useState } from 'react'
-import type { MarcheTravaux, Projet, ReunionChantier, StatutReunion, TypeGarantie } from '../types'
+import type {
+  EvenementMarche,
+  MarcheTravaux,
+  Projet,
+  ReunionChantier,
+  StatutReunion,
+  TypeEvenementMarche,
+  TypeGarantie,
+} from '../types'
 import { useStore } from '../store'
+import { useMoi } from '../moi'
 import { LIBELLE_GARANTIE, garantieDuMarche } from '../derive'
+import {
+  LIBELLE_EVENEMENT,
+  penaliteEncourue,
+  totalAppliqueMarche,
+  totalEncouruMarche,
+} from '../penalites'
 import { assemble, contexteProjet } from '../prompts'
 import {
   Badge,
@@ -189,6 +204,12 @@ function ModalMarche({
   const [moisZero, setMoisZero] = useState(marche?.moisZero || '')
   const [partFixe, setPartFixe] = useState<number | null>(marche?.partFixe ?? null)
   const [delaiVerif, setDelaiVerif] = useState<number | null>(marche?.delaiVerifJours ?? 15)
+  // 5.2 — taux de pénalités du CCAP, propres au marché (comme la révision :
+  // chaque CCAP écrit les siens). null = non relevé : l'encouru répondra
+  // null, jamais 0 — pas de « pénalité nulle » par défaut de saisie.
+  const [penRetard, setPenRetard] = useState<number | null>(marche?.penalites?.retardParJourHT ?? null)
+  const [penAbsence, setPenAbsence] = useState<number | null>(marche?.penalites?.absenceReunionHT ?? null)
+  const [penDocument, setPenDocument] = useState<number | null>(marche?.penalites?.documentRetardParJourHT ?? null)
   const [contactNom, setContactNom] = useState(marche?.contactNom || '')
   const [contactEmail, setContactEmail] = useState(marche?.contactEmail || '')
   const [actif, setActif] = useState(marche?.actif ? 'oui' : 'non')
@@ -225,6 +246,16 @@ function ModalMarche({
         moisZero: moisZero.trim() || undefined,
         partFixe: partFixe ?? undefined,
         delaiVerifJours: delaiVerif ?? 15,
+        // 5.2 — undefined quand rien n'est relevé : un objet vide laisserait
+        // croire que les taux du CCAP ont été lus et valent zéro
+        penalites:
+          penRetard == null && penAbsence == null && penDocument == null
+            ? undefined
+            : {
+                retardParJourHT: penRetard,
+                absenceReunionHT: penAbsence,
+                documentRetardParJourHT: penDocument,
+              },
         contactNom: contactNom.trim() || undefined,
         contactEmail: contactEmail.trim() || undefined,
         actif: actif === 'oui',
@@ -313,6 +344,17 @@ function ModalMarche({
         </div>
       )}
       <div className="form-row">
+        <Field label="Pénalité retard (€ HT/jour)" hint="taux du CCAP — vide : l'encouru ne se calcule pas">
+          <NumInput value={penRetard} onChange={setPenRetard} ariaLabel="Pénalité de retard d'exécution en euros HT par jour" />
+        </Field>
+        <Field label="Pénalité absence réunion (€ HT)">
+          <NumInput value={penAbsence} onChange={setPenAbsence} ariaLabel="Pénalité d'absence à une réunion de chantier en euros HT" />
+        </Field>
+        <Field label="Pénalité document (€ HT/jour)" hint="DOE, PPSPS, décomptes, agréments en retard">
+          <NumInput value={penDocument} onChange={setPenDocument} ariaLabel="Pénalité de document contractuel en retard en euros HT par jour" />
+        </Field>
+      </div>
+      <div className="form-row">
         <Field label="Contact">
           <TextInput value={contactNom} onChange={setContactNom} />
         </Field>
@@ -344,6 +386,336 @@ function ModalMarche({
         <Btn onClick={onClose}>Annuler</Btn>
         <Btn kind="primary" onClick={enregistrer} disabled={!valide}>
           {creation ? 'Ajouter le marché' : 'Enregistrer'}
+        </Btn>
+      </div>
+    </Modal>
+  )
+}
+
+// ============================================================
+// 5.2 — Pénalités de marché : le journal CONSTATE, le calcul
+// chiffre l'encouru, et l'application reste un geste humain
+// daté et signé (§15) — jamais un automatisme.
+// ============================================================
+
+/** jours d'intempéries à déduire d'un retard : branché par le livrable 5.3
+ *  (registre des intempéries) — tant que le registre n'existe pas, rien ne
+ *  s'excuse. La signature de `penaliteEncourue` attend déjà ce chiffre. */
+const AUCUNE_INTEMPERIE = 0
+
+export function CartePenalites({ projet: p }: { projet: Projet }) {
+  const { state, update, replace } = useStore()
+  // qui signe la décision : la personne reconnue, à défaut la première de
+  // la liste — même règle qu'au registre documentaire (pas de signature vide)
+  const moi = useMoi()
+  const signataire = moi.nom ?? state.settings.personnes[0]
+  const [modal, setModal] = useState<{ evenement?: EvenementMarche } | null>(null)
+
+  const marches = state.marches.filter((m) => m.projetId === p.id)
+  const evenements = state.evenementsMarche
+    .filter((e) => e.projetId === p.id)
+    .sort((a, b) => b.date.localeCompare(a.date) || a.id.localeCompare(b.id))
+  const marcheDe = (e: EvenementMarche) => marches.find((m) => m.id === e.marcheId)
+
+  const appliquer = async (e: EvenementMarche) => {
+    const m = marcheDe(e)
+    const encouru = penaliteEncourue(e, m?.penalites, AUCUNE_INTEMPERIE)
+    if (!encouru) return
+    if (
+      !(await confirmer({
+        message:
+          `Appliquer la pénalité de ${fmtMoney(encouru.montantHT, true)} HT — ${LIBELLE_EVENEMENT[e.type]}` +
+          `${m ? ` (${m.lot} — ${m.entreprise})` : ''} ?\n` +
+          `Le montant sera figé et la décision signée « ${signataire} ». Le report sur la situation reste à faire à la main : ` +
+          `une pénalité est un acte contractuel.`,
+        danger: true,
+        confirmerLabel: 'Appliquer la pénalité',
+      }))
+    )
+      return
+    update((d) => {
+      const x = d.evenementsMarche.find((y) => y.id === e.id)
+      if (!x) return
+      x.penaliteAppliquee = true
+      // FIGÉ : un taux corrigé ou une intempérie saisie après coup ne
+      // réécrit pas ce qui a été signifié à l'entreprise
+      x.penaliteMontantHT = encouru.montantHT
+      x.decidePar = signataire
+      x.decideLe = todayISO()
+    })
+    toast('Pénalité appliquée — montant figé, décision signée.', { tone: 'ok' })
+  }
+
+  const annulerApplication = async (e: EvenementMarche) => {
+    if (
+      !(await confirmer({
+        message:
+          `Annuler l'application de la pénalité de ${fmtMoney(e.penaliteMontantHT ?? 0, true)} HT ` +
+          `(décidée le ${fmtDate(e.decideLe)} par ${e.decidePar || '?'}) ?\nL'événement reste au journal, le montant redevient un simple encouru.`,
+        danger: true,
+        confirmerLabel: "Annuler l'application",
+      }))
+    )
+      return
+    update((d) => {
+      const x = d.evenementsMarche.find((y) => y.id === e.id)
+      if (!x) return
+      x.penaliteAppliquee = false
+      x.penaliteMontantHT = null
+      x.decidePar = null
+      x.decideLe = null
+    })
+  }
+
+  const supprimer = async (e: EvenementMarche) => {
+    const snap = state
+    if (
+      !(await confirmer({
+        message: e.penaliteAppliquee
+          ? `Supprimer cet événement ?\nLa pénalité APPLIQUÉE de ${fmtMoney(e.penaliteMontantHT ?? 0, true)} HT disparaîtra du total — préférez « Annuler l'application » pour garder la trace.`
+          : 'Supprimer cet événement du journal ?',
+        danger: true,
+        confirmerLabel: 'Supprimer',
+      }))
+    )
+      return
+    update((d) => {
+      d.evenementsMarche = d.evenementsMarche.filter((x) => x.id !== e.id)
+    })
+    toast('Événement supprimé.', { undo: () => replace(snap) })
+  }
+
+  // marchés qui ont au moins un événement : la ligne de synthèse par marché
+  const marchesAvecEvenements = marches.filter((m) => evenements.some((e) => e.marcheId === m.id))
+
+  return (
+    <Card
+      titre="Pénalités de marché"
+      actions={
+        marches.length > 0 && (
+          <Btn small kind="primary" onClick={() => setModal({})}>
+            Constater un événement
+          </Btn>
+        )
+      }
+    >
+      {marches.length === 0 ? (
+        <EmptyState>
+          Ajoutez d'abord les marchés de travaux : les taux de pénalités du CCAP se saisissent
+          sur chaque marché, et le journal des événements s'y rattache.
+        </EmptyState>
+      ) : evenements.length === 0 ? (
+        <EmptyState>
+          Aucun événement constaté — retard d'exécution, absence à une réunion de chantier, document
+          contractuel en retard (DOE, PPSPS…). Le Cockpit chiffre l'encouru d'après les taux du CCAP
+          saisis sur le marché ; l'application reste votre décision, datée et signée.
+        </EmptyState>
+      ) : (
+        <>
+          <Table
+            compact
+            head={[
+              'Marché',
+              'Événement',
+              'Date',
+              'Jours',
+              <span key="e" className="right">Encouru HT</span>,
+              'Décision',
+              '',
+            ]}
+          >
+            {evenements.map((e) => {
+              const m = marcheDe(e)
+              const encouru = penaliteEncourue(e, m?.penalites, AUCUNE_INTEMPERIE)
+              return (
+                <tr key={e.id}>
+                  <td>
+                    {m ? (
+                      <>
+                        <strong>{m.lot}</strong>
+                        <div className="muted small">{m.entreprise}</div>
+                      </>
+                    ) : (
+                      <span className="muted">marché supprimé</span>
+                    )}
+                  </td>
+                  <td>
+                    {LIBELLE_EVENEMENT[e.type]}
+                    {e.type === 'document_retard' && e.document && (
+                      <span className="muted"> · {e.document}</span>
+                    )}
+                    {e.commentaire && <div className="muted small">{e.commentaire}</div>}
+                  </td>
+                  <td style={{ whiteSpace: 'nowrap' }}>{fmtDate(e.date)}</td>
+                  <td className="num">{e.type === 'absence_reunion' ? '—' : e.jours != null ? `${e.jours} j` : '?'}</td>
+                  <td className="right">
+                    {e.penaliteAppliquee ? (
+                      <Money v={e.penaliteMontantHT} cents />
+                    ) : encouru ? (
+                      <Money v={encouru.montantHT} cents />
+                    ) : (
+                      // taux non saisi ou jours illisibles : le manque doit se
+                      // voir dans la liste, pas se confondre avec « 0 € »
+                      <span title="Encouru non calculable : saisissez le taux du CCAP sur le marché (« Modifier ») et les jours de l'événement.">
+                        <Badge tone="warn">taux CCAP ?</Badge>
+                      </span>
+                    )}
+                  </td>
+                  <td>
+                    {e.penaliteAppliquee ? (
+                      <span title={`Décision du ${fmtDate(e.decideLe)} — ${e.decidePar || '?'}`}>
+                        <Badge tone="danger">appliquée le {fmtDate(e.decideLe)}</Badge>
+                      </span>
+                    ) : (
+                      <Btn
+                        small
+                        kind="primary"
+                        disabled={!encouru}
+                        onClick={() => void appliquer(e)}
+                        title="Fige le montant encouru et signe la décision — le report sur la situation reste manuel"
+                      >
+                        Appliquer
+                      </Btn>
+                    )}
+                  </td>
+                  <td className="right">
+                    <RowMenu
+                      items={[
+                        ...(e.penaliteAppliquee
+                          ? [
+                              {
+                                label: "Annuler l'application",
+                                onClick: () => void annulerApplication(e),
+                              },
+                            ]
+                          : [{ label: 'Modifier l’événement', onClick: () => setModal({ evenement: e }) }]),
+                        { label: 'Supprimer l’événement', onClick: () => void supprimer(e), danger: true },
+                      ]}
+                    />
+                  </td>
+                </tr>
+              )
+            })}
+          </Table>
+          {marchesAvecEvenements.length > 0 && (
+            <p className="muted small" style={{ marginTop: 8 }}>
+              {marchesAvecEvenements.map((m) => (
+                <span key={m.id} style={{ display: 'block' }}>
+                  {m.lot} — {m.entreprise} : encouru{' '}
+                  <strong>{fmtMoney(totalEncouruMarche(evenements, m.id, m.penalites, AUCUNE_INTEMPERIE), true)}</strong> HT
+                  {' · '}appliqué <strong>{fmtMoney(totalAppliqueMarche(evenements, m.id), true)}</strong> HT
+                </span>
+              ))}
+            </p>
+          )}
+        </>
+      )}
+
+      {modal && (
+        <ModalEvenement
+          projetId={p.id}
+          marches={marches}
+          evenement={modal.evenement}
+          onClose={() => setModal(null)}
+        />
+      )}
+    </Card>
+  )
+}
+
+function ModalEvenement({
+  projetId,
+  marches,
+  evenement,
+  onClose,
+}: {
+  projetId: string
+  marches: MarcheTravaux[]
+  evenement?: EvenementMarche
+  onClose: () => void
+}) {
+  const { update } = useStore()
+  const creation = !evenement
+
+  const [marcheId, setMarcheId] = useState(evenement?.marcheId || marches[0]?.id || '')
+  const [type, setType] = useState<TypeEvenementMarche>(evenement?.type || 'retard_execution')
+  const [date, setDate] = useState<string | null>(evenement?.date || todayISO())
+  const [jours, setJours] = useState<number | null>(evenement?.jours ?? null)
+  const [doc, setDoc] = useState(evenement?.document || '')
+  const [commentaire, setCommentaire] = useState(evenement?.commentaire || '')
+
+  const valide = marcheId !== '' && !!date
+
+  const enregistrer = () => {
+    if (!valide) return
+    update((d) => {
+      const champs = {
+        marcheId,
+        type,
+        date: date!,
+        // une absence de réunion ne se compte pas en jours : ne pas garder
+        // une saisie faite avant un changement de type
+        jours: type === 'absence_reunion' ? null : jours,
+        document: type === 'document_retard' ? doc.trim() || undefined : undefined,
+        commentaire: commentaire.trim(),
+      }
+      if (creation) {
+        // penaliteAppliquee naît FAUX : constater n'est pas décider (§15)
+        d.evenementsMarche.push({ id: uid('evt'), projetId, penaliteAppliquee: false, ...champs })
+      } else {
+        const e = d.evenementsMarche.find((x) => x.id === evenement.id)
+        // un événement appliqué ne se modifie plus : sa pénalité est figée
+        if (e && !e.penaliteAppliquee) Object.assign(e, champs)
+      }
+    })
+    onClose()
+  }
+
+  return (
+    <Modal titre={creation ? 'Constater un événement' : 'Modifier l’événement'} onClose={onClose}>
+      <div className="form-row">
+        <Field label="Marché">
+          <Select
+            value={marcheId}
+            onChange={setMarcheId}
+            options={marches.map((m) => ({ value: m.id, label: `${m.lot} — ${m.entreprise}` }))}
+          />
+        </Field>
+        <Field label="Événement (CCAG art. 19-20)">
+          <Select
+            value={type}
+            onChange={(v) => setType(v as TypeEvenementMarche)}
+            options={(Object.keys(LIBELLE_EVENEMENT) as TypeEvenementMarche[]).map((t) => ({
+              value: t,
+              label: LIBELLE_EVENEMENT[t],
+            }))}
+          />
+        </Field>
+      </div>
+      <div className="form-row">
+        <Field label="Date du constat">
+          <DateInput value={date} onChange={setDate} />
+        </Field>
+        {type !== 'absence_reunion' && (
+          <Field label="Jours de retard" hint="l'encouru = jours × taux du CCAP saisi sur le marché">
+            <NumInput value={jours} onChange={setJours} ariaLabel="Jours de retard constatés" />
+          </Field>
+        )}
+        {type === 'document_retard' && (
+          <Field label="Document">
+            <TextInput value={doc} onChange={setDoc} placeholder="DOE, PPSPS, agrément, décompte…" />
+          </Field>
+        )}
+      </div>
+      <div className="form-row">
+        <Field label="Commentaire" hint="le constat tel qu'il sera opposable : réunion, OS, courrier…">
+          <TextArea value={commentaire} onChange={setCommentaire} rows={2} />
+        </Field>
+      </div>
+      <div className="form-foot">
+        <Btn onClick={onClose}>Annuler</Btn>
+        <Btn kind="primary" onClick={enregistrer} disabled={!valide}>
+          {creation ? 'Consigner l’événement' : 'Enregistrer'}
         </Btn>
       </div>
     </Modal>
@@ -872,6 +1244,9 @@ export default function ProjetChantier({ projet }: { projet: Projet }) {
     <>
       <CarteReunions projet={projet} />
       <CarteMarches projet={projet} />
+      {/* 5.2 — le journal des pénalités vit sous les marchés : les taux du
+          CCAP se saisissent sur le marché, les événements se constatent ici */}
+      <CartePenalites projet={projet} />
     </>
   )
 }

@@ -349,6 +349,17 @@ export interface MarcheTravaux {
   cautionRG?: boolean
   /** retenue de garantie libérée à l'entreprise (levée effectuée) */
   rgLibere?: boolean
+  /** 5.2 — taux de pénalités du CCAP, propres au marché (chaque CCAP écrit
+   *  les siens). `null`/absent = non saisi : le calcul répond alors null,
+   *  jamais 0 — un « 0 € de pénalité » affirmerait que le CCAP a été lu */
+  penalites?: {
+    /** € HT par jour de retard d'exécution */
+    retardParJourHT?: number | null
+    /** € HT par absence à une réunion de chantier */
+    absenceReunionHT?: number | null
+    /** € HT par jour de retard d'un document contractuel (DOE, PPSPS…) */
+    documentRetardParJourHT?: number | null
+  }
   notes?: string
 }
 
@@ -366,6 +377,36 @@ export interface IndiceBTP {
   /** mois de la valeur ('AAAA-MM') */
   mois: string
   valeur: number
+}
+
+/** 5.2 — les trois faits générateurs de pénalité du CCAG Travaux (art. 19-20) */
+export type TypeEvenementMarche = 'retard_execution' | 'absence_reunion' | 'document_retard'
+
+/** 5.2 — événement du journal de pénalités d'un marché. L'événement CONSTATE
+ *  (un retard, une absence, un document manquant) ; il n'applique rien :
+ *  une pénalité est un acte contractuel, pas un calcul. Le montant encouru
+ *  se recalcule à l'affichage (src/penalites.ts) ; seule la décision humaine
+ *  « Appliquer » fige `penaliteMontantHT` et la signe (decidePar/decideLe). */
+export interface EvenementMarche {
+  id: string
+  marcheId: string
+  projetId: string
+  type: TypeEvenementMarche
+  /** date du constat (retard, réunion manquée, échéance du document) */
+  date: string // ISO 'AAAA-MM-JJ'
+  /** jours de retard constatés (retard d'exécution, document en retard) —
+   *  sans objet pour une absence de réunion */
+  jours?: number | null
+  /** document concerné quand type = 'document_retard' (DOE, PPSPS, agrément…) */
+  document?: string
+  commentaire: string
+  /** décision humaine prise — jamais posée par le module de calcul */
+  penaliteAppliquee: boolean
+  /** montant HT FIGÉ à la décision : un taux corrigé ou une intempérie
+   *  saisie après coup ne réécrit pas ce qui a été signifié à l'entreprise */
+  penaliteMontantHT?: number | null
+  decidePar?: string | null
+  decideLe?: string | null
 }
 
 /** élément d'ouvrage prévu au CCTP d'un lot — un article numéroté du document */
@@ -1721,6 +1762,9 @@ export interface AppState {
    *  NATIONAL, transverse aux projets (une valeur BT01 sert tous les
    *  marchés qui citent cette série) — saisi en Paramètres */
   indicesBTP: IndiceBTP[]
+  /** 5.2 — journal des événements de pénalité par marché : la machine
+   *  calcule l'ENCOURU, l'humain décide l'application (§15) */
+  evenementsMarche: EvenementMarche[]
 }
 
 /** document du corpus de l'assistant : texte réglementaire (Légifrance,

@@ -78,6 +78,9 @@ jobs:
       - name: Situation claims checked against site reality
         run: npm run test:controle-situation
 
+      - name: Market penalties incurred, applied only by a signed human decision
+        run: npm run test:penalites
+
       - name: Current-user identity
         run: npm run test:identite
 

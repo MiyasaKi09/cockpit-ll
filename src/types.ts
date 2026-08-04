@@ -294,6 +294,14 @@ export interface ReunionChantier {
   notes?: string
 }
 
+/** Garantie d'un marché de travaux (CCAG Travaux art. 33) :
+ *  - 'retenue' : la retenue de garantie est prélevée sur chaque situation (défaut) ;
+ *  - 'caution' : caution bancaire de substitution — rien n'est retenu ;
+ *  - 'gpd' : garantie à première demande — rien n'est retenu non plus.
+ *  Retenir 5 % à une entreprise qui a fourni caution ou GPD lui ferait payer
+ *  sa garantie deux fois — c'était le défaut 5.1. */
+export type TypeGarantie = 'retenue' | 'caution' | 'gpd'
+
 /** Marché de travaux (une entreprise, un lot) — support des situations */
 export interface MarcheTravaux {
   id: string
@@ -318,7 +326,15 @@ export interface MarcheTravaux {
   dateFin?: string | null
   /** date de réception des travaux — point de départ de la garantie de parfait achèvement */
   dateReception?: string | null
-  /** retenue de garantie remplacée par une caution bancaire (pas d'argent retenu) */
+  /** type de garantie — absent sur les documents d'avant le Lot 5 : c'est
+   *  alors `cautionRG` qui tranche. `garantieDuMarche` (derive.ts) est la
+   *  SEULE lecture autorisée de ces deux champs ensemble : lire l'un sans
+   *  l'autre recrée le défaut 5.1 (décompte et cycle de vie divergents). */
+  garantie?: TypeGarantie
+  /** date de réception du document de garantie (caution ou GPD) */
+  garantieRecueLe?: string | null
+  /** [hérité] retenue remplacée par une caution bancaire — conservé pour les
+   *  documents existants ; `garantie` le remplace et prime quand il est posé */
   cautionRG?: boolean
   /** retenue de garantie libérée à l'entreprise (levée effectuée) */
   rgLibere?: boolean

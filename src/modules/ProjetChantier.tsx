@@ -3,8 +3,9 @@
 // sans API → CR au style de l'agence → relecture → diffusion).
 
 import { useEffect, useRef, useState } from 'react'
-import type { MarcheTravaux, Projet, ReunionChantier, StatutReunion } from '../types'
+import type { MarcheTravaux, Projet, ReunionChantier, StatutReunion, TypeGarantie } from '../types'
 import { useStore } from '../store'
+import { LIBELLE_GARANTIE, garantieDuMarche } from '../derive'
 import { assemble, contexteProjet } from '../prompts'
 import {
   Badge,
@@ -104,7 +105,16 @@ export function CarteMarches({ projet: p }: { projet: Projet }) {
                   <div className="muted small">dont avenants {fmtMoney(m.avenantsHT)}</div>
                 )}
               </td>
-              <td className="num">{fmtPct(m.tauxRG, 0)}</td>
+              <td className="num">
+                {garantieDuMarche(m) === 'retenue' ? (
+                  fmtPct(m.tauxRG, 0)
+                ) : (
+                  // la raison du 0 % doit se lire dans la liste, pas se deviner
+                  <span title={`RG 0 % — ${LIBELLE_GARANTIE[garantieDuMarche(m)]}${m.garantieRecueLe ? ` reçue le ${fmtDate(m.garantieRecueLe)}` : ''}`}>
+                    {garantieDuMarche(m) === 'caution' ? 'caution' : 'GPD'}
+                  </span>
+                )}
+              </td>
               <td>{m.revision ? 'oui' : '—'}</td>
               <td className="small">
                 {m.dateDebut || m.dateFin ? (
@@ -152,6 +162,10 @@ function ModalMarche({
   const [montantInitial, setMontantInitial] = useState<number | null>(marche?.montantInitialHT ?? null)
   const [avenants, setAvenants] = useState<number | null>(marche?.avenantsHT ?? 0)
   const [tauxRG, setTauxRG] = useState<number | null>(marche?.tauxRG ?? 0.05)
+  // `garantieDuMarche` et non `marche?.garantie` : un marché d'avant le Lot 5
+  // ne porte que `cautionRG`, et le formulaire doit montrer la valeur EFFECTIVE
+  const [garantie, setGarantie] = useState<TypeGarantie>(garantieDuMarche(marche))
+  const [garantieRecueLe, setGarantieRecueLe] = useState<string | null>(marche?.garantieRecueLe ?? null)
   const [revision, setRevision] = useState(marche?.revision ? 'oui' : 'non')
   const [delaiVerif, setDelaiVerif] = useState<number | null>(marche?.delaiVerifJours ?? 15)
   const [contactNom, setContactNom] = useState(marche?.contactNom || '')
@@ -172,6 +186,10 @@ function ModalMarche({
         montantInitialHT: montantInitial ?? 0,
         avenantsHT: avenants ?? 0,
         tauxRG: tauxRG ?? 0.05,
+        // le champ typé prime sur l'ancien `cautionRG` (voir garantieDuMarche) ;
+        // la date n'a de sens que si un document couvre le marché
+        garantie,
+        garantieRecueLe: garantie === 'retenue' ? null : garantieRecueLe,
         revision: revision === 'oui',
         delaiVerifJours: delaiVerif ?? 15,
         contactNom: contactNom.trim() || undefined,
@@ -210,9 +228,33 @@ function ModalMarche({
         </Field>
       </div>
       <div className="form-row">
-        <Field label="Retenue de garantie" hint="5 % par défaut sur les marchés publics">
+        <Field
+          label="Garantie (CCAG art. 33)"
+          hint="caution ou première demande : rien n'est retenu sur les situations"
+        >
+          <Select
+            value={garantie}
+            onChange={(v) => setGarantie(v as TypeGarantie)}
+            options={[
+              { value: 'retenue', label: 'Retenue de garantie' },
+              { value: 'caution', label: 'Caution bancaire' },
+              { value: 'gpd', label: 'Garantie à première demande' },
+            ]}
+          />
+        </Field>
+        <Field
+          label="Taux de retenue"
+          hint={garantie === 'retenue' ? '5 % par défaut sur les marchés publics' : 'sans effet : le document couvre le marché'}
+        >
           <PctInput value={tauxRG} onChange={setTauxRG} ariaLabel="Taux de retenue de garantie en pourcentage" />
         </Field>
+        {garantie !== 'retenue' && (
+          <Field label="Document reçu le" hint="date de réception de la caution / GPD">
+            <DateInput value={garantieRecueLe} onChange={setGarantieRecueLe} />
+          </Field>
+        )}
+      </div>
+      <div className="form-row">
         <Field label="Révision de prix">
           <Select
             value={revision}

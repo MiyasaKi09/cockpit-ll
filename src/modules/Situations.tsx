@@ -6,7 +6,7 @@
 // ============================================================
 
 import { useState } from 'react'
-import type { AppState, MarcheTravaux, Situation, StatutSituation } from '../types'
+import type { AppState, MarcheTravaux, Situation, StatutSituation, TypeGarantie } from '../types'
 import { useStore } from '../store'
 import {
   Badge,
@@ -33,8 +33,10 @@ import {
 } from '../ui'
 import { clamp, diffDays, fmtDate, fmtMois, fmtMoney, fmtPct, fold, monthKey, ouvrirGmail, uid } from '../util'
 import {
+  LIBELLE_GARANTIE,
   dateLimiteVerif,
   decompteSituation,
+  garantieDuMarche,
   honorairesDETduMois,
   marcheDeSituation,
   nomProjet,
@@ -95,7 +97,10 @@ function NetAPayer({ state, sit }: { state: AppState; sit: Situation }) {
   const titre =
     dc.tauxRG > 0
       ? `Cumul ${fmtMoney(dc.baseHT)} − RG ${fmtPct(dc.tauxRG, 0)} (${fmtMoney(dc.retenueGarantieHT)}) − déjà réglé ${fmtMoney(dc.precedentNetHT)}`
-      : 'RG à 0 % (marché non rattaché ou sans retenue)'
+      : dc.garantie !== 'retenue'
+        ? // la RAISON du 0 % se lit, sinon on croit à un marché mal rattaché (5.1)
+          `RG 0 % — ${LIBELLE_GARANTIE[dc.garantie]} fournie par l'entreprise`
+        : 'RG à 0 % (marché non rattaché ou sans retenue)'
   return (
     <span title={titre}>
       <Money v={dc.netAPayerHT} />
@@ -478,7 +483,10 @@ function ModalEdition({ sit, onClose }: { sit: Situation; onClose: () => void })
               </Field>
               <div style={{ flex: 1, minWidth: 240 }}>
                 <div className="small muted" style={{ marginBottom: 4 }}>
-                  Décompte net à payer — retenue de garantie {fmtPct(dc.tauxRG, 0)}
+                  Décompte net à payer —{' '}
+                  {dc.garantie !== 'retenue'
+                    ? `RG 0 % — ${LIBELLE_GARANTIE[dc.garantie]}`
+                    : `retenue de garantie ${fmtPct(dc.tauxRG, 0)}`}
                 </div>
                 <table className="table table-compact" style={{ margin: 0 }}>
                   <tbody>
@@ -926,7 +934,7 @@ function CarteRetenues() {
       ) : (
         <Table
           compact
-          head={['Lot / entreprise', 'Projet', 'Cumul travaux', 'RG retenue', 'Réception', 'Levée (récep.+1 an)', 'Caution', 'Statut', '']}
+          head={['Lot / entreprise', 'Projet', 'Cumul travaux', 'RG retenue', 'Réception', 'Levée (récep.+1 an)', 'Garantie', 'Statut', '']}
         >
           {marches.map((m) => {
             const rg = retenueGarantieMarche(state, m, today)
@@ -941,20 +949,30 @@ function CarteRetenues() {
                 <td className="right num">{fmtMoney(rg.travauxCumulHT)}</td>
                 <td className="right num">
                   {fmtMoney(rg.retenueHT)}
-                  <div className="muted small">{fmtPct(m.tauxRG, 0)}</div>
+                  <div className="muted small">
+                    {rg.garantie === 'retenue' ? fmtPct(m.tauxRG, 0) : 'rien n\'est retenu'}
+                  </div>
                 </td>
                 <td>
                   <DateInput value={m.dateReception ?? null} onChange={(v) => majMarche(m.id, { dateReception: v })} />
                 </td>
                 <td>{rg.dateLevee ? <DateF d={rg.dateLevee} /> : <span className="muted">—</span>}</td>
-                <td className="right">
-                  <label style={{ cursor: 'pointer' }} title="Retenue remplacée par une caution bancaire">
-                    <input
-                      type="checkbox"
-                      checked={!!m.cautionRG}
-                      onChange={(e) => majMarche(m.id, { cautionRG: e.target.checked })}
-                    />
-                  </label>
+                <td>
+                  {/* écrit le champ TYPÉ, qui prime sur l'ancien `cautionRG` :
+                      un booléen modifié ici pendant que le formulaire pose le
+                      type ferait deux sources de vérité (défaut 5.1) */}
+                  <Select
+                    value={garantieDuMarche(m)}
+                    onChange={(v) => majMarche(m.id, { garantie: v as TypeGarantie })}
+                    options={[
+                      { value: 'retenue', label: 'Retenue' },
+                      { value: 'caution', label: 'Caution bancaire' },
+                      { value: 'gpd', label: 'Première demande' },
+                    ]}
+                  />
+                  {garantieDuMarche(m) !== 'retenue' && m.garantieRecueLe && (
+                    <div className="muted small">reçue le {fmtDate(m.garantieRecueLe)}</div>
+                  )}
                 </td>
                 <td><Badge tone={lib.tone}>{lib.label}</Badge></td>
                 <td className="right">

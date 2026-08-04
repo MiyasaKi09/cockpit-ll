@@ -1,7 +1,7 @@
 // Valeurs dérivées — une seule source de vérité par donnée :
 // le facturé vient des factures, les heures réelles du pointage.
 
-import type { AppState, BaselineHeures, Consultation, EcheanceFacturation, Facture, MarcheTravaux, Phase, PhaseCode, Projet, Situation, StatutConsultation } from './types'
+import type { AppState, BaselineHeures, Consultation, EcheanceFacturation, Facture, MarcheTravaux, Phase, PhaseCode, Projet, Situation, StatutConsultation, TypeGarantie } from './types'
 import { PHASES_ORDRE, calculHonoraires } from './miqcp'
 import {
   creanceFactureTTC,
@@ -585,13 +585,39 @@ function baseSituation(s: Situation): number {
   return cumul + (s.revisionHT || 0)
 }
 
+/** SEULE autorité qui décide de la garantie d'un marché (livrable 5.1).
+ *  Le champ typé `garantie` tranche ; à défaut, l'ancien booléen `cautionRG`
+ *  (les marchés d'avant le Lot 5 ne portent que lui : true ≡ caution bancaire).
+ *  Une valeur inconnue (état plus récent, import) retombe sur la rétro-compat
+ *  plutôt que d'inventer un type. Le décompte des situations ET le cycle de
+ *  vie de la RG doivent TOUS DEUX passer ici : c'est la lecture séparée de
+ *  ces champs qui a produit le défaut 5.1 — le décompte lisait `tauxRG` seul
+ *  et retenait 5 % à une entreprise couverte par sa garantie. */
+export function garantieDuMarche(m: Pick<MarcheTravaux, 'garantie' | 'cautionRG'> | undefined): TypeGarantie {
+  if (!m) return 'retenue'
+  if (m.garantie === 'retenue' || m.garantie === 'caution' || m.garantie === 'gpd') return m.garantie
+  return m.cautionRG ? 'caution' : 'retenue'
+}
+
+/** libellés d'affichage — la RAISON d'un « RG 0 % » doit se lire telle quelle */
+export const LIBELLE_GARANTIE: Record<TypeGarantie, string> = {
+  retenue: 'retenue de garantie',
+  caution: 'caution bancaire',
+  gpd: 'garantie à première demande',
+}
+
 export interface DecompteSituation {
   /** travaux cumulés HT (montantCumulHT, à défaut montantMoisHT) */
   travauxCumulHT: number
   revisionHT: number
   /** travaux + révision */
   baseHT: number
+  /** taux EFFECTIF appliqué au décompte : 0 dès qu'une caution ou une GPD
+   *  couvre le marché, quel que soit `Marche.tauxRG` */
   tauxRG: number
+  /** type de garantie du marché — dit POURQUOI le taux vaut 0
+   *  ('retenue' quand aucun marché n'est rattaché : rien n'est couvert) */
+  garantie: TypeGarantie
   retenueGarantieHT: number
   /** base − RG */
   cumulNetHT: number
@@ -609,7 +635,11 @@ export interface DecompteSituation {
 /** décompte complet « net à payer » d'une situation (certificat de paiement) */
 export function decompteSituation(state: AppState, s: Situation, tauxTVA = 0.2): DecompteSituation {
   const marche = marcheDeSituation(state, s)
-  const tauxRG = marche?.tauxRG ?? 0
+  const garantie = garantieDuMarche(marche)
+  // Taux EFFECTIF : une caution bancaire ou une garantie à première demande
+  // couvre le marché, rien ne se retient (CCAG art. 33). Lire `tauxRG` seul
+  // retenait 5 % à une entreprise qui avait déjà fourni sa garantie (5.1).
+  const tauxRG = garantie === 'retenue' ? marche?.tauxRG ?? 0 : 0
   const travauxCumulHT = s.montantCumulHT ?? s.montantMoisHT ?? 0
   const revisionHT = s.revisionHT || 0
   const baseHT = travauxCumulHT + revisionHT
@@ -644,6 +674,7 @@ export function decompteSituation(state: AppState, s: Situation, tauxTVA = 0.2):
     revisionHT,
     baseHT,
     tauxRG,
+    garantie,
     retenueGarantieHT,
     cumulNetHT,
     precedentNetHT,
@@ -677,10 +708,15 @@ export type StatutRG = 'en_cours' | 'retenue' | 'a_liberer' | 'liberee'
 
 export interface RGMarche {
   travauxCumulHT: number
+  /** argent RÉELLEMENT retenu : 0 dès qu'une caution ou une GPD couvre le
+   *  marché — un cumul « théorique » ici, face à un décompte qui retient 0,
+   *  ferait deux vérités pour le même marché */
   retenueHT: number
   dateReception: string | null
   dateLevee: string | null
+  /** une garantie (caution OU première demande) couvre le marché */
   caution: boolean
+  garantie: TypeGarantie
   statut: StatutRG
 }
 
@@ -694,7 +730,10 @@ export function travauxCumulMarche(state: AppState, marcheId: string): number {
 /** état de la retenue de garantie d'un marché */
 export function retenueGarantieMarche(state: AppState, marche: MarcheTravaux, today: string): RGMarche {
   const travauxCumulHT = travauxCumulMarche(state, marche.id)
-  const retenueHT = travauxCumulHT * (marche.tauxRG || 0)
+  // même autorité que decompteSituation — deux lectures divergentes de la
+  // garantie sont exactement le défaut 5.1
+  const garantie = garantieDuMarche(marche)
+  const retenueHT = garantie === 'retenue' ? travauxCumulHT * (marche.tauxRG || 0) : 0
   const dateReception = marche.dateReception || null
   // réception + 1 an (même jour l'année suivante) — garantie de parfait achèvement
   const dateLevee = dateReception ? `${Number(dateReception.slice(0, 4)) + 1}${dateReception.slice(4)}` : null
@@ -705,7 +744,7 @@ export function retenueGarantieMarche(state: AppState, marche: MarcheTravaux, to
       : dateLevee && today >= dateLevee
         ? 'a_liberer'
         : 'retenue'
-  return { travauxCumulHT, retenueHT, dateReception, dateLevee, caution: !!marche.cautionRG, statut }
+  return { travauxCumulHT, retenueHT, dateReception, dateLevee, caution: garantie !== 'retenue', garantie, statut }
 }
 
 // ------------------------------------------------------------------

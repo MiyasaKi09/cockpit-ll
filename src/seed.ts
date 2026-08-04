@@ -1065,6 +1065,9 @@ export function seedState(): AppState {
     // ressemblerait à un constat contractuel réel, et une pénalité « EXEMPLE »
     // appliquée traînerait dans les totaux d'un vrai marché.
     evenementsMarche: [],
+    // 5.3 — vide pour la même raison : un jour d'intempérie inventé
+    // prolongerait un délai contractuel réel et excuserait un vrai retard.
+    intemperies: [],
 
     // v14 — finance F0/F1 : remplies par l'amorçage ci-dessous
     // (les factures « prévues » du seed deviennent des échéances)

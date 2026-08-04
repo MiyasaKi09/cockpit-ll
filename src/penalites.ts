@@ -12,7 +12,13 @@
 //
 // Logique PURE : aucun store, aucune horloge — les dates sont des arguments.
 
-import type { EvenementMarche, MarcheTravaux, TypeEvenementMarche } from './types'
+import type {
+  EvenementMarche,
+  Intemperie,
+  MarcheTravaux,
+  NatureIntemperie,
+  TypeEvenementMarche,
+} from './types'
 
 /** libellés d'affichage des faits générateurs (CCAG Travaux art. 19-20) */
 export const LIBELLE_EVENEMENT: Record<TypeEvenementMarche, string> = {
@@ -56,10 +62,10 @@ export interface PenaliteEncourue {
 /** montant HT encouru par un événement, d'après les taux du CCAP du marché.
  *
  *  `joursIntemperies` : jours d'intempéries reconnues sur la période du
- *  retard — un ARGUMENT, fourni par le registre des intempéries (5.3) :
- *  c'est le lien entre les deux livrables, et c'est pour lui que ce
- *  paramètre existe dès le premier jour. Ils ne se déduisent QUE du retard
- *  d'exécution : la pluie excuse
+ *  retard — un ARGUMENT, calculé par `joursIntemperies()` /
+ *  `prolongationDelai()` ci-dessous (5.3) : c'est le lien entre les deux
+ *  livrables. Ils ne se déduisent QUE du retard d'exécution : la pluie
+ *  excuse
  *  un chantier à l'arrêt, pas un DOE ou un PPSPS en retard — ces documents
  *  s'écrivent au bureau.
  *
@@ -146,4 +152,71 @@ export function totalAppliqueMarche(evenements: EvenementMarche[], marcheId: str
     total += typeof e.penaliteMontantHT === 'number' && Number.isFinite(e.penaliteMontantHT) ? e.penaliteMontantHT : 0
   }
   return arrondiCentimes(total)
+}
+
+// ------------------------------------------------------------
+// 5.3 — registre des intempéries : jours OUVRÉS distincts, et
+// leurs deux effets — déduction des retards (ci-dessus) et
+// prolongation du délai contractuel.
+// ------------------------------------------------------------
+
+/** libellés des natures d'intempéries (CCAG art. 19.2.3 ; chaleur : code du travail) */
+export const LIBELLE_INTEMPERIE: Record<NatureIntemperie, string> = {
+  pluie: 'pluie',
+  neige: 'neige',
+  vent: 'vent',
+  chaleur: 'chaleur',
+  gel: 'gel',
+}
+
+const DATE_VALIDE = /^\d{4}-\d{2}-\d{2}$/
+
+/** jour ouvré (lundi-vendredi). Arithmétique sur l'époque plutôt qu'un
+ *  objet Date et son getDay() : la date est un ARGUMENT et le résultat ne
+ *  dépend ni de l'horloge ni du fuseau du poste — un samedi doit rester un
+ *  samedi sur les deux machines de l'agence. */
+export function estJourOuvre(iso: string): boolean {
+  if (typeof iso !== 'string' || !DATE_VALIDE.test(iso)) return false
+  const jours = Math.floor(Date.parse(iso + 'T12:00:00Z') / 86400000)
+  const jourSemaine = (jours + 4) % 7 // le 1er janvier 1970 est un jeudi (4) ; 0 = dimanche
+  return jourSemaine >= 1 && jourSemaine <= 5
+}
+
+/** jours d'intempéries reconnues d'un chantier sur une période : jours
+ *  OUVRÉS DISTINCTS. Distincts, parce que pluie et vent le même jour font
+ *  UN jour d'arrêt, pas deux ; ouvrés, parce qu'un samedi ne se déduit pas
+ *  d'un délai qui ne le compte pas — les deux gonfleraient la déduction et
+ *  excuseraient des retards réels. Bornes incluses ; `debut`/`fin` à null =
+ *  période ouverte de ce côté. */
+export function joursIntemperies(
+  intemperies: Intemperie[],
+  projetId: string,
+  debut: string | null,
+  fin: string | null,
+): number {
+  if (!projetId) return 0
+  const jours = new Set<string>()
+  for (const i of Array.isArray(intemperies) ? intemperies : []) {
+    if (!i || i.projetId !== projetId) continue
+    if (typeof i.date !== 'string' || !DATE_VALIDE.test(i.date)) continue
+    if (debut && i.date < debut) continue
+    if (fin && i.date > fin) continue
+    if (!estJourOuvre(i.date)) continue
+    jours.add(i.date)
+  }
+  return jours.size
+}
+
+/** prolongation du délai contractuel d'un marché : les jours d'intempéries
+ *  reconnues pendant sa fenêtre d'intervention (CCAG art. 19.2.3) — la
+ *  trace opposable du décompte général. C'est ce MÊME chiffre que l'écran
+ *  passe à `penaliteEncourue` pour déduire les retards : deux effets, une
+ *  seule source, sinon la prolongation affichée et la déduction appliquée
+ *  divergeraient sur le même marché. */
+export function prolongationDelai(
+  marche: Pick<MarcheTravaux, 'projetId' | 'dateDebut' | 'dateFin'>,
+  intemperies: Intemperie[],
+): number {
+  if (!marche) return 0
+  return joursIntemperies(intemperies, marche.projetId, marche.dateDebut ?? null, marche.dateFin ?? null)
 }

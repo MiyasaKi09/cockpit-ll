@@ -409,6 +409,24 @@ export interface EvenementMarche {
   decideLe?: string | null
 }
 
+/** 5.3 — natures d'intempéries reconnues (CCAG art. 19.2.3 ; chaleur : code du travail) */
+export type NatureIntemperie = 'pluie' | 'neige' | 'vent' | 'chaleur' | 'gel'
+
+/** 5.3 — un jour d'intempérie constaté sur un chantier. Double effet, lu
+ *  par src/penalites.ts : prolongation du délai contractuel du marché ET
+ *  déduction des jours de retard (5.2) — les deux registres se lisent
+ *  ensemble, sinon on pénalise un retard que la pluie excuse. Le décompte
+ *  se fait en jours OUVRÉS DISTINCTS : deux natures le même jour font un
+ *  seul jour d'arrêt. */
+export interface Intemperie {
+  id: string
+  projetId: string
+  date: string // ISO 'AAAA-MM-JJ'
+  nature: NatureIntemperie
+  /** le constat opposable : seuil du CCAP atteint, CR de chantier, relevé météo… */
+  commentaire: string
+}
+
 /** élément d'ouvrage prévu au CCTP d'un lot — un article numéroté du document */
 export interface ElementCCTP {
   id: string
@@ -1765,6 +1783,9 @@ export interface AppState {
   /** 5.2 — journal des événements de pénalité par marché : la machine
    *  calcule l'ENCOURU, l'humain décide l'application (§15) */
   evenementsMarche: EvenementMarche[]
+  /** 5.3 — registre des intempéries par chantier : prolonge les délais et
+   *  neutralise les retards de 5.2 — trace opposable pour le décompte général */
+  intemperies: Intemperie[]
 }
 
 /** document du corpus de l'assistant : texte réglementaire (Légifrance,

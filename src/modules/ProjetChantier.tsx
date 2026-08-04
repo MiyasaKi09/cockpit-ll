@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from 'react'
 import type {
   EvenementMarche,
   MarcheTravaux,
+  NatureIntemperie,
   Projet,
   ReunionChantier,
   StatutReunion,
@@ -17,7 +18,10 @@ import { useMoi } from '../moi'
 import { LIBELLE_GARANTIE, garantieDuMarche } from '../derive'
 import {
   LIBELLE_EVENEMENT,
+  LIBELLE_INTEMPERIE,
+  estJourOuvre,
   penaliteEncourue,
+  prolongationDelai,
   totalAppliqueMarche,
   totalEncouruMarche,
 } from '../penalites'
@@ -398,11 +402,6 @@ function ModalMarche({
 // daté et signé (§15) — jamais un automatisme.
 // ============================================================
 
-/** jours d'intempéries à déduire d'un retard : branché par le livrable 5.3
- *  (registre des intempéries) — tant que le registre n'existe pas, rien ne
- *  s'excuse. La signature de `penaliteEncourue` attend déjà ce chiffre. */
-const AUCUNE_INTEMPERIE = 0
-
 export function CartePenalites({ projet: p }: { projet: Projet }) {
   const { state, update, replace } = useStore()
   // qui signe la décision : la personne reconnue, à défaut la première de
@@ -417,9 +416,17 @@ export function CartePenalites({ projet: p }: { projet: Projet }) {
     .sort((a, b) => b.date.localeCompare(a.date) || a.id.localeCompare(b.id))
   const marcheDe = (e: EvenementMarche) => marches.find((m) => m.id === e.marcheId)
 
+  // 5.3 — les jours d'intempéries reconnues sur la fenêtre d'intervention
+  // du marché : le MÊME chiffre que la prolongation du délai (une seule
+  // source, `prolongationDelai`), déduit ici des retards d'exécution — les
+  // deux registres se lisent ensemble, sinon on pénalise un retard que la
+  // pluie excuse.
+  const deductionDe = (m: MarcheTravaux | undefined): number =>
+    m ? prolongationDelai(m, state.intemperies) : 0
+
   const appliquer = async (e: EvenementMarche) => {
     const m = marcheDe(e)
-    const encouru = penaliteEncourue(e, m?.penalites, AUCUNE_INTEMPERIE)
+    const encouru = penaliteEncourue(e, m?.penalites, deductionDe(m))
     if (!encouru) return
     if (
       !(await confirmer({
@@ -526,7 +533,7 @@ export function CartePenalites({ projet: p }: { projet: Projet }) {
           >
             {evenements.map((e) => {
               const m = marcheDe(e)
-              const encouru = penaliteEncourue(e, m?.penalites, AUCUNE_INTEMPERIE)
+              const encouru = penaliteEncourue(e, m?.penalites, deductionDe(m))
               return (
                 <tr key={e.id}>
                   <td>
@@ -547,7 +554,21 @@ export function CartePenalites({ projet: p }: { projet: Projet }) {
                     {e.commentaire && <div className="muted small">{e.commentaire}</div>}
                   </td>
                   <td style={{ whiteSpace: 'nowrap' }}>{fmtDate(e.date)}</td>
-                  <td className="num">{e.type === 'absence_reunion' ? '—' : e.jours != null ? `${e.jours} j` : '?'}</td>
+                  <td className="num">
+                    {e.type === 'absence_reunion' ? (
+                      '—'
+                    ) : e.jours == null ? (
+                      '?'
+                    ) : encouru && encouru.joursDeduits > 0 ? (
+                      // 5.3 — la déduction se LIT là où elle agit : « 10 − 3 = 7 j »,
+                      // pas un résultat sec dont personne ne saurait d'où il vient
+                      <span title={`${encouru.joursDeduits} jour(s) ouvré(s) d'intempéries reconnues sur la fenêtre du marché, déduits du retard (registre ci-dessous)`}>
+                        {e.jours} − {encouru.joursDeduits} = {encouru.joursRetenus} j
+                      </span>
+                    ) : (
+                      `${e.jours} j`
+                    )}
+                  </td>
                   <td className="right">
                     {e.penaliteAppliquee ? (
                       <Money v={e.penaliteMontantHT} cents />
@@ -602,7 +623,7 @@ export function CartePenalites({ projet: p }: { projet: Projet }) {
               {marchesAvecEvenements.map((m) => (
                 <span key={m.id} style={{ display: 'block' }}>
                   {m.lot} — {m.entreprise} : encouru{' '}
-                  <strong>{fmtMoney(totalEncouruMarche(evenements, m.id, m.penalites, AUCUNE_INTEMPERIE), true)}</strong> HT
+                  <strong>{fmtMoney(totalEncouruMarche(evenements, m.id, m.penalites, deductionDe(m)), true)}</strong> HT
                   {' · '}appliqué <strong>{fmtMoney(totalAppliqueMarche(evenements, m.id), true)}</strong> HT
                 </span>
               ))}
@@ -719,6 +740,131 @@ function ModalEvenement({
         </Btn>
       </div>
     </Modal>
+  )
+}
+
+// ============================================================
+// 5.3 — Registre des intempéries : des jours datés, constatés,
+// opposables. Double effet, affiché là où il agit : prolongation
+// du délai des marchés (ici) et déduction des retards (journal
+// des pénalités ci-dessus) — même chiffre, même fonction.
+// ============================================================
+
+export function CarteIntemperies({ projet: p }: { projet: Projet }) {
+  const { state, update, replace } = useStore()
+  const [date, setDate] = useState<string | null>(todayISO())
+  const [nature, setNature] = useState<NatureIntemperie>('pluie')
+  const [commentaire, setCommentaire] = useState('')
+
+  const intemperies = state.intemperies
+    .filter((i) => i.projetId === p.id)
+    .sort((a, b) => b.date.localeCompare(a.date) || a.id.localeCompare(b.id))
+
+  // l'effet « prolongation » se lit sur les marchés dont la fenêtre
+  // d'intervention est posée — les autres n'ont pas de période à confronter
+  const marchesAvecFenetre = state.marches.filter(
+    (m) => m.projetId === p.id && (m.dateDebut || m.dateFin),
+  )
+
+  const ajouter = () => {
+    if (!date) return
+    update((d) => {
+      d.intemperies.push({
+        id: uid('intemp'),
+        projetId: p.id,
+        date,
+        nature,
+        commentaire: commentaire.trim(),
+      })
+    })
+    setCommentaire('')
+  }
+
+  const supprimer = (i: (typeof intemperies)[number]) => {
+    const snap = state
+    update((d) => {
+      d.intemperies = d.intemperies.filter((x) => x.id !== i.id)
+    })
+    toast('Jour d’intempérie retiré du registre.', { undo: () => replace(snap) })
+  }
+
+  return (
+    <Card titre="Registre des intempéries">
+      <div className="toolbar">
+        <DateInput value={date} onChange={setDate} style={{ maxWidth: 170 }} />
+        <Select
+          value={nature}
+          onChange={(v) => setNature(v as NatureIntemperie)}
+          options={(Object.keys(LIBELLE_INTEMPERIE) as NatureIntemperie[]).map((n) => ({
+            value: n,
+            label: LIBELLE_INTEMPERIE[n],
+          }))}
+          style={{ maxWidth: 140 }}
+        />
+        <TextInput
+          value={commentaire}
+          onChange={setCommentaire}
+          placeholder="Constat opposable : seuil du CCAP atteint, CR n°…, relevé météo…"
+          style={{ maxWidth: 420 }}
+        />
+        <Btn small kind="primary" onClick={ajouter} disabled={!date}>
+          Consigner le jour
+        </Btn>
+      </div>
+      {intemperies.length === 0 ? (
+        <EmptyState>
+          Aucun jour consigné — chaque jour d'intempérie (seuils du CCAP) prolonge le délai
+          contractuel des marchés et se déduit des retards du journal de pénalités : c'est la trace
+          opposable du décompte général.
+        </EmptyState>
+      ) : (
+        <>
+          <Table compact head={['Date', 'Nature', 'Commentaire', '']}>
+            {intemperies.map((i) => (
+              <tr key={i.id}>
+                <td style={{ whiteSpace: 'nowrap' }}>
+                  {fmtDate(i.date)}
+                  {!estJourOuvre(i.date) && (
+                    <>
+                      {' '}
+                      {/* consigné quand même (le constat est vrai), mais dit :
+                          un samedi ne prolonge pas un délai en jours ouvrés */}
+                      <span title="Jour non ouvré : consigné pour mémoire, il ne compte ni dans la prolongation ni dans la déduction des retards">
+                        <Badge tone="muted">week-end — non compté</Badge>
+                      </span>
+                    </>
+                  )}
+                </td>
+                <td>{LIBELLE_INTEMPERIE[i.nature]}</td>
+                <td>{i.commentaire || <span className="muted">—</span>}</td>
+                <td className="right">
+                  <RowMenu
+                    items={[{ label: 'Retirer ce jour', onClick: () => supprimer(i), danger: true }]}
+                  />
+                </td>
+              </tr>
+            ))}
+          </Table>
+          {marchesAvecFenetre.length > 0 && (
+            <p className="muted small" style={{ marginTop: 8 }}>
+              Prolongation du délai contractuel (jours ouvrés distincts sur la fenêtre
+              d'intervention — CCAG art. 19.2.3) :{' '}
+              {marchesAvecFenetre.map((m, idx) => (
+                <span key={m.id}>
+                  {idx > 0 && ' · '}
+                  {m.lot} <strong>+{prolongationDelai(m, state.intemperies)} j</strong>
+                </span>
+              ))}
+              . Le même chiffre se déduit des retards d'exécution du journal de pénalités.
+            </p>
+          )}
+          <p className="muted small" style={{ marginTop: 4 }}>
+            Deux natures le même jour comptent UN jour ; les week-ends sont consignés mais non
+            comptés.
+          </p>
+        </>
+      )}
+    </Card>
   )
 }
 
@@ -1247,6 +1393,9 @@ export default function ProjetChantier({ projet }: { projet: Projet }) {
       {/* 5.2 — le journal des pénalités vit sous les marchés : les taux du
           CCAP se saisissent sur le marché, les événements se constatent ici */}
       <CartePenalites projet={projet} />
+      {/* 5.3 — le registre des intempéries se lit AVEC le journal des
+          pénalités : il prolonge les délais et neutralise les retards */}
+      <CarteIntemperies projet={projet} />
     </>
   )
 }

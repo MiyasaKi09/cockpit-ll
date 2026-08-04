@@ -81,6 +81,9 @@ jobs:
       - name: Market penalties incurred, applied only by a signed human decision
         run: npm run test:penalites
 
+      - name: Weather days registry offsets delays in distinct working days
+        run: npm run test:intemperies
+
       - name: Current-user identity
         run: npm run test:identite
 

@@ -159,6 +159,9 @@ function migrate(parsed: AppState): AppState {
   // état antérieur n'a simplement constaté aucun événement, ce qui est la
   // vérité — rien à reprendre, rien à inventer.
   etat.evenementsMarche = Array.isArray(parsed.evenementsMarche) ? parsed.evenementsMarche : []
+  // 5.3 — registre des intempéries. Même règle : aucun jour constaté avant
+  // le livrable, la collection naît vide sur un état antérieur.
+  etat.intemperies = Array.isArray(parsed.intemperies) ? parsed.intemperies : []
   amorcerEntreprises(etat)
   // v5 → v6 : journal d'interactions CRM. On amorce depuis les
   // derniereInteraction existantes pour ne rien perdre de l'historique.

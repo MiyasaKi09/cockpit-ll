@@ -18,7 +18,9 @@
 // POURQUOI LE COMPILATEUR ET PAS UNE EXPRESSION RÉGULIÈRE
 // ---------------------------------------------------------
 // Le dépôt produit aussi du HTML d'IMPRESSION, dans des gabarits en
-// accents graves : `src/pdf.ts` en contient sept, `Planning.tsx` trois. Ces
+// accents graves : `src/pdf.ts` en contient au moins sept (neuf depuis le
+// certificat de paiement 5.19 — l'assertion plancher `>= 7` ci-dessous
+// suit ce comptage), `Planning.tsx` trois. Ces
 // `<table>`-là sont du texte, jamais montés à l'écran, et n'ont donc rien à
 // voir avec la règle. Une expression régulière ne fait pas la différence
 // entre un élément JSX et une chaîne qui lui ressemble : elle échouerait le

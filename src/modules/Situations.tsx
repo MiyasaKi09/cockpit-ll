@@ -6,11 +6,12 @@
 // ============================================================
 
 import { useState } from 'react'
-import type { AppState, MarcheTravaux, Situation, StatutSituation, TypeGarantie } from '../types'
+import type { AppState, Situation, StatutSituation, TypeGarantie } from '../types'
 import { useStore } from '../store'
 import {
   Badge,
   Btn,
+  BtnLien,
   Card,
   CopyBtn,
   DateF,
@@ -62,6 +63,11 @@ import {
   situationExiste,
 } from '../importRoutines'
 import type { ResultatImport, RetourSituation } from '../importRoutines'
+// 5.20 — le critère « situation du mois » et le texte de la relance vivent
+// dans src/entreprise.ts : la fiche entreprise, le fil d'urgences et cet
+// écran doivent dire (et écrire) la même chose
+import { corpsRelanceSituation, situationDuMois, sujetRelanceSituation } from '../entreprise'
+import FicheEntreprise from './FicheEntreprise'
 
 // ---------- petits helpers locaux ----------
 
@@ -1064,15 +1070,7 @@ function CarteHistorique() {
 }
 
 // ---------- situations attendues (marchés actifs) ----------
-
-function situationDuMois(state: AppState, m: MarcheTravaux, mois: string): Situation | undefined {
-  return state.situations.find(
-    (s) =>
-      s.mois === mois &&
-      (s.marcheId === m.id ||
-        (s.projetId === m.projetId && fold(s.entreprise) === fold(m.entreprise))),
-  )
-}
+// le critère « situation du mois » vit dans src/entreprise.ts (5.20)
 
 function CarteAttendues() {
   const { state } = useStore()
@@ -1080,6 +1078,8 @@ function CarteAttendues() {
   const moisCourant = monthKey(today)
   const tplRelance = gabarit(state, 'tpl-relance-situation')
   const actifs = state.marches.filter((m) => m.actif)
+  // 5.20 — le nom de l'entreprise ouvre sa fiche transverse (lecture)
+  const [fiche, setFiche] = useState<string | null>(null)
 
   return (
     <Card titre={`Situations attendues — ${fmtMois(moisCourant)}`}>
@@ -1098,7 +1098,14 @@ function CarteAttendues() {
                   <LienProjet state={state} projetId={m.projetId} />
                 </td>
                 <td>{m.lot}</td>
-                <td>{m.entreprise}</td>
+                <td>
+                  <BtnLien
+                    title="Ouvrir la fiche entreprise — tout ce qu'on sait d'elle, tous projets"
+                    onClick={() => setFiche(m.entrepriseId || m.entreprise)}
+                  >
+                    {m.entreprise}
+                  </BtnLien>
+                </td>
                 <td className="right">
                   <Money v={m.montantInitialHT + m.avenantsHT} />
                 </td>
@@ -1127,10 +1134,12 @@ function CarteAttendues() {
                         kind="ghost"
                         title="Ouvre Gmail avec une relance factuelle pré-remplie — l'envoi reste votre clic"
                         onClick={() =>
+                          // 5.20 — le MÊME brouillon que la fiche entreprise
+                          // (texte défini dans src/entreprise.ts, une fois)
                           ouvrirGmail(
                             m.contactEmail || '',
-                            `Situation de travaux ${fmtMois(monthKey(today))} — ${m.lot}`,
-                            `Bonjour,\n\nSauf erreur de notre part, nous n'avons pas reçu votre situation de travaux du mois de ${fmtMois(monthKey(today))} (${m.lot}) sur l'adresse dédiée situations@agence-ll.fr, prévue contractuellement chaque mois.\n\nMerci de nous la transmettre sous 5 jours ouvrés — le retard de transmission décale d'autant la vérification et le paiement.\n\nCordialement,\n${state.settings.nomAgence}`,
+                            sujetRelanceSituation(m, moisCourant),
+                            corpsRelanceSituation(m, moisCourant, state.settings.nomAgence),
                           )
                         }
                       >
@@ -1152,6 +1161,7 @@ function CarteAttendues() {
         Les marchés de travaux se gèrent dans la fiche projet (carte « Marchés de travaux »).
         {tplRelance ? ` La relance copiée se colle dans le Projet Claude « ${tplRelance.projetClaude} » — brouillon Gmail, relu avant envoi.` : ''}
       </p>
+      {fiche && <FicheEntreprise nomOuId={fiche} onClose={() => setFiche(null)} />}
     </Card>
   )
 }
@@ -1169,6 +1179,8 @@ function CarteRetenues() {
   const { state, update } = useStore()
   const today = useToday()
   const marches = state.marches.filter((m) => (m.tauxRG || 0) > 0)
+  // 5.20 — le nom de l'entreprise ouvre sa fiche transverse (lecture)
+  const [fiche, setFiche] = useState<string | null>(null)
 
   const majMarche = (id: string, patch: Partial<(typeof state.marches)[number]>) =>
     update((d) => {
@@ -1201,7 +1213,14 @@ function CarteRetenues() {
               <tr key={m.id}>
                 <td>
                   <strong>{m.lot}</strong>
-                  <div className="muted small">{m.entreprise}</div>
+                  <div className="muted small">
+                    <BtnLien
+                      title="Ouvrir la fiche entreprise — tout ce qu'on sait d'elle, tous projets"
+                      onClick={() => setFiche(m.entrepriseId || m.entreprise)}
+                    >
+                      {m.entreprise}
+                    </BtnLien>
+                  </div>
                 </td>
                 <td><LienProjet state={state} projetId={m.projetId} /></td>
                 <td className="right num">{fmtMoney(rg.travauxCumulHT)}</td>
@@ -1249,6 +1268,7 @@ function CarteRetenues() {
           })}
         </Table>
       )}
+      {fiche && <FicheEntreprise nomOuId={fiche} onClose={() => setFiche(null)} />}
     </Card>
   )
 }

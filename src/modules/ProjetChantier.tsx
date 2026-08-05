@@ -47,6 +47,7 @@ import { assemble, contexteMarche, contexteProjet } from '../prompts'
 import {
   Badge,
   Btn,
+  BtnLien,
   Card,
   CopyBtn,
   EmptyState,
@@ -69,6 +70,7 @@ import { CONTRAT_CR, genererDocxCR, parseRetourCR, retourVersTexte } from '../cr
 import { lireRacine, nomConforme, rangerFichier, supporteFS, type ResultatRangement } from '../fsdrive'
 import { creerDocument, empreinteSha256, enregistrerDocument, remplacerDocument } from '../registre'
 import { copier } from '../prompts'
+import FicheEntreprise from './FicheEntreprise'
 
 // ============================================================
 // Marchés de travaux
@@ -78,6 +80,8 @@ export function CarteMarches({ projet: p }: { projet: Projet }) {
   const { state, update, replace } = useStore()
   const today = todayISO()
   const [modal, setModal] = useState<{ marche?: MarcheTravaux } | null>(null)
+  // 5.20 — le nom de l'entreprise ouvre sa fiche transverse (lecture)
+  const [fiche, setFiche] = useState<string | null>(null)
 
   const marches = state.marches.filter((m) => m.projetId === p.id)
 
@@ -134,7 +138,14 @@ export function CarteMarches({ projet: p }: { projet: Projet }) {
             <tr key={m.id}>
               <td><strong>{m.lot}</strong></td>
               <td>
-                {m.entreprise}
+                {/* 5.20 — la fiche transverse : marchés tous projets, RG,
+                    certificats, GPA, visas, pénalités — en lecture */}
+                <BtnLien
+                  title="Ouvrir la fiche entreprise — tout ce qu'on sait d'elle, tous projets"
+                  onClick={() => setFiche(m.entrepriseId || m.entreprise)}
+                >
+                  {m.entreprise}
+                </BtnLien>
                 {m.notes && <div className="muted small">{m.notes}</div>}
               </td>
               <td className="right">
@@ -212,6 +223,7 @@ export function CarteMarches({ projet: p }: { projet: Projet }) {
       )}
 
       {modal && <ModalMarche projetId={p.id} marche={modal.marche} onClose={() => setModal(null)} />}
+      {fiche && <FicheEntreprise nomOuId={fiche} onClose={() => setFiche(null)} />}
     </Card>
   )
 }

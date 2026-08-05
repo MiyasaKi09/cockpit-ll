@@ -19,6 +19,7 @@ import {
 import { addDays, diffDays, fmtDate, fmtMoney, fmtMois, monthKey } from './util'
 import { LIBELLES_IMPORTANCE, type NiveauImportance, estImportance, graviteDe } from './categorisation'
 import { tacheAConfirmer } from './chantier'
+import { situationAttendueNonRecue } from './entreprise'
 import { SEUIL_ALERTE_VISA_JOURS, echeanceVisa } from './visas'
 import { ecartMois, notesManquantes } from './cotraitants'
 
@@ -220,22 +221,22 @@ export function computeAlertes(state: AppState, today: string, contexte?: Contex
       action: { kind: 'valider_situation', refId: sit.id, label: '✓ Valider' },
     })
   }
-  const moisCourant = monthKey(today)
-  const jourDuMois = Number(today.slice(8, 10))
-  if (jourDuMois >= 10) {
-    for (const m of state.marches.filter((m) => m.actif)) {
-      const recue = state.situations.some((x) => x.marcheId === m.id && x.mois === moisCourant)
-      if (!recue) {
-        alertes.push({
-          id: `sitmanq:${m.id}:${moisCourant}`,
-          type: 'situation_manquante',
-          gravite: jourDuMois >= 20 ? 3 : 2,
-          titre: `Situation attendue non reçue — ${m.entreprise} (${m.lot})`,
-          detail: `${nomProjet(state, m.projetId)} · mois ${fmtMois(moisCourant)} · relance à envoyer ?`,
-          lien: '#/situations',
-        })
-      }
-    }
+  // 5.20 — LE critère « situation attendue non reçue » vit dans
+  // src/entreprise.ts : la fiche entreprise et ce fil doivent dire la même
+  // chose le même jour. Au passage il rattrape aussi les situations reçues
+  // SANS marcheId (rapprochées par projet + nom, comme l'onglet Attendues) :
+  // l'alerte criait sur une situation que l'écran montrait reçue.
+  for (const m of state.marches) {
+    const attente = situationAttendueNonRecue(state, m, today)
+    if (!attente) continue
+    alertes.push({
+      id: `sitmanq:${m.id}:${attente.mois}`,
+      type: 'situation_manquante',
+      gravite: attente.gravite,
+      titre: `Situation attendue non reçue — ${m.entreprise} (${m.lot})`,
+      detail: `${nomProjet(state, m.projetId)} · mois ${fmtMois(attente.mois)} · relance à envoyer ?`,
+      lien: '#/situations',
+    })
   }
 
   // --- 5.7 : entreprise à confirmer — tâche de chantier démarrant sous
@@ -300,6 +301,7 @@ export function computeAlertes(state: AppState, today: string, contexte?: Contex
   // que rien ne le signale). « Relancer » ouvre un BROUILLON Gmail : la
   // machine propose, l'envoi reste un clic humain (§15) — et sans adresse,
   // pas d'action : un brouillon sans destinataire n'irait nulle part.
+  const moisCourant = monthKey(today)
   for (const { cotraitant, mois } of notesManquantes(state.cotraitants, state.notesHonoraires, moisCourant)) {
     // un mois de retard est un oubli de fin de mois ; deux mois, un signal —
     // le reçu s'écarte du convenu sans que personne ne le voie avant le bilan

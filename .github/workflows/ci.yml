@@ -105,6 +105,9 @@ jobs:
       - name: Co-contractor fee notes chased per overdue month
         run: npm run test:cotraitants
 
+      - name: Contractor summary sheet is read-only and reuses authorities
+        run: npm run test:entreprise
+
       - name: Project contacts sorted by call order
         run: npm run test:ordre-contacts
 

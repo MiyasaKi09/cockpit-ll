@@ -334,6 +334,9 @@ export function seedState(): AppState {
       snoozes: {},
       vus: {},
       dernierImportExcel: null,
+      // 5.18 — jamais récupérés encore : la première ouverture EN LIGNE
+      // ramène l'historique complet des indices INSEE (src/majIndices.ts)
+      indicesMajLe: null,
     },
 
     projets: [
@@ -1105,6 +1108,10 @@ export function seedState(): AppState {
     // fausserait le reçu affiché face au convenu.
     cotraitants: [],
     notesHonoraires: [],
+    // 5.19 — vide : un certificat de paiement « EXEMPLE » ressemblerait à un
+    // document contractuel émis vers un maître d'ouvrage — et sa numérotation
+    // décalerait celle des vrais états du marché (max + 1).
+    certificats: [],
 
     // v14 — finance F0/F1 : remplies par l'amorçage ci-dessous
     // (les factures « prévues » du seed deviennent des échéances)
@@ -1161,6 +1168,9 @@ export function seedState(): AppState {
     transactionsBancaires: [],
     importsBancaires: [],
     lotsComptables: [],
+    // Position TVA — vide : un mois « déclaré » d'exemple sortirait un mois
+    // RÉEL du « dû à l'État » sans qu'aucun humain n'ait fait le geste.
+    tvaDeclarations: [],
 
     // v16 — finance F6-F10 : pilotage unique (aucune donnée métier inventée)
     revisionsResteAFaire: [],

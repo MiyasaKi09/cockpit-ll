@@ -513,6 +513,30 @@ pre {
 .stat-acc-blue .stat-gm { background: var(--kpi-b-gm); border-radius: 50%; }
 .stat-acc-red .stat-gm { background: var(--kpi-r-gm); clip-path: polygon(50% 0, 100% 100%, 0 100%); }
 
+/* ---------- Finance · L'essentiel (décision du 04/08) ---------- */
+/* la tuile ENTIÈRE est le lien : rien à ajouter à l'écran pour dire
+   « ceci s'ouvre », le survol suffit */
+.tuile-lien { display: block; text-decoration: none; color: inherit; }
+.tuile-lien .stat { height: 100%; transition: border-color 0.12s ease; }
+.tuile-lien:hover .stat,
+.tuile-lien:focus-visible .stat { border-color: var(--accent); }
+.tuile-lien:focus-visible { outline: none; }
+
+/* rang secondaire de la sous-navigation Finance : cinq destinations moins
+   quotidiennes, toujours visibles et à UN clic (zéro suppression — 04/08) */
+.tabs-secondaires { display: flex; gap: 2px 16px; flex-wrap: wrap; margin: -10px 0 16px; }
+.tab-secondaire {
+  background: none;
+  border: none;
+  padding: 2px 0;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--ink-3);
+  cursor: pointer;
+}
+.tab-secondaire:hover { color: var(--ink); }
+.tab-secondaire-actif { color: var(--accent); font-weight: 600; }
+
 /* ---------- jauge de progression ---------- */
 .progress-head { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
 .progress-track { background: var(--line); border-radius: 99px; height: 8px; overflow: hidden; }

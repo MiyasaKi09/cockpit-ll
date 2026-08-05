@@ -19,6 +19,7 @@ import type {
 import { useStore } from '../store'
 import { useMoi } from '../moi'
 import { LIBELLE_GARANTIE, garantieDuMarche } from '../derive'
+import { serieEnRetard } from '../indicesInsee'
 import {
   DELAI_VISA_DEFAUT,
   LIBELLE_STATUT_VISA,
@@ -46,6 +47,7 @@ import { assemble, contexteMarche, contexteProjet } from '../prompts'
 import {
   Badge,
   Btn,
+  BtnLien,
   Card,
   CopyBtn,
   EmptyState,
@@ -68,6 +70,7 @@ import { CONTRAT_CR, genererDocxCR, parseRetourCR, retourVersTexte } from '../cr
 import { lireRacine, nomConforme, rangerFichier, supporteFS, type ResultatRangement } from '../fsdrive'
 import { creerDocument, empreinteSha256, enregistrerDocument, remplacerDocument } from '../registre'
 import { copier } from '../prompts'
+import FicheEntreprise from './FicheEntreprise'
 
 // ============================================================
 // Marchés de travaux
@@ -75,7 +78,10 @@ import { copier } from '../prompts'
 
 export function CarteMarches({ projet: p }: { projet: Projet }) {
   const { state, update, replace } = useStore()
+  const today = todayISO()
   const [modal, setModal] = useState<{ marche?: MarcheTravaux } | null>(null)
+  // 5.20 — le nom de l'entreprise ouvre sa fiche transverse (lecture)
+  const [fiche, setFiche] = useState<string | null>(null)
 
   const marches = state.marches.filter((m) => m.projetId === p.id)
 
@@ -132,7 +138,14 @@ export function CarteMarches({ projet: p }: { projet: Projet }) {
             <tr key={m.id}>
               <td><strong>{m.lot}</strong></td>
               <td>
-                {m.entreprise}
+                {/* 5.20 — la fiche transverse : marchés tous projets, RG,
+                    certificats, GPA, visas, pénalités — en lecture */}
+                <BtnLien
+                  title="Ouvrir la fiche entreprise — tout ce qu'on sait d'elle, tous projets"
+                  onClick={() => setFiche(m.entrepriseId || m.entreprise)}
+                >
+                  {m.entreprise}
+                </BtnLien>
                 {m.notes && <div className="muted small">{m.notes}</div>}
               </td>
               <td className="right">
@@ -154,10 +167,28 @@ export function CarteMarches({ projet: p }: { projet: Projet }) {
               <td>
                 {m.revision ? (
                   m.indiceRevision ? (
-                    <span className="small">
-                      {m.indiceRevision}
-                      {m.moisZero ? <span className="muted"> · base {m.moisZero}</span> : ''}
-                    </span>
+                    (() => {
+                      // 5.18 — deux manques à montrer, pas un : aucune valeur
+                      // du tout, et des valeurs PÉRIMÉES (> 4 mois d'écart —
+                      // l'INSEE publie à ~3 mois, au-delà c'est que la
+                      // récupération automatique échoue et il faut le voir ICI,
+                      // sur le marché concerné, pas dans une console).
+                      const retard = serieEnRetard(state.indicesBTP, m.indiceRevision!, today.slice(0, 7))
+                      return (
+                        <span className="small">
+                          {m.indiceRevision}
+                          {m.moisZero ? <span className="muted"> · base {m.moisZero}</span> : ''}
+                          {retard.enRetard && (
+                            <>
+                              {' '}
+                              <Badge tone="warn">
+                                {retard.dernierMois ? `indice périmé (${retard.dernierMois})` : 'indice ?'}
+                              </Badge>
+                            </>
+                          )}
+                        </span>
+                      )
+                    })()
                   ) : (
                     // révisable mais sans série : la révision théorique (5.4)
                     // répondra null — le manque doit se voir dans la liste
@@ -192,6 +223,7 @@ export function CarteMarches({ projet: p }: { projet: Projet }) {
       )}
 
       {modal && <ModalMarche projetId={p.id} marche={modal.marche} onClose={() => setModal(null)} />}
+      {fiche && <FicheEntreprise nomOuId={fiche} onClose={() => setFiche(null)} />}
     </Card>
   )
 }

@@ -10,6 +10,7 @@ import { basculerTheme, themeCourant } from './theme'
 import { useMoi, useSessionSupabase } from './moi'
 import type { InstantaneSession } from './sync'
 import { SurveillanceCtx, useSurveillance } from './surveillance'
+import { useMajIndicesInsee } from './majIndices'
 import { diffDays } from './util'
 import type { AppState } from './types'
 import { appliquerMiseAJour, surMiseAJour } from './majApp'
@@ -176,6 +177,11 @@ export default function App() {
   // INT-02 : la surveillance Gmail/Agenda tourne à la racine — elle continue
   // de capter les mails quel que soit l'écran affiché (le Cockpit ne fait que lire)
   const surveillance = useSurveillance(state, update)
+  // 5.18 : les indices INSEE se rafraîchissent à la racine aussi — différés
+  // de quelques secondes, silencieux sur échec, au plus une fois par 24 h.
+  // La récupération cesse d'être un geste à penser (« automatique et non pas
+  // volontaire », demande explicite de l'agence).
+  useMajIndicesInsee(state, update)
   // session RÉACTIVE : sans cet abonnement, le pied de menu affichait encore
   // « local » après une connexion réussie, jusqu'au rechargement de la page
   const session = useSessionSupabase()

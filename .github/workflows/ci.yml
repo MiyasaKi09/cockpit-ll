@@ -63,6 +63,9 @@ jobs:
       - name: VAT rounding rule and configurable tax mention
         run: npm run test:tva
 
+      - name: VAT position from real pieces, declared months frozen by a human gesture
+        run: npm run test:position-tva
+
       - name: Portal lifecycle surfaces per invoice with deposit reminder
         run: npm run test:transmissions
 
@@ -71,6 +74,9 @@ jobs:
 
       - name: Theoretical price revision from BTP indices
         run: npm run test:revision-prix
+
+      - name: Payment certificate matches the real document, frozen once issued
+        run: npm run test:certificat
 
       - name: Margin drift audited against hand-computed cases
         run: npm run test:derive-marge
@@ -98,6 +104,9 @@ jobs:
 
       - name: Co-contractor fee notes chased per overdue month
         run: npm run test:cotraitants
+
+      - name: Contractor summary sheet is read-only and reuses authorities
+        run: npm run test:entreprise
 
       - name: Project contacts sorted by call order
         run: npm run test:ordre-contacts
@@ -207,8 +216,14 @@ jobs:
       - name: Week total is computed once for both time views
         run: npm run test:temps-mobile
 
+      - name: INSEE index feed parsing, merge authority and daily throttle
+        run: npm run test:indices-insee
+
       - name: No raw JSX tables outside the recensed files
         run: npm run test:tableaux
+
+      - name: Finance entry screen reuses existing selectors, nine destinations kept
+        run: npm run test:finance-essentiel
 
       - name: Install Chromium
         run: npx playwright install --with-deps chromium

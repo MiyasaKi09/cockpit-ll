@@ -26,6 +26,7 @@ import {
   useToday,
 } from '../ui'
 import FinanceNav from './FinanceNav'
+import CarteTVA from './CarteTVA'
 import {
   PROFIL_DEFAUT,
   construirePaquet,
@@ -324,6 +325,11 @@ export default function Comptable() {
   return (
     <Page titre="Finance" sousTitre="Comptable — clôture mensuelle guidée et paquet d'import pour le cabinet.">
       <FinanceNav actif="comptable" />
+
+      {/* Position TVA — montage PROVISOIRE en tête de Comptable, le temps que
+          la vue d'ensemble Finance l'accueille : la carte est autonome, la
+          déplacer est un import à bouger, rien d'autre. */}
+      <CarteTVA />
 
       <div className="toolbar" style={{ marginBottom: 12 }}>
         <Select value={periode} onChange={setPeriode} options={options} />

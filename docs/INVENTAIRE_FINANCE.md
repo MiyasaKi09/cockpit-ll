@@ -36,7 +36,38 @@ vieilliront — le nom affiché, lui, se retrouve avec la recherche du code.
 
 ---
 
+## Décision du 04/08 — regroupement visuel, zéro suppression
+
+La commande : « quelque chose de clair et simple (visuellement) mais précis
+dans ce que ça montre ». Deux gestes, AUCUNE suppression :
+
+1. **L'écran d'entrée devient « L'essentiel »** (`src/modules/Finance.tsx`) :
+   six tuiles — trésorerie disponible (et point bas prévu), à encaisser
+   (dont retard), à facturer, achats à payer, TVA due à l'État, marge de
+   l'année — et rien d'autre. Chaque tuile lit le sélecteur que l'onglet de
+   détail applique déjà (`financeActions`, `derive`, `tva`, `banque`,
+   `tresorerie`) et la tuile entière ouvre cet onglet. Les blocs qui
+   occupaient l'ancienne « Vue d'ensemble » (section 1 ci-dessous) ne sont
+   pas perdus : la courbe 13 semaines vit dans Banque, les actions « à
+   traiter » restent comptées par le badge Finance et visibles dans leurs
+   vues (Ventes, Achats, Banque, Comptable), la santé des projets dans
+   Pilotage et les fiches projet, l'état de clôture dans Comptable.
+2. **La sous-navigation se hiérarchise** (`src/modules/FinanceNav.tsx`) :
+   rang principal « L'essentiel · Ventes · Achats & frais · Banque », rang
+   secondaire discret « Contrats · Comptable · Revue · Prévisions ·
+   Connecteurs ». **Les neuf destinations restent toutes affichées et
+   accessibles en un clic** — regroupement visuel, pas un masquage.
+
+Le cochage à deux (méthode ci-dessus) reste À FAIRE pour aller plus loin :
+tout repli « Voir plus » d'une carte cochée « jamais ouvert » sera un
+livrable à part, décidé ligne à ligne. `scripts/test-finance-essentiel.cjs`
+verrouille les deux gestes (sélecteurs réutilisés, neuf destinations).
+
 ## 1. Vue d'ensemble (`#/finance` — `src/modules/Finance.tsx`)
+
+> **04/08 :** cet écran est devenu « L'essentiel » (décision ci-dessus). Les
+> lignes ci-dessous décrivent l'ancien contenu, conservé pour le cochage :
+> chaque bloc existe encore dans l'onglet indiqué par la décision.
 
 | Élément affiché | Où | Ce que ça fait | Usage |
 |---|---|---|---|

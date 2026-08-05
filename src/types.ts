@@ -365,14 +365,25 @@ export interface MarcheTravaux {
     /** € HT par jour de retard d'un document contractuel (DOE, PPSPS…) */
     documentRetardParJourHT?: number | null
   }
+  /** 5.19 — avance forfaitaire du marché HT (CCAG Travaux art. 13, souvent
+   *  5 % du montant initial). `null`/absent = pas d'avance : le certificat
+   *  de paiement n'a alors rien à résorber */
+  avanceForfaitaireHT?: number | null
+  /** 5.19 — part de l'avance déjà remboursée HT (cumul des résorptions
+   *  ÉMISES). Avancé par le geste « Émettre » du certificat, jamais
+   *  recalculé : c'est un fait contractuel, pas une dérivation */
+  avanceRembourseeHT?: number | null
   notes?: string
 }
 
-/** 5.4 — valeur mensuelle d'un indice de révision BTP (BT01, BT02, TP08…).
- *  Saisie À LA MAIN depuis les publications INSEE : elles paraissent à
- *  ~3 mois, il n'existe aucun flux à brancher — et une valeur recopiée se
- *  relit, là où une valeur « récupérée » se croirait juste. Le rapprochement
- *  avec `Marche.indiceRevision` se fait sans casse ni espaces
+/** 5.4/5.18 — valeur mensuelle d'un indice de révision BTP (BT01, TP08…).
+ *  Depuis 5.18, l'historique COMPLET des séries se récupère TOUT SEUL depuis
+ *  l'API SDMX publique de l'INSEE (src/indicesInsee.ts, src/majIndices.ts) —
+ *  la décision « saisie à la main seulement » de 5.4 est annulée par
+ *  l'agence. La saisie manuelle reste possible (une valeur attendue avant
+ *  publication), mais la valeur INSEE du même (code, mois) l'écrase : l'INSEE
+ *  est la source, la saisie n'était que l'attente. Le rapprochement avec
+ *  `Marche.indiceRevision` se fait sans casse ni espaces
  *  (src/revisionPrix.ts) : « bt01 » saisi ici et « BT01 » au marché
  *  désignent la même série. */
 export interface IndiceBTP {
@@ -672,6 +683,92 @@ export interface Situation {
   factureId?: string | null
 }
 
+/** 5.19 — les lignes d'un certificat de paiement (état d'acompte), toutes
+ *  les rubriques A-E du document réel, en euros arrondis au centime. Cette
+ *  forme est celle qui se FIGE à l'émission : chaque valeur y est la valeur
+ *  RETENUE (proposition machine ou correction humaine — le document imprimé
+ *  ne dit pas la différence, et c'est voulu : c'est l'architecte qui signe). */
+export interface LignesCertificat {
+  // -- le marché --
+  baseHT: number
+  avenantsHT: number
+  totalMarcheHT: number
+  // -- avance forfaitaire (CCAG art. 13) --
+  avanceInitialeHT: number
+  /** avance versée AU PRÉSENT ÉTAT (0 en général : l'avance se mandate à la
+   *  notification, hors état mensuel — proposée à 0, corrigeable) */
+  avanceVerseePresentHT: number
+  avanceRembourseeAnterieureHT: number
+  /** résorption du présent état (proposée par la règle CCAG 65 % → 80 %) */
+  resorptionHT: number
+  avanceRembourseeTotaleHT: number
+  avanceResteHT: number
+  // -- A. acompte en prix de base --
+  cumulHT: number
+  anterieurHT: number
+  /** acompte du présent état = cumulé − antérieur */
+  acompteHT: number
+  // -- B. révision de prix --
+  revisionHT: number
+  revisionAnterieureHT: number
+  revisionOrigineHT: number
+  // -- C. TVA (présent état, puis cumuls depuis l'origine) --
+  tauxTVA: number
+  tvaAvanceHT: number
+  tvaAcompteHT: number
+  tvaRevisionHT: number
+  tvaAvanceCumulHT: number
+  tvaAcompteCumulHT: number
+  tvaRevisionCumulHT: number
+  /** total TTC du présent état, avant pénalités et retenue */
+  totalTTC: number
+  /** acomptes TTC cumulés depuis l'origine (avance comprise, résorptions déduites) */
+  acompteTTCCumul: number
+  // -- D. pénalités appliquées (5.2) à déduire — hors champ TVA --
+  penalitesHT: number
+  // -- E. retenue de garantie (0 si caution/GPD couvre le marché) --
+  retenueGarantieTTC: number
+  /** net à payer TTC du présent état */
+  netAPayerTTC: number
+  /** reste à exécuter HT (marché avenants compris − cumulé) */
+  resteHT: number
+}
+
+/** 5.19 — en-tête FIGÉ du certificat : le document réimprimé dans deux ans
+ *  doit porter le nom du MO et de l'agence D'ALORS, pas ceux d'aujourd'hui
+ *  (même règle que FactureFigee, audit F0) */
+export interface EnteteCertificat {
+  /** n° d'engagement / marché (numeroEngagement du projet) */
+  marcheNumero: string
+  objet: string
+  lot: string
+  moa: string
+  titulaire: string
+  /** type de garantie au moment de l'émission — dit POURQUOI la ligne E vaut ce qu'elle vaut */
+  garantie: TypeGarantie
+  agence: { nom: string; adresse?: string; siret?: string }
+}
+
+/** 5.19 — certificat de paiement ÉMIS vers le maître d'ouvrage, depuis une
+ *  situation validée. Un certificat émis est FIGÉ (comme FactureFigee) : le
+ *  recalculer plus tard avec d'autres indices ou un autre cumul changerait
+ *  un document déjà signé et transmis. La réouverture est une RÉIMPRESSION. */
+export interface CertificatPaiement {
+  id: string
+  marcheId: string
+  projetId: string
+  situationId: string
+  numero: number
+  mois: string // 'AAAA-MM'
+  entete: EnteteCertificat
+  /** toutes les rubriques A-E, valeurs retenues, figées à l'émission */
+  lignes: LignesCertificat
+  /** copie de lignes.netAPayerTTC — le chiffre des listes, sans déplier */
+  netAPayerTTC: number
+  emisLe: string // ISO
+  emisPar: string
+}
+
 export type StatutFacture = 'prevue' | 'emise' | 'encaissee'
 
 /** ligne d'une facture de vente — la précision exigée par les mentions
@@ -959,6 +1056,21 @@ export interface NoteFrais {
   statutComptable?: StatutComptable
   lotComptableId?: string | null
   evenements?: { date: string; type: string; detail?: string }[]
+}
+
+/** déclaration de TVA d'un mois échu, marquée par un GESTE humain (§15) :
+ *  le solde (collectée − déductible) est FIGÉ au moment du geste — le
+ *  « dû à l'État » de src/tva.ts ne recompte plus ce mois, même si une
+ *  pièce bouge ensuite. L'écart éventuel se VOIT alors face au solde
+ *  recalculé (CarteTVA) au lieu de déplacer en silence un montant déjà
+ *  déclaré au SIE. */
+export interface TvaDeclaration {
+  id: string
+  /** mois déclaré, 'AAAA-MM' */
+  mois: string
+  /** solde figé au moment du geste (euros — négatif : crédit de TVA) */
+  montant: number
+  declareLe: string // ISO
 }
 
 // --- moteur de complétude (audit §8) : une absence attendue devient une
@@ -1639,6 +1751,15 @@ export interface Settings {
    *  le cabinet (encaissements par défaut pour les prestations de services,
    *  option possible sur les débits) ; un réglage, pas une phrase codée en dur */
   mentionTVA?: string
+  /** régime d'exigibilité de la TVA collectée pour la POSITION CALCULÉE
+   *  (src/tva.ts) : 'encaissements' — droit commun des prestations de
+   *  services, la TVA d'un paiement reçu devient due — ou 'debits' (option
+   *  formulée au SIE : la TVA naît à l'ÉMISSION de la facture). Défaut
+   *  'encaissements' ; à valider avec le cabinet
+   *  (docs/QUESTIONS_CABINET_TVA.md). Distinct de `mentionTVA` (la phrase
+   *  IMPRIMÉE sur les pièces) et de `profilComptable.regimeTVA` (champ libre
+   *  de mémoire) : celui-ci pilote un CALCUL, pas un texte. */
+  regimeTVA?: 'encaissements' | 'debits'
   /** alerteId → ISO « en sommeil jusqu'au » */
   snoozes: Record<string, string>
   /** jumeau de `snoozes` : identifiant d'alerte → date où on l'a VUE.
@@ -1677,6 +1798,12 @@ export interface Settings {
   }
   /** dernier import par routine (« situations », « consultations », « courriers ») → date ISO */
   derniersImports?: Record<string, string>
+  /** 5.18 — dernière récupération RÉUSSIE des indices INSEE (horodatage ISO).
+   *  C'est l'anti-marteau : au plus un appel par 24 h
+   *  (src/indicesInsee.ts, `doitRafraichirIndices`). Partagé entre les 2
+   *  postes — l'un a récupéré, l'autre n'appelle pas. Jamais posé sur un
+   *  échec : le prochain démarrage doit pouvoir réessayer. */
+  indicesMajLe?: string | null
   /** dernier export JSON de sauvegarde (date ISO) */
   derniereSauvegarde?: string | null
   /** synchronisation Supabase (opt-in, offre gratuite) — config MACHINE-LOCALE :
@@ -1906,6 +2033,9 @@ export interface AppState {
   importsBancaires: ImportBancaire[]
   /** lots d'export comptable versionnés (F4) */
   lotsComptables: LotComptable[]
+  /** mois de TVA marqués « déclarée » — un geste humain fige le solde et
+   *  sort le mois du « dû à l'État » calculé (src/tva.ts, §15) */
+  tvaDeclarations: TvaDeclaration[]
   // --- Finance F6-F10 : pilotage unique ---
   /** reste à faire révisé par phase (base de la marge finale, F6) */
   revisionsResteAFaire: RevisionResteAFaire[]
@@ -1943,6 +2073,10 @@ export interface AppState {
    *  affiché FACE au convenu et au budget externe des phases — jamais versé
    *  dans le calcul de marge (audit 5.14) */
   notesHonoraires: NoteHonoraires[]
+  /** 5.19 — certificats de paiement ÉMIS (états d'acompte vers le MO),
+   *  figés à l'émission : la machine propose (src/certificat.ts), l'humain
+   *  corrige et émet, le document ne se recalcule plus jamais */
+  certificats: CertificatPaiement[]
 }
 
 /** document du corpus de l'assistant : texte réglementaire (Légifrance,

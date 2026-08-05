@@ -6,11 +6,12 @@
 // ============================================================
 
 import { useState } from 'react'
-import type { AppState, MarcheTravaux, Situation, StatutSituation, TypeGarantie } from '../types'
+import type { AppState, Situation, StatutSituation, TypeGarantie } from '../types'
 import { useStore } from '../store'
 import {
   Badge,
   Btn,
+  BtnLien,
   Card,
   CopyBtn,
   DateF,
@@ -44,7 +45,16 @@ import {
 } from '../derive'
 import type { StatutRG } from '../derive'
 import { SEUIL_ECART_AVANCEMENT_PTS, controleSituation } from '../controleSituation'
-import { ouvrirDecompteSituationPDF } from '../pdf'
+import {
+  avanceRembourseeApresEmission,
+  certificatDeSituation,
+  construireCertificat,
+  figerCertificat,
+} from '../certificat'
+import type { SurchargesCertificat } from '../certificat'
+import type { LignesCertificat } from '../types'
+import { useMoi } from '../moi'
+import { ouvrirCertificatPaiementPDF, ouvrirDecompteSituationPDF } from '../pdf'
 import { assemble, contexteMarche } from '../prompts'
 import {
   importerSituations,
@@ -53,6 +63,11 @@ import {
   situationExiste,
 } from '../importRoutines'
 import type { ResultatImport, RetourSituation } from '../importRoutines'
+// 5.20 — le critère « situation du mois » et le texte de la relance vivent
+// dans src/entreprise.ts : la fiche entreprise, le fil d'urgences et cet
+// écran doivent dire (et écrire) la même chose
+import { corpsRelanceSituation, situationDuMois, sujetRelanceSituation } from '../entreprise'
+import FicheEntreprise from './FicheEntreprise'
 
 // ---------- petits helpers locaux ----------
 
@@ -792,11 +807,161 @@ function CarteAVerifier() {
   )
 }
 
+// ---------- certificat de paiement (5.19) ----------
+
+/** libellés des lignes du certificat, dans l'ordre du document réel —
+ *  `null` en libellé = séparateur de rubrique */
+const LIGNES_CERTIFICAT: (readonly [keyof LignesCertificat | null, string, { fort?: boolean }?])[] = [
+  [null, 'Le marché'],
+  ['baseHT', 'Montant du marché (base) HT'],
+  ['avenantsHT', 'Avenants HT'],
+  ['totalMarcheHT', 'Total marché HT', { fort: true }],
+  [null, 'Avance forfaitaire (CCAG art. 13)'],
+  ['avanceInitialeHT', 'Avance forfaitaire initiale HT'],
+  ['avanceRembourseeAnterieureHT', 'Avance déjà remboursée HT (états antérieurs)'],
+  ['avanceVerseePresentHT', 'Avance versée au présent état HT'],
+  ['resorptionHT', 'Résorption du présent état HT (à déduire)'],
+  ['avanceResteHT', 'Reste à rembourser HT', { fort: true }],
+  [null, 'A — Acompte en prix de base'],
+  ['cumulHT', 'Travaux exécutés cumulés HT (décompte)'],
+  ['anterieurHT', 'À déduire : décompte antérieur HT'],
+  ['acompteHT', 'Acompte en prix de base HT (cumulé − antérieur)', { fort: true }],
+  [null, 'B — Révision de prix'],
+  ['revisionHT', 'Révision du présent état HT'],
+  ['revisionAnterieureHT', 'Révisions antérieures HT'],
+  ['revisionOrigineHT', 'Révision depuis l’origine HT', { fort: true }],
+  [null, 'C — TVA'],
+  ['tauxTVA', 'Taux de TVA (fraction : 0,2 = 20 %)'],
+  ['tvaAvanceHT', 'TVA sur avance (présent état)'],
+  ['tvaAcompteHT', 'TVA sur acompte (présent état)'],
+  ['tvaRevisionHT', 'TVA sur révision (présent état)'],
+  ['totalTTC', 'Total acompte TTC — présent état', { fort: true }],
+  ['acompteTTCCumul', 'Acomptes TTC cumulés depuis l’origine'],
+  [null, 'D & E — À déduire'],
+  ['penalitesHT', 'Pénalités appliquées (5.2)'],
+  ['retenueGarantieTTC', 'Retenue de garantie TTC'],
+  [null, 'Le net'],
+  ['netAPayerTTC', 'NET À PAYER TTC — présent état', { fort: true }],
+  ['resteHT', 'Reste à exécuter HT'],
+]
+
+/** modale d'émission : chaque ligne calculée est une PROPOSITION corrigeable
+ *  (le document réel le prouve — la RG de l'état n° 4 sort d'une lecture
+ *  contractuelle qu'aucune règle ne produit) ; « Émettre » FIGE et ouvre le
+ *  PDF. Un certificat émis se rouvre en LECTURE, il ne se recalcule pas. */
+function ModalCertificat({ sit, onClose }: { sit: Situation; onClose: () => void }) {
+  const { state, update } = useStore()
+  const today = useToday()
+  const moi = useMoi()
+  // qui émet : même règle que le visa et la pénalité — la personne reconnue,
+  // à défaut la première de la liste (pas de signature vide)
+  const signataire = moi.nom ?? state.settings.personnes[0]
+  const [surcharges, setSurcharges] = useState<SurchargesCertificat>({})
+  const [numero, setNumero] = useState<number | null>(null)
+
+  const construit = construireCertificat(state, sit.id, numero === null ? surcharges : { ...surcharges, numero })
+  if (!construit) {
+    return (
+      <Modal titre="Certificat de paiement" onClose={onClose}>
+        <p>Rattachez d'abord la situation à un marché (bouton « Éditer ») : sans marché, ni montant de base, ni avance, ni garantie — rien à certifier.</p>
+      </Modal>
+    )
+  }
+
+  const corriger = (cle: keyof LignesCertificat) => (v: number | null) =>
+    setSurcharges((prev) => {
+      const suiv = { ...prev }
+      if (v === null) delete suiv[cle]
+      else suiv[cle] = v
+      return suiv
+    })
+
+  const emettre = () => {
+    if (certificatDeSituation(state, sit.id)) {
+      toast('Un certificat est déjà émis pour cette situation — rouvrez-le en réimpression.', { tone: 'danger' })
+      return
+    }
+    // id calculé AVANT la mutation (producteur rejouable)
+    const id = uid('cert')
+    const cert = figerCertificat(construit, { id, emisLe: today, emisPar: signataire })
+    update((d) => {
+      d.certificats.push(cert)
+      // la résorption émise avance le compteur du marché : l'état suivant
+      // proposera la suite, pas la même résorption
+      const m = d.marches.find((x) => x.id === cert.marcheId)
+      if (m && cert.lignes.resorptionHT > 0) m.avanceRembourseeHT = avanceRembourseeApresEmission(m, cert)
+    })
+    ouvrirCertificatPaiementPDF(cert)
+    toast(`Certificat n° ${cert.numero} émis et figé (${fmtMoney(cert.netAPayerTTC, true)} TTC) — il se rouvrira en réimpression, jamais en recalcul.`, { tone: 'ok' })
+    onClose()
+  }
+
+  return (
+    <Modal titre={`Certificat de paiement — ${sit.entreprise} (${fmtMois(sit.mois)})`} onClose={onClose} large>
+      <p className="muted small" style={{ marginTop: 0 }}>
+        Chaque ligne est une <strong>proposition</strong> : corrigez ce que le contrat dit autrement
+        (l'état n° 4 de la MAM de Chamant retenait 5 % de RG sur le seul avenant, GPD sur la base —
+        aucune règle générale ne produit ça). Le PDF imprime la valeur retenue.
+      </p>
+      <div className="form-row">
+        <Field label="N° du certificat" hint={`proposé : ${construit.numeroPropose} (max des états émis du marché + 1)`}>
+          <NumInput value={numero ?? construit.numeroPropose} onChange={setNumero} />
+        </Field>
+      </div>
+      <Table compact head={['Rubrique', 'Proposé', 'Correction', 'Retenu']}>
+        {LIGNES_CERTIFICAT.map(([cle, libelle, opts], i) =>
+          cle === null ? (
+            <tr key={i}>
+              <td colSpan={4} style={{ fontWeight: 700, background: 'var(--bg-soft, #f6f7fa)' }}>{libelle}</td>
+            </tr>
+          ) : (
+            <tr key={i} style={opts?.fort ? { fontWeight: 700 } : undefined}>
+              <td>{libelle}</td>
+              <td className="right">
+                {cle === 'tauxTVA' ? fmtPct(construit.proposition[cle]) : <Money v={construit.proposition[cle]} cents />}
+              </td>
+              <td style={{ width: 120 }}>
+                <NumInput
+                  value={surcharges[cle] ?? null}
+                  onChange={corriger(cle)}
+                  placeholder="—"
+                  ariaLabel={`Correction — ${libelle}`}
+                />
+              </td>
+              <td className="right">
+                {cle === 'tauxTVA' ? fmtPct(construit.lignes[cle]) : <Money v={construit.lignes[cle]} cents />}
+              </td>
+            </tr>
+          ),
+        )}
+      </Table>
+      {construit.mentions.length > 0 && (
+        <div className="muted small" style={{ marginTop: 8 }}>
+          {construit.mentions.map((m, i) => (
+            <div key={i}>· {m}</div>
+          ))}
+        </div>
+      )}
+      <div className="form-foot">
+        <Btn kind="ghost" onClick={onClose}>
+          Annuler
+        </Btn>
+        <span className="spacer" />
+        <Btn kind="primary" onClick={emettre}>
+          Émettre le certificat n° {construit.numero} et ouvrir le PDF
+        </Btn>
+      </div>
+    </Modal>
+  )
+}
+
 // ---------- historique ----------
 
 function CarteHistorique() {
   const { state, update } = useStore()
   const today = useToday()
+  // situation dont on prépare le certificat de paiement (5.19)
+  const [certifId, setCertifId] = useState<string | null>(null)
   const traitees = state.situations
     .filter((s) => s.statut !== 'a_verifier')
     .sort((a, b) => b.mois.localeCompare(a.mois) || b.dateReception.localeCompare(a.dateReception))
@@ -844,9 +1009,36 @@ function CarteHistorique() {
                     </td>
                     <td>
                       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                        <Btn small kind="ghost" onClick={() => ouvrirDecompteSituationPDF(state, s)} title="Décompte / certificat de paiement">
+                        <Btn small kind="ghost" onClick={() => ouvrirDecompteSituationPDF(state, s)} title="Décompte de vérification (interne, vers l'entreprise)">
                           Décompte
                         </Btn>
+                        {(() => {
+                          // 5.19 — certificat de paiement vers le MO : émis = FIGÉ,
+                          // il se rouvre en réimpression, jamais en recalcul
+                          const cert = certificatDeSituation(state, s.id)
+                          if (cert)
+                            return (
+                              <Btn
+                                small
+                                kind="ghost"
+                                onClick={() => ouvrirCertificatPaiementPDF(cert)}
+                                title={`Émis le ${fmtDate(cert.emisLe)} par ${cert.emisPar} — réimpression du document figé`}
+                              >
+                                Certificat n° {cert.numero} ✓
+                              </Btn>
+                            )
+                          if (s.statut === 'validee' && marcheDeSituation(state, s))
+                            return (
+                              <Btn
+                                small
+                                onClick={() => setCertifId(s.id)}
+                                title="Certificat de paiement (état d'acompte) vers le maître d'ouvrage — chaque ligne proposée reste corrigeable avant émission"
+                              >
+                                Certificat de paiement
+                              </Btn>
+                            )
+                          return null
+                        })()}
                         {s.statut === 'validee' && (
                           <Btn
                             small
@@ -869,20 +1061,16 @@ function CarteHistorique() {
           )
         })
       )}
+      {(() => {
+        const sit = certifId ? state.situations.find((s) => s.id === certifId) : undefined
+        return sit ? <ModalCertificat sit={sit} onClose={() => setCertifId(null)} /> : null
+      })()}
     </Card>
   )
 }
 
 // ---------- situations attendues (marchés actifs) ----------
-
-function situationDuMois(state: AppState, m: MarcheTravaux, mois: string): Situation | undefined {
-  return state.situations.find(
-    (s) =>
-      s.mois === mois &&
-      (s.marcheId === m.id ||
-        (s.projetId === m.projetId && fold(s.entreprise) === fold(m.entreprise))),
-  )
-}
+// le critère « situation du mois » vit dans src/entreprise.ts (5.20)
 
 function CarteAttendues() {
   const { state } = useStore()
@@ -890,6 +1078,8 @@ function CarteAttendues() {
   const moisCourant = monthKey(today)
   const tplRelance = gabarit(state, 'tpl-relance-situation')
   const actifs = state.marches.filter((m) => m.actif)
+  // 5.20 — le nom de l'entreprise ouvre sa fiche transverse (lecture)
+  const [fiche, setFiche] = useState<string | null>(null)
 
   return (
     <Card titre={`Situations attendues — ${fmtMois(moisCourant)}`}>
@@ -908,7 +1098,14 @@ function CarteAttendues() {
                   <LienProjet state={state} projetId={m.projetId} />
                 </td>
                 <td>{m.lot}</td>
-                <td>{m.entreprise}</td>
+                <td>
+                  <BtnLien
+                    title="Ouvrir la fiche entreprise — tout ce qu'on sait d'elle, tous projets"
+                    onClick={() => setFiche(m.entrepriseId || m.entreprise)}
+                  >
+                    {m.entreprise}
+                  </BtnLien>
+                </td>
                 <td className="right">
                   <Money v={m.montantInitialHT + m.avenantsHT} />
                 </td>
@@ -937,10 +1134,12 @@ function CarteAttendues() {
                         kind="ghost"
                         title="Ouvre Gmail avec une relance factuelle pré-remplie — l'envoi reste votre clic"
                         onClick={() =>
+                          // 5.20 — le MÊME brouillon que la fiche entreprise
+                          // (texte défini dans src/entreprise.ts, une fois)
                           ouvrirGmail(
                             m.contactEmail || '',
-                            `Situation de travaux ${fmtMois(monthKey(today))} — ${m.lot}`,
-                            `Bonjour,\n\nSauf erreur de notre part, nous n'avons pas reçu votre situation de travaux du mois de ${fmtMois(monthKey(today))} (${m.lot}) sur l'adresse dédiée situations@agence-ll.fr, prévue contractuellement chaque mois.\n\nMerci de nous la transmettre sous 5 jours ouvrés — le retard de transmission décale d'autant la vérification et le paiement.\n\nCordialement,\n${state.settings.nomAgence}`,
+                            sujetRelanceSituation(m, moisCourant),
+                            corpsRelanceSituation(m, moisCourant, state.settings.nomAgence),
                           )
                         }
                       >
@@ -962,6 +1161,7 @@ function CarteAttendues() {
         Les marchés de travaux se gèrent dans la fiche projet (carte « Marchés de travaux »).
         {tplRelance ? ` La relance copiée se colle dans le Projet Claude « ${tplRelance.projetClaude} » — brouillon Gmail, relu avant envoi.` : ''}
       </p>
+      {fiche && <FicheEntreprise nomOuId={fiche} onClose={() => setFiche(null)} />}
     </Card>
   )
 }
@@ -979,6 +1179,8 @@ function CarteRetenues() {
   const { state, update } = useStore()
   const today = useToday()
   const marches = state.marches.filter((m) => (m.tauxRG || 0) > 0)
+  // 5.20 — le nom de l'entreprise ouvre sa fiche transverse (lecture)
+  const [fiche, setFiche] = useState<string | null>(null)
 
   const majMarche = (id: string, patch: Partial<(typeof state.marches)[number]>) =>
     update((d) => {
@@ -1011,7 +1213,14 @@ function CarteRetenues() {
               <tr key={m.id}>
                 <td>
                   <strong>{m.lot}</strong>
-                  <div className="muted small">{m.entreprise}</div>
+                  <div className="muted small">
+                    <BtnLien
+                      title="Ouvrir la fiche entreprise — tout ce qu'on sait d'elle, tous projets"
+                      onClick={() => setFiche(m.entrepriseId || m.entreprise)}
+                    >
+                      {m.entreprise}
+                    </BtnLien>
+                  </div>
                 </td>
                 <td><LienProjet state={state} projetId={m.projetId} /></td>
                 <td className="right num">{fmtMoney(rg.travauxCumulHT)}</td>
@@ -1059,6 +1268,7 @@ function CarteRetenues() {
           })}
         </Table>
       )}
+      {fiche && <FicheEntreprise nomOuId={fiche} onClose={() => setFiche(null)} />}
     </Card>
   )
 }

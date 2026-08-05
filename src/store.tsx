@@ -145,6 +145,11 @@ function migrate(parsed: AppState): AppState {
   etat.transactionsBancaires = Array.isArray(parsed.transactionsBancaires) ? parsed.transactionsBancaires : []
   etat.importsBancaires = Array.isArray(parsed.importsBancaires) ? parsed.importsBancaires : []
   etat.lotsComptables = Array.isArray(parsed.lotsComptables) ? parsed.lotsComptables : []
+  // Position TVA — déclarations marquées à la main. Champ ajouté sans
+  // palier : un état antérieur n'a simplement rien déclaré DEPUIS le
+  // Cockpit, ce qui est la vérité — ses mois échus restent dans le
+  // « dû à l'État » jusqu'au geste, jamais soldés d'office.
+  etat.tvaDeclarations = Array.isArray(parsed.tvaDeclarations) ? parsed.tvaDeclarations : []
   // v15 → v16 : finance F6-F10 — pilotage unique (5 collections additives)
   etat.revisionsResteAFaire = Array.isArray(parsed.revisionsResteAFaire) ? parsed.revisionsResteAFaire : []
   etat.pistesAvenant = Array.isArray(parsed.pistesAvenant) ? parsed.pistesAvenant : []
@@ -174,6 +179,11 @@ function migrate(parsed: AppState): AppState {
   // collection naît vide — et sans note consignée, aucune relance ne part.
   etat.cotraitants = Array.isArray(parsed.cotraitants) ? parsed.cotraitants : []
   etat.notesHonoraires = Array.isArray(parsed.notesHonoraires) ? parsed.notesHonoraires : []
+  // 5.19 — certificats de paiement émis. Champ ajouté sans palier : un état
+  // antérieur n'a simplement rien émis DEPUIS le Cockpit, ce qui est la
+  // vérité. Jamais reconstruits ni recalculés ici : un certificat est un
+  // document signé, figé à l'émission — le « migrer » réécrirait l'histoire.
+  etat.certificats = Array.isArray(parsed.certificats) ? parsed.certificats : []
   amorcerEntreprises(etat)
   // v5 → v6 : journal d'interactions CRM. On amorce depuis les
   // derniereInteraction existantes pour ne rien perdre de l'historique.

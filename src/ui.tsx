@@ -180,6 +180,31 @@ export function EmptyState({ children }: { children: ReactNode }) {
   return <div className="empty">{children}</div>
 }
 
+/** bouton qui se présente comme un lien — pour ouvrir une fiche/modale
+ *  depuis un nom dans un tableau : un vrai <button> (focusable, activable
+ *  au clavier), pas un <span onClick> muet ni un <a> sans destination */
+export function BtnLien({
+  onClick,
+  title,
+  children,
+}: {
+  onClick: () => void
+  title?: string
+  children: ReactNode
+}) {
+  return (
+    <button
+      type="button"
+      className="linklike"
+      style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--accent, #2563eb)', font: 'inherit', textAlign: 'left' }}
+      title={title}
+      onClick={onClick}
+    >
+      {children}
+    </button>
+  )
+}
+
 /** notation 1-5 en étoiles — cliquable si onChange est fourni, sinon lecture seule */
 export function Etoiles({
   note,

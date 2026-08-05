@@ -10,6 +10,10 @@
 // ============================================================
 
 const DOMAINES_AUTORISES = new Set([
+  // 5.18 — indices de révision BT/TP : LECTURE SEULE d'un XML public sans
+  // clé (l'API SDMX de la BDM). Le flux complet des 84 séries avec tout
+  // leur historique pèse ~1,2 Mo : le plafond de 3 Mo tient sans retouche.
+  'bdm.insee.fr',
   'api.ted.europa.eu',
   'ted.europa.eu',
   'www.marches-publics.info',

@@ -210,6 +210,9 @@ jobs:
       - name: Week total is computed once for both time views
         run: npm run test:temps-mobile
 
+      - name: INSEE index feed parsing, merge authority and daily throttle
+        run: npm run test:indices-insee
+
       - name: No raw JSX tables outside the recensed files
         run: npm run test:tableaux
 

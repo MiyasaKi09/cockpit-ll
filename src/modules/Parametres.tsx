@@ -29,6 +29,7 @@ import {
   useToday, RowMenu } from '../ui'
 import { DOMAINE_AGENCE, download, fmtDate, fmtMois, fmtMoney, fmtPct, fold, todayISO, uid } from '../util'
 import { cleSerie } from '../revisionPrix'
+import { rafraichirIndicesInsee } from '../majIndices'
 import { coefSuggere, coutAgenceAnnuel, coutAnnuelPersonne, coutHorairePersonne, coutHoraireMoyen, coutJourObjectif, objectifCA, tauxVente, tauxVenteObjectif } from '../derive'
 import { assurerJeton, connecterGoogle, deconnecter, estConnecte } from '../google'
 import { useSurveillanceCtx } from '../surveillance'
@@ -795,6 +796,7 @@ function CarteIndicesBTP() {
   const [indice, setIndice] = useState('BT01')
   const [mois, setMois] = useState('')
   const [valeur, setValeur] = useState<number | null>(null)
+  const [majEnCours, setMajEnCours] = useState(false)
 
   // série puis mois DÉCROISSANT : la question du quotidien est « quel est le
   // dernier BT01 saisi ? », pas l'historique complet
@@ -843,9 +845,35 @@ function CarteIndicesBTP() {
   return (
     <Card titre="Indices de révision BTP (BT01, BT02, TP08…)">
       <p className="small muted" style={{ marginBottom: 8 }}>
-        Valeurs saisies à la main depuis les publications INSEE (parution à ~3 mois). La révision
-        théorique d'un marché prend le dernier mois publié de sa série et se marque « approximative »
-        tant que l'indice du mois demandé n'est pas paru — jamais en silence.
+        L'historique complet des séries se récupère <strong>tout seul</strong> depuis l'INSEE
+        (au démarrage, au plus une fois par jour). La saisie manuelle reste possible pour une
+        valeur attendue avant publication — la valeur INSEE du même mois la remplacera. La révision
+        théorique d'un marché prend le dernier mois publié et se marque « approximative » tant que
+        l'indice du mois demandé n'est pas paru — jamais en silence.
+      </p>
+      <p className="small" style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 }}>
+        {state.settings.indicesMajLe ? (
+          <span className="muted">Dernière récupération INSEE : {fmtDate(state.settings.indicesMajLe.slice(0, 10))}</span>
+        ) : (
+          <Badge tone="warn">jamais récupérés — la première ouverture en ligne s'en charge</Badge>
+        )}
+        <Btn
+          small
+          disabled={majEnCours}
+          onClick={() => {
+            setMajEnCours(true)
+            void rafraichirIndicesInsee(update).then((r) => {
+              setMajEnCours(false)
+              // Le geste MANUEL parle toujours, contrairement au réveil
+              // automatique : la personne a cliqué, le silence serait une
+              // absence de réponse — y compris « rien de nouveau ».
+              if (!r.ok) toast(`Récupération impossible : ${r.erreur}`, { tone: 'danger' })
+              else toast(r.message ?? 'Indices INSEE déjà à jour — rien de nouveau.')
+            })
+          }}
+        >
+          {majEnCours ? 'Récupération…' : 'Actualiser depuis l’INSEE'}
+        </Btn>
       </p>
       {seriesAttendues.length > 0 && (
         <p className="small muted" style={{ marginBottom: 8 }}>

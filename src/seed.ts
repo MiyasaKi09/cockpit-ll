@@ -334,6 +334,9 @@ export function seedState(): AppState {
       snoozes: {},
       vus: {},
       dernierImportExcel: null,
+      // 5.18 — jamais récupérés encore : la première ouverture EN LIGNE
+      // ramène l'historique complet des indices INSEE (src/majIndices.ts)
+      indicesMajLe: null,
     },
 
     projets: [

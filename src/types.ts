@@ -368,11 +368,14 @@ export interface MarcheTravaux {
   notes?: string
 }
 
-/** 5.4 — valeur mensuelle d'un indice de révision BTP (BT01, BT02, TP08…).
- *  Saisie À LA MAIN depuis les publications INSEE : elles paraissent à
- *  ~3 mois, il n'existe aucun flux à brancher — et une valeur recopiée se
- *  relit, là où une valeur « récupérée » se croirait juste. Le rapprochement
- *  avec `Marche.indiceRevision` se fait sans casse ni espaces
+/** 5.4/5.18 — valeur mensuelle d'un indice de révision BTP (BT01, TP08…).
+ *  Depuis 5.18, l'historique COMPLET des séries se récupère TOUT SEUL depuis
+ *  l'API SDMX publique de l'INSEE (src/indicesInsee.ts, src/majIndices.ts) —
+ *  la décision « saisie à la main seulement » de 5.4 est annulée par
+ *  l'agence. La saisie manuelle reste possible (une valeur attendue avant
+ *  publication), mais la valeur INSEE du même (code, mois) l'écrase : l'INSEE
+ *  est la source, la saisie n'était que l'attente. Le rapprochement avec
+ *  `Marche.indiceRevision` se fait sans casse ni espaces
  *  (src/revisionPrix.ts) : « bt01 » saisi ici et « BT01 » au marché
  *  désignent la même série. */
 export interface IndiceBTP {
@@ -1701,6 +1704,12 @@ export interface Settings {
   }
   /** dernier import par routine (« situations », « consultations », « courriers ») → date ISO */
   derniersImports?: Record<string, string>
+  /** 5.18 — dernière récupération RÉUSSIE des indices INSEE (horodatage ISO).
+   *  C'est l'anti-marteau : au plus un appel par 24 h
+   *  (src/indicesInsee.ts, `doitRafraichirIndices`). Partagé entre les 2
+   *  postes — l'un a récupéré, l'autre n'appelle pas. Jamais posé sur un
+   *  échec : le prochain démarrage doit pouvoir réessayer. */
+  indicesMajLe?: string | null
   /** dernier export JSON de sauvegarde (date ISO) */
   derniereSauvegarde?: string | null
   /** synchronisation Supabase (opt-in, offre gratuite) — config MACHINE-LOCALE :

@@ -19,6 +19,7 @@ import type {
 import { useStore } from '../store'
 import { useMoi } from '../moi'
 import { LIBELLE_GARANTIE, garantieDuMarche } from '../derive'
+import { serieEnRetard } from '../indicesInsee'
 import {
   DELAI_VISA_DEFAUT,
   LIBELLE_STATUT_VISA,
@@ -75,6 +76,7 @@ import { copier } from '../prompts'
 
 export function CarteMarches({ projet: p }: { projet: Projet }) {
   const { state, update, replace } = useStore()
+  const today = todayISO()
   const [modal, setModal] = useState<{ marche?: MarcheTravaux } | null>(null)
 
   const marches = state.marches.filter((m) => m.projetId === p.id)
@@ -154,10 +156,28 @@ export function CarteMarches({ projet: p }: { projet: Projet }) {
               <td>
                 {m.revision ? (
                   m.indiceRevision ? (
-                    <span className="small">
-                      {m.indiceRevision}
-                      {m.moisZero ? <span className="muted"> · base {m.moisZero}</span> : ''}
-                    </span>
+                    (() => {
+                      // 5.18 — deux manques à montrer, pas un : aucune valeur
+                      // du tout, et des valeurs PÉRIMÉES (> 4 mois d'écart —
+                      // l'INSEE publie à ~3 mois, au-delà c'est que la
+                      // récupération automatique échoue et il faut le voir ICI,
+                      // sur le marché concerné, pas dans une console).
+                      const retard = serieEnRetard(state.indicesBTP, m.indiceRevision!, today.slice(0, 7))
+                      return (
+                        <span className="small">
+                          {m.indiceRevision}
+                          {m.moisZero ? <span className="muted"> · base {m.moisZero}</span> : ''}
+                          {retard.enRetard && (
+                            <>
+                              {' '}
+                              <Badge tone="warn">
+                                {retard.dernierMois ? `indice périmé (${retard.dernierMois})` : 'indice ?'}
+                              </Badge>
+                            </>
+                          )}
+                        </span>
+                      )
+                    })()
                   ) : (
                     // révisable mais sans série : la révision théorique (5.4)
                     // répondra null — le manque doit se voir dans la liste

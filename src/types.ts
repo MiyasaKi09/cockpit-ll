@@ -365,6 +365,14 @@ export interface MarcheTravaux {
     /** € HT par jour de retard d'un document contractuel (DOE, PPSPS…) */
     documentRetardParJourHT?: number | null
   }
+  /** 5.19 — avance forfaitaire du marché HT (CCAG Travaux art. 13, souvent
+   *  5 % du montant initial). `null`/absent = pas d'avance : le certificat
+   *  de paiement n'a alors rien à résorber */
+  avanceForfaitaireHT?: number | null
+  /** 5.19 — part de l'avance déjà remboursée HT (cumul des résorptions
+   *  ÉMISES). Avancé par le geste « Émettre » du certificat, jamais
+   *  recalculé : c'est un fait contractuel, pas une dérivation */
+  avanceRembourseeHT?: number | null
   notes?: string
 }
 
@@ -673,6 +681,92 @@ export interface Situation {
   revisionHT?: number | null
   /** facture d'honoraires DET générée depuis cette situation validée (anti-doublon + lien) */
   factureId?: string | null
+}
+
+/** 5.19 — les lignes d'un certificat de paiement (état d'acompte), toutes
+ *  les rubriques A-E du document réel, en euros arrondis au centime. Cette
+ *  forme est celle qui se FIGE à l'émission : chaque valeur y est la valeur
+ *  RETENUE (proposition machine ou correction humaine — le document imprimé
+ *  ne dit pas la différence, et c'est voulu : c'est l'architecte qui signe). */
+export interface LignesCertificat {
+  // -- le marché --
+  baseHT: number
+  avenantsHT: number
+  totalMarcheHT: number
+  // -- avance forfaitaire (CCAG art. 13) --
+  avanceInitialeHT: number
+  /** avance versée AU PRÉSENT ÉTAT (0 en général : l'avance se mandate à la
+   *  notification, hors état mensuel — proposée à 0, corrigeable) */
+  avanceVerseePresentHT: number
+  avanceRembourseeAnterieureHT: number
+  /** résorption du présent état (proposée par la règle CCAG 65 % → 80 %) */
+  resorptionHT: number
+  avanceRembourseeTotaleHT: number
+  avanceResteHT: number
+  // -- A. acompte en prix de base --
+  cumulHT: number
+  anterieurHT: number
+  /** acompte du présent état = cumulé − antérieur */
+  acompteHT: number
+  // -- B. révision de prix --
+  revisionHT: number
+  revisionAnterieureHT: number
+  revisionOrigineHT: number
+  // -- C. TVA (présent état, puis cumuls depuis l'origine) --
+  tauxTVA: number
+  tvaAvanceHT: number
+  tvaAcompteHT: number
+  tvaRevisionHT: number
+  tvaAvanceCumulHT: number
+  tvaAcompteCumulHT: number
+  tvaRevisionCumulHT: number
+  /** total TTC du présent état, avant pénalités et retenue */
+  totalTTC: number
+  /** acomptes TTC cumulés depuis l'origine (avance comprise, résorptions déduites) */
+  acompteTTCCumul: number
+  // -- D. pénalités appliquées (5.2) à déduire — hors champ TVA --
+  penalitesHT: number
+  // -- E. retenue de garantie (0 si caution/GPD couvre le marché) --
+  retenueGarantieTTC: number
+  /** net à payer TTC du présent état */
+  netAPayerTTC: number
+  /** reste à exécuter HT (marché avenants compris − cumulé) */
+  resteHT: number
+}
+
+/** 5.19 — en-tête FIGÉ du certificat : le document réimprimé dans deux ans
+ *  doit porter le nom du MO et de l'agence D'ALORS, pas ceux d'aujourd'hui
+ *  (même règle que FactureFigee, audit F0) */
+export interface EnteteCertificat {
+  /** n° d'engagement / marché (numeroEngagement du projet) */
+  marcheNumero: string
+  objet: string
+  lot: string
+  moa: string
+  titulaire: string
+  /** type de garantie au moment de l'émission — dit POURQUOI la ligne E vaut ce qu'elle vaut */
+  garantie: TypeGarantie
+  agence: { nom: string; adresse?: string; siret?: string }
+}
+
+/** 5.19 — certificat de paiement ÉMIS vers le maître d'ouvrage, depuis une
+ *  situation validée. Un certificat émis est FIGÉ (comme FactureFigee) : le
+ *  recalculer plus tard avec d'autres indices ou un autre cumul changerait
+ *  un document déjà signé et transmis. La réouverture est une RÉIMPRESSION. */
+export interface CertificatPaiement {
+  id: string
+  marcheId: string
+  projetId: string
+  situationId: string
+  numero: number
+  mois: string // 'AAAA-MM'
+  entete: EnteteCertificat
+  /** toutes les rubriques A-E, valeurs retenues, figées à l'émission */
+  lignes: LignesCertificat
+  /** copie de lignes.netAPayerTTC — le chiffre des listes, sans déplier */
+  netAPayerTTC: number
+  emisLe: string // ISO
+  emisPar: string
 }
 
 export type StatutFacture = 'prevue' | 'emise' | 'encaissee'
@@ -1979,6 +2073,10 @@ export interface AppState {
    *  affiché FACE au convenu et au budget externe des phases — jamais versé
    *  dans le calcul de marge (audit 5.14) */
   notesHonoraires: NoteHonoraires[]
+  /** 5.19 — certificats de paiement ÉMIS (états d'acompte vers le MO),
+   *  figés à l'émission : la machine propose (src/certificat.ts), l'humain
+   *  corrige et émet, le document ne se recalcule plus jamais */
+  certificats: CertificatPaiement[]
 }
 
 /** document du corpus de l'assistant : texte réglementaire (Légifrance,

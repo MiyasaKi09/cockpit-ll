@@ -44,7 +44,16 @@ import {
 } from '../derive'
 import type { StatutRG } from '../derive'
 import { SEUIL_ECART_AVANCEMENT_PTS, controleSituation } from '../controleSituation'
-import { ouvrirDecompteSituationPDF } from '../pdf'
+import {
+  avanceRembourseeApresEmission,
+  certificatDeSituation,
+  construireCertificat,
+  figerCertificat,
+} from '../certificat'
+import type { SurchargesCertificat } from '../certificat'
+import type { LignesCertificat } from '../types'
+import { useMoi } from '../moi'
+import { ouvrirCertificatPaiementPDF, ouvrirDecompteSituationPDF } from '../pdf'
 import { assemble, contexteMarche } from '../prompts'
 import {
   importerSituations,
@@ -792,11 +801,161 @@ function CarteAVerifier() {
   )
 }
 
+// ---------- certificat de paiement (5.19) ----------
+
+/** libellés des lignes du certificat, dans l'ordre du document réel —
+ *  `null` en libellé = séparateur de rubrique */
+const LIGNES_CERTIFICAT: (readonly [keyof LignesCertificat | null, string, { fort?: boolean }?])[] = [
+  [null, 'Le marché'],
+  ['baseHT', 'Montant du marché (base) HT'],
+  ['avenantsHT', 'Avenants HT'],
+  ['totalMarcheHT', 'Total marché HT', { fort: true }],
+  [null, 'Avance forfaitaire (CCAG art. 13)'],
+  ['avanceInitialeHT', 'Avance forfaitaire initiale HT'],
+  ['avanceRembourseeAnterieureHT', 'Avance déjà remboursée HT (états antérieurs)'],
+  ['avanceVerseePresentHT', 'Avance versée au présent état HT'],
+  ['resorptionHT', 'Résorption du présent état HT (à déduire)'],
+  ['avanceResteHT', 'Reste à rembourser HT', { fort: true }],
+  [null, 'A — Acompte en prix de base'],
+  ['cumulHT', 'Travaux exécutés cumulés HT (décompte)'],
+  ['anterieurHT', 'À déduire : décompte antérieur HT'],
+  ['acompteHT', 'Acompte en prix de base HT (cumulé − antérieur)', { fort: true }],
+  [null, 'B — Révision de prix'],
+  ['revisionHT', 'Révision du présent état HT'],
+  ['revisionAnterieureHT', 'Révisions antérieures HT'],
+  ['revisionOrigineHT', 'Révision depuis l’origine HT', { fort: true }],
+  [null, 'C — TVA'],
+  ['tauxTVA', 'Taux de TVA (fraction : 0,2 = 20 %)'],
+  ['tvaAvanceHT', 'TVA sur avance (présent état)'],
+  ['tvaAcompteHT', 'TVA sur acompte (présent état)'],
+  ['tvaRevisionHT', 'TVA sur révision (présent état)'],
+  ['totalTTC', 'Total acompte TTC — présent état', { fort: true }],
+  ['acompteTTCCumul', 'Acomptes TTC cumulés depuis l’origine'],
+  [null, 'D & E — À déduire'],
+  ['penalitesHT', 'Pénalités appliquées (5.2)'],
+  ['retenueGarantieTTC', 'Retenue de garantie TTC'],
+  [null, 'Le net'],
+  ['netAPayerTTC', 'NET À PAYER TTC — présent état', { fort: true }],
+  ['resteHT', 'Reste à exécuter HT'],
+]
+
+/** modale d'émission : chaque ligne calculée est une PROPOSITION corrigeable
+ *  (le document réel le prouve — la RG de l'état n° 4 sort d'une lecture
+ *  contractuelle qu'aucune règle ne produit) ; « Émettre » FIGE et ouvre le
+ *  PDF. Un certificat émis se rouvre en LECTURE, il ne se recalcule pas. */
+function ModalCertificat({ sit, onClose }: { sit: Situation; onClose: () => void }) {
+  const { state, update } = useStore()
+  const today = useToday()
+  const moi = useMoi()
+  // qui émet : même règle que le visa et la pénalité — la personne reconnue,
+  // à défaut la première de la liste (pas de signature vide)
+  const signataire = moi.nom ?? state.settings.personnes[0]
+  const [surcharges, setSurcharges] = useState<SurchargesCertificat>({})
+  const [numero, setNumero] = useState<number | null>(null)
+
+  const construit = construireCertificat(state, sit.id, numero === null ? surcharges : { ...surcharges, numero })
+  if (!construit) {
+    return (
+      <Modal titre="Certificat de paiement" onClose={onClose}>
+        <p>Rattachez d'abord la situation à un marché (bouton « Éditer ») : sans marché, ni montant de base, ni avance, ni garantie — rien à certifier.</p>
+      </Modal>
+    )
+  }
+
+  const corriger = (cle: keyof LignesCertificat) => (v: number | null) =>
+    setSurcharges((prev) => {
+      const suiv = { ...prev }
+      if (v === null) delete suiv[cle]
+      else suiv[cle] = v
+      return suiv
+    })
+
+  const emettre = () => {
+    if (certificatDeSituation(state, sit.id)) {
+      toast('Un certificat est déjà émis pour cette situation — rouvrez-le en réimpression.', { tone: 'danger' })
+      return
+    }
+    // id calculé AVANT la mutation (producteur rejouable)
+    const id = uid('cert')
+    const cert = figerCertificat(construit, { id, emisLe: today, emisPar: signataire })
+    update((d) => {
+      d.certificats.push(cert)
+      // la résorption émise avance le compteur du marché : l'état suivant
+      // proposera la suite, pas la même résorption
+      const m = d.marches.find((x) => x.id === cert.marcheId)
+      if (m && cert.lignes.resorptionHT > 0) m.avanceRembourseeHT = avanceRembourseeApresEmission(m, cert)
+    })
+    ouvrirCertificatPaiementPDF(cert)
+    toast(`Certificat n° ${cert.numero} émis et figé (${fmtMoney(cert.netAPayerTTC, true)} TTC) — il se rouvrira en réimpression, jamais en recalcul.`, { tone: 'ok' })
+    onClose()
+  }
+
+  return (
+    <Modal titre={`Certificat de paiement — ${sit.entreprise} (${fmtMois(sit.mois)})`} onClose={onClose} large>
+      <p className="muted small" style={{ marginTop: 0 }}>
+        Chaque ligne est une <strong>proposition</strong> : corrigez ce que le contrat dit autrement
+        (l'état n° 4 de la MAM de Chamant retenait 5 % de RG sur le seul avenant, GPD sur la base —
+        aucune règle générale ne produit ça). Le PDF imprime la valeur retenue.
+      </p>
+      <div className="form-row">
+        <Field label="N° du certificat" hint={`proposé : ${construit.numeroPropose} (max des états émis du marché + 1)`}>
+          <NumInput value={numero ?? construit.numeroPropose} onChange={setNumero} />
+        </Field>
+      </div>
+      <Table compact head={['Rubrique', 'Proposé', 'Correction', 'Retenu']}>
+        {LIGNES_CERTIFICAT.map(([cle, libelle, opts], i) =>
+          cle === null ? (
+            <tr key={i}>
+              <td colSpan={4} style={{ fontWeight: 700, background: 'var(--bg-soft, #f6f7fa)' }}>{libelle}</td>
+            </tr>
+          ) : (
+            <tr key={i} style={opts?.fort ? { fontWeight: 700 } : undefined}>
+              <td>{libelle}</td>
+              <td className="right">
+                {cle === 'tauxTVA' ? fmtPct(construit.proposition[cle]) : <Money v={construit.proposition[cle]} cents />}
+              </td>
+              <td style={{ width: 120 }}>
+                <NumInput
+                  value={surcharges[cle] ?? null}
+                  onChange={corriger(cle)}
+                  placeholder="—"
+                  ariaLabel={`Correction — ${libelle}`}
+                />
+              </td>
+              <td className="right">
+                {cle === 'tauxTVA' ? fmtPct(construit.lignes[cle]) : <Money v={construit.lignes[cle]} cents />}
+              </td>
+            </tr>
+          ),
+        )}
+      </Table>
+      {construit.mentions.length > 0 && (
+        <div className="muted small" style={{ marginTop: 8 }}>
+          {construit.mentions.map((m, i) => (
+            <div key={i}>· {m}</div>
+          ))}
+        </div>
+      )}
+      <div className="form-foot">
+        <Btn kind="ghost" onClick={onClose}>
+          Annuler
+        </Btn>
+        <span className="spacer" />
+        <Btn kind="primary" onClick={emettre}>
+          Émettre le certificat n° {construit.numero} et ouvrir le PDF
+        </Btn>
+      </div>
+    </Modal>
+  )
+}
+
 // ---------- historique ----------
 
 function CarteHistorique() {
   const { state, update } = useStore()
   const today = useToday()
+  // situation dont on prépare le certificat de paiement (5.19)
+  const [certifId, setCertifId] = useState<string | null>(null)
   const traitees = state.situations
     .filter((s) => s.statut !== 'a_verifier')
     .sort((a, b) => b.mois.localeCompare(a.mois) || b.dateReception.localeCompare(a.dateReception))
@@ -844,9 +1003,36 @@ function CarteHistorique() {
                     </td>
                     <td>
                       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                        <Btn small kind="ghost" onClick={() => ouvrirDecompteSituationPDF(state, s)} title="Décompte / certificat de paiement">
+                        <Btn small kind="ghost" onClick={() => ouvrirDecompteSituationPDF(state, s)} title="Décompte de vérification (interne, vers l'entreprise)">
                           Décompte
                         </Btn>
+                        {(() => {
+                          // 5.19 — certificat de paiement vers le MO : émis = FIGÉ,
+                          // il se rouvre en réimpression, jamais en recalcul
+                          const cert = certificatDeSituation(state, s.id)
+                          if (cert)
+                            return (
+                              <Btn
+                                small
+                                kind="ghost"
+                                onClick={() => ouvrirCertificatPaiementPDF(cert)}
+                                title={`Émis le ${fmtDate(cert.emisLe)} par ${cert.emisPar} — réimpression du document figé`}
+                              >
+                                Certificat n° {cert.numero} ✓
+                              </Btn>
+                            )
+                          if (s.statut === 'validee' && marcheDeSituation(state, s))
+                            return (
+                              <Btn
+                                small
+                                onClick={() => setCertifId(s.id)}
+                                title="Certificat de paiement (état d'acompte) vers le maître d'ouvrage — chaque ligne proposée reste corrigeable avant émission"
+                              >
+                                Certificat de paiement
+                              </Btn>
+                            )
+                          return null
+                        })()}
                         {s.statut === 'validee' && (
                           <Btn
                             small
@@ -869,6 +1055,10 @@ function CarteHistorique() {
           )
         })
       )}
+      {(() => {
+        const sit = certifId ? state.situations.find((s) => s.id === certifId) : undefined
+        return sit ? <ModalCertificat sit={sit} onClose={() => setCertifId(null)} /> : null
+      })()}
     </Card>
   )
 }

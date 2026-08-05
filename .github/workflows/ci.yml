@@ -75,6 +75,9 @@ jobs:
       - name: Theoretical price revision from BTP indices
         run: npm run test:revision-prix
 
+      - name: Payment certificate matches the real document, frozen once issued
+        run: npm run test:certificat
+
       - name: Margin drift audited against hand-computed cases
         run: npm run test:derive-marge
 

@@ -1108,6 +1108,10 @@ export function seedState(): AppState {
     // fausserait le reçu affiché face au convenu.
     cotraitants: [],
     notesHonoraires: [],
+    // 5.19 — vide : un certificat de paiement « EXEMPLE » ressemblerait à un
+    // document contractuel émis vers un maître d'ouvrage — et sa numérotation
+    // décalerait celle des vrais états du marché (max + 1).
+    certificats: [],
 
     // v14 — finance F0/F1 : remplies par l'amorçage ci-dessous
     // (les factures « prévues » du seed deviennent des échéances)

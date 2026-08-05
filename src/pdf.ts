@@ -2,7 +2,7 @@
 // imprimable propre s'ouvre et le navigateur « Enregistre en
 // PDF » (Ctrl+P). Déterministe, zéro service externe.
 
-import type { AppState, Facture, FactureFigee, Situation } from './types'
+import type { AppState, CertificatPaiement, Facture, FactureFigee, Situation } from './types'
 // 5.15 — la mention d'exigibilité TVA est un RÉGLAGE (à confirmer avec le
 // cabinet), jamais une phrase codée en dur : la coder ici imprimerait un
 // régime fiscal faux le jour où le cabinet confirme l'option sur les débits.
@@ -277,6 +277,128 @@ ${d.coherences.length > 0 ? `<div class="warn"><strong>Points à vérifier :</st
   <div class="box">Certifié par la maîtrise d'œuvre — ${echapper(s.nomAgence)}<div class="line">Date & signature</div></div>
 </div>
 <div class="muted" style="margin-top:24px;font-size:11px">Document indicatif établi par la maîtrise d'œuvre pour proposition de paiement au maître d'ouvrage. La retenue de garantie est libérée à la levée des réserves (délai de garantie de parfait achèvement), sauf caution de substitution.</div>
+</body></html>`
+
+  const w = window.open('', '_blank')
+  if (!w) return
+  w.document.write(html)
+  w.document.close()
+}
+
+/** 5.19 — certificat de paiement (état d'acompte) vers le maître d'ouvrage.
+ *  Le rendu part du bloc FIGÉ et de lui seul — aucune lecture de l'état
+ *  courant, aucun recalcul : réimprimer dans deux ans, avec d'autres indices
+ *  et un autre cumul, doit redonner le document signé (même règle que
+ *  ouvrirFactureFigee, audit F0). Rubriques A-E du document réel, colonnes
+ *  « présent état » / « cumulés depuis l'origine », cartouche « BON À PAYER LE ». */
+export function ouvrirCertificatPaiementPDF(cert: CertificatPaiement): void {
+  const e = cert.entete
+  const l = cert.lignes
+  const m = (v: number) => fmtMoney(v, true)
+  const cell = (v: number | null) => `<td class="r">${v === null ? '·' : m(v)}</td>`
+  const ligne = (
+    libelle: string,
+    present: number | null,
+    cumule: number | null,
+    opts: { fort?: boolean; retrait?: boolean; section?: boolean } = {},
+  ) =>
+    `<tr${opts.fort ? ' class="fort"' : opts.section ? ' class="section"' : ''}><td${opts.retrait ? ' style="padding-left:24px"' : ''}>${libelle}</td>${cell(present)}${cell(cumule)}</tr>`
+  const garantieLibelle =
+    e.garantie === 'retenue' ? 'Retenue de garantie' : `Retenue de garantie (${LIBELLE_GARANTIE[e.garantie]} fournie)`
+
+  const html = `<!doctype html>
+<html lang="fr"><head><meta charset="utf-8"><title>Certificat de paiement n° ${cert.numero} — ${echapper(e.titulaire)}</title>
+<style>
+  body { font-family: -apple-system, 'Segoe UI', Roboto, Arial, sans-serif; color: #1a2233; margin: 44px; font-size: 13px; }
+  header { display: flex; justify-content: space-between; margin-bottom: 24px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .muted { color: #5a6478; }
+  .bloc { margin: 14px 0; }
+  .entete { display: flex; gap: 24px; flex-wrap: wrap; border: 1px solid #c8cdd8; border-radius: 6px; padding: 12px 14px; }
+  .entete > div { min-width: 180px; }
+  .entete .kl { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: #5a6478; }
+  table.dc { width: 100%; border-collapse: collapse; margin-top: 12px; }
+  table.dc th { text-align: left; border-bottom: 2px solid #1a2233; padding: 7px 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+  table.dc th.r { text-align: right; }
+  table.dc td { padding: 7px 6px; border-bottom: 1px solid #e3e6ec; }
+  table.dc td.r { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  table.dc tr.fort td { font-weight: 700; border-bottom: 2px solid #1a2233; }
+  table.dc tr.section td { font-weight: 700; background: #f2f4f9; text-transform: uppercase; font-size: 11px; letter-spacing: .04em; }
+  table.av { border-collapse: collapse; margin-top: 8px; }
+  table.av td { padding: 4px 14px 4px 0; }
+  table.av td.r { text-align: right; font-variant-numeric: tabular-nums; }
+  .net { margin-top: 16px; padding: 13px 16px; background: #f2f6ff; border-radius: 8px; display: flex; justify-content: space-between; align-items: baseline; }
+  .net .v { font-size: 21px; font-weight: 800; }
+  .sign { margin-top: 36px; display: flex; justify-content: space-between; gap: 20px; font-size: 12px; color: #5a6478; }
+  .sign .box { flex: 1; border: 1px solid #c8cdd8; border-radius: 6px; padding: 10px 12px; min-height: 110px; }
+  .sign .box strong { color: #1a2233; }
+  .sign .line { margin-top: 46px; border-top: 1px solid #97a0b0; padding-top: 4px; }
+  .impression { position: fixed; top: 12px; right: 12px; }
+  @media print { .impression { display: none; } body { margin: 20px; } }
+</style></head><body>
+<button class="impression" onclick="window.print()">Imprimer / PDF</button>
+<header>
+  <div>
+    <h1>${echapper(e.agence.nom)}</h1>
+    <div class="muted">Maîtrise d'œuvre${e.agence.adresse ? `<br>${echapper(e.agence.adresse)}` : ''}${e.agence.siret ? `<br>SIRET ${echapper(e.agence.siret)}` : ''}</div>
+  </div>
+  <div style="text-align:right">
+    <h1>Certificat de paiement n° ${cert.numero}</h1>
+    <div class="muted">État d'acompte — mois ${echapper(fmtMois(cert.mois))}<br>Émis le ${fmtDate(cert.emisLe)} par ${echapper(cert.emisPar)}</div>
+  </div>
+</header>
+
+<div class="entete">
+  <div><div class="kl">Maître d'ouvrage</div>${echapper(e.moa || '—')}</div>
+  <div><div class="kl">Opération</div>${echapper(e.objet)}</div>
+  <div><div class="kl">Marché n°</div>${echapper(e.marcheNumero || '—')}</div>
+  <div><div class="kl">Lot</div>${echapper(e.lot || '—')}</div>
+  <div><div class="kl">Titulaire</div>${echapper(e.titulaire)}</div>
+</div>
+
+<div class="bloc">
+  <table class="av">
+    <tr><td>Montant du marché (base) HT</td><td class="r">${m(l.baseHT)}</td>
+        <td style="padding-left:32px">Avance forfaitaire initiale HT</td><td class="r">${m(l.avanceInitialeHT)}</td></tr>
+    <tr><td>Avenants HT</td><td class="r">${m(l.avenantsHT)}</td>
+        <td style="padding-left:32px">Avance remboursée HT</td><td class="r">${m(l.avanceRembourseeTotaleHT)}</td></tr>
+    <tr><td><strong>Total marché HT</strong></td><td class="r"><strong>${m(l.totalMarcheHT)}</strong></td>
+        <td style="padding-left:32px">Reste à rembourser HT</td><td class="r">${m(l.avanceResteHT)}</td></tr>
+  </table>
+</div>
+
+<table class="dc">
+  <thead><tr><th>Rubrique</th><th class="r">Présent état</th><th class="r">Cumulés depuis l'origine</th></tr></thead>
+  <tbody>
+  ${ligne('A — Acompte en prix de base', null, null, { section: true })}
+  ${ligne('Avance forfaitaire versée', l.avanceVerseePresentHT, l.avanceInitialeHT)}
+  ${ligne(`Décompte n° ${cert.numero} — travaux exécutés HT`, null, l.cumulHT)}
+  ${ligne('À déduire : décompte antérieur HT', null, l.anterieurHT, { retrait: true })}
+  ${ligne('Résorption de l’avance forfaitaire', -l.resorptionHT, -l.avanceRembourseeTotaleHT, { retrait: true })}
+  ${ligne('Acompte en prix de base HT (cumulé − antérieur)', l.acompteHT, null, { fort: true })}
+  ${ligne('B — Révision de prix', null, null, { section: true })}
+  ${ligne('Révision du présent état HT', l.revisionHT, null)}
+  ${ligne('Révisions antérieures HT', null, l.revisionAnterieureHT, { retrait: true })}
+  ${ligne('Révision depuis l’origine HT', null, l.revisionOrigineHT, { fort: true })}
+  ${ligne(`C — TVA (${fmtPct(l.tauxTVA, 0)})`, null, null, { section: true })}
+  ${ligne('TVA sur avance', l.tvaAvanceHT, l.tvaAvanceCumulHT)}
+  ${ligne('TVA sur acompte', l.tvaAcompteHT, l.tvaAcompteCumulHT)}
+  ${ligne('TVA sur révision', l.tvaRevisionHT, l.tvaRevisionCumulHT)}
+  ${ligne('Total acompte TTC', l.totalTTC, l.acompteTTCCumul, { fort: true })}
+  ${ligne('D — Pénalités appliquées à déduire', -l.penalitesHT, null)}
+  ${ligne(`E — ${garantieLibelle}`, -l.retenueGarantieTTC, null)}
+  </tbody>
+</table>
+
+<div class="net"><span><strong>NET À PAYER</strong> au titulaire — présent état TTC</span><span class="v">${m(l.netAPayerTTC)}</span></div>
+
+<p class="muted" style="margin-top:12px">Reste à exécuter HT (marché avenants compris − travaux cumulés) : <strong>${m(l.resteHT)}</strong></p>
+
+<div class="sign">
+  <div class="box"><strong>Certifié exact par la maîtrise d'œuvre</strong><br>${echapper(e.agence.nom)}<div class="line">Le ${fmtDate(cert.emisLe)} — signature</div></div>
+  <div class="box"><strong>Le maître d'ouvrage</strong><br>${echapper(e.moa || '')}<div class="line">BON À PAYER LE&nbsp;: ......................... — signature</div></div>
+</div>
+<div class="muted" style="margin-top:20px;font-size:11px">Certificat établi depuis la situation de travaux n° ${cert.numero} vérifiée par la maîtrise d'œuvre. Chiffres figés à l'émission ; toute correction ultérieure passe par un état rectificatif, jamais par la réédition de celui-ci.</div>
 </body></html>`
 
   const w = window.open('', '_blank')

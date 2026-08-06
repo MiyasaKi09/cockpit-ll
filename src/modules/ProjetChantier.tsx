@@ -2,14 +2,16 @@
 // réunions de chantier avec l'assistant CR (audio → transcription
 // sans API → CR au style de l'agence → relecture → diffusion).
 
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react'
 import type {
   DesordreGPA,
+  EtatPointSeance,
   EvenementMarche,
   Intemperie,
   MarcheTravaux,
   NatureIntemperie,
   PhaseCode,
+  PointSeance,
   Projet,
   ReunionChantier,
   StatutReunion,
@@ -21,10 +23,28 @@ import { useStore } from '../store'
 import { useMoi } from '../moi'
 import { LIBELLE_GARANTIE, garantieDuMarche } from '../derive'
 // C1/C2 — l'avancement d'un lot et le prédicat « entreprise à confirmer »
-// ont DÉJÀ leur autorité (src/chantier.ts) : le bloc de préparation de
-// réunion les importe. Les recopier ici donnerait deux chiffres possibles
-// pour la même question — le défaut n° 1 de l'audit (constat R3).
+// ont DÉJÀ leur autorité (src/chantier.ts) : les cartes de cet onglet les
+// importent. Les recopier ici donnerait deux chiffres possibles pour la
+// même question — le défaut n° 1 de l'audit (constat R3).
 import { avancementLot, tacheAConfirmer } from '../chantier'
+// C3 — le relevé de séance : rangement, ancienneté, report des points non
+// résolus et propositions de la machine. TOUT vient de là, y compris pour
+// le papier (src/pdf.ts appelle la même `preparerSeance`) : c'est ce qui
+// rend impossible que l'écran et le document imprimé montrent deux ordres
+// du jour différents.
+import {
+  LIBELLE_ETAT_POINT,
+  ORDRE_ETATS_POINT,
+  libelleAnciennete,
+  pointAvecEtat,
+  pointCorrige,
+  pointDepuisProposition,
+  pointNouveau,
+  pointResolu,
+  preparerSeance,
+  type ContexteGeste,
+  type PropositionSeance,
+} from '../seanceChantier'
 // R2 — le rapprochement nom → entreprise canonique a DÉJÀ son autorité
 // (src/entreprise.ts) : la datalist du marché la réutilise au lieu d'en
 // écrire une seconde, sinon « Martin BTP » et « SARL Martin BTP »
@@ -2155,105 +2175,146 @@ function participantsParDefaut(state: ReturnType<typeof useStore>['state'], p: P
   return lignes.filter(Boolean).join('\n')
 }
 
-/** C1 — le gabarit d'impression (`ouvrirPreparationReunionPDF`, src/pdf.ts)
- *  est LIVRÉ et importé en tête de ce fichier.
+/** C3 — le gabarit d'impression (`ouvrirPreparationReunionPDF`, src/pdf.ts)
+ *  imprime CE relevé, et il ne le refait pas : il appelle `preparerSeance`,
+ *  exactement comme ce bloc.
  *
- *  Aucun chiffre ne voyage d'ici vers l'impression : le gabarit RE-DÉRIVE les
- *  siens des mêmes sélecteurs que ce bloc (`avancementLot`,
- *  `penaliteEncourue` + `prolongationDelai`, `visasEnAttente` /
- *  `visasEnRetard`, `desordresOuverts`, `tacheAConfirmer`). Deux lectures de
- *  la même autorité ne peuvent pas diverger ; deux calculs, si. Le filtre
- *  « hors phase » ci-dessous est le même des deux côtés : s'il bouge ici, il
- *  bouge là-bas (le commentaire jumeau est dans src/pdf.ts). */
+ *  C'était déjà l'intention du lot C — « deux lectures de la même autorité
+ *  ne peuvent pas diverger ; deux calculs, si » — mais l'écran et le papier
+ *  portaient chacun LEUR filtre, et le commentaire jumeau ne tenait que par
+ *  la discipline. Ils n'en ont plus qu'un, et il vit dans
+ *  `src/seanceChantier.ts` : le rangement des points, le report de ce qui
+ *  n'est pas résolu, le comptage de l'ancienneté et les propositions de la
+ *  machine sortent de la MÊME fonction. Si le filtre bouge, il bouge des
+ *  deux côtés parce qu'il n'existe qu'une fois. (Le commentaire jumeau est
+ *  dans src/pdf.ts.) */
 
-/** C1 — « Préparer la réunion » : le symétrique AMONT de l'assistant de CR,
- *  qui n'existait qu'en aval.
+/** C3 — LE RELEVÉ DE SÉANCE, en lieu et place du bloc « Préparer la
+ *  réunion » du lot C.
  *
- *  Préparer une réunion de chantier coûtait douze gestes sur quatre écrans et
- *  une synthèse faite de tête (parcours 6 de l'audit d'usage) alors que
- *  CHAQUE brique était déjà calculée et testée ailleurs. Ce bloc n'en
- *  recalcule aucune : il ASSEMBLE les sélecteurs qui font autorité, lot par
- *  lot — l'ordre du jour d'une réunion de chantier se tient lot par lot.
+ *  Ce que l'agence a refusé, mot pour mot : « je ne vois pas où créer ça, le
+ *  modifier, etc. Il faudrait que ça soit à la limite une version du CR
+ *  précédent, ajusté. Il faudrait pouvoir faire une sorte de to-do
+ *  améliorée, où on garde tout mais où tout se range en fonction de ce qui
+ *  est fait ou non. » Elle a raison : le bloc précédent assemblait des
+ *  chiffres EN LECTURE. Un tableau de bord n'est pas un ordre du jour.
  *
- *  Il n'écrit rien et ne décide rien : les gestes (viser, appliquer une
- *  pénalité, confirmer une entreprise, lever un désordre) restent chacun
- *  dans sa carte. C'est une page à lire avant d'entrer en séance. */
-function PreparationReunion({
-  projet: p,
-  prochaine,
-}: {
-  projet: Projet
-  prochaine: ReunionChantier | null
-}) {
-  const { state } = useStore()
+ *  Ici, tout se fait sans quitter l'écran : inscrire un point, le corriger,
+ *  changer son état (LE geste de la réunion — une liste, un choix), accepter
+ *  ou écarter ce que la machine propose, un par un. Chaque geste laisse un
+ *  « Annuler ».
+ *
+ *  Ce bloc REMPLACE la préparation, il ne s'ajoute pas à côté : l'agence ne
+ *  veut pas deux endroits, et elle a raison une seconde fois — deux endroits
+ *  pour la même question, c'est deux réponses possibles. */
+function ReleveSeance({ projet: p }: { projet: Projet }) {
+  const { state, update, replace } = useStore()
   const today = todayISO()
-
+  // UNE seule autorité : l'ordre du jour, le rangement, l'ancienneté et les
+  // propositions viennent tous de src/seanceChantier.ts — rien n'est
+  // recalculé ici, et le papier lit exactement la même fonction
+  const ordre = preparerSeance(state, p.id, { maintenant: today })
   const marches = state.marches.filter((m) => m.projetId === p.id)
-  const visasDuProjet = state.visas.filter((v) => v.projetId === p.id)
-  const aViser = visasEnAttente(visasDuProjet)
-  const enRetard = visasEnRetard(visasDuProjet, today)
-  const ouverts = desordresOuverts(state.desordresGPA.filter((d) => d.projetId === p.id))
-  // les pénalités ENCOURUES non encore décidées : une pénalité appliquée est
-  // une décision signifiée, elle n'a plus sa place dans un ordre du jour
-  const encourus = state.evenementsMarche.filter((e) => e.projetId === p.id && !e.penaliteAppliquee)
-  const marcheDeTache = (marcheId: string | null | undefined) =>
-    marcheId ? marches.find((m) => m.id === marcheId) ?? null : null
-  // « entreprise à confirmer » : le prédicat de l'alerte de l'accueil, pas un
-  // second seuil écrit ici (src/chantier.ts, un mois à l'avance)
-  const aConfirmer = state.tachesChantier.filter(
-    (t) => t.projetId === p.id && tacheAConfirmer(t, marcheDeTache(t.marcheId), today),
-  )
 
-  const lignes = marches
-    .map((m) => {
-      const visasLot = aViser.filter((v) => v.marcheId === m.id)
-      const retardLot = enRetard.filter((v) => v.marcheId === m.id)
-      const evLot = encourus.filter((e) => e.marcheId === m.id)
-      // même déduction d'intempéries que le journal des pénalités : une
-      // seule source (`prolongationDelai`), sinon la préparation annoncerait
-      // un montant que l'écran de décision ne confirmerait pas
-      const deduction = prolongationDelai(m, state.intemperies)
-      const chiffres = evLot.map((e) => penaliteEncourue(e, m.penalites, deduction))
-      const chiffrables = chiffres.filter((c) => c !== null)
-      return {
-        m,
-        avancement: avancementLot(state.tachesChantier, m.id),
-        visasLot,
-        retardLot,
-        evLot,
-        chiffrables: chiffrables.length,
-        // null ≠ 0 : rien de chiffrable ⇒ pas de total, un badge qui le dit
-        totalEncouruHT: chiffrables.reduce((t, c) => t + c!.montantHT, 0),
-        tauxManquant: chiffres.some((c) => c === null),
-        desordresLot: ouverts.filter((d) => d.marcheId === m.id),
-        confirmerLot: aConfirmer.filter((t) => t.marcheId === m.id),
-      }
-    })
-    // hors phase : un marché soldé qui n'a plus rien à dire ne prend pas une
-    // ligne de l'ordre du jour — il reste entier dans la carte Marchés
-    .filter(
-      (l) =>
-        l.m.actif ||
-        l.visasLot.length > 0 ||
-        l.evLot.length > 0 ||
-        l.desordresLot.length > 0 ||
-        l.confirmerLot.length > 0,
+  const [edition, setEdition] = useState<PointSeance | null>(null)
+  // la ligne de saisie : quatre champs, toujours à la même place, jamais une
+  // modale — inscrire un point est le deuxième geste le plus fréquent de la
+  // séance, et il doit coûter une frappe et une touche Entrée
+  const [libelle, setLibelle] = useState('')
+  const [marcheId, setMarcheId] = useState('')
+  const [qui, setQui] = useState('')
+  const [echeance, setEcheance] = useState<string | null>(null)
+
+  const optionsLot = [
+    { value: '', label: '— aucun lot —' },
+    ...marches.map((m) => ({ value: m.id, label: `${m.lot} · ${m.entreprise}` })),
+  ]
+
+  const contexte = (): ContexteGeste => ({
+    id: uid('pts'),
+    projetId: p.id,
+    maintenant: today,
+    // le point naît à la séance qu'on prépare quand il y en a une : c'est
+    // elle qui datera son ancienneté aux séances suivantes
+    reunionId: ordre.seance ? ordre.seance.id : null,
+  })
+
+  const ajouter = () => {
+    if (!libelle.trim()) return
+    const snap = state
+    const point = pointNouveau(
+      { libelle, marcheId: marcheId || null, responsable: qui, echeance },
+      contexte(),
     )
+    update((d) => {
+      d.pointsSeance.push(point)
+    })
+    setLibelle('')
+    setQui('')
+    setEcheance(null)
+    toast(`Point inscrit à l’ordre du jour : « ${point.libelle} ».`, {
+      tone: 'ok',
+      undo: () => replace(snap),
+    })
+  }
 
-  const sansLot = (id: string | null | undefined) => !id || !marches.some((m) => m.id === id)
-  const visasSansLot = aViser.filter((v) => sansLot(v.marcheId))
-  const desordresSansLot = ouverts.filter((d) => sansLot(d.marcheId))
-  const restes = [
-    visasSansLot.length > 0 ? `${visasSansLot.length} visa(s) à rendre` : null,
-    desordresSansLot.length > 0 ? `${desordresSansLot.length} désordre(s) GPA ouvert(s)` : null,
-  ].filter(Boolean) as string[]
+  /** LE geste de la réunion. Une seule écriture, donc un seul « Annuler ». */
+  const changerEtat = (point: PointSeance, etat: EtatPointSeance) => {
+    if (etat === point.etat) return
+    const snap = state
+    const suivant = pointAvecEtat(point, etat, today)
+    update((d) => {
+      const i = d.pointsSeance.findIndex((x) => x.id === point.id)
+      if (i >= 0) d.pointsSeance[i] = suivant
+    })
+    toast(`« ${point.libelle} » → ${LIBELLE_ETAT_POINT[etat]}.`, {
+      tone: etat === 'fait' ? 'ok' : undefined,
+      undo: () => replace(snap),
+    })
+  }
 
-  const rienASignaler = lignes.length === 0 && restes.length === 0
-  // aucun marché ET rien à dire : l'onglet n'a pas encore de chantier à
-  // préparer — le bloc se tait plutôt que d'afficher un cadre vide
-  if (marches.length === 0 && rienASignaler) return null
+  /** accepter (« à traiter ») ou écarter (« sans suite ») une proposition,
+   *  UNE PAR UNE. Écarter n'efface rien : le point entre au relevé, rangé
+   *  tout en bas, avec la date à laquelle on a décidé de ne pas le suivre —
+   *  et il se rouvre d'un geste. « Vu et écarté » n'est pas « jamais vu ». */
+  const trancher = (proposition: PropositionSeance, etat: EtatPointSeance) => {
+    const snap = state
+    const point = pointDepuisProposition(proposition, contexte(), etat)
+    update((d) => {
+      d.pointsSeance.push(point)
+    })
+    toast(
+      etat === 'sans_suite'
+        ? `« ${proposition.libelle} » écarté — rangé « sans suite » au relevé, jamais perdu.`
+        : `« ${proposition.libelle} » inscrit à l’ordre du jour.`,
+      { tone: etat === 'sans_suite' ? undefined : 'ok', undo: () => replace(snap) },
+    )
+  }
 
-  const imprimer = () => ouvrirPreparationReunionPDF(state, p, today, prochaine)
+  const supprimer = async (point: PointSeance) => {
+    const snap = state
+    if (
+      !(await confirmer({
+        message: `Supprimer « ${point.libelle} » du relevé ?\nPour ranger un point sans le perdre, « sans suite » suffit.`,
+        danger: true,
+        confirmerLabel: 'Supprimer',
+      }))
+    )
+      return
+    update((d) => {
+      d.pointsSeance = d.pointsSeance.filter((x) => x.id !== point.id)
+    })
+    toast('Point supprimé du relevé.', { undo: () => replace(snap) })
+  }
+
+  const imprimer = () => ouvrirPreparationReunionPDF(state, p, today, ordre.seance)
+
+  const libelleLot = (point: PointSeance): string => {
+    const m = marches.find((x) => x.id === point.marcheId)
+    return m ? `${m.lot} · ${m.entreprise}` : point.lot || ''
+  }
+
+  const ouverts = ordre.nbParEtat.a_traiter + ordre.nbParEtat.en_cours
 
   return (
     <div
@@ -2265,147 +2326,313 @@ function PreparationReunion({
         marginBottom: 14,
       }}
     >
-      <div className="toolbar" style={{ marginBottom: rienASignaler ? 0 : 10 }}>
-        <strong>Préparer la réunion</strong>
+      <div className="toolbar" style={{ marginBottom: 10 }}>
+        <strong>Relevé de séance</strong>
         <span className="small muted">
-          {prochaine
-            ? `prochaine séance le ${fmtDate(prochaine.date)}${prochaine.heure ? ` à ${prochaine.heure}` : ''}`
+          {ordre.seance
+            ? `prochaine séance le ${fmtDate(ordre.seance.date)}${ordre.seance.heure ? ` à ${ordre.seance.heure}` : ''}`
             : 'aucune séance programmée — « Nouvelle réunion » ci-dessus'}
+          {ordre.seancePrecedente && (
+            <>
+              {' '}· repris de « {ordre.seancePrecedente.titre} » du {fmtDate(ordre.seancePrecedente.date)}
+            </>
+          )}
         </span>
-        <span style={{ marginLeft: 'auto' }}>
+        <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+          {ouverts > 0 && (
+            <Badge tone={ordre.quiTrainent > 0 ? 'warn' : 'info'}>
+              {ouverts} ouvert{ouverts > 1 ? 's' : ''}
+              {ordre.quiTrainent > 0 &&
+                `, dont ${ordre.quiTrainent} qui traîne${ordre.quiTrainent > 1 ? 'nt' : ''}`}
+            </Badge>
+          )}
           <Btn
             small
             onClick={imprimer}
-            title="Ouvre le dossier de séance imprimable (Ctrl+P pour le PDF) — mêmes chiffres que ci-dessous"
+            title="Ouvre le relevé imprimable (Ctrl+P pour le PDF) — même ordre du jour, même rangement, même ancienneté"
           >
-            Imprimer le dossier de séance
+            Imprimer le relevé
           </Btn>
         </span>
       </div>
 
-      {rienASignaler ? (
-        <p className="small muted" style={{ margin: 0 }}>
-          Rien à signaler avant la séance : aucun visa en attente, aucune pénalité encourue non
-          décidée, aucun désordre ouvert, aucune intervention à confirmer.
-        </p>
-      ) : (
-        <>
-          <Table
-            compact
-            head={[
-              'Lot / entreprise',
-              'Avancement',
-              'Visas à rendre',
-              <span key="p" className="right">Pénalités encourues</span>,
-              'Intervention à confirmer',
-              'GPA',
-            ]}
-          >
-            {lignes.map((l) => {
-              const prochaineConfirmation = l.confirmerLot
-                .map((t) => t.debut)
-                .filter((d): d is string => Boolean(d))
-                .sort()[0]
+      {/* ce que la MACHINE propose — hors du relevé tant que personne n'a
+          tranché : rien ne s'inscrit tout seul (§15) */}
+      {ordre.propositions.length > 0 && (
+        <div
+          style={{
+            border: '1px solid var(--border)',
+            borderRadius: 'var(--radius)',
+            background: 'var(--panel)',
+            padding: '9px 11px',
+            marginBottom: 10,
+          }}
+        >
+          <div className="small" style={{ marginBottom: 4 }}>
+            <strong>
+              Le cockpit propose {ordre.propositions.length} point{ordre.propositions.length > 1 ? 's' : ''}
+            </strong>{' '}
+            <span className="muted">
+              — relus des registres de cet onglet (visas, pénalités, parfait achèvement, planning). Rien ne
+              s’inscrit sans vous.
+            </span>
+          </div>
+          {ordre.propositions.map((prop) => (
+            <div
+              key={prop.cle}
+              style={{
+                display: 'flex',
+                gap: 10,
+                alignItems: 'flex-start',
+                padding: '6px 0',
+                borderTop: '1px solid var(--line)',
+                flexWrap: 'wrap',
+              }}
+            >
+              <div style={{ flex: '1 1 260px', minWidth: 0 }}>
+                <div className="small">{prop.libelle}</div>
+                <div className="muted small">{prop.detail}</div>
+              </div>
+              <span style={{ display: 'inline-flex', gap: 6 }}>
+                <Btn
+                  small
+                  kind="primary"
+                  onClick={() => trancher(prop, 'a_traiter')}
+                  title="Inscrire ce point à l’ordre du jour"
+                >
+                  Inscrire
+                </Btn>
+                <Btn
+                  small
+                  onClick={() => trancher(prop, 'sans_suite')}
+                  title="Écarter : le point entre au relevé « sans suite » — la décision est tracée, et elle se rouvre d’un geste"
+                >
+                  Écarter
+                </Btn>
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <Table compact head={['Point', 'Lot / entreprise', 'Qui', 'Pour le', 'État', '']}>
+        {ordre.groupes.map((g) => (
+          <Fragment key={g.etat + g.libelle}>
+            <tr>
+              <td colSpan={6} style={{ background: 'var(--bg-soft)', fontWeight: 700 }}>
+                {g.libelle} ({g.entrees.length})
+              </td>
+            </tr>
+            {g.entrees.map((e) => {
+              const point = e.point
+              const lot = libelleLot(point)
+              const enRetard = !pointResolu(point) && Boolean(point.echeance) && point.echeance! < today
               return (
-                <tr key={l.m.id}>
+                <tr key={point.id} style={pointResolu(point) ? { opacity: 0.68 } : undefined}>
                   <td>
-                    <strong>{l.m.lot}</strong>
-                    <div className="muted small">{l.m.entreprise}</div>
-                  </td>
-                  <td className="num">
-                    {l.avancement === null ? (
-                      // « on ne sait pas » n'est pas « rien n'est fait » :
-                      // sans tâche de planning rattachée, avancementLot rend
-                      // null et l'écran le dit (src/chantier.ts)
-                      <span title="Aucune tâche de planning rattachée à ce lot — l’avancement se constate en séance, il ne se devine pas">
-                        ?
-                      </span>
-                    ) : (
-                      `${l.avancement} %`
-                    )}
-                  </td>
-                  <td className="small">
-                    {l.visasLot.length === 0 ? (
-                      <span className="muted">—</span>
-                    ) : (
-                      <>
-                        {l.visasLot.length} à viser
-                        {l.retardLot.length > 0 && (
-                          <>
-                            {' '}
-                            <Badge tone="danger">{l.retardLot.length} en retard</Badge>
-                          </>
-                        )}
-                      </>
-                    )}
-                  </td>
-                  <td className="right">
-                    {l.evLot.length === 0 ? (
-                      <span className="muted">—</span>
-                    ) : l.chiffrables === 0 ? (
-                      <span title="Encouru non calculable : saisissez les taux du CCAP sur le marché (carte Marchés → « Modifier »).">
-                        <Badge tone="warn">taux CCAP ?</Badge>
-                      </span>
-                    ) : (
-                      <>
-                        <Money v={l.totalEncouruHT} cents />
-                        <div className="muted small">
-                          {l.evLot.length} événement(s) non décidé(s)
-                          {l.tauxManquant && ', dont taux CCAP manquant'}
-                        </div>
-                      </>
-                    )}
-                  </td>
-                  <td className="small">
-                    {l.confirmerLot.length === 0 ? (
-                      <span className="muted">—</span>
-                    ) : (
-                      <>
+                    <div>{point.libelle}</div>
+                    <div
+                      className="small"
+                      style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}
+                    >
+                      {!pointResolu(point) && e.anciennete > 1 && (
                         <span
-                          title={`${l.m.entreprise} n’a pas confirmé sa venue — « Entreprise confirmée » ou « Relancer » dans l’onglet Planning`}
+                          title={`Inscrit le ${fmtDate(point.inscritLe)} — il revient à l’ordre du jour pour la ${libelleAnciennete(e.anciennete)}`}
                         >
-                          <Badge tone="warn">{l.confirmerLot.length} à confirmer</Badge>
+                          <Badge tone={e.traine ? 'warn' : 'muted'}>{libelleAnciennete(e.anciennete)}</Badge>
                         </span>
-                        {prochaineConfirmation && (
-                          <div className="muted">
-                            <a href={`#/projets/${p.id}/planning`}>
-                              la plus proche le {fmtDate(prochaineConfirmation)} →
-                            </a>
-                          </div>
-                        )}
-                      </>
-                    )}
+                      )}
+                      {pointResolu(point) && point.resoluLe && (
+                        <span className="muted">
+                          {point.etat === 'fait' ? 'fait le' : 'écarté le'} {fmtDate(point.resoluLe)}
+                        </span>
+                      )}
+                      {point.notes && <span className="muted">{point.notes}</span>}
+                    </div>
                   </td>
+                  <td className="small">{lot || <span className="muted">—</span>}</td>
                   <td className="small">
-                    {l.desordresLot.length > 0 ? (
-                      <Badge tone="warn">{l.desordresLot.length} ouvert(s)</Badge>
-                    ) : l.m.dateReception ? (
+                    {point.responsable || (
+                      // « null n'est pas 0 » : personne n'a été désigné, et un
+                      // point sans responsable ne se fait jamais tout seul
                       <span
                         className="muted"
-                        title={`Réception le ${fmtDate(l.m.dateReception)} — parfait achèvement jusqu’au ${fmtDate(finGPA(l.m.dateReception))}`}
+                        title="Personne n’a été désigné — c’est justement ce qui se décide en séance"
                       >
-                        aucun désordre
+                        ?
+                      </span>
+                    )}
+                  </td>
+                  <td className="small" style={{ whiteSpace: 'nowrap' }}>
+                    {point.echeance ? (
+                      <span
+                        className={enRetard ? 'danger-text' : undefined}
+                        title={enRetard ? 'Échéance dépassée' : undefined}
+                      >
+                        {fmtDate(point.echeance)}
                       </span>
                     ) : (
                       <span className="muted">—</span>
                     )}
+                  </td>
+                  <td>
+                    {/* LE geste de la réunion : une liste, un choix, et le
+                        relevé se range tout seul. Pas quatre boutons par
+                        ligne — un écran qui gagne une option et perd en
+                        lisibilité est un échec. */}
+                    <Select
+                      value={point.etat}
+                      onChange={(v) => changerEtat(point, v as EtatPointSeance)}
+                      options={ORDRE_ETATS_POINT.map((etat) => ({
+                        value: etat,
+                        label: LIBELLE_ETAT_POINT[etat],
+                      }))}
+                      style={{ minWidth: 116 }}
+                    />
+                  </td>
+                  <td className="right">
+                    <RowMenu
+                      items={[
+                        { label: 'Modifier le point', onClick: () => setEdition(point) },
+                        { label: 'Supprimer du relevé', danger: true, onClick: () => void supprimer(point) },
+                      ]}
+                    />
                   </td>
                 </tr>
               )
             })}
-          </Table>
-          {restes.length > 0 && (
-            <p className="small" style={{ margin: '8px 0 0' }}>
-              Sans lot rattaché : {restes.join(' · ')}.
-            </p>
-          )}
-          <p className="muted small" style={{ margin: '8px 0 0' }}>
-            Rassemblé depuis les registres de cet onglet — rien ne se décide ici : viser, appliquer
-            une pénalité, confirmer une entreprise ou lever un désordre reste un geste, dans sa carte.
-          </p>
-        </>
+          </Fragment>
+        ))}
+
+        {/* la ligne de saisie, dans les mêmes colonnes que le relevé */}
+        <tr>
+          <td colSpan={6} style={{ background: 'var(--bg-soft)', fontWeight: 700 }}>
+            inscrire un point
+          </td>
+        </tr>
+        <tr>
+          <td>
+            <TextInput
+              value={libelle}
+              onChange={setLibelle}
+              placeholder="Ce qu’il y a à dire, à faire ou à décider"
+              ariaLabel="Libellé du point"
+            />
+          </td>
+          <td>
+            <Select value={marcheId} onChange={setMarcheId} options={optionsLot} />
+          </td>
+          <td>
+            <TextInput value={qui} onChange={setQui} placeholder="Qui agit" ariaLabel="Qui doit agir" />
+          </td>
+          <td>
+            <DateInput value={echeance} onChange={setEcheance} />
+          </td>
+          <td colSpan={2} className="right">
+            <Btn small kind="primary" onClick={ajouter} disabled={!libelle.trim()}>
+              Inscrire
+            </Btn>
+          </td>
+        </tr>
+      </Table>
+
+      <p className="muted small" style={{ margin: '8px 0 0' }}>
+        Le relevé PRÉPARE le compte rendu et lui SURVIT : les points non résolus passent d’eux-mêmes à la
+        séance suivante — ils appartiennent à l’opération, pas à une réunion — et leur ancienneté se compte
+        toute seule. Le CR, lui, reste le document d’UNE séance : il se rédige et se diffuse depuis
+        l’assistant, ci-dessous.
+      </p>
+
+      {edition && (
+        <ModalPointSeance
+          projet={p}
+          point={state.pointsSeance.find((x) => x.id === edition.id) || edition}
+          onClose={() => setEdition(null)}
+        />
       )}
     </div>
+  )
+}
+
+/** corriger un point : son libellé, son rattachement, son responsable, son
+ *  échéance. L'état ne passe PAS par ici — il a son geste, plus rapide, dans
+ *  la ligne du relevé. */
+function ModalPointSeance({
+  projet: p,
+  point,
+  onClose,
+}: {
+  projet: Projet
+  point: PointSeance
+  onClose: () => void
+}) {
+  const { state, update, replace } = useStore()
+  const today = todayISO()
+  const marches = state.marches.filter((m) => m.projetId === p.id)
+  const [libelle, setLibelle] = useState(point.libelle)
+  const [marcheId, setMarcheId] = useState(point.marcheId || '')
+  const [lot, setLot] = useState(point.lot || '')
+  const [responsable, setResponsable] = useState(point.responsable || '')
+  const [echeance, setEcheance] = useState<string | null>(point.echeance || null)
+
+  const enregistrer = () => {
+    if (!libelle.trim()) return toast('Le libellé ne peut pas être vide.', { tone: 'danger' })
+    const snap = state
+    const suivant = pointCorrige(
+      point,
+      { libelle, marcheId: marcheId || null, lot: marcheId ? '' : lot, responsable, echeance },
+      today,
+    )
+    update((d) => {
+      const i = d.pointsSeance.findIndex((x) => x.id === point.id)
+      if (i >= 0) d.pointsSeance[i] = suivant
+    })
+    toast('Point mis à jour.', { tone: 'ok', undo: () => replace(snap) })
+    onClose()
+  }
+
+  return (
+    <Modal titre="Modifier le point" onClose={onClose}>
+      <Field label="Point">
+        <TextInput value={libelle} onChange={setLibelle} />
+      </Field>
+      <div className="form-row">
+        <Field label="Lot / entreprise">
+          <Select
+            value={marcheId}
+            onChange={setMarcheId}
+            options={[
+              { value: '', label: '— aucun lot —' },
+              ...marches.map((m) => ({ value: m.id, label: `${m.lot} · ${m.entreprise}` })),
+            ]}
+          />
+        </Field>
+        {!marcheId && (
+          <Field label="… ou à la main" hint="bureau de contrôle, concessionnaire, lot non attribué">
+            <TextInput value={lot} onChange={setLot} />
+          </Field>
+        )}
+      </div>
+      <div className="form-row">
+        <Field label="Qui doit agir" hint="c’est ce qui s’écrit au compte rendu">
+          <TextInput value={responsable} onChange={setResponsable} />
+        </Field>
+        <Field label="Pour le" hint="facultatif — beaucoup de points n’ont pas d’échéance">
+          <DateInput value={echeance} onChange={setEcheance} />
+        </Field>
+      </div>
+      <p className="small muted" style={{ marginTop: 0 }}>
+        Inscrit le {fmtDate(point.inscritLe)}
+        {point.origine ? ' · proposé par le cockpit' : ''} — cette date ne bouge pas : c’est elle qui porte
+        l’ancienneté du point.
+      </p>
+      <div className="form-foot">
+        <Btn onClick={onClose}>Annuler</Btn>
+        <Btn kind="primary" onClick={enregistrer}>
+          Enregistrer
+        </Btn>
+      </div>
+    </Modal>
   )
 }
 
@@ -2421,13 +2648,10 @@ export function CarteReunions({ projet: p }: { projet: Projet }) {
     .filter((r) => r.projetId === p.id)
     .sort((a, b) => b.date.localeCompare(a.date))
 
-  // C1 — la séance que le bloc de préparation vise : la plus PROCHE à venir
-  // (aujourd'hui compris). Aucune à venir ⇒ null : le bloc prépare quand même,
-  // il dit simplement qu'aucune date n'est posée.
-  const prochaine =
-    reunions
-      .filter((r) => r.date >= today)
-      .sort((a, b) => a.date.localeCompare(b.date))[0] ?? null
+  // C3 — « quelle est la prochaine séance ? » ne se décide plus ici : c'est
+  // `preparerSeance` (src/seanceChantier.ts) qui répond, pour l'écran comme
+  // pour le papier. La règle était écrite deux fois — ici et dans le
+  // gabarit d'impression — pour un seul jour où elles auraient divergé.
 
   const titreParDefaut = `Réunion de chantier n°${reunions.length + 1}`
 
@@ -2516,9 +2740,11 @@ export function CarteReunions({ projet: p }: { projet: Projet }) {
         </>
       }
     >
-      {/* C1 — en TÊTE de la carte : ce qu'il y a à dire en séance se lit avant
-          la liste des CR passés, qui est de l'archive */}
-      <PreparationReunion projet={p} prochaine={prochaine} />
+      {/* C3 — en TÊTE de la carte : l'ordre du jour se tient avant la liste
+          des CR passés, qui est de l'archive. C'est ici qu'on travaille en
+          séance, et c'est le SEUL endroit — il n'y a plus de bloc de
+          préparation à côté. */}
+      <ReleveSeance projet={p} />
 
       {reunions.length === 0 ? (
         <EmptyState>

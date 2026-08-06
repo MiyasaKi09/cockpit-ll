@@ -299,6 +299,88 @@ export interface ReunionChantier {
   notes?: string
 }
 
+/** C3 — état d'un point de séance. QUATRE états, pas cinq : au-delà, plus
+ *  personne ne sait lequel choisir en réunion, et le geste le plus fréquent
+ *  du chantier cesse d'être instantané.
+ *
+ *  « sans suite » n'est pas « fait » : un point abandonné (l'entreprise a
+ *  eu raison, la MOA a tranché autrement, le point n'avait pas lieu d'être)
+ *  se RANGE, il ne se supprime pas — six mois plus tard, la question de
+ *  savoir si on l'avait vu et écarté, ou jamais vu, est exactement celle
+ *  qu'on se pose. */
+export type EtatPointSeance = 'a_traiter' | 'en_cours' | 'fait' | 'sans_suite'
+
+/** C3 — d'où vient un point que la MACHINE a proposé et qu'un humain a
+ *  inscrit. Sert à deux choses, et à rien d'autre : dire à l'écran d'où
+ *  sort la ligne, et empêcher de reproposer indéfiniment ce qui est déjà au
+ *  relevé (`PointSeance.origineRef`). Un point saisi à la main n'a pas
+ *  d'origine — c'est le cas ordinaire. */
+export type OriginePointSeance = 'visa' | 'penalite' | 'gpa' | 'confirmation' | 'avancement'
+
+/** C3 — POINT DE SÉANCE : la ligne d'ordre du jour d'une réunion de
+ *  chantier, et le retour d'usage du 06/08/2026 (« il faudrait que ça soit
+ *  à la limite une version du CR précédent, ajusté ; une sorte de to-do
+ *  améliorée, où on garde tout mais où tout se range en fonction de ce qui
+ *  est fait ou non »).
+ *
+ *  POURQUOI RATTACHÉ AU PROJET, ET NON À LA RÉUNION — c'est toute la
+ *  question, et c'est ce qui sépare ce modèle d'une liste de tâches par
+ *  réunion. Une réunion de chantier ne part JAMAIS d'une page blanche :
+ *  elle reprend le relevé précédent, point par point, et chaque point
+ *  avance ou n'avance pas. Un point qui appartiendrait à UNE réunion
+ *  devrait être RECOPIÉ à la suivante — et une recopie, c'est deux objets
+ *  pour une seule question, donc deux histoires possibles, donc la
+ *  disparition silencieuse de la seule information que personne n'a
+ *  aujourd'hui : « ce point traîne depuis trois séances ».
+ *
+ *  Le point traverse donc les réunions et ne garde d'elles que celle où il
+ *  est APPARU (`reunionOrigineId`). Son ancienneté se COMPTE
+ *  (`ancienneteEnSeances`, src/seanceChantier.ts) au lieu de se stocker :
+ *  un compteur incrémenté à chaque séance se désynchroniserait le jour où
+ *  une réunion est reprogrammée ou supprimée.
+ *
+ *  Le CR (`ReunionChantier.cr`) reste ce qu'il est : le compte rendu d'UNE
+ *  séance, rédigé, diffusé, figé dans le temps. Le relevé le PRÉPARE et lui
+ *  SURVIT. Les deux ne se remplacent pas. */
+export interface PointSeance {
+  id: string
+  projetId: string
+  /** marché (lot + entreprise) concerné — null : point général de
+   *  l'opération (MOA, MOE, bureau de contrôle…) */
+  marcheId?: string | null
+  /** lot ou entreprise écrit à la main, quand aucun marché ne porte le
+   *  point (bureau de contrôle, concessionnaire, lot pas encore attribué) */
+  lot?: string
+  libelle: string
+  /** qui doit AGIR — texte libre : c'est ce qui s'écrit au CR (« SARL
+   *  Martin BTP », « MOE », « MOA »). null/absent = personne n'a été
+   *  désigné, et l'écran le dit : « ? », jamais un nom par défaut. */
+  responsable?: string | null
+  /** échéance FACULTATIVE (ISO) — beaucoup de points n'en ont pas, et
+   *  inventer une date au motif qu'il en faut une transformerait le relevé
+   *  en fabrique d'échéances fausses */
+  echeance?: string | null
+  etat: EtatPointSeance
+  /** date de PREMIÈRE inscription à l'ordre du jour (ISO) — jamais
+   *  réécrite : c'est elle qui fait l'ancienneté et le rangement */
+  inscritLe: string
+  /** réunion où le point est APPARU. Le « n° » de la séance est celui de
+   *  son titre (« Réunion de chantier n°18 ») ; null = point inscrit hors
+   *  séance, entre deux réunions, ce qui est fréquent. */
+  reunionOrigineId?: string | null
+  /** date de résolution (ISO) : posée en passant à « fait » ou « sans
+   *  suite », retirée si le point est rouvert (src/seanceChantier.ts) */
+  resoluLe?: string | null
+  /** proposition de la machine acceptée : sa nature… */
+  origine?: OriginePointSeance
+  /** … et sa clé stable (`visa:v-12`, `gpa:d-3`…). Un point qui la porte
+   *  ne sera plus reproposé : la question vit désormais au relevé, à un
+   *  seul endroit. */
+  origineRef?: string | null
+  notes?: string
+  majLe: string
+}
+
 /** Garantie d'un marché de travaux (CCAG Travaux art. 33) :
  *  - 'retenue' : la retenue de garantie est prélevée sur chaque situation (défaut) ;
  *  - 'caution' : caution bancaire de substitution — rien n'est retenu ;
@@ -681,6 +763,92 @@ export interface Situation {
   revisionHT?: number | null
   /** facture d'honoraires DET générée depuis cette situation validée (anti-doublon + lien) */
   factureId?: string | null
+  /** B1 — copie FIGÉE du décompte, prise AU MOMENT DE LA VALIDATION. Absente
+   *  tant que la situation n'est pas validée, et absente sur les situations
+   *  validées AVANT B1 : le PDF le DIT au lieu de faire croire à une pièce
+   *  stable (voir DecompteFige). Elle disparaît si la situation repasse « à
+   *  vérifier » — un décompte figé qui ne correspond plus à rien est pire
+   *  qu'aucun décompte. */
+  decompteFige?: DecompteFige
+}
+
+/** B1 — en-tête FIGÉ du décompte de situation : ce que le papier remis à
+ *  l'entreprise NOMMAIT au moment de la validation. Même raison d'être que
+ *  EnteteCertificat : réimprimer dans deux ans doit redonner l'agence, le
+ *  chantier et le marché D'ALORS — renommer l'agence ou saisir un avenant
+ *  ne doit pas réécrire un papier déjà parti. */
+export interface EnteteDecompte {
+  /** l'agence telle qu'elle se nommait — le papier porte sa signature */
+  agence: { nom: string; personnes: string[]; siret?: string }
+  /** l'opération, déjà libellée par `nomProjet` (une seule autorité) */
+  projetLibelle: string
+  projetAdresse?: string
+  entreprise: string
+  lot?: string
+  mois: string // 'AAAA-MM'
+  /** n° de situation — `null` quand l'entreprise n'en donne pas : « null n'est pas 0 » */
+  numero: number | null
+  dateReception: string // ISO
+  /** montant du marché avenants compris au jour de la validation — `null`
+   *  quand la situation n'est rattachée à AUCUN marché : le papier dit alors
+   *  qu'il ne retient rien parce qu'il n'y a pas de marché, pas parce que le
+   *  marché vaudrait 0 € */
+  marcheTotalHT: number | null
+  /** marché révisable — dit pourquoi une ligne de révision peut exister */
+  marcheRevisable: boolean
+}
+
+/** B1 — les lignes RETENUES du décompte au moment de la validation. Mêmes
+ *  rubriques que `DecompteSituation` (src/derive.ts, la SEULE autorité du
+ *  calcul) : ce bloc n'est pas un second calcul, c'en est la PHOTO. */
+export interface LignesDecompte {
+  travauxCumulHT: number
+  revisionHT: number
+  /** travaux + révision */
+  baseHT: number
+  /** taux EFFECTIF appliqué (0 dès qu'une caution ou une GPD couvrait le marché) */
+  tauxRG: number
+  /** type de garantie au jour de la validation — dit POURQUOI le taux vaut ce qu'il vaut */
+  garantie: TypeGarantie
+  retenueGarantieHT: number
+  /** base − retenue */
+  cumulNetHT: number
+  /** cumul net des situations antérieures, déjà réglé */
+  precedentNetHT: number
+  netAPayerHT: number
+  tauxTVA: number
+  netAPayerTTC: number
+}
+
+/** B1 — copie FIGÉE du décompte de situation (constat S6, lot B).
+ *
+ *  Trois pièces se ressemblent à l'écran : la facture, le certificat de
+ *  paiement et ce décompte. Les deux premières se réimprimaient depuis leur
+ *  copie figée ; celui-ci se RECALCULAIT depuis l'état courant — l'entreprise
+ *  recevait un décompte le 3 juillet, l'agence saisissait un avenant le 10,
+ *  réimprimait le 12 pour classer, et rangeait un papier qui ne portait plus
+ *  les mêmes chiffres que celui qui avait été envoyé.
+ *
+ *  Le bloc se pose À LA VALIDATION (src/decompte.ts, `figerDecompte`), jamais
+ *  à l'impression : ce qui fait foi est l'état validé, pas l'état de la
+ *  première impression — sinon deux personnes qui impriment le même jour
+ *  figeraient deux vérités. Le PDF ne lit ensuite QUE ce bloc. */
+export interface DecompteFige {
+  entete: EnteteDecompte
+  /** les lignes retenues — ce que le papier envoyé portait */
+  lignes: LignesDecompte
+  /** points à vérifier relevés au figeage : le papier envoyé les portait,
+   *  les taire à la réimpression donnerait un document plus propre que
+   *  l'original */
+  coherences: string[]
+  /** date du FIGEAGE = date de la validation (jamais celle de l'impression) */
+  figeLe: string // ISO
+  /** qui a validé — `null` quand le poste ne sait pas qui est là (`useMoi()`,
+   *  §identité) : un décompte ne se signe pas au nom du premier de la liste */
+  validePar: string | null
+  /** empreinte SHA-256 du bloc (audit, comme FactureFigee) — absente ou vide
+   *  si l'API crypto manque : une empreinte inventée ne prouverait rien */
+  empreinte?: string
 }
 
 /** 5.19 — les lignes d'un certificat de paiement (état d'acompte), toutes
@@ -1126,6 +1294,66 @@ export interface ImportBancaire {
   dateSolde?: string | null
 }
 
+// --- Connexion bancaire directe (GoCardless Bank Account Data, lecture seule) ---
+//
+// CE QUI VIT ICI, ET CE QUI N'Y VIT PAS
+// --------------------------------------
+// L'AUTORITÉ est la table `banque_connexions` (Supabase, `service_role`
+// seul) : c'est elle qui tient la demande, l'accord et les identifiants de
+// compte GoCardless. Ce qui suit en est un MIROIR daté, rapatrié par la
+// fonction Edge `banque-sync` — de quoi afficher un état et produire une
+// alerte SANS réseau, puisque le fil d'urgences (`src/alerts.ts`) est pur et
+// que le Cockpit doit rester lisible hors ligne.
+//
+// Aucun identifiant d'API tiers n'entre ici : ni secret GoCardless, ni jeton,
+// ni identifiant de compte GoCardless. Un compte se désigne par
+// l'identifiant de NOTRE ligne, et se reconnaît à quatre chiffres d'IBAN.
+export interface CompteBancaireConnecte {
+  /** identifiant de la ligne `banque_comptes` — jamais l'identifiant GoCardless */
+  id: string
+  libelle: string | null
+  /** quatre derniers caractères de l'IBAN, précédés d'une ellipse */
+  ibanMasque: string | null
+  devise: string | null
+  /** DISCOVERED · PROCESSING · READY · ERROR · EXPIRED · SUSPENDED */
+  statut: string | null
+  /** dernier solde relevé — `null` quand la banque n'en publie aucun
+   *  d'exploitable. `null` n'est pas 0, et l'écran le dit. */
+  dernierSolde: number | null
+  /** `closingBooked`, `interimAvailable`… — le type FAIT partie du solde :
+   *  un disponible et un comptable ne se comparent pas */
+  dernierSoldeType: string | null
+  dernierSoldeDate: string | null
+  /** les types de solde que CETTE banque publie réellement, relevés au fil
+   *  des synchronisations : ils ne se devinent pas d'un établissement à l'autre */
+  typesSoldeVus: string[]
+}
+
+export interface ConnexionBancaire {
+  /** identifiant de la ligne `banque_connexions` */
+  id: string
+  /** nom lisible de l'établissement */
+  banque: string
+  /** en_attente (parcours banque non terminé) · liee · expiree · erreur */
+  statut: 'en_attente' | 'liee' | 'expiree' | 'erreur'
+  /** statut brut de GoCardless (CR ID GC UA RJ SA GA LN SU ER EX), conservé
+   *  tel quel pour le diagnostic — on ne le traduit pas de force */
+  statutGocardless: string | null
+  /** durée d'accès accordée, en jours (90 en pratique — DSP2) */
+  accesJours: number | null
+  consentementAccepteLe: string | null
+  /** ISO — fin de l'accès continu. `null` = inconnue, jamais « lointaine ». */
+  consentementExpireLe: string | null
+  /** dernière synchronisation RÉELLEMENT INTÉGRÉE au Cockpit ('AAAA-MM-JJ').
+   *  `null` veut dire « jamais » : une synchronisation morte depuis trois
+   *  semaines doit se voir, pas se deviner. */
+  derniereSyncLe: string | null
+  derniereSyncResultat: string | null
+  /** date à laquelle ce miroir a été rafraîchi depuis le serveur */
+  vuLe: string
+  comptes: CompteBancaireConnecte[]
+}
+
 /** mapping CSV bancaire mémorisé (audit §5.5 — phase initiale) */
 export interface MappingBancaire {
   separateur: string
@@ -1196,6 +1424,50 @@ export interface EvenementTransmission {
   statut: 'deposee' | 'rejetee' | 'mise_a_disposition' | 'approuvee' | 'payee'
   reference?: string
   motif?: string
+  /**
+   * Le code du portail, TEL QU'IL L'A ÉCRIT (`REJETEE`, `SUSPENDUE`,
+   * `MISE_EN_PAIEMENT`…). Optionnel : une saisie manuelle et l'import CSV n'en
+   * portent pas, et rien ne dépend de sa présence.
+   *
+   * POURQUOI CE CHAMP EXISTE. Chorus Pro déclare une quinzaine de statuts
+   * quand `statut` ci-dessus en compte cinq — liste FERMÉE qui pilote le badge
+   * rouge, l'action « à traiter » et l'alerte du fil d'urgences. Quatre codes
+   * non nominaux (`REJETEE`, `SUSPENDUE`, `A_RECYCLER`, `A_COMPLETER`) se
+   * projettent donc sur « rejetée » : pour l'agence, ils ont la même
+   * conséquence — la facture est revenue et ne sera pas payée. Ce qui serait
+   * malhonnête, c'est d'AFFICHER « rejetée » quand le portail a dit
+   * « suspendue » : le code exact voyage ici, et c'est LUI que l'écran et
+   * l'alerte prononcent. La liste fermée décide du comportement, le mot du
+   * portail décide des mots (`src/chorusApi.ts`).
+   */
+  statutPortail?: string
+}
+
+/**
+ * Une facture VUE SUR CHORUS PRO dont le numéro ne correspond à aucune facture
+ * du Cockpit (§ le rattachement se fait par numéro, comme l'import CSV).
+ *
+ * Elle est SIGNALÉE, jamais rattachée « au plus proche ». Un rapprochement
+ * approximatif écrirait un rejet sur la facture du voisin, se propagerait à
+ * toute la pièce et ne se verrait jamais ; un rattachement absent coûte un
+ * clic. Les causes légitimes sont nombreuses : facture déposée hors Cockpit,
+ * numéro saisi autrement sur le portail, pièce d'un cotraitant, ou lecture de
+ * l'environnement de QUALIFICATION (jeu de données de l'AIFE).
+ */
+export interface FactureChorusInconnue {
+  /** le numéro tel que le portail l'écrit — la clé qui n'a rien trouvé */
+  numero: string
+  /** identifiant interne Chorus, pour retrouver la pièce sur le portail */
+  idFacture?: string | null
+  /** code de statut du portail, tel quel */
+  statutPortail: string
+  dateStatut?: string | null
+  destinataire?: string | null
+  montantTTC?: number | null
+  /** `null` veut dire « le portail n'a pas rendu de motif », jamais « aucun » */
+  motif?: string | null
+  /** date à laquelle la synchronisation l'a vue pour la dernière fois */
+  vueLe: string
 }
 
 // ============================================================
@@ -1650,6 +1922,21 @@ export type TypeAlerte =
   | 'mail_a_traiter'
   | 'reponse_attendue'
   | 'proposition_ia'
+  // Connexion bancaire directe — les deux façons dont une trésorerie se fige
+  // en silence, et qui doivent donc se voir AVANT :
+  //   · le consentement DSP2 arrive à échéance (90 jours) et il faut
+  //     retourner s'authentifier chez sa banque ;
+  //   · plus aucune synchronisation n'aboutit depuis des jours, sans erreur
+  //     visible — le cas le plus traître, parce qu'un écran muet ressemble à
+  //     un écran calme.
+  | 'banque_consentement'
+  | 'banque_sync_muette'
+  // 5.16 — facture rejetée par le portail (Chorus Pro, plateforme agréée).
+  // Ce n'est pas un retard qui finira par se résorber : une facture rejetée
+  // ne sera JAMAIS payée tant que personne ne la corrige et ne la redépose.
+  // Le motif voyage avec l'alerte — sans lui, il faut rouvrir le portail
+  // pour savoir quoi corriger, et le geste se remet à demain.
+  | 'facture_rejetee_portail'
 
 /** Alerte du fil d'urgences — calculée, jamais stockée (hors snooze) */
 /** action rapide attachée à une alerte, réalisable depuis le fil */
@@ -1741,6 +2028,12 @@ export interface Settings {
   profilComptable?: ProfilComptable
   /** mapping du CSV bancaire, mémorisé après le premier import (F3) */
   banqueMapping?: MappingBancaire
+  /** dernière synchronisation Chorus Pro INTÉGRÉE au Cockpit — la trace vit
+   *  ici (donc dans l'état partagé, donc lisible hors ligne et sur les deux
+   *  postes) et non seulement dans le journal serveur. `environnement` en fait
+   *  partie : lire la qualification en croyant lire la structure est le
+   *  contresens que ce mot rend impossible à commettre en silence. */
+  chorusSync?: { le: string; environnement: string; resultat: string } | null
   /** seuil d'alerte de point bas de trésorerie (€) */
   seuilTresorerie?: number | null
   /** décaissement mensuel prévisionnel de TVA/impôts (paramétré avec le cabinet) */
@@ -1984,6 +2277,12 @@ export interface AppState {
   consultations: Consultation[]
   prompts: PromptTemplate[]
   reunions: ReunionChantier[]
+  /** C3 — points de séance : l'ordre du jour qui TRAVERSE les réunions.
+   *  Rattachés au projet, jamais à une réunion (voir `PointSeance`) : c'est
+   *  ce qui fait qu'une séance repart du relevé précédent au lieu d'une
+   *  page blanche, et que « ce point traîne depuis trois séances » se lit
+   *  au lieu de se deviner. */
+  pointsSeance: PointSeance[]
   courriers: Courrier[]
   /** B.1 — les tâches internes du §8.5. Restent dans le document JSONB :
    *  le volume est borné et la fréquence d'écriture est HUMAINE (§3.1). */
@@ -2031,6 +2330,14 @@ export interface AppState {
   /** lignes de relevés bancaires importées (F3) */
   transactionsBancaires: TransactionBancaire[]
   importsBancaires: ImportBancaire[]
+  /** miroir daté des connexions bancaires directes — l'autorité reste la
+   *  table `banque_connexions` côté Supabase. Il est ici pour que le fil
+   *  d'urgences puisse annoncer la reconnexion des 90 jours sans réseau. */
+  connexionsBancaires: ConnexionBancaire[]
+  /** 5.16 — factures vues sur Chorus Pro dont le numéro ne correspond à
+   *  AUCUNE facture du Cockpit. Elles sont signalées ici, jamais rattachées
+   *  au plus proche : c'est une liste à relire, pas une donnée métier. */
+  chorusInconnues: FactureChorusInconnue[]
   /** lots d'export comptable versionnés (F4) */
   lotsComptables: LotComptable[]
   /** mois de TVA marqués « déclarée » — un geste humain fige le solde et

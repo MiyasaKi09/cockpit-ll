@@ -100,12 +100,51 @@ const fonctions = fs
   .filter((entree) => entree.isDirectory() && !entree.name.startsWith('_'))
   .map((entree) => entree.name)
 
-assert.equal(fonctions.length, 7, 'sept fonctions Edge sont attendues')
-for (const nom of fonctions) {
-  assert.ok(
-    runbook.includes(`functions deploy ${nom}`),
-    `${nom} n'apparaît pas dans l'ordre de déploiement du runbook`,
-  )
+// Le runbook et le dépôt doivent contenir EXACTEMENT les mêmes fonctions.
+//
+// Un nombre écrit à la main (« sept fonctions attendues ») obligeait à le
+// corriger à chaque livraison sans rien apprendre : il disait qu'un compte
+// avait changé, pas lequel. La comparaison des deux ensembles dit les deux
+// choses à la fois — la fonction nouvelle qu'on oublierait de déployer (elle
+// existerait, éteinte, et l'écran afficherait une panne réseau) ET la ligne
+// de déploiement restée pour une fonction supprimée (la commande échouerait
+// au milieu de la bascule).
+const deployees = [...runbook.matchAll(/functions deploy ([a-z0-9-]+)/g)].map((m) => m[1])
+assert.deepEqual(
+  [...new Set(deployees)].sort(),
+  [...fonctions].sort(),
+  'le runbook et supabase/functions/ ne déclarent pas les mêmes fonctions Edge',
+)
+assert.equal(deployees.length, new Set(deployees).size, 'une fonction est déployée deux fois par le runbook')
+
+// --- Chaque secret lu par une fonction est nommé dans le runbook ------------
+//
+// Un secret que personne ne sait poser produit la pire des pannes : la
+// fonction répond, poliment, qu'elle n'est pas configurée — et on cherche
+// dans le code ce qui manquait dans un tableau de bord.
+{
+  const FOURNIS_PAR_LA_PLATEFORME = new Set(['SUPABASE_URL', 'SUPABASE_ANON_KEY', 'SUPABASE_SERVICE_ROLE_KEY'])
+  const secrets = new Set()
+  for (const nom of fonctions) {
+    const chemin = path.join(racine, 'supabase/functions', nom)
+    for (const fichier of fs.readdirSync(chemin).filter((f) => f.endsWith('.ts'))) {
+      const source = lire(`supabase/functions/${nom}/${fichier}`)
+      for (const m of source.matchAll(/Deno\.env\.get\(\s*'([A-Z0-9_]+)'/g)) secrets.add(m[1])
+      // le détour par un helper `secret(nom)` : les noms sont dans une
+      // constante voisine, et la valeur au bout est la même
+      if (/Deno\.env\.get\(nom\)/.test(source)) {
+        for (const m of source.matchAll(/'([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+)'/g)) secrets.add(m[1])
+      }
+    }
+  }
+  for (const secret of [...secrets].sort()) {
+    if (FOURNIS_PAR_LA_PLATEFORME.has(secret)) continue
+    assert.ok(
+      runbook.includes(secret),
+      `${secret} est lu par une fonction Edge mais absent du runbook : personne ne saurait qu'il faut le poser,\n` +
+        "et la fonction se contenterait de répondre qu'elle n'est pas configurée.",
+    )
+  }
 }
 
 for (const nom of [...planification.matchAll(/cron\.schedule\(\s*'([^']+)'/g)].map((m) => m[1])) {

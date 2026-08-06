@@ -28,6 +28,19 @@ import {
 } from './entreprise'
 import { SEUIL_ALERTE_VISA_JOURS, echeanceVisa } from './visas'
 import { ecartMois, notesManquantes } from './cotraitants'
+// La connexion bancaire directe : `src/banqueApi.ts` porte l'autorité sur
+// l'état d'un consentement et sur la fraîcheur d'une synchronisation. Sa
+// partie pure n'importe aucune pile réseau — ce fil doit rester calculable
+// hors ligne, sur un état chargé du localStorage.
+import { etatConsentement, etatSynchronisation } from './banqueApi'
+// 5.16 — le cycle de vie d'une facture sur un portail agréé. `src/facture.ts`
+// porte l'autorité sur « quel est le dernier statut » (le plus récent PAR
+// DATE, pas le dernier élément du tableau) : l'écran Ventes, la file « à
+// traiter » de `financeActions` et ce fil lisent tous les trois la MÊME
+// fonction. `src/chorusApi.ts` porte les mots — le code exact du portail, qui
+// est celui qu'on retrouvera sur le portail.
+import { derniereTransmission } from './facture'
+import { libelleCodeChorus, libellePlateformeTransmission } from './chorusApi'
 
 // ------------------------------------------------------------
 // A.11 — notifier les personnes concernées (§12.3 pt 10)
@@ -233,6 +246,58 @@ export function computeAlertes(state: AppState, today: string, contexte?: Contex
     }
   }
 
+  // --- 5.16 : facture REJETÉE par le portail (Chorus Pro, plateforme agréée).
+  //
+  // C'est l'urgence la plus silencieuse de la facturation publique. Un impayé
+  // finit par se voir : l'échéance passe, le retard grandit, l'alerte
+  // ci-dessus se durcit. Une facture rejetée, elle, ne produit AUCUN de ces
+  // signaux tant que son échéance n'est pas dépassée — et quand elle l'est, on
+  // relance un payeur qui n'a jamais rien reçu d'exploitable. Elle ne sera
+  // jamais payée tant que personne ne la corrige et ne la redépose.
+  //
+  // Le motif VOYAGE avec l'alerte. Sans lui, il faut rouvrir le portail pour
+  // savoir quoi corriger, et le geste se remet à demain — ce qui est
+  // exactement la façon dont un rejet devient un trimestre de trésorerie.
+  // Quand le portail n'a rendu aucun motif, on le DIT au lieu d'en inventer un.
+  //
+  // Deux surfaces, un seul prédicat : `financeActions` produit l'action du
+  // badge Finance, ce fil produit la ligne rouge du matin, et les deux lisent
+  // `derniereTransmission`. Le jour où l'une des deux relirait le tableau à la
+  // main, elles diraient deux choses de la même facture.
+  for (const f of Array.isArray(state.factures) ? state.factures : []) {
+    const transmission = derniereTransmission(f)
+    if (!transmission || transmission.statut !== 'rejetee') continue
+    const projet = projetById(state, f.projetId)
+    alertes.push({
+      id: `rejet-portail:${f.id}`,
+      type: 'facture_rejetee_portail',
+      // toujours 3 : il n'existe pas de rejet « à surveiller ». Tant qu'elle
+      // n'est pas corrigée, la pièce est hors circuit de paiement.
+      gravite: 3,
+      // le mot du PORTAIL quand on l'a (« suspendue », « à compléter »…) :
+      // c'est celui qu'on relira sur le portail. Les quatre voies non
+      // nominales de Chorus se projettent sur « rejetée » pour le
+      // comportement, jamais pour les mots.
+      titre: `Facture ${f.numero || f.id} — ${
+        transmission.statutPortail ? libelleCodeChorus(transmission.statutPortail) : 'rejetée'
+      } par ${libellePlateformeTransmission(transmission.plateforme)}`,
+      detail: [
+        transmission.motif
+          ? `Motif : ${transmission.motif}`
+          : 'Motif non rendu par le portail — à lire sur Chorus Pro',
+        `${nomProjet(state, f.projetId)} · ${fmtMoney(f.figee?.totalHT ?? f.montantHT)} HT${
+          transmission.date ? ` · statut du ${fmtDate(transmission.date)}` : ''
+        }`,
+        'Elle ne sera pas payée tant qu’elle n’est pas corrigée et redéposée — le dépôt reste un geste humain sur le portail.',
+      ].join(' — '),
+      // le numéro voyage dans le lien : la ligne visée est la seule affichée
+      // dans la liste des pièces (route `#/facturation/chercher/<terme>`)
+      lien: `#/facturation/chercher/${encodeURIComponent(f.numero || f.id)}`,
+      date: transmission.date || undefined,
+      projetId: projet ? f.projetId : undefined,
+    })
+  }
+
   // --- Situations : « à vérifier » (écrites par la routine) avec délai
   // contractuel de vérification ; situations mensuelles attendues manquantes.
   for (const sit of state.situations) {
@@ -381,6 +446,62 @@ export function computeAlertes(state: AppState, today: string, contexte?: Contex
       lien: '#/situations/rg',
       date: rg.dateLevee || undefined,
     })
+  }
+
+  // --- Connexion bancaire directe : les deux façons dont une trésorerie se
+  // fige EN SILENCE.
+  //
+  // 1) LA RECONNEXION DES 90 JOURS. La DSP2 impose une ré-authentification
+  //    forte à date fixe. Cette date est CONNUE d'avance : l'annoncer une
+  //    semaine avant est le mécanisme principal ; détecter l'erreur 401
+  //    `AccessExpiredError` au moment où elle tombe n'est que le filet.
+  //    Attendre le filet, c'est découvrir le problème le jour où les
+  //    mouvements ont déjà cessé d'entrer.
+  // 2) LA SYNCHRONISATION MUETTE. Une connexion qui n'a plus rien rapporté
+  //    depuis des semaines ne produit AUCUNE erreur : elle produit un écran
+  //    calme, et un solde qui vieillit sans que personne ne s'en aperçoive.
+  //
+  // Les deux mènent à la carte de la connexion concernée
+  // (`#/finance/banque/<id>`), où le bouton « Reconnecter » attend — pas en
+  // haut de la liste des mouvements.
+  for (const c of Array.isArray(state.connexionsBancaires) ? state.connexionsBancaires : []) {
+    if (!c || !c.id) continue
+    const consentement = etatConsentement(c, today)
+    if (consentement.alerter) {
+      const jours = consentement.jours ?? 0
+      alertes.push({
+        id: `banque-consentement:${c.id}`,
+        type: 'banque_consentement',
+        // expiré : plus rien n'entre, c'est rouge. À venir : orange, il
+        // reste le temps de faire le geste tranquillement.
+        gravite: consentement.expire ? 3 : 2,
+        titre: consentement.expire
+          ? `Banque ${c.banque} — autorisation expirée, plus aucun mouvement n'entre`
+          : `Banque ${c.banque} — autorisation à renouveler sous ${jours} j`,
+        detail: consentement.expire
+          ? 'La banque exige une nouvelle authentification (DSP2, tous les 90 jours). Le solde affiché ne bouge plus : reconnectez, ou importez un relevé en attendant.'
+          : `Fin de l'accès le ${fmtDate(c.consentementExpireLe?.slice(0, 10) || today)}. Reconnecter maintenant évite l'interruption — l'import de relevé reste le repli.`,
+        lien: `#/finance/banque/${c.id}`,
+        date: c.consentementExpireLe?.slice(0, 10),
+      })
+      continue
+    }
+    // Pas de double alerte : quand le consentement parle déjà, le silence de
+    // la synchronisation en est la conséquence, pas une seconde nouvelle.
+    const synchro = etatSynchronisation(c, today)
+    if (synchro.alerter) {
+      alertes.push({
+        id: `banque-muette:${c.id}`,
+        type: 'banque_sync_muette',
+        gravite: synchro.morte ? 3 : 2,
+        titre: synchro.jamais
+          ? `Banque ${c.banque} — connectée mais jamais synchronisée`
+          : `Banque ${c.banque} — aucune synchronisation depuis ${synchro.jours} j`,
+        detail: `Le solde et les mouvements affichés datent${c.derniereSyncLe ? ` du ${fmtDate(c.derniereSyncLe)}` : ' d’avant la connexion'}. Une synchronisation à la demande suffit à rattraper.`,
+        lien: `#/finance/banque/${c.id}`,
+        date: c.derniereSyncLe || undefined,
+      })
+    }
   }
 
   // --- Dérive d'heures : réel > prévu × seuil, par projet actif.

@@ -1,7 +1,8 @@
 // ============================================================
 // Finance — Connecteurs (audit F10). Diagnostic consolidé
 // (banque, mail, Drive, cabinet, Chorus, PDP) et imports :
-// - banque : CAMT.053, OFX/QFX, QIF, CSV — tous idempotents ;
+// - banque : connexion directe (lecture seule) OU CAMT.053, OFX/QFX,
+//   QIF, CSV — un seul écran les intègre, tous idempotents ;
 // - achats : lecture CII/UBL ligne par ligne, TVA par taux,
 //   conservation du XML source ;
 // - Chorus/PDP : import CSV du cycle de vie, rattaché par numéro
@@ -16,6 +17,11 @@ import { useStore } from '../store'
 import { Badge, Btn, Card, Field, Page, Select, Stat, Table, TextInput, navigate, toast, useToday } from '../ui'
 import FinanceNav from './FinanceNav'
 import { soldeBancaire } from '../banque'
+// L'état d'un consentement bancaire et la fraîcheur d'une synchronisation ont
+// UN propriétaire (src/banqueApi.ts) : le diagnostic les IMPORTE. Les
+// recompter ici les ferait diverger de ce qu'annonce Banque & trésorerie, et
+// de ce qu'annonce le fil d'urgences — trois comptes du même délai.
+import { etatConsentement, etatSynchronisation } from '../banqueApi'
 import { lireCycleVieCSV } from '../imports'
 import { lireFactureXMLDetail } from '../facturx'
 import { fmtDate, fmtMoney, fold, uid } from '../util'
@@ -29,8 +35,22 @@ interface Diagnostic {
   detail: string
 }
 
-function diagnostics(state: ReturnType<typeof useStore>['state']): Diagnostic[] {
+function diagnostics(state: ReturnType<typeof useStore>['state'], today: string): Diagnostic[] {
   const banque = soldeBancaire(state)
+  // Connexion directe : c'est le seul connecteur du tableau qui puisse
+  // s'éteindre TOUT SEUL, à date fixe (DSP2, 90 jours). Un diagnostic qui ne
+  // le dirait pas afficherait « ✓ connecté » sur une trésorerie figée.
+  const connexions = Array.isArray(state.connexionsBancaires) ? state.connexionsBancaires : []
+  const aReconnecter = connexions.filter((c) => etatConsentement(c, today).alerter)
+  const muettes = connexions.filter((c) => etatSynchronisation(c, today).alerter)
+  const detailConnexion =
+    connexions.length === 0
+      ? null
+      : aReconnecter.length > 0
+        ? `${aReconnecter.length} connexion(s) à reconnecter`
+        : muettes.length > 0
+          ? `${muettes.length} connexion(s) sans synchronisation récente`
+          : `${connexions.length} connexion(s) directe(s) actives`
   const derCompta = [...state.lotsComptables].sort((a, b) => a.dateExport.localeCompare(b.dateExport)).pop()
   const transmissions = state.factures.filter((f) => (f.transmissions || []).length > 0).length
   const chorusVus = state.factures.some((f) => (f.transmissions || []).some((t) => t.plateforme === 'chorus'))
@@ -42,7 +62,28 @@ function diagnostics(state: ReturnType<typeof useStore>['state']): Diagnostic[] 
     return base
   }
   return [
-    sante('banque', { type: 'banque', libelle: 'Banque', etat: banque ? 'ok' : state.transactionsBancaires.length ? 'partiel' : 'absent', detail: banque ? `solde ${fmtMoney(banque.solde)} au ${fmtDate(banque.date)}` : state.transactionsBancaires.length ? `${state.transactionsBancaires.length} mouvements importés` : 'aucun relevé' }),
+    sante('banque', {
+      type: 'banque',
+      libelle: 'Banque',
+      etat:
+        aReconnecter.length > 0
+          ? 'partiel'
+          : banque
+            ? 'ok'
+            : state.transactionsBancaires.length
+              ? 'partiel'
+              : 'absent',
+      detail: [
+        banque
+          ? `solde ${fmtMoney(banque.solde)} au ${fmtDate(banque.date)}`
+          : state.transactionsBancaires.length
+            ? `${state.transactionsBancaires.length} mouvements importés`
+            : 'aucun relevé',
+        detailConnexion,
+      ]
+        .filter(Boolean)
+        .join(' · '),
+    }),
     sante('mail', { type: 'mail', libelle: 'Mail (Gmail)', etat: state.settings.surveillance?.clientId ? 'ok' : 'absent', detail: state.settings.surveillance?.email || 'non branché (Paramètres → Branchements)' }),
     sante('drive', { type: 'drive', libelle: 'Drive', etat: state.registreDocuments.length ? 'partiel' : 'absent', detail: `${state.registreDocuments.length} pièce(s) au registre` }),
     sante('cabinet', { type: 'cabinet', libelle: 'Cabinet comptable', etat: state.settings.profilComptable ? (derCompta ? 'ok' : 'partiel') : 'absent', detail: derCompta ? `dernier lot ${derCompta.periode} v${derCompta.version}` : state.settings.profilComptable ? 'profil configuré, aucun export' : 'profil non configuré' }),
@@ -60,14 +101,22 @@ function diagnostics(state: ReturnType<typeof useStore>['state']): Diagnostic[] 
 // vit maintenant dans Banque & trésorerie, avec son champ « solde de fin ».
 // La carte reste : c'est ici qu'on vient chercher les imports, et un écran qui
 // perd une entrée sans la remplacer fait chercher longtemps.
+//
+// La CONNEXION DIRECTE (lecture seule) arrive au même endroit et par le même
+// chemin — `preparerImport`, le solde de fin, le rapprochement proposé. Le
+// renvoi la mentionne pour la même raison qu'il mentionnait l'import : ce qui
+// n'est pas nommé ici se cherche ailleurs.
 
 function CarteImportBancaire() {
   const { state } = useStore()
+  const today = useToday()
   const dernier = [...state.importsBancaires].sort((a, b) => a.date.localeCompare(b.date)).pop()
   const solde = soldeBancaire(state)
+  const connexions = Array.isArray(state.connexionsBancaires) ? state.connexionsBancaires : []
+  const aReconnecter = connexions.filter((c) => etatConsentement(c, today).alerter)
   return (
     <Card
-      titre="Import bancaire — CAMT.053 · OFX/QFX · QIF · CSV"
+      titre="Import bancaire — CAMT.053 · OFX/QFX · QIF · CSV (et connexion directe)"
       actions={
         <Btn small kind="primary" onClick={() => navigate('/finance/banque')}>
           Aller à l'import de relevé
@@ -75,8 +124,8 @@ function CarteImportBancaire() {
       }
     >
       <p className="small" style={{ margin: '0 0 8px' }}>
-        Les quatre formats s'importent en UN SEUL endroit :{' '}
-        <a href="#/finance/banque">Banque &amp; trésorerie</a>. C'est le seul point qui porte le{' '}
+        La connexion bancaire directe (lecture seule) et les quatre formats de fichier arrivent en UN SEUL
+        endroit : <a href="#/finance/banque">Banque &amp; trésorerie</a>. C'est le seul point qui porte le{' '}
         <strong>solde de fin de relevé</strong> — celui qui cale la trésorerie affichée. Le rapprochement suit,
         proposé, jamais appliqué sans validation.
       </p>
@@ -85,6 +134,9 @@ function CarteImportBancaire() {
           ? `Dernier relevé : ${dernier.nomFichier} du ${fmtDate(dernier.date)} — ${dernier.nbNouvelles} mouvement(s) nouveaux.`
           : 'Aucun relevé importé pour l’instant.'}
         {solde ? ` Solde bancaire connu : ${fmtMoney(solde.solde)} au ${fmtDate(solde.date)}.` : ' Aucun solde de fin saisi : le solde bancaire reste inconnu.'}
+        {connexions.length > 0
+          ? ` ${connexions.length} connexion(s) directe(s)${aReconnecter.length > 0 ? ` — ${aReconnecter.length} à reconnecter (autorisation DSP2 de 90 jours)` : ''}.`
+          : ' Aucune connexion directe : l’import de fichier reste le chemin hors ligne.'}
       </p>
     </Card>
   )
@@ -325,7 +377,8 @@ function CartePasserelles() {
 
 export default function Connecteurs() {
   const { state } = useStore()
-  const diag = useMemo(() => diagnostics(state), [state])
+  const today = useToday()
+  const diag = useMemo(() => diagnostics(state, today), [state, today])
   return (
     <Page titre="Finance" sousTitre="Connecteurs — diagnostic consolidé et imports.">
       <FinanceNav actif="connecteurs" />

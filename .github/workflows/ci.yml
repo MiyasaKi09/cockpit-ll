@@ -45,6 +45,9 @@ jobs:
       - name: Edge Functions security tests
         run: npm run test:edge-security
 
+      - name: Third-party credentials never leave their Edge function
+        run: npm run test:secrets-connecteurs
+
       - name: Production rollout consistency
         run: npm run test:mise-en-production
 
@@ -110,6 +113,9 @@ jobs:
 
       - name: Defects liability year registry with one authoritative end date
         run: npm run test:gpa
+
+      - name: Site meeting agenda carried over, ranked and never hidden
+        run: npm run test:releve-seance
 
       - name: Co-contractor fee notes chased per overdue month
         run: npm run test:cotraitants
@@ -242,6 +248,12 @@ jobs:
 
       - name: One authority per notion — canonical contractor, single bank import keeping the balance
         run: npm run test:autorite-unique
+
+      - name: Direct bank link — API and file statements deduplicate, null balance is never 0, consent announced before it breaks
+        run: npm run test:banque-connectee
+
+      - name: Chorus Pro lifecycle — matched by invoice number, no amount ever rewritten
+        run: npm run test:cycle-chorus
 
       - name: Finance entry screen reuses existing selectors, nine destinations kept
         run: npm run test:finance-essentiel

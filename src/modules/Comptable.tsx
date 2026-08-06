@@ -40,6 +40,13 @@ import {
   piecesPeriode,
   telechargerOctets,
 } from '../comptable'
+// Le cycle de vie d'une facture publique a UN propriétaire : `derniereTransmission`
+// (le statut le plus récent PAR DATE, pas le dernier élément du tableau) et
+// `soldeFacture` (le solde se dérive des paiements enregistrés). Cet écran les
+// IMPORTE : recompter ici ferait dire deux choses de la même facture à la
+// clôture et à l'écran Ventes.
+import { derniereTransmission, soldeFacture } from '../facture'
+import { estMiseEnPaiement, libelleCodeChorus, libellePlateformeTransmission } from '../chorusApi'
 import { addMonths, fmtDate, fmtMoney, monthKey, uid } from '../util'
 
 // ------------------------------------------------------------------
@@ -262,6 +269,108 @@ function RetourModal({ lot, onClose }: { lot: LotComptable; onClose: () => void 
 }
 
 // ------------------------------------------------------------------
+// Chorus Pro à la clôture — les deux écarts que le portail révèle
+// ------------------------------------------------------------------
+//
+// Pourquoi cette carte est ICI et pas seulement dans Ventes : la clôture est
+// le moment où l'on confronte ce que le Cockpit croit à ce que les tiers
+// disent. Le portail public en dit deux choses qu'aucun autre écran ne
+// rapproche :
+//
+//   · une facture REJETÉE est sortie du circuit de paiement. Elle ne se voit
+//     nulle part dans une clôture — elle n'est ni en retard (son échéance
+//     n'est pas forcément passée) ni payée. Elle sera portée au chiffre
+//     d'affaires du mois alors qu'elle n'a jamais été reçue de façon
+//     exploitable ;
+//   · une facture MISE EN PAIEMENT par le payeur et non soldée au Cockpit :
+//     le virement est parti, le rapprochement bancaire n'a pas encore eu lieu.
+//     C'est un encaissement à attendre, daté, sur lequel on peut compter.
+//
+// Aucun de ces deux chiffres n'est recalculé ici : `derniereTransmission` dit
+// le statut, `soldeFacture` dit le solde. La carte ASSEMBLE, elle ne décide
+// pas — et elle n'écrit rien.
+
+function CarteChorusCloture() {
+  const { state } = useStore()
+
+  const rejetees = state.factures.filter((f) => derniereTransmission(f)?.statut === 'rejetee')
+  const enPaiement = state.factures.filter((f) => {
+    const t = derniereTransmission(f)
+    return estMiseEnPaiement(t) && f.type !== 'avoir' && soldeFacture(state, f) > 0.01
+  })
+  const attendu = enPaiement.reduce((somme, f) => somme + soldeFacture(state, f), 0)
+  const sync = state.settings.chorusSync || null
+
+  return (
+    <Card titre="Chorus Pro — ce que le portail dit de nos factures publiques">
+      {rejetees.length === 0 && enPaiement.length === 0 ? (
+        <EmptyState>
+          Aucun écart signalé par le portail. {sync ? '' : 'Aucune synchronisation intégrée : le cycle de vie se lit dans Ventes (ou s’importe en CSV depuis Connecteurs).'}
+        </EmptyState>
+      ) : (
+        <Table compact head={['Facture', 'Ce que dit le portail', 'Conséquence à la clôture', <span key="m" className="right">Montant</span>]}>
+          {rejetees.map((f) => {
+            const t = derniereTransmission(f)!
+            return (
+              <tr key={`rejet-${f.id}`}>
+                <td className="mono">
+                  <a href={`#/facturation/chercher/${encodeURIComponent(f.numero || f.id)}`}>{f.numero || f.id}</a>
+                </td>
+                <td>
+                  <Badge tone="danger">
+                    {libellePlateformeTransmission(t.plateforme)} ·{' '}
+                    {t.statutPortail ? libelleCodeChorus(t.statutPortail) : 'rejetée'}
+                  </Badge>
+                  <div className="danger-text small">{t.motif || 'motif non rendu par le portail — à lire sur Chorus Pro'}</div>
+                </td>
+                <td className="small">
+                  Sortie du circuit de paiement : elle ne sera pas réglée tant qu'elle n'est pas corrigée et
+                  redéposée{t.date ? ` (statut du ${fmtDate(t.date)})` : ''}.
+                </td>
+                <td className="right num">{fmtMoney(f.figee?.totalHT ?? f.montantHT, true)} HT</td>
+              </tr>
+            )
+          })}
+          {enPaiement.map((f) => {
+            const t = derniereTransmission(f)!
+            return (
+              <tr key={`paiement-${f.id}`}>
+                <td className="mono">
+                  <a href={`#/facturation/chercher/${encodeURIComponent(f.numero || f.id)}`}>{f.numero || f.id}</a>
+                </td>
+                <td>
+                  <Badge tone="ok">
+                    {libellePlateformeTransmission(t.plateforme)} ·{' '}
+                    {t.statutPortail ? libelleCodeChorus(t.statutPortail) : 'payée (plateforme)'}
+                  </Badge>
+                </td>
+                <td className="small">
+                  Le payeur a lancé le virement{t.date ? ` le ${fmtDate(t.date)}` : ''} ; aucun paiement n'est
+                  encore enregistré au Cockpit — encaissement à rapprocher au relevé.
+                </td>
+                <td className="right num">{fmtMoney(soldeFacture(state, f), true)} TTC</td>
+              </tr>
+            )
+          })}
+        </Table>
+      )}
+      <p className="muted small" style={{ margin: '10px 2px 0' }}>
+        {enPaiement.length > 0 && (
+          <>
+            <strong>{fmtMoney(attendu)}</strong> TTC annoncés en paiement par le portail et non encore rapprochés.{' '}
+          </>
+        )}
+        Un statut de portail ne solde JAMAIS une facture : le solde se dérive des paiements enregistrés, et le
+        rapprochement se fait dans <a href="#/finance/banque">Banque &amp; trésorerie</a>.{' '}
+        {sync
+          ? `Statuts lus le ${fmtDate(sync.le)} (${sync.environnement}).`
+          : 'Statuts saisis ou importés à la main : la synchronisation se lance depuis Ventes.'}
+      </p>
+    </Card>
+  )
+}
+
+// ------------------------------------------------------------------
 // Page
 // ------------------------------------------------------------------
 
@@ -426,6 +535,8 @@ export default function Comptable() {
           ))}
         </Table>
       </Card>
+
+      <CarteChorusCloture />
 
       {apercu && (
         <Card titre={`Aperçu des écritures (${ecritures.length})`}>

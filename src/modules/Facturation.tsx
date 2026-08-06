@@ -15,6 +15,22 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { AppState, EcheanceFacturation, EvenementTransmission, Facture, LigneFacture, PhaseCode, TypeMO } from '../types'
 import { useStore } from '../store'
+// Cycle de vie Chorus Pro — la moitié PURE (traduction des statuts du portail,
+// rattachement PAR NUMÉRO) et le transport vers la fonction Edge `chorus-sync`.
+// Le client Supabase lui est PASSÉ : aucun identifiant PISTE ni compte
+// technique n'approche ce navigateur.
+import {
+  confirmerSynchronisationChorus,
+  fusionnerInconnues,
+  libelleCodeChorus,
+  libellePlateformeTransmission,
+  lireStatutChorusPro,
+  rattacherCycleVieChorus,
+  resumeSynchronisationChorus,
+  synchroniserChorus,
+  type StatutChorus,
+} from '../chorusApi'
+import { clientSupabase } from '../sync'
 import {
   Badge,
   Btn,
@@ -127,13 +143,262 @@ const LIBELLES_TRANSMISSION: Record<EvenementTransmission['statut'], string> = {
 }
 
 /** badge du DERNIER statut portail (le plus récent par date — un import CSV
- *  rejoué peut ajouter un événement ancien en fin de tableau) */
+ *  rejoué peut ajouter un événement ancien en fin de tableau).
+ *
+ *  Le mot affiché est celui du PORTAIL quand la synchronisation l'a rapporté
+ *  (`statutPortail` : « suspendue », « à compléter »…), et celui de la liste
+ *  fermée sinon (saisie manuelle, import CSV). Chorus déclare une quinzaine de
+ *  statuts là où la liste en compte cinq : quatre voies non nominales se
+ *  projettent sur « rejetée » pour que le badge rouge, l'action « à traiter »
+ *  et l'alerte se déclenchent — mais afficher « rejetée » quand le portail a
+ *  dit « suspendue » enverrait chercher le mauvais mot sur le portail. */
 function BadgeTransmission({ t }: { t: EvenementTransmission }) {
   const tone = t.statut === 'rejetee' ? 'danger' : t.statut === 'approuvee' || t.statut === 'payee' ? 'ok' : 'info'
   return (
     <Badge tone={tone}>
-      {t.plateforme} · {LIBELLES_TRANSMISSION[t.statut]}
+      {libellePlateformeTransmission(t.plateforme)} ·{' '}
+      {t.statutPortail ? libelleCodeChorus(t.statutPortail) : LIBELLES_TRANSMISSION[t.statut]}
     </Badge>
+  )
+}
+
+// ---------- Chorus Pro : le cycle de vie se SYNCHRONISE (5.16) ----------
+//
+// L'import CSV du cycle de vie (Connecteurs) reste en place, et reste le
+// repli : il fonctionne hors ligne, sans raccordement, sans compte technique.
+// Cette carte ne le remplace pas — elle évite d'avoir à le faire à la main
+// chaque semaine. Les deux passent par la MÊME règle de rattachement (par
+// numéro de facture) et par la même idempotence : synchroniser après avoir
+// importé le CSV du même jour n'ajoute aucune ligne.
+//
+// Ce que la synchronisation écrit sur une facture : UN événement de
+// transmission, et une ligne au journal d'audit de la pièce. Rien d'autre. Pas
+// de montant, pas de numéro, pas de statut de paiement — « mise en paiement »
+// chez Chorus veut dire que le payeur a lancé le virement, pas que l'argent
+// est arrivé, et le solde d'une facture se dérive des paiements enregistrés.
+
+/** fenêtre de dépôt balayée : un trimestre plus les délais publics. Au-delà,
+ *  une facture non payée a déjà parlé par une autre alerte. */
+const FENETRE_CHORUS_JOURS = 120
+
+function CarteChorus() {
+  const { state, update, replace } = useStore()
+  const today = useToday()
+  const sb = clientSupabase()
+  const [statut, setStatut] = useState<StatutChorus | null>(null)
+  const [erreur, setErreur] = useState<string | null>(null)
+  const [occupe, setOccupe] = useState(false)
+
+  const inconnues = Array.isArray(state.chorusInconnues) ? state.chorusInconnues : []
+  const derniereLocale = state.settings.chorusSync || null
+
+  useEffect(() => {
+    if (!sb) return
+    let vivant = true
+    void (async () => {
+      try {
+        const lu = await lireStatutChorusPro(sb)
+        if (vivant) setStatut(lu)
+      } catch (e) {
+        if (vivant) setErreur(e instanceof Error ? e.message : 'Statut Chorus Pro illisible.')
+      }
+    })()
+    return () => {
+      vivant = false
+    }
+    // une seule fois par montage : la configuration ne bouge pas en cours de session
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const synchroniser = async () => {
+    if (!sb) return
+    setOccupe(true)
+    setErreur(null)
+    try {
+      const reponse = await synchroniserChorus(sb, FENETRE_CHORUS_JOURS)
+      // TOUT est calculé AVANT la mutation (producteur rejouable), et le
+      // rattachement passe par l'autorité unique : `rattacherCycleVieChorus`.
+      const resultat = rattacherCycleVieChorus(state.factures, reponse.factures, today)
+      const resume = resumeSynchronisationChorus(resultat)
+      const snapshot = state
+
+      update((d) => {
+        for (const ajout of resultat.ajouts) {
+          const f = d.factures.find((x) => x.id === ajout.factureId)
+          if (!f) continue
+          f.transmissions = [...(f.transmissions || []), ajout.evenement]
+          f.evenements = [
+            ...(f.evenements || []),
+            {
+              date: ajout.evenement.date || today,
+              type: 'transmission',
+              detail: `Chorus Pro (synchronisation) : ${ajout.evenement.statutPortail || ajout.evenement.statut}${
+                ajout.evenement.motif ? ` — ${ajout.evenement.motif}` : ''
+              }`,
+            },
+          ]
+        }
+        d.chorusInconnues = fusionnerInconnues(
+          d.chorusInconnues,
+          resultat.inconnues,
+          resultat.ajouts.map((a) => a.numero),
+        )
+        d.settings.chorusSync = { le: today, environnement: reponse.environnement, resultat: resume }
+      })
+
+      toast(resume, {
+        tone: resultat.inconnues.length > 0 || resultat.nonTraduits.length > 0 ? 'warn' : 'ok',
+        undo: () => replace(snapshot),
+      })
+      if (reponse.diagnostic) toast(reponse.diagnostic, { tone: 'warn' })
+
+      // Le serveur apprend ce qui est RÉELLEMENT entré au Cockpit : « Chorus a
+      // répondu » et « le Cockpit a rattaché » ne sont pas la même chose.
+      // L'échec de cette confirmation n'est pas bloquant.
+      if (reponse.journalId) {
+        void confirmerSynchronisationChorus(
+          sb,
+          reponse.journalId,
+          resume,
+          resultat.ajouts.length,
+          resultat.inconnues.length,
+        ).catch(() => undefined)
+      }
+      setStatut((s) => (s ? { ...s, environnement: reponse.environnement } : s))
+    } catch (e) {
+      const message = e instanceof Error ? e.message : 'Synchronisation Chorus Pro impossible.'
+      setErreur(message)
+      toast(message, { tone: 'danger' })
+    } finally {
+      setOccupe(false)
+    }
+  }
+
+  const oublierInconnue = (numero: string) => {
+    const snapshot = state
+    update((d) => {
+      d.chorusInconnues = (Array.isArray(d.chorusInconnues) ? d.chorusInconnues : []).filter(
+        (x) => x.numero !== numero,
+      )
+    })
+    toast(`Facture ${numero} retirée de la liste à relire.`, { undo: () => replace(snapshot) })
+  }
+
+  return (
+    <Card
+      titre="Chorus Pro — cycle de vie des factures publiques"
+      actions={
+        sb && statut?.configure ? (
+          <Btn small kind="primary" disabled={occupe} onClick={() => void synchroniser()}>
+            {occupe ? 'Synchronisation…' : 'Synchroniser les statuts'}
+          </Btn>
+        ) : undefined
+      }
+    >
+      {!sb ? (
+        <p className="muted small" style={{ margin: 0 }}>
+          La synchronisation passe par l'espace partagé (les identifiants PISTE et le compte technique restent
+          côté serveur, jamais dans ce navigateur) : connectez-vous dans <a href="#/parametres">Paramètres</a>.
+          L'import CSV du cycle de vie (<a href="#/finance/connecteurs">Connecteurs</a>) fonctionne, lui, sans rien
+          de tout cela.
+        </p>
+      ) : (
+        <>
+          {statut?.configure === false && (
+            <div className="pill-note" style={{ marginBottom: 10 }}>
+              Chorus Pro n'est pas branché : il manque{' '}
+              {statut.manquants.map((m, i) => (
+                <span key={m}>
+                  {i > 0 ? ', ' : ''}
+                  <code>{m}</code>
+                </span>
+              ))}{' '}
+              dans les secrets de la fonction <code>chorus-sync</code>. Les deux premiers viennent de l'application
+              PISTE (<a href="https://piste.gouv.fr" target="_blank" rel="noreferrer">piste.gouv.fr</a> → créer une
+              application → <code>client_id</code> / <code>client_secret</code>) ; les deux suivants du{' '}
+              <strong>compte technique</strong> Chorus Pro (espace « Raccordements » → « Créer un compte
+              technique » — il n'est actif qu'au bout de 30 minutes). Tant qu'ils n'y sont pas, l'import CSV du
+              cycle de vie reste le chemin, et il suffit.
+            </div>
+          )}
+          {statut?.configure && statut.environnement === 'qualification' && (
+            <div className="pill-note" style={{ marginBottom: 10 }}>
+              Environnement de <strong>qualification</strong> : les factures lues viennent du jeu de données de
+              l'AIFE, <strong>pas de la structure de l'agence</strong>. Elles apparaîtront donc presque toutes
+              comme « sans correspondance ». Pour lire les vraies factures, posez{' '}
+              <code>CHORUS_ENVIRONNEMENT=production</code> sur la fonction — après avoir déclaré le raccordement
+              dans Chorus Pro.
+            </div>
+          )}
+          {erreur && (
+            <div className="pill-note" style={{ marginBottom: 10, borderColor: 'var(--danger)', color: 'var(--danger)' }}>
+              {erreur}
+            </div>
+          )}
+
+          <p className="muted small" style={{ margin: '0 0 8px' }}>
+            {derniereLocale
+              ? `Dernière synchronisation intégrée : ${fmtDate(derniereLocale.le)} (${derniereLocale.environnement}) — ${derniereLocale.resultat}`
+              : 'Aucune synchronisation intégrée pour l’instant.'}
+            {statut?.derniere && statut.derniere.ok === false && (
+              <> · Dernier essai côté serveur en échec : {statut.derniere.resultat}</>
+            )}
+          </p>
+
+          {inconnues.length > 0 && (
+            <>
+              <p className="small" style={{ margin: '10px 0 6px' }}>
+                <strong>{inconnues.length} facture(s) du portail sans correspondance</strong> — signalées, jamais
+                rattachées « au plus proche » : le rattachement se fait par <strong>numéro de facture</strong>,
+                comme l'import CSV. À relire : facture déposée hors Cockpit, numéro saisi autrement sur le
+                portail, pièce d'un cotraitant — ou lecture de l'environnement de qualification.
+              </p>
+              <Table
+                compact
+                head={[
+                  'N° au portail',
+                  'Statut',
+                  'Le',
+                  'Destinataire',
+                  <span key="ttc" style={{ display: 'block', textAlign: 'right' }}>TTC</span>,
+                  '',
+                ]}
+              >
+                {inconnues.map((x) => (
+                  <tr key={x.numero}>
+                    <td className="mono">{x.numero}</td>
+                    <td>
+                      <Badge tone={x.statutPortail === 'REJETEE' ? 'danger' : 'info'}>
+                        {libelleCodeChorus(x.statutPortail)}
+                      </Badge>
+                      {x.motif && <div className="danger-text small">{x.motif}</div>}
+                    </td>
+                    <td>{x.dateStatut ? <DateF d={x.dateStatut} /> : <span className="muted">—</span>}</td>
+                    <td className="small">{x.destinataire || <span className="muted">—</span>}</td>
+                    <td className="right num">{x.montantTTC != null ? fmtMoney(x.montantTTC, true) : '—'}</td>
+                    <td>
+                      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                        <Btn small onClick={() => oublierInconnue(x.numero)} title="Retirer de la liste à relire (annulable)">
+                          Retirer
+                        </Btn>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </Table>
+            </>
+          )}
+
+          <p className="muted small" style={{ margin: '10px 2px 0' }}>
+            Lecture seule : le Cockpit LIT le portail. Il ne dépose rien, ne ré-émet aucune facture, ne corrige
+            aucun montant et n'envoie rien — corriger un rejet puis redéposer reste un geste humain sur Chorus
+            Pro. Un statut « mise en paiement » dit que le payeur a lancé le virement, pas que l'argent est
+            arrivé : le solde d'une facture se dérive des paiements enregistrés. Fenêtre de dépôt balayée :{' '}
+            {FENETRE_CHORUS_JOURS} jours. Relancer la synchronisation n'ajoute aucun doublon.
+          </p>
+        </>
+      )}
+    </Card>
   )
 }
 
@@ -1733,6 +1998,10 @@ export default function Facturation() {
           (<a href="#/finance/connecteurs">Connecteurs</a>).
         </div>
       )}
+
+      {/* ----- cycle de vie du portail : la carte qui produit les deux
+              pill-notes ci-dessus, ou dit précisément ce qui manque ----- */}
+      <CarteChorus />
 
       {/* ----- relances graduées ----- */}
       <CarteRelances state={state} today={today} />

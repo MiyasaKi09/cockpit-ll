@@ -89,6 +89,14 @@ function migrate(parsed: AppState): AppState {
   etat.chronos = Array.isArray(parsed.chronos) ? parsed.chronos : []
   etat.pointages = Array.isArray(parsed.pointages) ? parsed.pointages : []
   etat.reunions = Array.isArray(parsed.reunions) ? parsed.reunions : []
+  // C3 — points de séance. Champ ajouté sans palier, et SANS reprise : les
+  // points d'ordre du jour des réunions passées vivent dans le texte des CR
+  // déjà diffusés, et les extraire à la machine fabriquerait des lignes
+  // approximatives que personne n'a écrites — avec un état inventé, ce qui
+  // est exactement ce que ce registre existe pour ne plus faire. Un état
+  // antérieur naît donc avec un relevé vide : le premier point s'inscrit à
+  // la prochaine séance, et la machine propose déjà ce qu'elle sait.
+  etat.pointsSeance = Array.isArray(parsed.pointsSeance) ? parsed.pointsSeance : []
   // v18 → v19 : les trois axes du §5.2 (src/categorisation.ts). Le palier
   // REPREND les courriers existants sans rien inventer : le type d'échange
   // et l'importance se dérivent de `type` et `urgence`, qui restent la
@@ -144,6 +152,25 @@ function migrate(parsed: AppState): AppState {
   etat.attendusFinanciers = Array.isArray(parsed.attendusFinanciers) ? parsed.attendusFinanciers : []
   etat.transactionsBancaires = Array.isArray(parsed.transactionsBancaires) ? parsed.transactionsBancaires : []
   etat.importsBancaires = Array.isArray(parsed.importsBancaires) ? parsed.importsBancaires : []
+  // Connexion bancaire directe — miroir daté, sans secret. Champ ajouté sans
+  // palier : un état antérieur n'a simplement aucune connexion, ce qui est la
+  // vérité. Les comptes sont normalisés à leur tour parce qu'ils viennent
+  // d'un serveur : un `comptes` absent rendrait `.map` sur `undefined` au
+  // premier affichage, et l'écran de trésorerie tomberait en entier.
+  etat.connexionsBancaires = (Array.isArray(parsed.connexionsBancaires) ? parsed.connexionsBancaires : []).map(
+    (c) => ({
+      ...c,
+      comptes: (Array.isArray(c?.comptes) ? c.comptes : []).map((x) => ({
+        ...x,
+        typesSoldeVus: Array.isArray(x?.typesSoldeVus) ? x.typesSoldeVus : [],
+      })),
+    }),
+  )
+  // 5.16 — factures vues sur Chorus Pro sans correspondance au Cockpit.
+  // Champ ajouté sans palier : un état antérieur n'a simplement jamais
+  // synchronisé le portail, ce qui est la vérité — la collection naît vide,
+  // et l'import CSV du cycle de vie continue de fonctionner à l'identique.
+  etat.chorusInconnues = Array.isArray(parsed.chorusInconnues) ? parsed.chorusInconnues : []
   etat.lotsComptables = Array.isArray(parsed.lotsComptables) ? parsed.lotsComptables : []
   // Position TVA — déclarations marquées à la main. Champ ajouté sans
   // palier : un état antérieur n'a simplement rien déclaré DEPUIS le

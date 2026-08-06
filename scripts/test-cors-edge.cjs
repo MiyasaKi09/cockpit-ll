@@ -57,6 +57,36 @@ assert.ok(
     'soit ce test ne sait plus les repérer — dans les deux cas il ne garde plus rien.',
 )
 
+// --- le filet du filet : la dérivation ne doit rien laisser passer ----------
+//
+// Le repérage ci-dessus ne reconnaît qu'une forme : `functions.invoke('nom'`.
+// Le jour où un appel passe par une constante ou des guillemets doubles, la
+// fonction sortirait du périmètre SANS que rien ne change à l'écran — et le
+// préflet la bloquerait en production pendant que ce test resterait vert.
+// On croise donc avec les fonctions dont le NOM est écrit quelque part dans
+// `src/` : si le Cockpit connaît son nom, c'est qu'il lui parle.
+const dossiersFonctions = fs
+  .readdirSync(path.join(racine, 'supabase/functions'), { withFileTypes: true })
+  .filter((e) => e.isDirectory() && !e.name.startsWith('_'))
+  .map((e) => e.name)
+
+for (const nom of dossiersFonctions) {
+  const citee = fichiersClient.some((f) => lire(f).includes(`'${nom}'`) || lire(f).includes(`"${nom}"`))
+  if (!citee) continue
+  assert.ok(
+    appelees.has(nom),
+    `${nom} est nommée dans src/ mais n’a pas été repérée comme appelée : ce test ne vérifierait donc PAS\n` +
+      'ses en-têtes CORS. Un appel qui ne s’écrit pas `functions.invoke(\'nom\'` sort du filet — corrigez le\n' +
+      'repérage plutôt que de laisser une fonction hors périmètre.',
+  )
+}
+
+// Les deux branchements de ce lot sont appelés depuis le navigateur : si l'un
+// d'eux quittait cette liste, c'est que l'écran aurait cessé de l'appeler.
+for (const nom of ['banque-sync', 'chorus-sync']) {
+  assert.ok(appelees.has(nom), `${nom} doit être vue comme appelée depuis le navigateur`)
+}
+
 // --- chacune autorise ce que le navigateur va demander ---------------------
 
 for (const nom of [...appelees].sort()) {

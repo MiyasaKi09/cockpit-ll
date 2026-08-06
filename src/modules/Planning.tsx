@@ -6,7 +6,7 @@
 // paysage propre à envoyer à tout le monde.
 // ============================================================
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { AppState, MarcheTravaux, PhaseCode, Projet } from '../types'
 import { useStore } from '../store'
 import { Badge, Btn, Card, confirmer, DateInput, EmptyState, Field, Icon, NumInput, navigate, Page, Select, Table, Tabs, TextInput, toast, useRoute, useToday } from '../ui'
@@ -14,7 +14,7 @@ import { addDays, diffDays, fmtDate, fmtHeures, mondayOf, todayISO, uid } from '
 import { LIBELLES_PHASES, PHASES_ORDRE } from '../miqcp'
 import { daterPhases, echeancesParDefaut } from '../echeancier'
 import { STATUTS_ACTIFS, capacitePersonneSemaine, capaciteSemaine, chargePlanifieeSemaine, heuresAbsenceSemaine } from '../derive'
-import { conflitsConges, propositionsReport, type ConflitConge } from '../conges'
+import { EPSILON_HEURES, conflitsConges, propositionsReport, type ConflitConge } from '../conges'
 import { simulerProjet, type VerdictPersonne } from '../chargeProspective'
 import { personnesActives } from '../depart'
 import { EcheancesContenu } from './Calendrier'
@@ -119,7 +119,13 @@ function PisteProjet({ projet: p, fenetre: f }: { projet: Projet; fenetre: Fenet
 
 // ---------- édition rapide des dates (le réel du chantier) ----------
 
-function EditionDates({ projet: p }: { projet: Projet }) {
+/** Exporté depuis le lot d'usage : le geste le plus fréquent d'une phase de
+ *  chantier — constater un retard et décaler — se faisait ICI, dans le
+ *  Planning global, alors qu'on constate le retard dans la FICHE du projet.
+ *  Le composant est autonome (il ne lit que le projet qu'on lui passe) ;
+ *  l'onglet Planning de la fiche le monte tel quel, sans en écrire un
+ *  second qui aurait divergé au premier changement de règle de propagation. */
+export function EditionDates({ projet: p }: { projet: Projet }) {
   const { state, update } = useStore()
   const [propager, setPropager] = useState(true)
   const [debutEtudes, setDebutEtudes] = useState<string | null>(
@@ -393,8 +399,10 @@ function BarreChantier({ ligne, fenetre: f, today }: { ligne: LigneChantier; fen
   )
 }
 
-/** édition rapide des dates de chantier — un lot glisse, les suivants suivent */
-function EditionChantier({ projet: p }: { projet: Projet }) {
+/** édition rapide des dates de chantier — un lot glisse, les suivants suivent.
+ *  Exporté pour la même raison qu'`EditionDates` : l'onglet Planning de la
+ *  fiche projet le monte, au lieu d'obliger à repasser par le Planning global. */
+export function EditionChantier({ projet: p }: { projet: Projet }) {
   const { state, update } = useStore()
   const [propager, setPropager] = useState(true)
   const lots = state.marches
@@ -712,6 +720,31 @@ function PlanDeCharge({ debutLundi, nbSemaines }: { debutLundi: string; nbSemain
   )
 }
 
+/** ce qui EST planifié cette semaine-là, ligne à ligne — « P03 · DCE — 12 h ».
+ *
+ *  Aucun calcul nouveau : `chargePlanifieeSemaine` (src/derive.ts) est
+ *  REJOUÉE sur un état restreint à une seule phase d'un seul projet. La
+ *  somme des lignes est donc, par construction, le total que la cellule
+ *  affiche — refaire la boucle ici la ferait diverger au premier changement
+ *  de la règle de répartition (constat R3 de l'audit d'usage). */
+interface LigneChargeSemaine {
+  projetId: string
+  nomProjet: string
+  phase: PhaseCode
+  heures: number
+}
+
+function chargeParPhase(state: AppState, personne: string, lundi: string): LigneChargeSemaine[] {
+  const lignes: LigneChargeSemaine[] = []
+  for (const p of state.projets) {
+    for (const ph of p.phases) {
+      const heures = chargePlanifieeSemaine({ ...state, projets: [{ ...p, phases: [ph] }] }, personne, lundi)
+      if (heures > EPSILON_HEURES) lignes.push({ projetId: p.id, nomProjet: p.nom, phase: ph.code, heures })
+    }
+  }
+  return lignes.sort((a, b) => b.heures - a.heures || a.projetId.localeCompare(b.projetId))
+}
+
 /** 5.12 — les pistes de report d'un conflit congé × charge. Tout est
  *  calculé par src/conges.ts ; ce bloc MONTRE et n'écrit rien : décaler
  *  une phase (onglet Études) ou changer l'équipe du projet reste le geste
@@ -719,6 +752,9 @@ function PlanDeCharge({ debutLundi, nbSemaines }: { debutLundi: string; nbSemain
 function PistesReport({ conflit: c }: { conflit: ConflitConge }) {
   const { state } = useStore()
   const pistes = propositionsReport(state, c)
+  // parcours 10 : la piste disait « 14 h à replacer » sans jamais dire
+  // LESQUELLES — on repartait chercher la phase à décaler à la main
+  const aDecaler = chargeParPhase(state, c.personne, c.lundi)
   return (
     <div style={{ marginTop: 12, border: '1px solid var(--danger)', borderRadius: 8, padding: '10px 12px' }}>
       <strong>Congé de {c.personne} — semaine du {fmtDate(c.lundi)}</strong>
@@ -726,6 +762,41 @@ function PistesReport({ conflit: c }: { conflit: ConflitConge }) {
         {fmtHeures(c.planifie)} planifiées pour {fmtHeures(c.capacite)} de capacité ({fmtHeures(c.absence)} de
         congé) : <strong>{fmtHeures(c.excedent)} à replacer</strong>.
       </p>
+      {aDecaler.length > 0 && (
+        <>
+          <p className="small" style={{ margin: '0 0 6px' }}>
+            Ce qui est planifié cette semaine-là — c'est l'une de ces phases qu'il faut décaler :
+          </p>
+          <Table
+            compact
+            head={['Projet · phase', <span key="h" className="right">Heures</span>, '']}
+          >
+            {aDecaler.map((l) => (
+              <tr key={`${l.projetId}|${l.phase}`}>
+                <td>
+                  <strong>{l.projetId}</strong> · {l.phase}{' '}
+                  <span className="muted small" title={l.nomProjet}>
+                    {LIBELLES_PHASES[l.phase]}
+                  </span>
+                </td>
+                <td className="right num">{fmtHeures(l.heures)}</td>
+                <td className="right">
+                  <a
+                    href={`#/planning/etudes/${l.projetId}`}
+                    className="small"
+                    title={`Ouvre « Ajuster les dates » de ${l.projetId} — la phase ${l.phase} et celles qui suivent`}
+                  >
+                    ajuster →
+                  </a>
+                </td>
+              </tr>
+            ))}
+          </Table>
+          <p className="small" style={{ margin: '8px 0 10px' }}>
+            <strong>Où poser ces heures :</strong>
+          </p>
+        </>
+      )}
       {pistes.length === 0 ? (
         <EmptyState>
           Aucune marge dans les semaines voisines ni chez l'autre personne — il faudra décaler une phase
@@ -754,8 +825,8 @@ function PistesReport({ conflit: c }: { conflit: ConflitConge }) {
         </Table>
       )}
       <p className="muted small" style={{ margin: '8px 0 0' }}>
-        Rien n'est appliqué automatiquement : pour reporter, décalez la phase (onglet Études), ajustez ses
-        heures prévues, ou modifiez l'équipe du projet (fiche projet).
+        Rien n'est appliqué automatiquement : pour reporter, décalez la phase (« ajuster » ci-dessus, ou
+        onglet Planning de la fiche projet), ajustez ses heures prévues, ou modifiez l'équipe du projet.
       </p>
     </div>
   )
@@ -956,12 +1027,19 @@ function ouvrirChargePDF(state: AppState, debutLundi: string, nbSemaines: number
     })
     .join('')
 
+  // S2 — le papier dit la MÊME capacité que l'écran : congés déduits
+  // (`capacitePersonneSemaine`). Avec la capacité nominale, une semaine à
+  // 2 jours de congé sortait « confortable » sur le PDF envoyé à tout le
+  // monde et rouge à l'écran — c'est le PDF qu'on regarde en réunion.
   const lignes = equipe
     .map((pers) => {
       const cells = lundis
         .map((l) => {
           const h = chargePlanifieeSemaine(state, pers.nom, l)
-          const ratio = cap > 0 ? h / cap : 0
+          const capP = capacitePersonneSemaine(state, pers.nom, l)
+          if (capP <= 0)
+            return `<td style="text-align:center;font-size:8px;padding:3px 2px;background:#eef1f5;color:#5a6478;font-style:italic">congé</td>`
+          const ratio = h / capP
           const { bg, fg } = couleurChargePDF(ratio)
           return `<td style="text-align:center;font-size:9px;padding:3px 2px;background:${bg};color:${fg};font-weight:${ratio > 1.001 ? 800 : 600}">${h < 0.05 ? '·' : Math.round(h)}</td>`
         })
@@ -973,7 +1051,7 @@ function ouvrirChargePDF(state: AppState, debutLundi: string, nbSemaines: number
   const totaux = lundis
     .map((l) => {
       const t = equipe.reduce((s, pers) => s + chargePlanifieeSemaine(state, pers.nom, l), 0)
-      const capEquipe = cap * equipe.length
+      const capEquipe = equipe.reduce((s, pers) => s + capacitePersonneSemaine(state, pers.nom, l), 0)
       const ratio = capEquipe > 0 ? t / capEquipe : 0
       const { fg } = couleurChargePDF(ratio)
       return `<td style="text-align:center;font-size:9px;padding:3px 2px;font-weight:700;color:${fg};border-top:1px solid #cdd3dd">${t < 0.05 ? '·' : Math.round(t)}</td>`
@@ -993,7 +1071,7 @@ function ouvrirChargePDF(state: AppState, debutLundi: string, nbSemaines: number
 </style></head><body>
 <button class="impression" onclick="window.print()">Imprimer / PDF</button>
 <h1>${echapper(state.settings.nomAgence)} — Plan de charge</h1>
-<div class="muted">Édité le ${fmtDate(today)} · ${fmtDate(lundis[0])} → ${fmtDate(addDays(lundis[lundis.length - 1], 6))} · heures planifiées / semaine · rouge = surcharge · document indicatif</div>
+<div class="muted">Édité le ${fmtDate(today)} · ${fmtDate(lundis[0])} → ${fmtDate(addDays(lundis[lundis.length - 1], 6))} · heures planifiées / semaine, comparées à la capacité <strong>congés déduits</strong> (semaine entièrement en congé : « congé ») · rouge = surcharge · document indicatif</div>
 <table>
   <thead><tr><th style="text-align:left;font-size:10px;padding:3px 6px;border-bottom:1px solid #e3e6ec">Personne</th>${enTete}</tr></thead>
   <tbody>${lignes}<tr><td style="padding:3px 6px;font-size:10px;color:#5a6478;border-right:1px solid #e3e6ec">Total équipe</td>${totaux}</tr></tbody>
@@ -1013,11 +1091,25 @@ type Mode = 'phases' | 'chantier' | 'charge'
 function GanttEtCharge({ vue }: { vue: 'etudes' | 'chantier' | 'charge' }) {
   const { state } = useStore()
   const today = useToday()
+  const route = useRoute()
   /** une vue = un onglet — plus de bascule cachée à l'intérieur */
   const mode: Mode = vue === 'etudes' ? 'phases' : vue
-  const [filtre, setFiltre] = useState('')
+  const enCharge = mode === 'charge'
+  // parcours 10 : « ajuster » depuis une piste de report dépose sur LE projet
+  // à décaler — `#/planning/etudes/P03` ouvre sa fenêtre d'édition des dates
+  const cibleRoute = route[0] === 'planning' && route[1] === 'etudes' ? route[2] : undefined
+  const [filtre, setFiltre] = useState(cibleRoute || '')
   const [debutF, setDebutF] = useState(() => addMonths(debutMois(todayISO()), -1))
   const [nbMois, setNbMois] = useState(12)
+  // S3 — la charge se lit en SEMAINES, et la question porte sur les 8 à 12
+  // qui viennent : la fenêtre en mois affichait ~52 colonnes dont 4 passées.
+  // Un trimestre par défaut, ancré sur la semaine en cours.
+  const [ancreLundi, setAncreLundi] = useState(() => mondayOf(todayISO()))
+  const [nbSemainesChoisi, setNbSemainesChoisi] = useState(13)
+
+  useEffect(() => {
+    if (cibleRoute) setFiltre(cibleRoute)
+  }, [cibleRoute])
 
   const tousPhases = projetsPlanifies(state)
   const tousChantier = projetsAvecChantier(state)
@@ -1027,9 +1119,10 @@ function GanttEtCharge({ vue }: { vue: 'etudes' | 'chantier' | 'charge' }) {
 
   const lignesCh = mode === 'chantier' ? lignesChantier(state, projets) : []
 
-  // fenêtre en semaines pour le plan de charge (lundis couvrant la fenêtre en mois)
-  const debutLundi = mondayOf(f.debut)
-  const nbSemaines = Math.max(1, Math.round(diffDays(f.debut, f.fin) / 7))
+  // fenêtre du plan de charge : en semaines, la sienne ; les frises gardent
+  // la fenêtre en mois (lundis la couvrant)
+  const debutLundi = enCharge ? ancreLundi : mondayOf(f.debut)
+  const nbSemaines = enCharge ? nbSemainesChoisi : Math.max(1, Math.round(diffDays(f.debut, f.fin) / 7))
 
   const mois: string[] = []
   for (let m = f.debut; m < f.fin; m = addMonths(m, 1)) mois.push(m)
@@ -1039,7 +1132,10 @@ function GanttEtCharge({ vue }: { vue: 'etudes' | 'chantier' | 'charge' }) {
       mode === 'phases' || mode === 'charge'
         ? tousPhases.flatMap((p) => p.phases.filter((ph) => ph.debut).map((ph) => ph.debut!))
         : state.marches.filter((m) => tousChantier.some((p) => p.id === m.projetId) && m.dateDebut).map((m) => m.dateDebut!)
-    if (debuts.length > 0) setDebutF(debutMois(debuts.sort()[0]))
+    if (debuts.length === 0) return
+    const premier = debuts.sort()[0]
+    setDebutF(debutMois(premier))
+    setAncreLundi(mondayOf(premier))
   }
 
   const projetSelectionne = filtre ? state.projets.find((p) => p.id === filtre) : undefined
@@ -1073,16 +1169,37 @@ function GanttEtCharge({ vue }: { vue: 'etudes' | 'chantier' | 'charge' }) {
   return (
     <>
       <div className="toolbar">
-        <Btn onClick={() => setDebutF(addMonths(debutF, -1))}>‹</Btn>
-        <Btn onClick={() => setDebutF(addMonths(debutF, 1))}>›</Btn>
-        <Btn onClick={() => setDebutF(addMonths(debutMois(todayISO()), -1))}>Aujourd'hui</Btn>
+        <Btn onClick={() => (enCharge ? setAncreLundi(addDays(ancreLundi, -28)) : setDebutF(addMonths(debutF, -1)))}>‹</Btn>
+        <Btn onClick={() => (enCharge ? setAncreLundi(addDays(ancreLundi, 28)) : setDebutF(addMonths(debutF, 1)))}>›</Btn>
+        <Btn
+          onClick={() => {
+            setAncreLundi(mondayOf(todayISO()))
+            setDebutF(addMonths(debutMois(todayISO()), -1))
+          }}
+        >
+          Aujourd'hui
+        </Btn>
         <Btn kind="ghost" onClick={calerSurProjets}>Caler sur les projets</Btn>
-        <Select
-          value={String(nbMois)}
-          onChange={(v) => setNbMois(Number(v))}
-          options={[{ value: '6', label: '6 mois' }, { value: '12', label: '12 mois' }, { value: '24', label: '24 mois' }]}
-          style={{ maxWidth: 110 }}
-        />
+        {enCharge ? (
+          <Select
+            value={String(nbSemainesChoisi)}
+            onChange={(v) => setNbSemainesChoisi(Number(v))}
+            options={[
+              { value: '8', label: '8 semaines' },
+              { value: '13', label: '13 semaines (un trimestre)' },
+              { value: '26', label: '26 semaines' },
+              { value: '52', label: '52 semaines' },
+            ]}
+            style={{ maxWidth: 200 }}
+          />
+        ) : (
+          <Select
+            value={String(nbMois)}
+            onChange={(v) => setNbMois(Number(v))}
+            options={[{ value: '6', label: '6 mois' }, { value: '12', label: '12 mois' }, { value: '24', label: '24 mois' }]}
+            style={{ maxWidth: 110 }}
+          />
+        )}
         {mode !== 'charge' && (
           <Select
             value={filtre}
@@ -1092,7 +1209,9 @@ function GanttEtCharge({ vue }: { vue: 'etudes' | 'chantier' | 'charge' }) {
           />
         )}
         <span className="muted small">
-          {fmtDate(f.debut)} → {fmtDate(addDays(f.fin, -1))}
+          {enCharge
+            ? `${fmtDate(debutLundi)} → ${fmtDate(addDays(debutLundi, nbSemaines * 7 - 1))}`
+            : `${fmtDate(f.debut)} → ${fmtDate(addDays(f.fin, -1))}`}
         </span>
         <span className="spacer" />
         {boutonPDF}

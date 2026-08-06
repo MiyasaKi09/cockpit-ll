@@ -6,10 +6,21 @@
 // des dossiers donne une lecture déterministe de l'avancement.
 
 import { useCallback, useEffect, useState } from 'react'
-import type { Projet } from '../types'
+import type { PhaseCode, Projet } from '../types'
 import { useStore } from '../store'
+import { useMoi } from '../moi'
 import { Badge, Btn, Card, EmptyState, Field, Select, Table, TextInput } from '../ui'
-import { LIBELLES_STATUT, chercherDoublon, creerDocument, enregistrerDocument } from '../registre'
+import {
+  CATEGORIES_DOC,
+  DOSSIER_PAR_CATEGORIE,
+  LIBELLES_STATUT,
+  chercherDoublon,
+  classerFichier,
+  creerDocument,
+  enregistrerDocument,
+  type PropositionClassement,
+} from '../registre'
+import { LIBELLES_PHASES, PHASES_ORDRE } from '../miqcp'
 import { fmtDate, todayISO } from '../util'
 import {
   ARBORESCENCE,
@@ -17,6 +28,7 @@ import {
   creerArborescenceProjet,
   lireRacine,
   nomConforme as nomConformeFS,
+  phaseDuDossier,
   rangerFichier,
   slugProjet,
   supporteFS,
@@ -24,7 +36,26 @@ import {
   type FSDirHandle,
 } from '../fsdrive'
 
-const TYPES_DOC = ['ADM', 'PC', 'CR', 'DCE', 'PLAN', 'FACT', 'DEVIS', 'PHOTO', 'MAIL', 'NOTE', 'CCTP', 'SITU']
+// Les catégories viennent de `CATEGORIES_DOC` (registre.ts) : la liste
+// recopiée qui vivait ici (`TYPES_DOC`) en avait DIVERGÉ — ni DPGF, ni
+// AUTRE — si bien que la même pièce déposée ici ou dans la boîte
+// d'arrivée n'était pas classée pareil (R3). Les libellés se composent
+// des mêmes autorités : la catégorie dit où elle range, le sous-dossier
+// dit ce qu'il contient.
+const OPTIONS_CATEGORIE = CATEGORIES_DOC.map((c) => ({
+  value: c as string,
+  label: `${c} → ${DOSSIER_PAR_CATEGORIE[c] || '00_ADMIN'}`,
+}))
+
+const OPTIONS_DOSSIER = ARBORESCENCE.map((a) => ({
+  value: a.dossier,
+  label: `${a.dossier} — ${a.description}`,
+}))
+
+const OPTIONS_PHASE = [
+  { value: '', label: '— aucune —' },
+  ...PHASES_ORDRE.map((c) => ({ value: c as string, label: `${c} — ${LIBELLES_PHASES[c]}` })),
+]
 
 
 
@@ -36,13 +67,53 @@ interface EtatDossier {
 
 export default function ProjetDocuments({ projet: p }: { projet: Projet }) {
   const { state, update } = useStore()
+  // qui dépose : renseigné seulement si l'application sait qui est là
+  const moi = useMoi()
   const [racine, setRacine] = useState<FSDirHandle | null>(null)
   const [etat, setEtat] = useState<EtatDossier[] | null>(null)
   const [message, setMessage] = useState('')
-  const [type, setType] = useState('CR')
+  const [categorie, setCategorie] = useState('CR')
   const [dossierCible, setDossierCible] = useState('07_CHANTIER')
+  const [phase, setPhase] = useState('')
   const [objet, setObjet] = useState('')
   const [fichier, setFichier] = useState<File | null>(null)
+  /** ce que le moteur de classement a proposé pour CE fichier (et pourquoi) */
+  const [proposition, setProposition] = useState<PropositionClassement | null>(null)
+
+  /**
+   * Dépôt : le moteur PROPOSE, vous tranchez. C'est le même
+   * `classerFichier` que la boîte d'arrivée — sans lui, cet écran
+   * faisait tout retaper alors que le nom du fichier suffisait presque
+   * toujours (R6). Le projet, lui, ne se propose pas : on est dans son
+   * onglet.
+   */
+  const choisirFichier = (f: File | null) => {
+    setFichier(f)
+    if (!f) {
+      setProposition(null)
+      return
+    }
+    const prop = classerFichier(state, f.name, { typeMime: f.type || undefined })
+    const dossier = DOSSIER_PAR_CATEGORIE[prop.categorie] || dossierCible
+    setProposition(prop)
+    setCategorie(prop.categorie)
+    setDossierCible(dossier)
+    setPhase(phaseDuDossier(dossier) || '')
+  }
+
+  /** la catégorie entraîne le sous-dossier, le sous-dossier entraîne la
+   *  phase — une seule correspondance, celle d'`ARBORESCENCE` */
+  const choisirCategorie = (v: string) => {
+    const dossier = DOSSIER_PAR_CATEGORIE[v] || dossierCible
+    setCategorie(v)
+    setDossierCible(dossier)
+    setPhase(phaseDuDossier(dossier) || '')
+  }
+
+  const choisirDossier = (v: string) => {
+    setDossierCible(v)
+    setPhase(phaseDuDossier(v) || '')
+  }
 
   useEffect(() => {
     void lireRacine().then(async (h) => {
@@ -116,7 +187,7 @@ export default function ProjetDocuments({ projet: p }: { projet: Projet }) {
     }
   }
 
-  const nomConforme = (f: File): string => nomConformeFS(p, type, objet, f.name)
+  const nomConforme = (f: File): string => nomConformeFS(p, categorie, objet, f.name)
 
   const deposer = async () => {
     if (!racine || !fichier) return
@@ -128,13 +199,18 @@ export default function ProjetDocuments({ projet: p }: { projet: Projet }) {
         titre: r.nomFinal,
         nomOriginal: fichier.name,
         source: 'depot',
-        categorie: type,
+        categorie,
         typeMime: fichier.type || undefined,
         taille: fichier.size,
         empreinteSha256: r.empreinte || undefined,
         cheminDrive: r.chemin,
         projetId: p.id,
-        statut: 'classe', // type + dossier choisis à la main → classement confirmé
+        phase: phase ? (phase as PhaseCode) : null,
+        // qui dépose ; vide si l'application ne sait pas qui est là
+        auteur: moi.nom || undefined,
+        confiance: proposition?.confiance ?? null,
+        raisons: proposition?.raisons,
+        statut: 'classe', // catégorie + dossier confirmés à la main
       })
       update((d) => {
         enregistrerDocument(d, doc)
@@ -148,6 +224,7 @@ export default function ProjetDocuments({ projet: p }: { projet: Projet }) {
       )
       setFichier(null)
       setObjet('')
+      setProposition(null)
       await scanner(racine)
     } catch (e) {
       setMessage(`Dépôt impossible : ${e instanceof Error ? e.message : String(e)}`)
@@ -204,27 +281,41 @@ export default function ProjetDocuments({ projet: p }: { projet: Projet }) {
             </div>
 
             <div className="form-row" style={{ marginTop: 8 }}>
-              <Field label="Fichier à ranger">
+              <Field label="Fichier à ranger" hint="la catégorie et la phase sont proposées d’après le nom">
                 <input
                   className="input"
                   type="file"
-                  onChange={(e) => setFichier(e.target.files?.[0] || null)}
+                  onChange={(e) => choisirFichier(e.target.files?.[0] || null)}
                 />
               </Field>
-              <Field label="Type">
-                <Select value={type} onChange={setType} options={TYPES_DOC.map((t) => ({ value: t, label: t }))} />
+              <Field label="Catégorie">
+                <Select value={categorie} onChange={choisirCategorie} options={OPTIONS_CATEGORIE} />
               </Field>
               <Field label="Sous-dossier">
-                <Select
-                  value={dossierCible}
-                  onChange={setDossierCible}
-                  options={ARBORESCENCE.map((a) => ({ value: a.dossier, label: a.dossier }))}
-                />
+                <Select value={dossierCible} onChange={choisirDossier} options={OPTIONS_DOSSIER} />
+              </Field>
+              <Field label="Phase" hint="proposée d’après le sous-dossier">
+                <Select value={phase} onChange={setPhase} options={OPTIONS_PHASE} />
               </Field>
               <Field label="Objet (optionnel)" hint="sinon le nom du fichier est repris">
                 <TextInput value={objet} onChange={setObjet} placeholder="cr-reunion-12" />
               </Field>
             </div>
+            {fichier && proposition && proposition.raisons.length > 0 && (
+              <details className="small" style={{ margin: '6px 0' }}>
+                <summary>Voir pourquoi cette proposition</summary>
+                <ul style={{ margin: '4px 0 0 18px' }}>
+                  {proposition.raisons.map((r, i) => (
+                    <li key={i}>{r}</li>
+                  ))}
+                </ul>
+              </details>
+            )}
+            {fichier && proposition?.projetId && proposition.projetId !== p.id && (
+              <p className="small warn-text" style={{ margin: '6px 0' }}>
+                Ce fichier semble concerner {proposition.projetId} — vous êtes dans {p.id}.
+              </p>
+            )}
             {fichier && (
               <p className="small" style={{ margin: '6px 0' }}>
                 Sera rangé sous : <code>{slugProjet(p)}/{dossierCible}/{nomConforme(fichier)}</code>

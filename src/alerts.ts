@@ -4,7 +4,7 @@
 // source) et peut être mise en sommeil (snooze).
 // ============================================================
 
-import type { Alerte, AppState } from './types'
+import type { Alerte, AppState, Facture, MarcheTravaux } from './types'
 import {
   STATUTS_ACTIFS,
   dateLimiteVerif,
@@ -13,13 +13,19 @@ import {
   heuresPrevues,
   heuresReelles,
   nomProjet,
+  projetById,
   retardFacture,
   retenueGarantieMarche,
 } from './derive'
 import { addDays, diffDays, fmtDate, fmtMoney, fmtMois, monthKey } from './util'
 import { LIBELLES_IMPORTANCE, type NiveauImportance, estImportance, graviteDe } from './categorisation'
 import { tacheAConfirmer } from './chantier'
-import { situationAttendueNonRecue } from './entreprise'
+import {
+  corpsRelanceSituation,
+  entrepriseDe,
+  situationAttendueNonRecue,
+  sujetRelanceSituation,
+} from './entreprise'
 import { SEUIL_ALERTE_VISA_JOURS, echeanceVisa } from './visas'
 import { ecartMois, notesManquantes } from './cotraitants'
 
@@ -79,6 +85,18 @@ const JOURS_AVANT_RELANCE = 3
  *  `estImportance()` referme la porte à la compilation. */
 const IMPORTANCES_ALERTANTES = new Set<NiveauImportance>(['urgent', 'bloquant', 'contractuel'])
 
+/** Où mène un message tant qu'AUCUN écran message n'existe.
+ *
+ *  Les liens `#/messages/{id}` pointaient une route absente d'App.tsx : le
+ *  clic retombait sur l'accueil sans un mot, plusieurs fois par jour. Tant
+ *  que l'écran n'est pas livré, la destination honnête est le message
+ *  lui-même, dans Gmail — `urlGmail` est déjà porté par la ligne. Sans
+ *  URL, on renvoie à l'accueil, où la boîte « À traiter » montre le
+ *  message : c'est la seule destination qui le contient vraiment. */
+function lienDuMessage(urlGmail: string | null): string {
+  return urlGmail || '#/'
+}
+
 function alertesDesMessages(ctx: ContexteAlertes, today: string): Alerte[] {
   const sortie: Alerte[] = []
 
@@ -95,7 +113,7 @@ function alertesDesMessages(ctx: ContexteAlertes, today: string): Alerte[] {
       gravite: graviteDe(m.importance),
       titre: `Message ${LIBELLES_IMPORTANCE[m.importance].toLowerCase()} — ${m.objet || '(sans objet)'}`,
       detail: `De ${m.expediteur}. Non traité.`,
-      lien: `#/messages/${m.id}`,
+      lien: lienDuMessage(m.urlGmail),
       date: m.envoyeLe ? m.envoyeLe.slice(0, 10) : undefined,
       pour: ctx.moi || undefined,
       projetId: m.projetId || undefined,
@@ -114,7 +132,7 @@ function alertesDesMessages(ctx: ContexteAlertes, today: string): Alerte[] {
       gravite: jours >= 7 ? 3 : 2,
       titre: `Sans réponse depuis ${jours} jours — ${m.objet || '(sans objet)'}`,
       detail: `${m.expediteur} attend. Dernier message du fil, rien n'est reparti depuis.`,
-      lien: `#/messages/${m.id}`,
+      lien: lienDuMessage(m.urlGmail),
       date: m.envoyeLe.slice(0, 10),
       pour: ctx.moi || undefined,
       projetId: m.projetId || undefined,
@@ -133,7 +151,11 @@ function alertesDesMessages(ctx: ContexteAlertes, today: string): Alerte[] {
       gravite: 1,
       titre: `${enAttente} proposition${enAttente > 1 ? 's' : ''} à revoir`,
       detail: 'Détections issues des messages : à accepter, modifier ou ignorer.',
-      lien: '#/messages/propositions',
+      // même correction que ci-dessus : `#/messages/propositions` n'existe
+      // pas. L'écran de revue est un livrable à part (lot A) ; d'ici là on
+      // dépose sur le registre documentaire, seul écran qui montre ce qui
+      // est arrivé et n'a pas encore été rangé.
+      lien: '#/documents',
       pour: ctx.moi || undefined,
     })
   }
@@ -193,7 +215,7 @@ export function computeAlertes(state: AppState, today: string, contexte?: Contex
     const retard = retardFacture(state, f, today)
     if (retard > 0) {
       alertes.push({
-        id: `retard:${f.id}`,
+        id: idFactureEnRetard(f),
         type: 'facture_retard',
         gravite: retard > 15 ? 3 : 2,
         titre: `Impayé : facture ${f.numero || f.id} en retard de ${retard} j`,
@@ -230,12 +252,20 @@ export function computeAlertes(state: AppState, today: string, contexte?: Contex
     const attente = situationAttendueNonRecue(state, m, today)
     if (!attente) continue
     alertes.push({
-      id: `sitmanq:${m.id}:${attente.mois}`,
+      id: idSituationManquante(m, attente.mois),
       type: 'situation_manquante',
       gravite: attente.gravite,
       titre: `Situation attendue non reçue — ${m.entreprise} (${m.lot})`,
       detail: `${nomProjet(state, m.projetId)} · mois ${fmtMois(attente.mois)} · relance à envoyer ?`,
-      lien: '#/situations',
+      // l'onglet où l'on VOIT ce qui manque, pas la tête de l'écran :
+      // `#/situations` déposait devant la liste des situations reçues,
+      // c'est-à-dire devant tout sauf la question posée
+      lien: '#/situations/attendues',
+      projetId: m.projetId,
+      // le geste « Relancer » ne peut pas voyager dans `Alerte.action` (le
+      // type ActionAlerte est fermé, src/types.ts) : il est résolu à
+      // l'affichage par `relanceDeLAlerte` ci-dessous, avec le texte de
+      // src/entreprise.ts — le même que la fiche entreprise
     })
   }
 
@@ -399,6 +429,11 @@ export function computeAlertes(state: AppState, today: string, contexte?: Contex
   }
 
   // --- CRM : prochaine action datée et dépassée.
+  //
+  // Le lien mène là où la liste ET le geste « Relancer » vivent depuis que
+  // les contacts ont déménagé : `#/ressources/contacts`. Il pointait encore
+  // `#/agenda`, l'écran d'où ils sont partis — le clic arrivait sur une
+  // page qui ne contient plus ni le contact, ni son geste.
   for (const c of state.contacts) {
     if (!c.dateProchaineAction || c.dateProchaineAction > today) continue
     alertes.push({
@@ -407,8 +442,25 @@ export function computeAlertes(state: AppState, today: string, contexte?: Contex
       gravite: diffDays(c.dateProchaineAction, today) > 14 ? 2 : 1,
       titre: `CRM : ${c.nom}${c.organisme ? ` (${c.organisme})` : ''} — ${c.prochaineAction || 'action prévue'}`,
       detail: `prévu le ${fmtDate(c.dateProchaineAction)}`,
-      lien: '#/agenda',
+      lien: '#/ressources/contacts',
       date: c.dateProchaineAction,
+    })
+  }
+  // Même règle, sur les ORGANISATIONS : « prochaine action » + « pour le »
+  // s'y saisissent depuis le Lot 5 et aucun producteur ne les relisait —
+  // une relance notée sur un acheteur ne ressortait nulle part. Un même
+  // seuil, une même gravité, un même libellé : deux règles pour la même
+  // notion divergeraient au premier ajustement.
+  for (const o of Array.isArray(state.organisations) ? state.organisations : []) {
+    if (!o || !o.dateProchaineAction || o.dateProchaineAction > today) continue
+    alertes.push({
+      id: `crm-org:${o.id}:${o.dateProchaineAction}`,
+      type: 'crm',
+      gravite: diffDays(o.dateProchaineAction, today) > 14 ? 2 : 1,
+      titre: `CRM : ${o.nom}${o.type ? ` (${o.type})` : ''} — ${o.prochaineAction || 'action prévue'}`,
+      detail: `prévu le ${fmtDate(o.dateProchaineAction)}`,
+      lien: '#/ao/acheteurs',
+      date: o.dateProchaineAction,
     })
   }
 
@@ -487,3 +539,128 @@ export function alertesActives(state: AppState, today: string, contexte?: Contex
  *  que la lecture, contrairement à une facture qu'on émet ou une situation
  *  qu'on vérifie */
 const TYPES_MARQUABLES_VUS = new Set(['mail_a_traiter', 'reponse_attendue', 'proposition_ia'])
+
+// ------------------------------------------------------------
+// Les relances proposées depuis le fil — un BROUILLON, jamais un envoi
+// ------------------------------------------------------------
+//
+// Deux alertes montrent un problème dont le geste tient en un e-mail :
+// la situation attendue qui n'arrive pas, et la facture impayée. L'alerte
+// jumelle des notes d'honoraires porte déjà ce geste dans `Alerte.action`
+// (`relancer_cotraitant`) — le parcours y tient en 2 clics, ici il en
+// demandait 5.
+//
+// Pourquoi ces deux-là ne passent PAS par `Alerte.action` : le type
+// `ActionAlerte` vit dans `src/types.ts`, hors du périmètre de ce lot. Le
+// geste est donc résolu à l'affichage, à partir du TYPE de l'alerte, en
+// REJOUANT le prédicat qui l'a produite — jamais en redécoupant son
+// identifiant, ce qui ferait de la forme de l'id un contrat implicite.
+//
+// Le TEXTE, lui, appartient à son propriétaire : la relance de situation
+// est celle de `src/entreprise.ts`, mot pour mot celle de l'onglet
+// « Attendues » et de la fiche entreprise. La relance d'impayé n'avait
+// aucun propriétaire — l'écran Ventes copie des PROMPTS Claude dans le
+// presse-papier — elle en reçoit un ici, et c'est le seul : l'écran de
+// facturation doit l'IMPORTER plutôt qu'en écrire une seconde.
+
+/** l'identifiant d'une alerte « situation attendue non reçue » — construit
+ *  à un seul endroit, pour que le producteur et le résolveur du geste ne
+ *  puissent pas diverger */
+function idSituationManquante(m: Pick<MarcheTravaux, 'id'>, mois: string): string {
+  return `sitmanq:${m.id}:${mois}`
+}
+
+/** idem pour l'impayé */
+function idFactureEnRetard(f: Pick<Facture, 'id'>): string {
+  return `retard:${f.id}`
+}
+
+/** relance de premier niveau (courtoise) d'une facture échue. Volontairement
+ *  factuelle et courte : elle constate un retard, elle ne le qualifie pas.
+ *  La fermeté et la mise en demeure restent des rédactions humaines, dans
+ *  l'écran Ventes — un fil d'urgences ne doit pas pouvoir durcir le ton
+ *  d'un courrier au client d'un seul clic. */
+export function sujetRelanceImpaye(f: Pick<Facture, 'numero' | 'id' | 'libelle'>): string {
+  return `Facture ${f.numero || f.id} — ${f.libelle}`
+}
+
+export function corpsRelanceImpaye(
+  f: Pick<Facture, 'numero' | 'id' | 'libelle' | 'montantHT'>,
+  echeance: string,
+  retardJours: number,
+  operation: string,
+  nomAgence: string,
+): string {
+  return (
+    `Bonjour,\n\n` +
+    `Sauf erreur de notre part, notre facture n° ${f.numero || f.id} (${f.libelle} — ${operation}), ` +
+    `d'un montant de ${fmtMoney(f.montantHT)} HT, échue le ${fmtDate(echeance)}, reste à ce jour impayée ` +
+    `(${retardJours} jours de retard).\n\n` +
+    `Merci de nous indiquer la date de règlement prévue, ou de nous signaler toute pièce qui vous manquerait — ` +
+    `nous vous la transmettons aussitôt.\n\nCordialement,\n${nomAgence}`
+  )
+}
+
+/** un brouillon de relance proposé par le fil d'urgences */
+export interface RelanceProposee {
+  /** ce qui est relancé (marché ou facture) — l'écran s'en sert pour tracer
+   *  le geste au clic, comme l'écran Ventes le fait déjà */
+  refId: string
+  /** destinataire ; `null` quand aucune adresse n'est connue — un brouillon
+   *  sans destinataire n'irait nulle part, l'écran n'offre alors pas le geste */
+  email: string | null
+  sujet: string
+  corps: string
+  /** de quoi il s'agit, pour le toast de confirmation */
+  quoi: string
+}
+
+/** L'e-mail de contact d'un marché : le marché d'abord (c'est l'adresse à
+ *  qui l'on écrit pour CE lot), le registre entreprise en repli — la même
+ *  double lecture que la fiche 5.20, jamais une troisième. */
+function contactDuMarche(state: AppState, m: MarcheTravaux): string | null {
+  if (m.contactEmail) return m.contactEmail
+  return entrepriseDe(state, m.entrepriseId || m.entreprise)?.contactEmail || null
+}
+
+/** Le brouillon de relance d'une alerte, s'il y en a un. Pur : `today` en
+ *  paramètre, aucune écriture — c'est l'écran qui ouvre Gmail, au clic. */
+export function relanceDeLAlerte(state: AppState, a: Alerte, today: string): RelanceProposee | null {
+  if (a.type === 'situation_manquante') {
+    for (const m of Array.isArray(state.marches) ? state.marches : []) {
+      const attente = situationAttendueNonRecue(state, m, today)
+      if (!attente || idSituationManquante(m, attente.mois) !== a.id) continue
+      return {
+        refId: m.id,
+        email: contactDuMarche(state, m),
+        sujet: sujetRelanceSituation(m, attente.mois),
+        corps: corpsRelanceSituation(m, attente.mois, state.settings.nomAgence),
+        quoi: `${m.entreprise} — ${m.lot}`,
+      }
+    }
+    return null
+  }
+  if (a.type === 'facture_retard') {
+    for (const f of Array.isArray(state.factures) ? state.factures : []) {
+      if (idFactureEnRetard(f) !== a.id) continue
+      const retard = retardFacture(state, f, today)
+      if (retard <= 0) return null
+      const projet = projetById(state, f.projetId)
+      return {
+        refId: f.id,
+        email: projet?.emailMOA || null,
+        sujet: sujetRelanceImpaye(f),
+        corps: corpsRelanceImpaye(
+          f,
+          encaissementPrevu(f),
+          retard,
+          nomProjet(state, f.projetId),
+          state.settings.nomAgence,
+        ),
+        quoi: `facture ${f.numero || f.id}`,
+      }
+    }
+    return null
+  }
+  return null
+}

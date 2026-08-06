@@ -45,6 +45,61 @@ function projetsMateriau(state: ReturnType<typeof useStore>['state'], id: string
   return state.projets.filter((p) => p.materiauxIds.includes(id)).map((p) => p.id).sort()
 }
 
+// ------------------------------------------------------------------
+// UNE suppression par notion (constat R3). La liste et la fiche
+// supprimaient différemment : la liste retirait l'artisan (ou le
+// matériau) de l'annuaire SANS le détacher des projets — son
+// identifiant restait dans `projet.artisanIds` / `materiauxIds`, où
+// plus rien ne pouvait le résoudre. Même geste, même cascade, même
+// « Annuler », appelés des deux endroits.
+// ------------------------------------------------------------------
+
+type Magasin = ReturnType<typeof useStore>
+
+/** supprime un artisan et le détache des projets. Rend `true` si c'est fait. */
+async function supprimerArtisan({ state, update, replace }: Magasin, a: Artisan): Promise<boolean> {
+  const projets = projetsArtisan(state, a.id, a.nom)
+  const snap = state
+  const ok = await confirmer({
+    message:
+      `Supprimer ${a.nom} de l'annuaire ?` +
+      (projets.length > 0
+        ? `\n\nIl est rattaché à ${projets.length} projet(s) : ${projets.join(', ')} — le rattachement sera retiré. Les marchés et les notes de chantier déjà signés, eux, restent.`
+        : ''),
+    danger: true,
+    confirmerLabel: 'Supprimer',
+  })
+  if (!ok) return false
+  update((d) => {
+    d.artisans = d.artisans.filter((x) => x.id !== a.id)
+    for (const pr of d.projets) pr.artisanIds = pr.artisanIds.filter((x) => x !== a.id)
+  })
+  toast('Artisan supprimé.', { undo: () => replace(snap) })
+  return true
+}
+
+/** supprime un matériau et le détache des projets. Rend `true` si c'est fait. */
+async function supprimerMateriau({ state, update, replace }: Magasin, m: Materiau): Promise<boolean> {
+  const projets = projetsMateriau(state, m.id)
+  const snap = state
+  const ok = await confirmer({
+    message:
+      `Supprimer ${m.nom} de la matériauthèque ?` +
+      (projets.length > 0
+        ? `\n\nIl est employé sur ${projets.length} projet(s) : ${projets.join(', ')} — le rattachement sera retiré.`
+        : ''),
+    danger: true,
+    confirmerLabel: 'Supprimer',
+  })
+  if (!ok) return false
+  update((d) => {
+    d.materiaux = d.materiaux.filter((x) => x.id !== m.id)
+    for (const pr of d.projets) pr.materiauxIds = pr.materiauxIds.filter((x) => x !== m.id)
+  })
+  toast('Matériau supprimé.', { undo: () => replace(snap) })
+  return true
+}
+
 function BadgesProjets({ ids }: { ids: string[] }) {
   if (ids.length === 0) return <span className="muted">—</span>
   return (
@@ -64,13 +119,20 @@ export default function Ressources() {
   if (route[1] === 'artisan' && route[2]) return <FicheArtisanPage id={route[2]} />
   return (
     <ListeRessources
-      ongletInitial={route[1] === 'materiaux' ? 'materiaux' : route[1] === 'contacts' ? 'contacts' : 'artisans'}
+      onglet={route[1] === 'materiaux' ? 'materiaux' : route[1] === 'contacts' ? 'contacts' : 'artisans'}
+      // `#/ressources/contacts/<id>` : la fiche organisation envoie sur LE
+      // contact, pas sur l'annuaire — l'échange à tracer était à re-chercher
+      // à l'arrivée (T6)
+      contactCible={route[1] === 'contacts' ? route[2] : undefined}
     />
   )
 }
 
-function ListeRessources({ ongletInitial }: { ongletInitial: string }) {
-  const [onglet, setOnglet] = useState(ongletInitial)
+/** L'onglet vit dans l'ADRESSE, comme `#/situations/<onglet>` et `#/ao/<onglet>`.
+ *  En `useState` local, il n'était qu'une valeur INITIALE : l'écran déjà monté
+ *  ignorait le lien suivant, et « ouvrir ce contact » depuis une fiche
+ *  organisation laissait l'onglet Entreprises affiché (T6). */
+function ListeRessources({ onglet, contactCible }: { onglet: string; contactCible?: string }) {
   const today = useToday()
   return (
     <Page
@@ -84,10 +146,10 @@ function ListeRessources({ ongletInitial }: { ongletInitial: string }) {
           { id: 'materiaux', label: 'Matériaux' },
         ]}
         actif={onglet}
-        onSelect={setOnglet}
+        onSelect={(id) => navigate(`/ressources/${id}`)}
       />
       {onglet === 'artisans' && <OngletArtisans />}
-      {onglet === 'contacts' && <OngletContacts today={today} />}
+      {onglet === 'contacts' && <OngletContacts today={today} cibleId={contactCible} />}
       {onglet === 'materiaux' && <OngletMateriaux />}
     </Page>
   )
@@ -99,7 +161,8 @@ function ListeRessources({ ongletInitial }: { ongletInitial: string }) {
 // ------------------------------------------------------------------
 
 function FicheMateriauPage({ id }: { id: string }) {
-  const { state, update, replace } = useStore()
+  const magasin = useStore()
+  const { state } = magasin
   const [edition, setEdition] = useState(false)
   const m = state.materiaux.find((x) => x.id === id)
 
@@ -126,15 +189,7 @@ function FicheMateriauPage({ id }: { id: string }) {
           <Btn
             kind="danger"
             onClick={async () => {
-              const snap = state
-              if (await confirmer({ message: `Supprimer ${m.nom} ?`, danger: true, confirmerLabel: 'Supprimer' })) {
-                update((d) => {
-                  d.materiaux = d.materiaux.filter((x) => x.id !== m.id)
-                  for (const pr of d.projets) pr.materiauxIds = pr.materiauxIds.filter((x) => x !== m.id)
-                })
-                toast('Matériau supprimé.', { undo: () => replace(snap) })
-                navigate('/ressources/materiaux')
-              }
+              if (await supprimerMateriau(magasin, m)) navigate('/ressources/materiaux')
             }}
           >
             Supprimer
@@ -185,7 +240,8 @@ function FicheMateriauPage({ id }: { id: string }) {
 }
 
 function FicheArtisanPage({ id }: { id: string }) {
-  const { state, update, replace } = useStore()
+  const magasin = useStore()
+  const { state, update } = magasin
   const today = useToday()
   const [edition, setEdition] = useState(false)
   const a = state.artisans.find((x) => x.id === id)
@@ -210,15 +266,7 @@ function FicheArtisanPage({ id }: { id: string }) {
           <Btn
             kind="danger"
             onClick={async () => {
-              const snap = state
-              if (await confirmer({ message: `Supprimer ${a.nom} ?`, danger: true, confirmerLabel: 'Supprimer' })) {
-                update((d) => {
-                  d.artisans = d.artisans.filter((x) => x.id !== a.id)
-                  for (const pr of d.projets) pr.artisanIds = pr.artisanIds.filter((x) => x !== a.id)
-                })
-                toast('Artisan supprimé.', { undo: () => replace(snap) })
-                navigate('/ressources')
-              }
+              if (await supprimerArtisan(magasin, a)) navigate('/ressources')
             }}
           >
             Supprimer
@@ -347,7 +395,8 @@ function artisanVide(): Artisan {
 }
 
 function OngletArtisans() {
-  const { state, update, replace } = useStore()
+  const magasin = useStore()
+  const { state, update } = magasin
   const today = useToday()
   const [recherche, setRecherche] = useState('')
   const [filtreLot, setFiltreLot] = useState('')
@@ -428,15 +477,7 @@ function OngletArtisans() {
                       {
                         label: "Supprimer l'artisan",
                         danger: true,
-                        onClick: async () => {
-                          const snap = state
-                          if (await confirmer({ message: `Supprimer ${a.nom} ?`, danger: true, confirmerLabel: 'Supprimer' })) {
-                            update((d) => {
-                              d.artisans = d.artisans.filter((x) => x.id !== a.id)
-                            })
-                            toast('Artisan supprimé.', { undo: () => replace(snap) })
-                          }
-                        },
+                        onClick: () => void supprimerArtisan(magasin, a),
                       },
                     ]}
                   />
@@ -534,7 +575,8 @@ function materiauVide(): Materiau {
 }
 
 function OngletMateriaux() {
-  const { state, update, replace } = useStore()
+  const magasin = useStore()
+  const { state, update } = magasin
   const [recherche, setRecherche] = useState('')
   const [filtreTag, setFiltreTag] = useState('')
   const [edition, setEdition] = useState<Materiau | null>(null)
@@ -660,15 +702,7 @@ function OngletMateriaux() {
                       {
                         label: 'Supprimer le matériau',
                         danger: true,
-                        onClick: async () => {
-                          const snap = state
-                          if (await confirmer({ message: `Supprimer ${m.nom} ?`, danger: true, confirmerLabel: 'Supprimer' })) {
-                            update((d) => {
-                              d.materiaux = d.materiaux.filter((x) => x.id !== m.id)
-                            })
-                            toast('Matériau supprimé.', { undo: () => replace(snap) })
-                          }
-                        },
+                        onClick: () => void supprimerMateriau(magasin, m),
                       },
                     ]}
                   />

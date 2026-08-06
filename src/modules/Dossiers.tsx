@@ -39,6 +39,7 @@ import {
   useToday,
 } from '../ui'
 import { diffDays, fmtHeures, fold, mondayOf, todayISO, uid } from '../util'
+import { useMoi } from '../moi'
 import { probaConsultation } from '../derive'
 import { unzipSync } from 'fflate'
 import { extraireTexteFichier } from '../cctp'
@@ -765,15 +766,25 @@ function LigneDocument({ d, onDetacher }: { d: DocumentRecord; onDetacher: () =>
 // ---------- temps pointé sur le dossier (Lot 4 : coût réel) ----------
 
 function CarteTempsDossier({ c }: { c: Consultation }) {
-  const { state, update } = useStore()
+  const { state, update, replace } = useStore()
   const today = useToday()
-  const [personne, setPersonne] = useState(state.settings.personnes[0] || '')
+  const moi = useMoi()
+  const personnes = state.settings.personnes
+  // Le pointage part sur MOI (audit d'usage, action 27). `personnes[0]`
+  // attribuait une heure sur deux à l'autre associée, en silence — et un
+  // coût de dossier mal réparti se découvre au bilan gagné/perdu, trop tard
+  // pour se souvenir de qui avait travaillé. Sans identité reconnue, l'écran
+  // ne désigne personne : il demande, plutôt que de signer à la place de
+  // quelqu'un.
+  const [choix, setChoix] = useState('')
+  const personne = choix || (moi.nom && personnes.includes(moi.nom) ? moi.nom : '')
   const [heures, setHeures] = useState<number | null>(null)
   const cout = coutDossier(state, c.id)
   const entrees = state.tempsHorsProjet.filter((t) => t.consultationId === c.id)
 
   const pointer = () => {
     if (!personne || !heures || heures <= 0) return
+    const snap = state
     const entree = {
       id: uid('thp'),
       semaine: mondayOf(today),
@@ -786,7 +797,10 @@ function CarteTempsDossier({ c }: { c: Consultation }) {
       d.tempsHorsProjet.push(structuredClone(entree))
     })
     setHeures(null)
-    toast(`${heures} h pointées sur le dossier (Prospection / AO, semaine du ${mondayOf(today)}).`)
+    toast(
+      `${fmtHeures(heures)} pointées par ${personne} sur le dossier (Prospection / AO, semaine du ${mondayOf(today)}).`,
+      { undo: () => replace(snap) },
+    )
   }
 
   return (
@@ -806,14 +820,24 @@ function CarteTempsDossier({ c }: { c: Consultation }) {
       <div className="toolbar" style={{ marginTop: 8, flexWrap: 'wrap' }}>
         <Select
           value={personne}
-          onChange={setPersonne}
-          options={state.settings.personnes.map((p) => ({ value: p, label: p }))}
-          style={{ maxWidth: 130 }}
+          onChange={setChoix}
+          options={[
+            // l'entrée vide n'existe que tant que l'écran ne sait pas qui est
+            // là : une fois la personne connue, elle disparaît
+            ...(personne ? [] : [{ value: '', label: '— qui a travaillé ? —' }]),
+            ...personnes.map((p) => ({ value: p, label: p })),
+          ]}
+          style={{ maxWidth: 180 }}
         />
         <NumInput value={heures} onChange={setHeures} placeholder="heures" ariaLabel="Heures à pointer" style={{ maxWidth: 90 }} />
-        <Btn small kind="primary" onClick={pointer} disabled={!heures || heures <= 0}>
+        <Btn small kind="primary" onClick={pointer} disabled={!personne || !heures || heures <= 0}>
           Pointer cette semaine
         </Btn>
+        {!personne && (
+          <span className="muted small" style={{ alignSelf: 'center' }}>
+            Choisissez la personne : une heure sans nom ne se rattache à aucun coût.
+          </span>
+        )}
       </div>
       {entrees.length > 0 && (
         <p className="muted small" style={{ marginTop: 8, marginBottom: 0 }}>

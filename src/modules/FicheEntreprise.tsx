@@ -108,7 +108,9 @@ export default function FicheEntreprise({
               tone={syn.totaux.aLibererHT > 0 ? 'danger' : undefined}
               sub={
                 syn.totaux.aLibererHT > 0 ? (
-                  <a href="#/situations" title="Onglet Retenues de garantie — c'est là que la levée se constate">GPA échue — lever la RG →</a>
+                  // T6 — chaque lien porte l'ONGLET où l'on agit : les
+                  // sous-vues de Situations ont désormais une adresse
+                  <a href="#/situations/rg" title="Onglet Retenues de garantie — c'est là que la levée se constate">GPA échue — lever la RG →</a>
                 ) : (
                   'rien d’échu'
                 )
@@ -181,7 +183,7 @@ export default function FicheEntreprise({
                 </td>
                 <td className="small">
                   {dernierCertificat ? (
-                    <a href="#/situations" title="Historique des situations — réimpression du certificat figé">
+                    <a href="#/situations/historique" title="Historique des situations — réimpression du certificat figé">
                       n° {dernierCertificat.numero} · {fmtMois(dernierCertificat.mois)} ·{' '}
                       {fmtMoney(dernierCertificat.netAPayerTTC, true)} TTC
                     </a>
@@ -195,7 +197,7 @@ export default function FicheEntreprise({
                   ) : situationDuMoisRecue ? (
                     <Badge tone="ok">reçue ✓</Badge>
                   ) : (
-                    <a href="#/situations" title="Onglet Attendues — relance et suivi">
+                    <a href="#/situations/attendues" title="Onglet Attendues — relance et suivi">
                       <Badge tone="warn">non reçue</Badge>
                     </a>
                   )}

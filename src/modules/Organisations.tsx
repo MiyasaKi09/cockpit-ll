@@ -30,7 +30,7 @@ import {
   useToday,
 } from '../ui'
 import type { Tone } from '../ui'
-import { fmtDate, fold, todayISO, uid } from '../util'
+import { diffDays, fmtDate, fold, todayISO, uid } from '../util'
 import {
   ETAPES_RELATION,
   LIBELLE_RELATION,
@@ -43,6 +43,8 @@ import {
   rapprocherOrganisations,
   rechercherAttributionsDecp,
   referencesPourOrganisation,
+  trierContactsAppel,
+  type ActionSuggeree,
   type AttributionDecp,
 } from '../organisations'
 import { signauxPourAcheteur } from '../veille'
@@ -68,6 +70,42 @@ const TON_STATUT_CONSULTATION: Record<Consultation['statut'], { label: string; t
 
 function nouvelleOrganisation(): Organisation {
   return { id: uid('org'), nom: '', relation: 'identifie', creeLe: todayISO() }
+}
+
+/** « Prochaine action » + « Pour le » : la date se VOIT dans la liste, avec
+ *  le même seuil que l'alerte CRM des organisations (`alerts.ts` : due dès
+ *  que la date est atteinte). Une action sans date ne déclenche rien : la
+ *  colonne le dit plutôt que de laisser croire qu'elle est suivie. */
+function CelluleProchaineAction({
+  o,
+  today,
+  suggestion,
+}: {
+  o: Organisation
+  today: string
+  suggestion: ActionSuggeree | null
+}) {
+  if (!o.prochaineAction) {
+    return suggestion ? <span className="muted">suggérée : {suggestion.action}</span> : <>—</>
+  }
+  const d = o.dateProchaineAction || null
+  const dj = d ? diffDays(d, today) : null
+  return (
+    <>
+      {o.prochaineAction}
+      <div style={{ marginTop: 2 }}>
+        {!d ? (
+          <Badge tone="muted">sans date — pas de rappel</Badge>
+        ) : dj !== null && dj > 0 ? (
+          <Badge tone="danger">en retard de {dj} j — {fmtDate(d)}</Badge>
+        ) : dj === 0 ? (
+          <Badge tone="warn">aujourd'hui</Badge>
+        ) : (
+          <span className="muted small">pour le {fmtDate(d)}</span>
+        )}
+      </div>
+    </>
+  )
 }
 
 // ---------- liste ----------
@@ -168,7 +206,7 @@ export function OrganisationsContenu() {
                   <td className="right num">{consultations.length || '—'}</td>
                   <td>{derniere ? fmtDate(derniere) : <span className="muted">jamais</span>}</td>
                   <td className="small">
-                    {o.prochaineAction || (suggestion ? <span className="muted">suggérée : {suggestion.action}</span> : '—')}
+                    <CelluleProchaineAction o={o} today={today} suggestion={suggestion} />
                   </td>
                   <td className="right">
                     <Btn small kind="ghost" onClick={() => setFiche({ o: { ...o }, nouveau: false })}>
@@ -206,7 +244,9 @@ function FicheOrganisation({
   const maj = (patch: Partial<Organisation>) => setO((prev) => ({ ...prev, ...patch }))
 
   const consultations = useMemo(() => consultationsDe(state, o), [state, o])
-  const contacts = useMemo(() => contactsDe(state, o), [state, o])
+  // ordre d'APPEL (5.11) : qui appeler en premier chez cet acheteur ne se
+  // sait plus de tête — même autorité que la fiche projet, jamais recopiée
+  const contacts = useMemo(() => trierContactsAppel(contactsDe(state, o)), [state, o])
   const interactions = useMemo(() => interactionsDe(state, o), [state, o])
   const references = useMemo(() => referencesPourOrganisation(state, o), [state, o])
   const suggestion = prochaineActionSuggeree(state, o, today)
@@ -385,18 +425,47 @@ function BlocRelations({
             organisme via « Rapprocher ».
           </p>
         ) : (
-          contacts.map((c) => (
-            <div key={c.id} className="small" style={{ padding: '2px 0' }}>
-              <strong>{c.nom}</strong>
-              {c.role && <span className="muted"> · {c.role}</span>}
-              {c.email && (
-                <>
-                  {' '}
-                  · <a href={`mailto:${c.email}`}>{c.email}</a>
-                </>
-              )}
-            </div>
-          ))
+          <>
+            {contacts.map((c, i) => (
+              <div key={c.id} className="small" style={{ padding: '2px 0' }}>
+                {typeof c.ordreAppel === 'number' && (
+                  <span className="muted" title="ordre d’appel">
+                    {c.ordreAppel}.{' '}
+                  </span>
+                )}
+                {/* le nom EST le lien : `#/ressources/contacts/<id>` ouvre la
+                    fiche du contact concerné, avec son journal d'échanges. Le
+                    lien générique sous la liste ne pouvait ouvrir que l'annuaire,
+                    et l'échange à tracer restait à re-chercher à l'arrivée (T6). */}
+                <a
+                  href={`#/ressources/contacts/${c.id}`}
+                  title={`Ouvrir la fiche de ${c.nom} — journal des échanges, prochaine action`}
+                >
+                  <strong>{c.nom}</strong>
+                </a>
+                {/* « à appeler en premier » seulement si un RANG le dit :
+                    le tri retombe sur l'alphabet quand rien n'est classé */}
+                {i === 0 && contacts.length > 1 && typeof c.ordreAppel === 'number' && (
+                  <span className="muted"> · à appeler en premier</span>
+                )}
+                {c.role && <span className="muted"> · {c.role}</span>}
+                {c.email && (
+                  <>
+                    {' '}
+                    · <a href={`mailto:${c.email}`}>{c.email}</a>
+                  </>
+                )}
+                {c.tel && <span className="muted"> · {c.tel}</span>}
+              </div>
+            ))}
+            {/* l'échange se trace là où il s'écrit déjà (fiche contact de
+                l'annuaire) : le recopier ici ferait deux journaux. Le geste
+                part du NOM ci-dessus — un second lien générique n'ouvrirait
+                que la liste. */}
+            <p className="muted small" style={{ margin: '4px 0 0' }}>
+              Cliquez un nom pour tracer une interaction : le journal des échanges vit sur sa fiche.
+            </p>
+          </>
         )}
         <div style={{ fontWeight: 700, fontSize: 13, margin: '10px 0 6px' }}>
           Dernières interactions <span className="muted small">({interactions.length})</span>

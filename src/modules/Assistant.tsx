@@ -13,11 +13,19 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../store'
-import { Badge, Btn, Card, CopyBtn, EmptyState, Field, Page, Select, Table, Tabs, TextArea, TextInput, navigate, toast, useRoute, useToday } from '../ui'
+import { useMoi } from '../moi'
+import { Badge, Btn, Card, CopyBtn, DateInput, EmptyState, Field, Page, Select, Table, Tabs, TextArea, TextInput, navigate, toast, useRoute, useToday } from '../ui'
 import { assistantDisponible, interrogerAssistant } from '../assistant'
 import type { DocPourAssistant } from '../assistant'
 import { texteVersDocx } from '../crdocx'
 import { contexteProjet } from '../prompts'
+import {
+  DOSSIER_PAR_CATEGORIE,
+  creerDocument,
+  empreinteSha256,
+  enregistrerDocument,
+} from '../registre'
+import { lireRacine, nomConforme, rangerFichier, supporteFS } from '../fsdrive'
 import { fmtDate, todayISO, uid } from '../util'
 import type { DocumentCorpus } from '../types'
 
@@ -27,6 +35,17 @@ const ONGLETS = [
   { id: 'doc', label: 'Générer un document' },
   { id: 'corpus', label: 'Corpus' },
 ]
+
+// ============================================================
+// Les trois bornes d'un envoi — le miroir EXACT de ce que le
+// serveur accepte (`api/assistant.js` : MAX_DOCS, MAX_CARACTERES_*).
+// Elles étaient recopiées en clair dans les deux onglets, à deux
+// endroits : le jour où le serveur bouge, l'écran doit bouger avec
+// lui, et une seule déclaration rend l'oubli visible.
+// ============================================================
+const MAX_DOCS = 16
+const MAX_CARACTERES_TOTAL = 650_000
+const MAX_CARACTERES_DOC = 120_000
 
 /** téléchargement d'un Blob (DOCX) sous un nom de fichier donné */
 function telechargerBlob(blob: Blob, nomFichier: string): void {
@@ -164,9 +183,9 @@ function OngletQuestion({ dispo }: { dispo: boolean }) {
     [documentsSelectionnes],
   )
   const selectionTropGrande =
-    documentsSelectionnes.length > 16 ||
-    poidsSelection > 650_000 ||
-    documentsSelectionnes.some((document) => document.texte.length > 120_000)
+    documentsSelectionnes.length > MAX_DOCS ||
+    poidsSelection > MAX_CARACTERES_TOTAL ||
+    documentsSelectionnes.some((document) => document.texte.length > MAX_CARACTERES_DOC)
 
   const basculer = (id: string) => {
     setReponse(null)
@@ -309,8 +328,9 @@ function OngletQuestion({ dispo }: { dispo: boolean }) {
           if (selectionTropGrande) {
             return (
               <div className="pill-note" style={{ marginBottom: 10, borderColor: 'var(--danger)' }}>
-                Sélection refusée : 16 documents, 650 k caractères au total et 120 k par document
-                au maximum. Réduisez le corpus avant l’envoi.
+                Sélection refusée : {MAX_DOCS} documents, {MAX_CARACTERES_TOTAL / 1000} k caractères
+                au total et {MAX_CARACTERES_DOC / 1000} k par document au maximum. Réduisez le
+                corpus avant l’envoi.
               </div>
             )
           }
@@ -373,14 +393,23 @@ function OngletCR({ dispo }: { dispo: boolean }) {
   const [projetId, setProjetId] = useState('')
   const [question, setQuestion] = useState('')
   const [enCours, setEnCours] = useState(false)
+  /** bornes de période — vides = tout l'historique du projet */
+  const [debut, setDebut] = useState<string | null>(null)
+  const [fin, setFin] = useState<string | null>(null)
+  /** les CR retenus pour l'envoi (identifiants de réunion) */
+  const [coches, setCoches] = useState<Set<string>>(() => new Set())
   const [reponse, setReponse] = useState<{
     reponse: string
     modele?: string
     projetId: string
     projetNom: string
+    /** ce qui a RÉELLEMENT été transmis — la sélection a bougé depuis */
+    nbCR: number
+    du: string | null
+    au: string | null
   } | null>(null)
 
-  const avecCR = useMemo(
+  const tousCR = useMemo(
     () =>
       state.reunions
         .filter((r) => r.cr && r.cr.trim() !== '')
@@ -388,21 +417,66 @@ function OngletCR({ dispo }: { dispo: boolean }) {
         .sort((a, b) => b.date.localeCompare(a.date)),
     [state.reunions, projetId],
   )
+  /** ce que la période laisse passer — du plus récent au plus ancien */
+  const periode = useMemo(
+    () => tousCR.filter((r) => (!debut || r.date >= debut) && (!fin || r.date <= fin)),
+    [tousCR, debut, fin],
+  )
   const projetsAvecCR = useMemo(() => {
     const ids = new Set(state.reunions.filter((r) => r.cr && r.cr.trim() !== '').map((r) => r.projetId))
     return state.projets.filter((p) => ids.has(p.id))
   }, [state.reunions, state.projets])
+
+  /**
+   * La préselection : les CR les PLUS RÉCENTS qui tiennent dans les
+   * bornes du serveur. Un chantier suivi un an dépasse 16 CR et
+   * l'onglet se désactivait — sans offrir le moindre moyen de limiter
+   * (T5, S1). La question porte presque toujours sur les derniers mois ;
+   * décocher, ou borner la période, reste à vous.
+   */
+  const defaut = useMemo(() => {
+    const ids: string[] = []
+    let total = 0
+    for (const r of periode) {
+      const taille = r.cr?.length || 0
+      // un CR seul au-delà de la borne ne partira jamais : l'ajouter
+      // bloquerait l'envoi sans le dire
+      if (taille > MAX_CARACTERES_DOC) continue
+      if (ids.length >= MAX_DOCS || total + taille > MAX_CARACTERES_TOTAL) break
+      ids.push(r.id)
+      total += taille
+    }
+    return ids
+  }, [periode])
+  // clé stable : la préselection se refait quand le projet ou la période
+  // change, jamais sous les doigts de qui vient de décocher un CR
+  const cleDefaut = defaut.join(',')
+  useEffect(() => {
+    setCoches(new Set(cleDefaut ? cleDefaut.split(',') : []))
+  }, [cleDefaut])
+
+  const avecCR = useMemo(() => periode.filter((r) => coches.has(r.id)), [periode, coches])
   const caracteresCR = useMemo(
     () => avecCR.reduce((total, reunion) => total + (reunion.cr?.length || 0), 0),
     [avecCR],
   )
   const corpusTropGrand =
-    avecCR.length > 16 ||
-    caracteresCR > 650_000 ||
-    avecCR.some((reunion) => (reunion.cr?.length || 0) > 120_000)
+    avecCR.length > MAX_DOCS ||
+    caracteresCR > MAX_CARACTERES_TOTAL ||
+    avecCR.some((reunion) => (reunion.cr?.length || 0) > MAX_CARACTERES_DOC)
+
+  const basculer = (id: string) => {
+    setReponse(null)
+    setCoches((prev) => {
+      const s = new Set(prev)
+      if (s.has(id)) s.delete(id)
+      else s.add(id)
+      return s
+    })
+  }
 
   const chercher = async () => {
-    if (!projetId || corpusTropGrand) return
+    if (!projetId || corpusTropGrand || avecCR.length === 0) return
     const projetCible = state.projets.find((p) => p.id === projetId)
     if (!projetCible) return
     const projetIdCible = projetCible.id
@@ -421,6 +495,9 @@ function OngletCR({ dispo }: { dispo: boolean }) {
         ...r,
         projetId: projetIdCible,
         projetNom: projetCible.nom,
+        nbCR: docs.length,
+        du: avecCR[avecCR.length - 1]?.date || null,
+        au: avecCR[0]?.date || null,
       })
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Erreur inattendue.', { tone: 'danger' })
@@ -464,14 +541,89 @@ function OngletCR({ dispo }: { dispo: boolean }) {
             ) : (
               <>
                 <p className="small muted">
-                  {avecCR.length} CR sélectionné{avecCR.length > 1 ? 's' : ''} (
-                  {Math.ceil(caracteresCR / 1000)} k caractères) — seuls les CR de ce projet seront
-                  transmis au fournisseur IA.
+                  {avecCR.length} CR retenu{avecCR.length > 1 ? 's' : ''} sur {tousCR.length}{' '}
+                  conservé{tousCR.length > 1 ? 's' : ''} ({Math.ceil(caracteresCR / 1000)} k
+                  caractères) — seuls ceux-là seront transmis au fournisseur IA.
+                  {tousCR.length > avecCR.length &&
+                    ' Les plus récents sont pris par défaut : « Choisir les CR » pour décocher ou borner la période.'}
                 </p>
+                <details className="small" style={{ marginBottom: 10 }}>
+                  <summary>Choisir les CR et la période</summary>
+                  <div
+                    style={{
+                      display: 'flex',
+                      gap: 10,
+                      flexWrap: 'wrap',
+                      alignItems: 'flex-end',
+                      margin: '8px 0',
+                    }}
+                  >
+                    <Field label="Du">
+                      <DateInput value={debut} onChange={setDebut} />
+                    </Field>
+                    <Field label="Au">
+                      <DateInput value={fin} onChange={setFin} />
+                    </Field>
+                    <Btn
+                      small
+                      onClick={() => {
+                        setDebut(null)
+                        setFin(null)
+                        setCoches(new Set(defaut))
+                        setReponse(null)
+                      }}
+                      disabled={enCours}
+                    >
+                      Revenir aux {MAX_DOCS} plus récents
+                    </Btn>
+                  </div>
+                  <p className="small muted" style={{ margin: '0 0 6px' }}>
+                    {MAX_DOCS} CR au maximum par envoi, {MAX_CARACTERES_TOTAL / 1000} k caractères
+                    au total : au-delà, l’assistant refuse la demande.
+                  </p>
+                  {periode.length === 0 ? (
+                    <p className="small muted" style={{ margin: 0 }}>
+                      Aucun CR dans cette période — élargissez les dates.
+                    </p>
+                  ) : (
+                    <div style={{ display: 'grid', gap: 4, maxHeight: 220, overflowY: 'auto' }}>
+                      {periode.map((r) => {
+                        const taille = r.cr?.length || 0
+                        const horsBorne = taille > MAX_CARACTERES_DOC
+                        return (
+                          <label
+                            key={r.id}
+                            style={{ display: 'flex', alignItems: 'baseline', gap: 8, cursor: 'pointer' }}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={coches.has(r.id)}
+                              onChange={() => basculer(r.id)}
+                              disabled={enCours || horsBorne}
+                            />
+                            <span className="small">
+                              {fmtDate(r.date)} — {r.titre}{' '}
+                              <span className="muted">
+                                ({Math.max(1, Math.round(taille / 1000))} k
+                                {horsBorne ? ` — au-delà de ${MAX_CARACTERES_DOC / 1000} k, non transmissible` : ''})
+                              </span>
+                            </span>
+                          </label>
+                        )
+                      })}
+                    </div>
+                  )}
+                </details>
                 {corpusTropGrand && (
                   <p className="small danger-text">
-                    Corpus trop volumineux : limitez ce projet à 16 CR, 650 k caractères au total
-                    et 120 k par CR avant l’envoi.
+                    Sélection trop volumineuse : {MAX_DOCS} CR, {MAX_CARACTERES_TOTAL / 1000} k
+                    caractères au total et {MAX_CARACTERES_DOC / 1000} k par CR au maximum. Décochez
+                    des CR, ou resserrez la période.
+                  </p>
+                )}
+                {avecCR.length === 0 && !corpusTropGrand && (
+                  <p className="small warn-text">
+                    Aucun CR coché — l’assistant ne répond qu’à partir de sources.
                   </p>
                 )}
                 <Field label="Votre question">
@@ -486,7 +638,9 @@ function OngletCR({ dispo }: { dispo: boolean }) {
                 <Btn
                   kind="primary"
                   onClick={() => void chercher()}
-                  disabled={!dispo || enCours || !question.trim() || corpusTropGrand}
+                  disabled={
+                    !dispo || enCours || !question.trim() || corpusTropGrand || avecCR.length === 0
+                  }
                 >
                   {enCours ? 'Recherche…' : `Chercher dans ${avecCR.length} CR`}
                 </Btn>
@@ -499,7 +653,11 @@ function OngletCR({ dispo }: { dispo: boolean }) {
         <>
           <BlocReponse reponse={reponse.reponse} modele={reponse.modele} />
           <p className="small muted">
-            Corpus utilisé : projet {reponse.projetId} — {reponse.projetNom}.
+            Corpus utilisé : {reponse.nbCR} CR du projet {reponse.projetId} — {reponse.projetNom}
+            {reponse.du && reponse.au
+              ? `, du ${fmtDate(reponse.du)} au ${fmtDate(reponse.au)}`
+              : ''}
+            . Les CR hors de cette sélection n’ont pas été lus.
           </p>
         </>
       )}
@@ -509,8 +667,15 @@ function OngletCR({ dispo }: { dispo: boolean }) {
 
 // ---------- Onglet 3 : générer un document depuis un modèle ----------
 
+/** catégorie et sous-dossier d'un brouillon produit ici : la
+ *  correspondance vient de `DOSSIER_PAR_CATEGORIE`, jamais d'un chemin
+ *  écrit à la main dans cet écran */
+const CATEGORIE_BROUILLON = 'NOTE'
+const DOSSIER_BROUILLON = DOSSIER_PAR_CATEGORIE[CATEGORIE_BROUILLON] || '00_ADMIN'
+
 function OngletDocument({ dispo }: { dispo: boolean }) {
-  const { state } = useStore()
+  const { state, update, replace } = useStore()
+  const moi = useMoi()
   const today = useToday()
   const modeles = useMemo(
     () => state.corpusDocuments.filter((document) => document.type === 'modele' && !document.prive),
@@ -520,6 +685,9 @@ function OngletDocument({ dispo }: { dispo: boolean }) {
   const [projetId, setProjetId] = useState('')
   const [instructions, setInstructions] = useState('')
   const [enCours, setEnCours] = useState(false)
+  /** rangement du brouillon courant : null = pas encore rangé, '' = en cours */
+  const [range, setRange] = useState<string | null>(null)
+  const [rangeEnCours, setRangeEnCours] = useState(false)
   const [reponse, setReponse] = useState<{
     reponse: string
     modele?: string
@@ -532,6 +700,12 @@ function OngletDocument({ dispo }: { dispo: boolean }) {
   const modele = modeles.find((d) => d.id === modeleId)
   const projet = state.projets.find((p) => p.id === projetId)
 
+  /** un brouillon abandonné n'emporte pas la trace de son rangement */
+  const oublierReponse = () => {
+    setReponse(null)
+    setRange(null)
+  }
+
   const generer = async () => {
     if (!modele || !projet) return
     const modeleCible = {
@@ -542,7 +716,7 @@ function OngletDocument({ dispo }: { dispo: boolean }) {
     }
     const projetCible = structuredClone(projet)
     setEnCours(true)
-    setReponse(null)
+    oublierReponse()
     try {
       const r = await interrogerAssistant({
         mode: 'doc',
@@ -583,6 +757,77 @@ function OngletDocument({ dispo }: { dispo: boolean }) {
     toast('DOCX brouillon téléchargé — à relire avant envoi.', { tone: 'ok' })
   }
 
+  /**
+   * R6 — ce que l'agence PRODUIT sortait de sa propre mémoire : le DOCX
+   * partait en Téléchargements et n'entrait ni au Drive ni au registre,
+   * alors que le mécanisme sert déjà aux comptes rendus (source
+   * `'genere'`). Même chaîne, mêmes fonctions : `rangerFichier` n'écrase
+   * jamais rien, `enregistrerDocument` ne duplique pas un contenu déjà
+   * connu, et le projet est celui qui a servi à rédiger — pas un choix
+   * de plus à faire.
+   */
+  const ranger = async () => {
+    if (!reponse) return
+    const projetCible = state.projets.find((p) => p.id === reponse.projetId)
+    if (!projetCible) {
+      toast('Projet introuvable — le brouillon ne peut pas être rangé.', { tone: 'danger' })
+      return
+    }
+    setRangeEnCours(true)
+    try {
+      const blob = await texteVersDocx(
+        `${reponse.modeleTitre} — ${reponse.projetNom}`,
+        reponse.reponse,
+      )
+      const nom = nomConforme(
+        projetCible,
+        CATEGORIE_BROUILLON,
+        `brouillon-${reponse.modeleTitre}`,
+        'document.docx',
+      )
+      const file = new File([blob], nom, { type: blob.type })
+      const racine = supporteFS ? await lireRacine() : null
+      const rangement = racine
+        ? await rangerFichier(racine, projetCible, DOSSIER_BROUILLON, file, nom)
+        : null
+      // Drive non branché (ou navigateur sans File System Access) : le
+      // fichier part quand même, et le registre le dit
+      if (!rangement) telechargerBlob(blob, nom)
+      const docPret = creerDocument({
+        titre: rangement?.nomFinal || nom,
+        nomOriginal: nom,
+        source: 'genere',
+        categorie: CATEGORIE_BROUILLON,
+        typeMime: file.type || undefined,
+        taille: file.size,
+        empreinteSha256: rangement?.empreinte || (await empreinteSha256(file)) || undefined,
+        cheminDrive: rangement?.chemin,
+        projetId: projetCible.id,
+        auteur: moi.nom || undefined,
+        dateDocument: today,
+        raisons: [
+          `Brouillon rédigé par l'assistant d'après le modèle « ${reponse.modeleTitre} » et la fiche du projet, le ${fmtDate(today)} — relecture humaine obligatoire avant tout usage.`,
+        ],
+        statut: 'classe',
+      })
+      const snap = state
+      update((d) => {
+        enregistrerDocument(d, structuredClone(docPret))
+      })
+      setRange(rangement?.chemin || '')
+      toast(
+        rangement
+          ? `Rangé : ${rangement.chemin} — inscrit au registre. « Annuler » retire l'entrée du registre ; le fichier, lui, reste dans le Drive.`
+          : `Inscrit au registre du projet ${projetCible.id} — Drive non branché, le fichier est parti dans vos téléchargements.`,
+        { tone: 'ok', undo: () => replace(snap) },
+      )
+    } catch (e) {
+      toast(`Rangement impossible : ${e instanceof Error ? e.message : String(e)}`, { tone: 'danger' })
+    } finally {
+      setRangeEnCours(false)
+    }
+  }
+
   if (modeles.length === 0) {
     return (
       <Card titre="Générer un document">
@@ -612,7 +857,7 @@ function OngletDocument({ dispo }: { dispo: boolean }) {
               value={modeleId}
               onChange={(id) => {
                 setModeleId(id)
-                setReponse(null)
+                oublierReponse()
               }}
               options={[{ value: '', label: '— choisir —' }, ...modeles.map((d) => ({ value: d.id, label: d.titre }))]}
               disabled={enCours}
@@ -623,7 +868,7 @@ function OngletDocument({ dispo }: { dispo: boolean }) {
               value={projetId}
               onChange={(id) => {
                 setProjetId(id)
-                setReponse(null)
+                oublierReponse()
               }}
               options={[
                 { value: '', label: '— choisir —' },
@@ -653,9 +898,29 @@ function OngletDocument({ dispo }: { dispo: boolean }) {
             Contexte figé : modèle {reponse.modeleTitre} · projet {reponse.projetId} —{' '}
             {reponse.projetNom}.
           </p>
-          <div style={{ marginTop: 10 }}>
+          <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <Btn onClick={() => void telecharger()}>Télécharger en DOCX (brouillon)</Btn>
+            {/* le brouillon entre dans la mémoire de l'agence — même geste
+                que pour un CR, au lieu de finir dans les Téléchargements */}
+            <Btn
+              kind="primary"
+              onClick={() => void ranger()}
+              disabled={rangeEnCours || range !== null}
+            >
+              {rangeEnCours
+                ? 'Rangement…'
+                : range !== null
+                  ? 'Rangé au registre'
+                  : 'Ranger dans le Drive et au registre'}
+            </Btn>
           </div>
+          {range !== null && (
+            <p className="small muted" style={{ marginTop: 6 }}>
+              {range
+                ? `Rangé sous ${range} et inscrit au registre du projet ${reponse.projetId} — brouillon, à relire et signer avant tout envoi.`
+                : `Inscrit au registre du projet ${reponse.projetId} — le Drive n'est pas branché sur ce poste (onglet Documents du projet), le fichier est dans vos téléchargements.`}
+            </p>
+          )}
         </>
       )}
     </>

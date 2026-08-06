@@ -24,7 +24,9 @@ import { ligneActivable,
   TextArea,
   TextInput,
   confirmer,
+  navigate,
   toast,
+  useRoute,
   useToday, RowMenu } from '../ui'
 import { addDays, addMonths, diffDays, download, fmtDate, fold, ouvrirGmail, todayISO, uid } from '../util'
 import { STATUTS_ACTIFS } from '../derive'
@@ -45,10 +47,16 @@ function derniereInteractionDe(state: AppState, contactId: string): string | nul
   return toutes.length ? toutes[toutes.length - 1] : null
 }
 
+const ONGLETS_AGENDA = ['obligations', 'contrats']
+
 export default function Agenda() {
-  const [onglet, setOnglet] = useState('obligations')
   const { state } = useStore()
   const today = useToday()
+  // L'onglet vit dans l'ADRESSE, comme `#/situations/<onglet>` : en `useState`
+  // local, un lien venu d'ailleurs déposait toujours sur « Obligations », et le
+  // contrat d'agence cherché restait à retrouver derrière un onglet (T6).
+  const route = useRoute()
+  const onglet = ONGLETS_AGENDA.includes(route[1] || '') ? route[1]! : 'obligations'
 
   const exporterICS = () => {
     const lignes: string[] = []
@@ -95,13 +103,13 @@ export default function Agenda() {
           { id: 'contrats', label: 'Contrats de l’agence' },
         ]}
         actif={onglet}
-        onSelect={setOnglet}
+        onSelect={(id) => navigate(`/agenda/${id}`)}
       />
       <p className="muted small" style={{ margin: '0 0 8px' }}>
         Les contacts (CRM) ont déménagé dans l'<a href="#/ressources/contacts">Annuaire</a>.
       </p>
       {onglet === 'obligations' && <OngletObligations today={today} />}
-      {onglet === 'contrats' && <OngletContrats today={today} />}
+      {onglet === 'contrats' && <OngletContrats today={today} cibleId={route[2]} />}
     </Page>
   )
 }
@@ -247,7 +255,7 @@ function contratVide(): Obligation {
   }
 }
 
-function OngletContrats({ today }: { today: string }) {
+function OngletContrats({ today, cibleId }: { today: string; cibleId?: string }) {
   const { state, update, replace } = useStore()
   const [edition, setEdition] = useState<Obligation | null>(null)
   const [creation, setCreation] = useState(false)
@@ -256,6 +264,22 @@ function OngletContrats({ today }: { today: string }) {
     () => state.obligations.filter((o) => o.contrat).sort((a, b) => a.echeance.localeCompare(b.echeance)),
     [state.obligations],
   )
+
+  // Atterrissage sur L'ÉLÉMENT : `#/agenda/contrats/<obligationId>` ouvre la
+  // fiche du contrat — paiement, rappel et renouvellement, ce que le lien
+  // « ouvrir dans l'agenda » de Contrats.tsx promet. Le tableau reste dessous :
+  // fermer la fiche rend la liste, pas une page blanche.
+  const cible = cibleId ? contrats.find((o) => o.id === cibleId) : undefined
+  const fiche = useMemo(
+    () => edition ?? (cible ? structuredClone(cible) : null),
+    [edition, cible],
+  )
+  const fermerFiche = () => {
+    setEdition(null)
+    setCreation(false)
+    // l'adresse profonde se retire, sinon la fiche se rouvrirait aussitôt
+    if (cibleId) navigate('/agenda/contrats')
+  }
   const totalAnnuel = contrats.reduce((somme, o) => somme + (o.montantAnnuel || 0), 0)
 
   /** cellule Renouvellement : date + badge selon l'urgence de la décision */
@@ -287,6 +311,12 @@ function OngletContrats({ today }: { today: string }) {
       </div>
 
       <Card>
+        {cibleId && !cible && (
+          <div className="pill-note" style={{ marginBottom: 10, borderColor: 'var(--warn)' }}>
+            Le contrat demandé par ce lien n'est plus suivi ici (supprimé, ou décoché « contrat »).
+            Voici la liste complète.
+          </div>
+        )}
         {contrats.length === 0 ? (
           <EmptyState>
             Aucun contrat suivi. Ajoutez MAF, multirisque, licences logiciels, bail… — le Cockpit
@@ -374,14 +404,11 @@ function OngletContrats({ today }: { today: string }) {
         )}
       </Card>
 
-      {(edition || creation) && (
+      {(fiche || creation) && (
         <FicheObligation
-          initiale={edition || contratVide()}
+          initiale={fiche || contratVide()}
           creation={creation}
-          onClose={() => {
-            setEdition(null)
-            setCreation(false)
-          }}
+          onClose={fermerFiche}
         />
       )}
     </>
@@ -526,12 +553,27 @@ function marquerRelanceFaite(state: AppState, update: (fn: (d: AppState) => void
   })
 }
 
-export function OngletContacts({ today }: { today: string }) {
+export function OngletContacts({ today, cibleId }: { today: string; cibleId?: string }) {
   const { state, update, replace } = useStore()
   const [recherche, setRecherche] = useState('')
   const [filtreType, setFiltreType] = useState('')
   const [edition, setEdition] = useState<Contact | null>(null)
   const [creation, setCreation] = useState(false)
+
+  // Atterrissage sur L'ÉLÉMENT : `#/ressources/contacts/<id>` ouvre la fiche
+  // du contact — son journal d'échanges est le geste attendu depuis la fiche
+  // organisation. La liste reste dessous : fermer rend l'annuaire.
+  const cible = cibleId ? state.contacts.find((c) => c.id === cibleId) : undefined
+  const fiche = useMemo(
+    () => edition ?? (cible ? structuredClone(cible) : null),
+    [edition, cible],
+  )
+  const fermerFiche = () => {
+    setEdition(null)
+    setCreation(false)
+    // l'adresse profonde se retire, sinon la fiche se rouvrirait aussitôt
+    if (cibleId) navigate('/ressources/contacts')
+  }
 
   const contacts = useMemo(() => {
     const q = fold(recherche)
@@ -560,6 +602,12 @@ export function OngletContacts({ today }: { today: string }) {
       </div>
 
       <Card>
+        {cibleId && !cible && (
+          <div className="pill-note" style={{ marginBottom: 10, borderColor: 'var(--warn)' }}>
+            Le contact demandé par ce lien n'est plus à l'annuaire (supprimé, ou annuaire d'un autre
+            poste). Le voici cherchable ci-dessous.
+          </div>
+        )}
         {contacts.length === 0 ? (
           <EmptyState>Aucun contact — le CRM se nourrit de chaque échange.</EmptyState>
         ) : (
@@ -639,15 +687,8 @@ export function OngletContacts({ today }: { today: string }) {
         )}
       </Card>
 
-      {(edition || creation) && (
-        <FicheContact
-          initiale={edition || contactVide()}
-          creation={creation}
-          onClose={() => {
-            setEdition(null)
-            setCreation(false)
-          }}
-        />
+      {(fiche || creation) && (
+        <FicheContact initiale={fiche || contactVide()} creation={creation} onClose={fermerFiche} />
       )}
     </>
   )

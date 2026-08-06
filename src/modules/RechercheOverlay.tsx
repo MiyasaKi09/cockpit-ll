@@ -1,17 +1,30 @@
 // Recherche globale — palette de commandes (overlay « / »).
-// Un matériau, une entreprise, un contact, un mot du journal… →
-// tout ce qui y touche, avec le chemin vers chaque fiche et les
-// projets reliés. Clavier : ↑ ↓ pour naviguer, Entrée pour ouvrir,
-// Échap pour fermer. Les résultats sont de VRAIS liens (clavier,
-// lecteur d'écran, clic molette) et les derniers éléments ouverts
-// s'affichent avant la saisie.
+// Une tâche, un matériau, une entreprise, un contact, un mot du
+// journal… → tout ce qui y touche, avec le chemin vers chaque fiche
+// et les projets reliés. Clavier : ↑ ↓ pour naviguer, Entrée pour
+// ouvrir, Échap pour fermer. Les résultats sont de VRAIS liens
+// (clavier, lecteur d'écran, clic molette) et les derniers éléments
+// ouverts s'affichent avant la saisie.
+//
+// CHAQUE LIEN ATTERRIT SUR L'ÉLÉMENT, jamais en haut d'une liste : la
+// fiche du document s'ouvre (`#/documents/tous/<id>`), la situation
+// s'ouvre dans l'onglet où elle se trouve vraiment, et le terme cherché
+// voyage dans l'adresse au lieu d'être retapé à l'arrivée (T3, T6).
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../store'
 import type { AppState } from '../types'
 import { navigate } from '../ui'
 import { LIBELLES_STATUT } from '../registre'
+import { LIBELLES_STATUT_TACHE, estStatutTache } from '../taches'
 import { fmtDate, fmtMoney, fold } from '../util'
+
+/** Le terme cherché voyage dans le lien : il était retapé à l'arrivée
+ *  (T3, parcours 9). Un seul constructeur pour ne pas oublier l'encodage —
+ *  `useRoute` décode chaque segment, un « / » dans un libellé casserait
+ *  le découpage. */
+const lienRecherche = (base: string, terme: string): string =>
+  terme.trim() ? `${base}/chercher/${encodeURIComponent(terme.trim())}` : base
 
 interface Resultat {
   groupe: string
@@ -71,6 +84,27 @@ function chercher(state: AppState, q: string): Resultat[] {
       })
   }
 
+  // les tâches — l'entité quotidienne depuis B.12 ; sans elles, la palette
+  // ignore ce sur quoi on travaille vraiment (R5)
+  for (const t of state.taches) {
+    if (hit(t.titre, t.description, t.responsable, t.projetId))
+      res.push({
+        groupe: 'Tâches',
+        titre: t.titre,
+        detail: [
+          estStatutTache(t.statut) ? LIBELLES_STATUT_TACHE[t.statut] : t.statut,
+          t.echeance ? `pour le ${fmtDate(t.echeance)}` : null,
+          t.responsable,
+        ]
+          .filter(Boolean)
+          .join(' · '),
+        // la route `#/taches/<id>` ouvre la fiche : sans l'identifiant, le
+        // résultat déposait en haut de la liste, à re-chercher à l'œil (T6)
+        lien: `#/taches/${t.id}`,
+        projets: t.projetId ? [t.projetId] : undefined,
+      })
+  }
+
   for (const d of state.registreDocuments) {
     if (d.statut === 'rejete') continue
     if (hit(d.titre, d.nomOriginal, d.cheminDrive, d.categorie))
@@ -78,7 +112,9 @@ function chercher(state: AppState, q: string): Resultat[] {
         groupe: 'Documents',
         titre: d.titre,
         detail: [d.categorie, `v${d.version}`, LIBELLES_STATUT[d.statut]].join(' · '),
-        lien: '#/documents/tous',
+        // la FICHE du document, pas le haut du registre : c'est l'élément
+        // cherché, et son chemin Drive y est lisible d'un coup d'œil (T6)
+        lien: `#/documents/tous/${d.id}`,
         projets: d.projetId ? [d.projetId] : undefined,
       })
   }
@@ -122,7 +158,9 @@ function chercher(state: AppState, q: string): Resultat[] {
         groupe: 'Contacts',
         titre: `${c.nom}${c.organisme ? ` (${c.organisme})` : ''}`,
         detail: c.email,
-        lien: '#/agenda',
+        // les contacts ont déménagé dans Ressources : l'agenda n'en montre
+        // plus la liste, on y arrivait devant un écran sans le contact
+        lien: '#/ressources/contacts',
       })
   }
 
@@ -155,7 +193,8 @@ function chercher(state: AppState, q: string): Resultat[] {
         groupe: 'Factures',
         titre: `${f.numero || f.id} — ${f.libelle}`,
         detail: `${f.projetId} · ${fmtMoney(f.montantHT)} HT`,
-        lien: '#/facturation',
+        // la liste s'ouvre sur le terme cherché, plus sur son premier écran
+        lien: lienRecherche('#/facturation', f.numero || f.libelle),
         projets: [f.projetId],
       })
   }
@@ -165,7 +204,7 @@ function chercher(state: AppState, q: string): Resultat[] {
         groupe: 'Factures',
         titre: `À émettre — ${e.libelle}`,
         detail: `${e.projetId} · ${fmtMoney(e.montantHT)} HT · prévue le ${fmtDate(e.datePrevue)}`,
-        lien: '#/facturation',
+        lien: lienRecherche('#/facturation', e.libelle),
         projets: [e.projetId],
       })
   }
@@ -176,7 +215,12 @@ function chercher(state: AppState, q: string): Resultat[] {
         groupe: 'Situations',
         titre: `${s.entreprise} — ${s.mois}`,
         detail: s.montantMoisHT !== null ? `${fmtMoney(s.montantMoisHT)} HT` : undefined,
-        lien: '#/situations',
+        // l'onglet où la situation se trouve VRAIMENT : une situation validée
+        // n'est pas dans « À vérifier », et on repartait la chercher
+        lien: lienRecherche(
+          s.statut === 'a_verifier' ? '#/situations/verifier' : '#/situations/historique',
+          s.entreprise,
+        ),
         projets: s.projetId ? [s.projetId] : [],
       })
   }

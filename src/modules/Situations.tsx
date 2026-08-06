@@ -29,7 +29,9 @@ import {
   TextArea,
   TextInput,
   confirmer,
+  navigate,
   toast,
+  useRoute,
   useToday,
 } from '../ui'
 import { clamp, diffDays, fmtDate, fmtMois, fmtMoney, fmtPct, fold, monthKey, ouvrirGmail, uid } from '../util'
@@ -45,6 +47,7 @@ import {
 } from '../derive'
 import type { StatutRG } from '../derive'
 import { SEUIL_ECART_AVANCEMENT_PTS, controleSituation } from '../controleSituation'
+import type { ControleSituation } from '../controleSituation'
 import {
   avanceRembourseeApresEmission,
   certificatDeSituation,
@@ -66,7 +69,14 @@ import type { ResultatImport, RetourSituation } from '../importRoutines'
 // 5.20 — le critère « situation du mois » et le texte de la relance vivent
 // dans src/entreprise.ts : la fiche entreprise, le fil d'urgences et cet
 // écran doivent dire (et écrire) la même chose
-import { corpsRelanceSituation, situationDuMois, sujetRelanceSituation } from '../entreprise'
+import {
+  JOUR_ATTENTE_SITUATION,
+  JOUR_RELANCE_SITUATION,
+  corpsRelanceSituation,
+  situationAttendueNonRecue,
+  situationDuMois,
+  sujetRelanceSituation,
+} from '../entreprise'
 import FicheEntreprise from './FicheEntreprise'
 
 // ---------- petits helpers locaux ----------
@@ -128,6 +138,42 @@ function NetAPayer({ state, sit }: { state: AppState; sit: Situation }) {
  *  française, sans passer par fmtPct qui attend une fraction */
 const pts = (v: number) => String(v).replace('.', ',')
 
+/** l'écart d'avancement quand il dépasse le seuil nommé de 5.5, null sinon.
+ *  UN SEUL prédicat pour les trois endroits qui le lisent : le badge de la
+ *  ligne « à vérifier », le panneau qui s'ouvre au clic « Valider » et le
+ *  bloc de contrôle lui-même — trois lectures du même seuil finiraient par
+ *  ne plus dire la même chose. */
+const ecartSignificatif = (ctl: ControleSituation): number | null =>
+  ctl.ecartPts !== null && Math.abs(ctl.ecartPts) > SEUIL_ECART_AVANCEMENT_PTS ? ctl.ecartPts : null
+
+/** T2 — le badge d'écart DANS LA LIGNE : on clique « Valider » depuis la
+ *  liste, le contrôle 5.5 doit donc s'y voir. Rien n'est recalculé ici,
+ *  controleSituation reste la seule autorité ; le badge SIGNALE, il ne
+ *  qualifie pas — valider ou non reste le clic humain. */
+function BadgeEcartControle({ state, sit }: { state: AppState; sit: Situation }) {
+  const ctl = controleSituation(state, sit)
+  const ecart = ecartSignificatif(ctl)
+  if (ecart === null || ctl.pctDemande === null || ctl.pctChantier === null) return null
+  return (
+    <span
+      title={`Contrôle 5.5 — l'entreprise demande ${pts(ctl.pctDemande)} %, le chantier dit ${pts(ctl.pctChantier)} % : « Valider » ouvrira le détail du contrôle.`}
+    >
+      <Badge tone="warn">écart {pts(Math.abs(ecart))} pts</Badge>
+    </span>
+  )
+}
+
+/** n° d'ordre PROPOSÉ pour une nouvelle situation d'un marché : le plus haut
+ *  déjà reçu + 1 (1 si c'est la première). Une proposition, pas une règle —
+ *  le champ reste ouvert, les entreprises numérotent comme elles veulent. */
+function prochainNumeroSituation(state: AppState, marcheId: string): number {
+  let max = 0
+  for (const s of state.situations) {
+    if (s.marcheId === marcheId && typeof s.numero === 'number' && s.numero > max) max = s.numero
+  }
+  return max + 1
+}
+
 /** 5.5 — le bloc « Contrôle » : la situation FACE AU réel du chantier et
  *  des indices. Des chiffres côte à côte, un badge quand l'écart
  *  d'avancement dépasse le seuil nommé — et jamais un verdict : valider ou
@@ -139,6 +185,7 @@ function BlocControle({ state, sit }: { state: AppState; sit: Situation }) {
   // construction, et la fiche demande déjà le rattachement juste au-dessus
   if (!marcheDeSituation(state, sit)) return null
   const ctl = controleSituation(state, sit)
+  const ecart = ecartSignificatif(ctl)
   return (
     <div style={{ marginTop: 8, padding: 12, background: 'var(--bg-soft, #f6f7fa)', borderRadius: 8 }}>
       <div className="small" style={{ fontWeight: 700, marginBottom: 4 }}>
@@ -150,9 +197,7 @@ function BlocControle({ state, sit }: { state: AppState; sit: Situation }) {
             l’entreprise demande <strong>{pts(ctl.pctDemande)} %</strong> · le chantier dit{' '}
             <strong>{pts(ctl.pctChantier)} %</strong>
           </span>
-          {ctl.ecartPts !== null && Math.abs(ctl.ecartPts) > SEUIL_ECART_AVANCEMENT_PTS && (
-            <Badge tone="warn">écart {pts(Math.abs(ctl.ecartPts))} pts</Badge>
-          )}
+          {ecart !== null && <Badge tone="warn">écart {pts(Math.abs(ecart))} pts</Badge>}
         </div>
       )}
       {(ctl.revisionDemandee !== null || ctl.revisionTheorique !== null) && (
@@ -408,7 +453,12 @@ function CarteImport() {
 
 // ---------- modal d'édition ----------
 
-function ModalEdition({ sit, onClose }: { sit: Situation; onClose: () => void }) {
+/** LA fiche d'une situation — en édition comme en création (S1). Une
+ *  situation reçue par courrier papier ou remise en réunion n'avait aucun
+ *  point d'entrée : seul le JSON de la routine en créait. Le même formulaire
+ *  sert les deux gestes — décompte, contrôle 5.5 et cohérences compris —
+ *  plutôt qu'un second écran de saisie qui divergerait. */
+function ModalEdition({ sit, creation, onClose }: { sit: Situation; creation?: boolean; onClose: () => void }) {
   const { state, update, replace } = useStore()
   const [entreprise, setEntreprise] = useState(sit.entreprise)
   const [lot, setLot] = useState(sit.lot || '')
@@ -427,6 +477,28 @@ function ModalEdition({ sit, onClose }: { sit: Situation; onClose: () => void })
 
   const marche = state.marches.find((m) => m.id === marcheId)
 
+  /** S4 — la confiance est l'indice d'une LECTURE machine. Dès qu'un humain
+   *  corrige un chiffre lu, cet indice ne veut plus rien dire : la situation
+   *  redevient une « saisie manuelle ». Le champ ne se retape donc plus au
+   *  clavier — il se lit, et il se remet tout seul. */
+  const manuel = () => setConfiance(null)
+
+  /** choisir le marché REMPLIT la fiche en création (entreprise, lot, projet,
+   *  n° proposé) — c'est le sens de « pré-remplie depuis le marché ». En
+   *  édition il ne touche qu'au projet : le rattachement se corrige souvent
+   *  après coup, écraser le nom LU ferait perdre la trace de ce qui est
+   *  arrivé. */
+  const choisirMarche = (id: string) => {
+    setMarcheId(id)
+    const m = state.marches.find((x) => x.id === id)
+    if (!m) return
+    setProjetId(m.projetId)
+    if (!creation) return
+    setEntreprise(m.entreprise)
+    setLot(m.lot)
+    setNumero(prochainNumeroSituation(state, m.id))
+  }
+
   const enregistrer = () => {
     if (!entreprise.trim()) {
       toast('Le nom de l’entreprise est obligatoire.', { tone: 'danger' })
@@ -434,6 +506,34 @@ function ModalEdition({ sit, onClose }: { sit: Situation; onClose: () => void })
     }
     if (!/^\d{4}-\d{2}$/.test(mois)) {
       toast('Mois attendu au format AAAA-MM (ex. 2026-07).', { tone: 'danger' })
+      return
+    }
+    if (creation) {
+      const snap = state
+      const nouvelle: Situation = {
+        ...sit,
+        entreprise: entreprise.trim(),
+        lot: lot.trim() || undefined,
+        mois,
+        numero,
+        montantMoisHT: montantMois,
+        montantCumulHT: cumul,
+        revisionHT: revision,
+        confiance: confiance === null ? null : clamp(confiance, 0, 1),
+        marcheId: marcheId || null,
+        projetId: marche ? marche.projetId : projetId,
+        dateReception: dateReception || sit.dateReception,
+        statut,
+        source: source.trim() || undefined,
+        notes: notes.trim() || undefined,
+      }
+      update((d) => {
+        d.situations.push(nouvelle)
+      })
+      toast(`Situation saisie : ${nouvelle.entreprise} — ${fmtMois(nouvelle.mois)}.`, {
+        undo: () => replace(snap),
+      })
+      onClose()
       return
     }
     update((d) => {
@@ -468,12 +568,19 @@ function ModalEdition({ sit, onClose }: { sit: Situation; onClose: () => void })
   }
 
   return (
-    <Modal titre="Éditer la situation" onClose={onClose} large>
+    <Modal titre={creation ? 'Saisir une situation' : 'Éditer la situation'} onClose={onClose} large>
+      {creation && (
+        <p className="muted small" style={{ marginTop: 0 }}>
+          Situation reçue autrement que par situations@ (courrier, remise en réunion) :
+          choisissez le marché, le reste se pré-remplit. Elle entrera « à vérifier », comme
+          celles de la routine.
+        </p>
+      )}
       <div className="form-row">
         <Field label="Marché rattaché" hint="Le rattachement fixe le projet et le délai de vérification">
           <Select
             value={marcheId}
-            onChange={setMarcheId}
+            onChange={choisirMarche}
             options={[
               { value: '', label: '— non rattachée —' },
               ...state.marches.map((m) => ({
@@ -496,34 +603,86 @@ function ModalEdition({ sit, onClose }: { sit: Situation; onClose: () => void })
           </Field>
         )}
       </div>
+      {/* toute correction d'une valeur LUE repasse la situation en « saisie
+          manuelle » : la confiance ci-dessous se remet toute seule */}
       <div className="form-row">
         <Field label="Entreprise">
-          <TextInput value={entreprise} onChange={setEntreprise} />
+          <TextInput
+            value={entreprise}
+            onChange={(v) => {
+              setEntreprise(v)
+              manuel()
+            }}
+          />
         </Field>
         <Field label="Lot">
-          <TextInput value={lot} onChange={setLot} placeholder="Lot 01 — Gros œuvre" />
+          <TextInput
+            value={lot}
+            onChange={(v) => {
+              setLot(v)
+              manuel()
+            }}
+            placeholder="Lot 01 — Gros œuvre"
+          />
         </Field>
       </div>
       <div className="form-row">
         <Field label="Mois" hint="Format AAAA-MM">
-          <TextInput value={mois} onChange={setMois} placeholder="2026-07" />
+          <TextInput
+            value={mois}
+            onChange={(v) => {
+              setMois(v)
+              manuel()
+            }}
+            placeholder="2026-07"
+          />
         </Field>
         <Field label="N° de situation">
-          <NumInput value={numero} onChange={setNumero} />
+          <NumInput
+            value={numero}
+            onChange={(v) => {
+              setNumero(v)
+              manuel()
+            }}
+          />
         </Field>
         <Field label="Montant du mois HT">
-          <NumInput value={montantMois} onChange={setMontantMois} />
+          <NumInput
+            value={montantMois}
+            onChange={(v) => {
+              setMontantMois(v)
+              manuel()
+            }}
+          />
         </Field>
         <Field label="Cumul HT">
-          <NumInput value={cumul} onChange={setCumul} />
+          <NumInput
+            value={cumul}
+            onChange={(v) => {
+              setCumul(v)
+              manuel()
+            }}
+          />
         </Field>
       </div>
       <div className="form-row">
         <Field label="Reçue le">
           <DateInput value={dateReception} onChange={setDateReception} />
         </Field>
-        <Field label="Confiance" hint="0 à 1 — vide si saisie manuelle">
-          <NumInput value={confiance} onChange={setConfiance} placeholder="0,85" />
+        {/* S4 — plus de « 0 à 1 » à retaper au clavier : la confiance est une
+            LECTURE, elle se lit. Elle repasse à « saisie manuelle » dès qu'une
+            valeur lue est corrigée ci-dessus. */}
+        <Field
+          label="Confiance de la lecture"
+          hint={
+            confiance === null
+              ? 'saisie ou corrigée à la main — aucune lecture machine à qualifier'
+              : 'lecture de la routine ; toute correction ci-dessus la repasse en saisie manuelle'
+          }
+        >
+          <div style={{ paddingTop: 6 }}>
+            <BadgeConfiance v={confiance} />
+          </div>
         </Field>
         <Field label="Statut">
           <Select
@@ -560,7 +719,14 @@ function ModalEdition({ sit, onClose }: { sit: Situation; onClose: () => void })
                 label="Révision de prix HT"
                 hint={marche ? (marche.revision ? 'marché révisable' : 'marché non révisable') : 'rattachez un marché pour la RG et le contrôle'}
               >
-                <NumInput value={revision} onChange={setRevision} placeholder="0" />
+                <NumInput
+                  value={revision}
+                  onChange={(v) => {
+                    setRevision(v)
+                    manuel()
+                  }}
+                  placeholder="0"
+                />
               </Field>
               <div style={{ flex: 1, minWidth: 240 }}>
                 <div className="small muted" style={{ marginBottom: 4 }}>
@@ -615,15 +781,17 @@ function ModalEdition({ sit, onClose }: { sit: Situation; onClose: () => void })
         <TextArea value={notes} onChange={setNotes} rows={3} />
       </Field>
       <div className="form-foot">
-        <Btn kind="danger" onClick={supprimer}>
-          Supprimer
-        </Btn>
+        {!creation && (
+          <Btn kind="danger" onClick={supprimer}>
+            Supprimer
+          </Btn>
+        )}
         <span className="spacer" />
         <Btn kind="ghost" onClick={onClose}>
           Annuler
         </Btn>
         <Btn kind="primary" onClick={enregistrer}>
-          Enregistrer
+          {creation ? 'Enregistrer la situation' : 'Enregistrer'}
         </Btn>
       </div>
     </Modal>
@@ -638,19 +806,63 @@ function CarteAVerifier() {
   const [editionId, setEditionId] = useState<string | null>(null)
   const [rejetId, setRejetId] = useState<string | null>(null)
   const [motifRejet, setMotifRejet] = useState('')
+  /** situation dont « Valider » a ouvert le contrôle 5.5 (écart au-delà du seuil) */
+  const [controleId, setControleId] = useState<string | null>(null)
+  /** dernière situation validée : le geste suivant (le certificat) se propose ici */
+  const [suiteId, setSuiteId] = useState<string | null>(null)
+  const [certifId, setCertifId] = useState<string | null>(null)
+  /** situation en cours de SAISIE manuelle (courrier papier, remise en réunion) */
+  const [creation, setCreation] = useState<Situation | null>(null)
 
   const tplVerif = gabarit(state, 'tpl-verif-situation')
   const aVerifier = state.situations
     .filter((s) => s.statut === 'a_verifier')
     .sort((a, b) => dateLimiteVerif(state, a).localeCompare(dateLimiteVerif(state, b)))
 
-  const valider = (id: string) => {
+  const saisirSituation = () =>
+    setCreation({
+      // id calculé AVANT la mutation (producteur rejouable)
+      id: uid('sit'),
+      projetId: '',
+      marcheId: null,
+      entreprise: '',
+      mois: monthKey(today),
+      numero: null,
+      montantMoisHT: null,
+      montantCumulHT: null,
+      statut: 'a_verifier',
+      confiance: null,
+      source: `saisie manuelle du ${fmtDate(today)}`,
+      dateReception: today,
+    })
+
+  const validerVraiment = (id: string) => {
     const snap = state
     update((d) => {
       const x = d.situations.find((s) => s.id === id)
       if (x) x.statut = 'validee'
     })
-    toast('Situation validée.', { undo: () => replace(snap) })
+    setControleId(null)
+    setSuiteId(id)
+    toast('Situation validée.', {
+      undo: () => {
+        setSuiteId(null)
+        replace(snap)
+      },
+    })
+  }
+
+  /** T2 — le contrôle 5.5 au POINT DE DÉCISION. On clique « Valider » depuis
+   *  la liste : quand l'écart d'avancement dépasse le seuil, le contrôle
+   *  s'ouvre AVANT la validation au lieu de rester dans la modale « Éditer »
+   *  que personne n'ouvre. Il ne bloque rien — il montre, l'humain tranche. */
+  const valider = (id: string) => {
+    const s = state.situations.find((x) => x.id === id)
+    if (s && ecartSignificatif(controleSituation(state, s)) !== null) {
+      setControleId(id)
+      return
+    }
+    validerVraiment(id)
   }
 
   const confirmerRejet = () => {
@@ -671,14 +883,55 @@ function CarteAVerifier() {
 
   const enEdition = editionId ? state.situations.find((s) => s.id === editionId) : undefined
   const enRejet = rejetId ? state.situations.find((s) => s.id === rejetId) : undefined
+  const enControle = controleId ? state.situations.find((s) => s.id === controleId) : undefined
+  // la suite ne se propose que tant que la validation TIENT : « Annuler »
+  // dans le toast la fait disparaître d'elle-même
+  const suite = suiteId ? state.situations.find((s) => s.id === suiteId) : undefined
+  const suiteAProposer =
+    suite && suite.statut === 'validee' && marcheDeSituation(state, suite) && !certificatDeSituation(state, suite.id)
+      ? suite
+      : undefined
 
   // regroupement par projet : on vérifie chantier par chantier, pas en vrac
   const projetIds = [...new Set(aVerifier.map((s) => s.projetId))]
 
   return (
-    <Card titre={`À vérifier (${aVerifier.length})`}>
+    <Card
+      titre={`À vérifier (${aVerifier.length})`}
+      actions={
+        <Btn
+          small
+          onClick={saisirSituation}
+          title="Une situation reçue par courrier ou remise en réunion se saisit ici — même fiche, même contrôle que celles de la routine"
+        >
+          Saisir une situation
+        </Btn>
+      }
+    >
+      {/* T2 — après « Valider », le geste suivant est toujours le certificat :
+          il se propose ici, au lieu de se retrouver dans l'onglet Historique */}
+      {suiteAProposer && (
+        <div
+          className="pill-note"
+          style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}
+        >
+          <span>
+            <strong>{suiteAProposer.entreprise}</strong> validée ({fmtMois(suiteAProposer.mois)}) — le
+            geste suivant est le certificat de paiement vers le maître d’ouvrage.
+          </span>
+          <Btn small kind="primary" onClick={() => setCertifId(suiteAProposer.id)}>
+            Émettre le certificat
+          </Btn>
+          <Btn small kind="ghost" onClick={() => setSuiteId(null)} title="Il restera dans l’onglet Historique">
+            Plus tard
+          </Btn>
+        </div>
+      )}
       {aVerifier.length === 0 ? (
-        <EmptyState>Aucune situation en attente de vérification.</EmptyState>
+        <EmptyState>
+          Aucune situation en attente de vérification — « Saisir une situation » pour celle qui
+          arrive autrement que par situations@.
+        </EmptyState>
       ) : (
         projetIds.map((pid) => {
           const duProjet = aVerifier.filter((s) => s.projetId === pid)
@@ -720,7 +973,7 @@ function CarteAVerifier() {
                         <Money v={s.montantMoisHT} />
                       </td>
                       <td className="right">
-                        <Money v={s.montantCumulHT} />
+                        <Money v={s.montantCumulHT} /> <BadgeEcartControle state={state} sit={s} />
                       </td>
                       <td className="right">
                         <NetAPayer state={state} sit={s} /> <BadgeCoherence state={state} sit={s} />
@@ -763,7 +1016,14 @@ function CarteAVerifier() {
                           </Btn>
                           <RowMenu
                             items={[
-                              { label: 'Décompte (PDF)', onClick: () => ouvrirDecompteSituationPDF(state, s), title: 'Certificat de paiement imprimable (net à payer)' },
+                              {
+                                label: 'Décompte (PDF)',
+                                onClick: () => ouvrirDecompteSituationPDF(state, s),
+                                // S6 — ce document est le DÉCOMPTE DE VÉRIFICATION remis à
+                                // l'entreprise ; le certificat de paiement est un autre
+                                // document, contractuel, adressé au maître d'ouvrage
+                                title: 'Décompte de vérification (interne, remis à l’entreprise) — net à payer',
+                              },
                               { label: 'Éditer', onClick: () => setEditionId(s.id) },
                               { label: 'Rejeter…', onClick: () => { setRejetId(s.id); setMotifRejet('') }, danger: true },
                             ]}
@@ -785,6 +1045,42 @@ function CarteAVerifier() {
         </p>
       )}
       {enEdition && <ModalEdition sit={enEdition} onClose={() => setEditionId(null)} />}
+      {creation && <ModalEdition sit={creation} creation onClose={() => setCreation(null)} />}
+      {enControle && (
+        <Modal
+          titre={`Contrôle avant validation — ${enControle.entreprise} (${fmtMois(enControle.mois)})`}
+          onClose={() => setControleId(null)}
+          large
+        >
+          <p className="muted small" style={{ marginTop: 0 }}>
+            Le contrôle a trouvé un écart d’avancement de plus de {SEUIL_ECART_AVANCEMENT_PTS} points.
+            Il ne dit pas qui a raison : le planning travaux peut être en retard de saisie, la
+            demande peut devancer le chantier. Vous décidez.
+          </p>
+          <BlocControle state={state} sit={enControle} />
+          <div className="form-foot">
+            <Btn kind="ghost" onClick={() => setControleId(null)}>
+              Annuler
+            </Btn>
+            <span className="spacer" />
+            <Btn
+              onClick={() => {
+                setEditionId(enControle.id)
+                setControleId(null)
+              }}
+            >
+              Éditer la situation
+            </Btn>
+            <Btn kind="primary" onClick={() => validerVraiment(enControle.id)}>
+              Valider quand même
+            </Btn>
+          </div>
+        </Modal>
+      )}
+      {(() => {
+        const sit = certifId ? state.situations.find((s) => s.id === certifId) : undefined
+        return sit ? <ModalCertificat sit={sit} onClose={() => setCertifId(null)} /> : null
+      })()}
       {enRejet && (
         <Modal titre={`Rejeter la situation — ${enRejet.entreprise} (${fmtMois(enRejet.mois)})`} onClose={() => setRejetId(null)}>
           <Field label="Motif du rejet" hint="tracé dans les notes de la situation">
@@ -957,29 +1253,98 @@ function ModalCertificat({ sit, onClose }: { sit: Situation; onClose: () => void
 
 // ---------- historique ----------
 
-function CarteHistorique() {
+/** T5 — les 6 lignes par chantier restent le DÉFAUT d'affichage (l'historique
+ *  se lit chantier par chantier), jamais une limite d'accès : sur 8 lots, le
+ *  bouton « Certificat de paiement » du 7e lot devenait inatteignable. */
+const PLAFOND_HISTORIQUE = 6
+
+function CarteHistorique({ entrepriseInitiale = '' }: { entrepriseInitiale?: string }) {
   const { state, update } = useStore()
   const today = useToday()
   // situation dont on prépare le certificat de paiement (5.19)
+  // le filtre porté par la route ne s'applique que s'il désigne une entreprise
+  // réellement présente dans l'historique : sinon la carte s'ouvrirait vide
+  // sans dire pourquoi, ce qui est pire que de ne pas pré-remplir.
+  const connuIci = state.situations.some(
+    (s) => s.statut !== 'a_verifier' && s.entreprise === entrepriseInitiale,
+  )
   const [certifId, setCertifId] = useState<string | null>(null)
-  const traitees = state.situations
+  const [filtreMois, setFiltreMois] = useState('')
+  const [filtreEntreprise, setFiltreEntreprise] = useState(connuIci ? entrepriseInitiale : '')
+  /** projets dont on a demandé l'historique complet (par leur id) */
+  const [deplies, setDeplies] = useState<string[]>([])
+  const deplier = (pid: string) =>
+    setDeplies((prev) => (prev.includes(pid) ? prev.filter((x) => x !== pid) : [...prev, pid]))
+
+  const toutes = state.situations
     .filter((s) => s.statut !== 'a_verifier')
     .sort((a, b) => b.mois.localeCompare(a.mois) || b.dateReception.localeCompare(a.dateReception))
+  const moisConnus = [...new Set(toutes.map((s) => s.mois))].sort().reverse()
+  const entreprisesConnues = [...new Set(toutes.map((s) => s.entreprise))].sort((a, b) => a.localeCompare(b))
+  const traitees = toutes.filter(
+    (s) => (!filtreMois || s.mois === filtreMois) && (!filtreEntreprise || s.entreprise === filtreEntreprise),
+  )
+  const filtre = Boolean(filtreMois || filtreEntreprise)
 
-  // par projet, les 6 dernières de chaque chantier : l'historique se lit chantier par chantier
   const projetIds = [...new Set(traitees.map((s) => s.projetId))]
 
   return (
     <Card titre="Historique — par projet">
-      {traitees.length === 0 ? (
+      {toutes.length > 0 && (
+        <div className="toolbar" style={{ marginTop: 0 }}>
+          <Select
+            value={filtreMois}
+            onChange={setFiltreMois}
+            options={[
+              { value: '', label: 'Tous les mois' },
+              ...moisConnus.map((m) => ({ value: m, label: fmtMois(m) })),
+            ]}
+          />
+          <Select
+            value={filtreEntreprise}
+            onChange={setFiltreEntreprise}
+            options={[
+              { value: '', label: 'Toutes les entreprises' },
+              ...entreprisesConnues.map((e) => ({ value: e, label: e })),
+            ]}
+          />
+          <span className="muted small">
+            {traitees.length} situation{traitees.length > 1 ? 's' : ''}
+            {filtre ? ` sur ${toutes.length}` : ''}
+          </span>
+          {filtre && (
+            <Btn
+              small
+              kind="ghost"
+              onClick={() => {
+                setFiltreMois('')
+                setFiltreEntreprise('')
+              }}
+            >
+              Retirer le filtre
+            </Btn>
+          )}
+        </div>
+      )}
+      {toutes.length === 0 ? (
         <EmptyState>Aucune situation validée ou rejetée pour l’instant.</EmptyState>
+      ) : traitees.length === 0 ? (
+        <EmptyState>Aucune situation ne correspond à ce filtre — « Retirer le filtre » les remet toutes.</EmptyState>
       ) : (
         projetIds.map((pid) => {
-          const duProjet = traitees.filter((s) => s.projetId === pid).slice(0, 6)
+          const duProjetToutes = traitees.filter((s) => s.projetId === pid)
+          const deplie = deplies.includes(pid)
+          const duProjet = deplie ? duProjetToutes : duProjetToutes.slice(0, PLAFOND_HISTORIQUE)
           return (
             <div key={pid} style={{ marginBottom: 14 }}>
               <div className="small" style={{ margin: '0 0 6px', fontWeight: 700 }}>
                 <LienProjet state={state} projetId={pid} />
+                {duProjetToutes.length > PLAFOND_HISTORIQUE && !deplie && (
+                  <span className="muted" style={{ fontWeight: 500 }}>
+                    {' '}
+                    — {PLAFOND_HISTORIQUE} dernières sur {duProjetToutes.length}
+                  </span>
+                )}
               </div>
               <Table
                 compact
@@ -1057,6 +1422,18 @@ function CarteHistorique() {
                   </tr>
                 ))}
               </Table>
+              {duProjetToutes.length > PLAFOND_HISTORIQUE && (
+                <div className="small" style={{ marginTop: 4 }}>
+                  <BtnLien
+                    title="Le plafond de 6 lignes est un défaut d’affichage — jamais une limite d’accès au certificat"
+                    onClick={() => deplier(pid)}
+                  >
+                    {deplie
+                      ? `Réduire aux ${PLAFOND_HISTORIQUE} dernières`
+                      : `Afficher tout (${duProjetToutes.length})`}
+                  </BtnLien>
+                </div>
+              )}
             </div>
           )
         })
@@ -1092,6 +1469,11 @@ function CarteAttendues() {
         <Table head={['Projet', 'Lot', 'Entreprise', 'Montant marché', 'État du mois', 'Relance']}>
           {actifs.map((m) => {
             const sit = situationDuMois(state, m, moisCourant)
+            // 5.20 / S2 — LE critère partagé du 10 du mois (src/entreprise.ts),
+            // celui du fil d'urgences et de la fiche entreprise. La règle
+            // locale « manquante dès le 1er » faisait répondre deux écrans
+            // différemment à « cette situation est-elle en retard ? »
+            const attente = situationAttendueNonRecue(state, m, today)
             return (
               <tr key={m.id}>
                 <td>
@@ -1114,13 +1496,37 @@ function CarteAttendues() {
                     <>
                       <Badge tone="ok">reçue ✓</Badge> <BadgeStatutSituation statut={sit.statut} />
                     </>
+                  ) : attente ? (
+                    <span
+                      title={
+                        attente.gravite === 3
+                          ? `Attendue depuis le ${JOUR_ATTENTE_SITUATION} — passé le ${JOUR_RELANCE_SITUATION}, le retard décale d’autant la vérification puis le paiement`
+                          : `Attendue depuis le ${JOUR_ATTENTE_SITUATION} du mois`
+                      }
+                    >
+                      <Badge tone={attente.gravite === 3 ? 'danger' : 'warn'}>non reçue</Badge>
+                    </span>
                   ) : (
-                    <Badge tone="warn">manquante</Badge>
+                    <span
+                      className="muted small"
+                      title={`L'entreprise facture à terme échu : elle a jusqu'au ${JOUR_ATTENTE_SITUATION} pour envoyer sa situation du mois.`}
+                    >
+                      attendue à partir du {JOUR_ATTENTE_SITUATION}
+                    </span>
                   )}
                 </td>
                 <td>
-                  {sit ? (
-                    <span className="muted">—</span>
+                  {!attente ? (
+                    <span
+                      className="muted"
+                      title={
+                        sit
+                          ? 'Situation reçue — rien à relancer'
+                          : `Avant le ${JOUR_ATTENTE_SITUATION}, l'entreprise n'est pas en retard : relancer serait injuste`
+                      }
+                    >
+                      —
+                    </span>
                   ) : tplRelance ? (
                     <span style={{ display: 'inline-flex', gap: 6 }}>
                       <CopyBtn
@@ -1158,7 +1564,10 @@ function CarteAttendues() {
         </Table>
       )}
       <p className="muted small">
-        Les marchés de travaux se gèrent dans la fiche projet (carte « Marchés de travaux »).
+        Une situation n’est « non reçue » qu’à partir du {JOUR_ATTENTE_SITUATION} du mois —
+        l’entreprise facture à terme échu ; c’est le même critère que le fil d’urgences et la
+        fiche entreprise. Les marchés de travaux se gèrent dans la fiche projet (carte
+        « Marchés de travaux »).
         {tplRelance ? ` La relance copiée se colle dans le Projet Claude « ${tplRelance.projetClaude} » — brouillon Gmail, relu avant envoi.` : ''}
       </p>
       {fiche && <FicheEntreprise nomOuId={fiche} onClose={() => setFiche(null)} />}
@@ -1273,11 +1682,23 @@ function CarteRetenues() {
   )
 }
 
+/** T6 — les sous-vues ont une ADRESSE : `#/situations/attendues` ouvre
+ *  l'onglet Attendues, comme `#/projets/:id/chantier` ouvre l'onglet
+ *  Chantier. En `useState` local, tous les liens venus d'ailleurs (fiche
+ *  entreprise, alertes) atterrissaient sur « À vérifier », charge à la
+ *  personne de retrouver l'onglet qu'on lui avait promis. */
+const ONGLETS_SITUATIONS = ['verifier', 'attendues', 'historique', 'rg']
+
 export default function Situations() {
   // quatre tâches distinctes → quatre sous-vues (audit simplification) ;
   // l'import manuel de la routine devient un dépannage replié
   const { state } = useStore()
-  const [vue, setVue] = useState('verifier')
+  const route = useRoute()
+  const vue = ONGLETS_SITUATIONS.includes(route[1] || '') ? route[1] : 'verifier'
+  // route profonde `#/situations/<onglet>/chercher/<entreprise>` (palette « / ») :
+  // la palette envoie déjà sur le BON onglet en portant le nom de l'entreprise ;
+  // sans cette lecture, l'onglet était bon et le filtre vide (T6, parcours 9).
+  const entrepriseRoute = route[2] === 'chercher' ? route[3] || '' : ''
   const nbAVerifier = state.situations.filter((s) => s.statut === 'a_verifier').length
   return (
     <Page
@@ -1292,7 +1713,7 @@ export default function Situations() {
           { id: 'rg', label: 'Retenues de garantie' },
         ]}
         actif={vue}
-        onSelect={setVue}
+        onSelect={(id) => navigate(`/situations/${id}`)}
       />
       {vue === 'verifier' && (
         <>
@@ -1312,7 +1733,11 @@ export default function Situations() {
         </>
       )}
       {vue === 'attendues' && <CarteAttendues />}
-      {vue === 'historique' && <CarteHistorique />}
+      {/* `key` : arriver depuis la palette sur une AUTRE entreprise repose le
+          filtre — sans lui, le second lien laisserait le premier filtre en place */}
+      {vue === 'historique' && (
+        <CarteHistorique key={entrepriseRoute} entrepriseInitiale={entrepriseRoute} />
+      )}
       {vue === 'rg' && <CarteRetenues />}
     </Page>
   )

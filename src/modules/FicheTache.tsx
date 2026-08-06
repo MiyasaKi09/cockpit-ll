@@ -23,12 +23,15 @@
 // ============================================================
 
 import { useState } from 'react'
-import type { TacheInterne } from '../types'
+import type { PhaseCode, TacheInterne } from '../types'
 import { useStore } from '../store'
 import { Btn, Modal, Select, TextInput, toast } from '../ui'
 import { useMoi } from '../moi'
 import { fmtDate, fmtHeures, lienGmail } from '../util'
+import { LIBELLES_PHASES, PHASES_ORDRE } from '../miqcp'
+import { messageArretHonnete } from './ChronoBarre'
 import { type ChronoActif, arreterChrono, basculerChrono, chronoDe, poserChrono } from '../chrono'
+import { type Pointage, tempsParTache } from '../pointages'
 import {
   LIBELLES_PRIORITE_TACHE,
   LIBELLES_SOURCE_TACHE,
@@ -64,28 +67,28 @@ function Bloc({ titre, children }: { titre: string; children: React.ReactNode })
   )
 }
 
-export default function FicheTache({ tache, onClose }: { tache: TacheInterne; onClose: () => void }) {
+/**
+ * Le geste chrono d'une tâche — monté UNE fois, consommé deux fois : la
+ * fiche, et chaque ligne de « Mes tâches » (audit d'usage, action 30).
+ *
+ * Deux copies de cette glu auraient divergé comme le reste : celle de la
+ * liste aurait oublié la bascule, et deux chronos auraient compté la même
+ * heure. La règle elle-même n'est pas ici — elle est dans `src/chrono.ts`,
+ * pure et testée ; ce hook n'est que le fil entre elle et le magasin.
+ */
+export function useChronoTache() {
   const { state, update } = useStore()
   const moi = useMoi()
-  const [commentaire, setCommentaire] = useState('')
-  const [sousTache, setSousTache] = useState('')
-
-  // On relit la tâche dans l'état à chaque rendu : la prop est un
-  // instantané, et une modification faite ici doit se voir ici.
-  const t = state.taches.find((x) => x.id === tache.id) || tache
-
-  // --- M.3 : le chrono de cette tâche -------------------------------------
   const qui = moi.nom || ''
-  const chronoCourant = chronoDe(state.chronos as ChronoActif[], qui) as ChronoActif | null
-  const enCoursIci = chronoCourant?.tacheId === t.id
+  const courant = chronoDe(state.chronos as ChronoActif[], qui) as ChronoActif | null
 
-  const demarrerIci = () => {
+  const demarrer = (t: TacheInterne) => {
     if (!qui) {
       toast('Indiquez d’abord qui vous êtes : un temps sans personne ne se rattache à rien.', { tone: 'warn' })
       return
     }
     const maintenant = new Date().toISOString()
-    const { chrono, arret } = basculerChrono(chronoCourant, qui, {
+    const { chrono, arret } = basculerChrono(courant, qui, {
       projetId: t.projetId ?? null,
       phase: t.phase ?? null,
       tacheId: t.id,
@@ -96,19 +99,51 @@ export default function FicheTache({ tache, onClose }: { tache: TacheInterne; on
       d.chronos = poserChrono(d.chronos as ChronoActif[], chrono, qui)
     })
     // La bascule est silencieuse si on ne la dit pas : quelqu'un qui démarre
-    // une seconde tâche doit savoir que la première vient d'être enregistrée.
-    toast(arret ? `${arret.message} Chrono démarré sur « ${t.titre} ».` : `Chrono démarré sur « ${t.titre} ».`, { tone: 'ok' })
+    // une seconde tâche doit savoir que la première vient d'être enregistrée
+    // — et jusqu'où elle l'a été (`messageArretHonnete`).
+    toast(
+      arret
+        ? `${messageArretHonnete(arret.message, !!arret.pointage)} Chrono démarré sur « ${t.titre} ».`
+        : `Chrono démarré sur « ${t.titre} ».`,
+      { tone: 'ok' },
+    )
   }
 
-  const arreterIci = () => {
-    if (!chronoCourant) return
-    const { pointage, message } = arreterChrono(chronoCourant, new Date().toISOString())
+  const arreter = () => {
+    if (!courant) return
+    const { pointage, message } = arreterChrono(courant, new Date().toISOString())
     update((d) => {
       d.chronos = poserChrono(d.chronos as ChronoActif[], null, qui)
       if (pointage) d.pointages = [...(d.pointages || []), pointage]
     })
-    toast(message, { tone: pointage ? 'ok' : 'warn' })
+    toast(messageArretHonnete(message, !!pointage), { tone: pointage ? 'ok' : 'warn' })
   }
+
+  return {
+    qui,
+    courant,
+    /** vrai si le chrono qui tourne est celui de CETTE tâche */
+    enCoursSur: (tacheId: string) => courant?.tacheId === tacheId,
+    demarrer,
+    arreter,
+  }
+}
+
+export default function FicheTache({ tache, onClose }: { tache: TacheInterne; onClose: () => void }) {
+  const { state, update } = useStore()
+  const moi = useMoi()
+  const [commentaire, setCommentaire] = useState('')
+  const [sousTache, setSousTache] = useState('')
+
+  // On relit la tâche dans l'état à chaque rendu : la prop est un
+  // instantané, et une modification faite ici doit se voir ici.
+  const t = state.taches.find((x) => x.id === tache.id) || tache
+
+  // --- M.3 : le chrono de cette tâche, par la glu partagée -----------------
+  const chrono = useChronoTache()
+  const enCoursIci = chrono.enCoursSur(t.id)
+  const demarrerIci = () => chrono.demarrer(t)
+  const arreterIci = () => chrono.arreter()
 
   const modifier = (fn: (cible: TacheInterne) => void) => {
     update((d) => {
@@ -123,6 +158,23 @@ export default function FicheTache({ tache, onClose }: { tache: TacheInterne; on
   const avancement = avancementSousTaches(t)
   const { resolues, introuvables } = dependancesDe(t, state.taches)
   const equipe = state.settings.equipe.map((p) => p.nom)
+
+  /** les phases du projet, dans l'ordre MIQCP — pas le référentiel entier :
+   *  une phase que le projet ne porte pas n'a pas d'heures à recevoir */
+  const phasesDuProjet = (projetId: string | null | undefined): PhaseCode[] => {
+    const p = projetId ? state.projets.find((x) => x.id === projetId) : null
+    if (!p) return []
+    return p.phases
+      .map((ph) => ph.code)
+      .sort((a, b) => PHASES_ORDRE.indexOf(a) - PHASES_ORDRE.indexOf(b))
+  }
+  const phasesDisponibles = phasesDuProjet(t.projetId)
+
+  /** temps chronométré sur cette tâche — lu par l'autorité de la notion
+   *  (`tempsParTache`), pas recompté ici : la projection vers
+   *  `tempsEnregistre` (B.9) n'est pas branchée, le chiffre n'a donc encore
+   *  aucun autre chemin pour se montrer. */
+  const heuresChronometrees = tempsParTache(state.pointages as Pointage[]).get(t.id) ?? 0
 
   return (
     <Modal titre={t.titre} onClose={onClose} large>
@@ -268,6 +320,60 @@ export default function FicheTache({ tache, onClose }: { tache: TacheInterne; on
             />
           </Bloc>
 
+          {/* LE RATTACHEMENT (audit d'usage, action 31).
+              `projeterVersTemps` ignore tout pointage sans projet ET sans
+              phase : sa clé les contient tous les deux. Une tâche née d'un
+              message ou d'une proposition arrive sans projet ; sans ces deux
+              sélecteurs elle n'en a JAMAIS, et le temps chronométré dessus
+              n'atteindra pas la marge — même une fois la projection branchée.
+              Le chrono lit `t.projetId` et `t.phase` au démarrage : les poser
+              ici, c'est les poser sur tous les pointages à venir. */}
+          <Bloc titre="Projet">
+            <Select
+              value={t.projetId || ''}
+              onChange={(v) =>
+                modifier((c) => {
+                  c.projetId = v || null
+                  // changer de projet en gardant une phase que le nouveau ne
+                  // porte pas produirait un rattachement que rien ne refuse
+                  // et que la projection écarte en silence
+                  if (!v || !phasesDuProjet(v).includes(c.phase as PhaseCode)) c.phase = null
+                })
+              }
+              options={[
+                { value: '', label: 'Aucun projet' },
+                ...state.projets.map((p) => ({ value: p.id, label: `${p.id} — ${p.nom}` })),
+              ]}
+            />
+          </Bloc>
+
+          <Bloc titre="Phase">
+            <Select
+              value={t.phase || ''}
+              onChange={(v) =>
+                modifier((c) => {
+                  c.phase = (v || null) as PhaseCode | null
+                })
+              }
+              disabled={!t.projetId}
+              options={[
+                { value: '', label: t.projetId ? 'Phase non précisée' : 'choisissez un projet d’abord' },
+                ...phasesDisponibles.map((code) => ({ value: code, label: `${code} — ${LIBELLES_PHASES[code]}` })),
+              ]}
+            />
+            {t.projetId && phasesDisponibles.length === 0 && (
+              <div className="muted small" style={{ marginTop: 4 }}>
+                Ce projet n’a aucune phase — elles se créent dans sa fiche.
+              </div>
+            )}
+            {t.projetId && phasesDisponibles.length > 0 && !t.phase && (
+              <div className="muted small" style={{ marginTop: 4 }}>
+                Sans phase, le temps chronométré ici ne rejoindra pas la feuille : la grille est
+                tenue par projet <em>et</em> phase.
+              </div>
+            )}
+          </Bloc>
+
           <Bloc titre="Priorité">
             <Select
               value={estPrioriteTache(t.priorite) ? t.priorite : 'normale'}
@@ -325,6 +431,19 @@ export default function FicheTache({ tache, onClose }: { tache: TacheInterne; on
                 </>
               )}
             </div>
+            {/* « Enregistré : 0 h » sous un bouton qu'on vient d'arrêter est
+                le mensonge que l'audit pointe (T4) : `tempsEnregistre` est une
+                projection que personne n'a encore branchée. On lit donc le
+                temps chronométré là où il est — par `tempsParTache`, qui EST
+                l'autorité de cette notion — et on dit qu'il n'est pas compté.
+                Cette ligne disparaît au branchement de B.9. */}
+            {heuresChronometrees > 0 && (
+              <div className="muted small" style={{ marginTop: 2 }}>
+                {fmtHeures(heuresChronometrees)} chronométrées sur cette tâche, pas encore comptées
+                ci-dessus ni dans la marge — le détail est sous « Ma semaine » dans{' '}
+                <a href="#/temps">Temps passé</a>.
+              </div>
+            )}
             {/* M.3 — démarrage en un appui. La bascule est dans `chrono.ts` :
                 démarrer alors qu'un chrono tourne arrête le premier et
                 enregistre son pointage, en un seul geste. Sans cette règle,

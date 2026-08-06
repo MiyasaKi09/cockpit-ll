@@ -32,6 +32,32 @@ import {
   secondesEcoulees,
 } from '../chrono'
 
+/**
+ * L'HONNÊTETÉ D'ATTENTE (audit d'usage, action 26).
+ *
+ * `arreterChrono` annonce « 1 h 20 enregistrées », et c'est vrai : le
+ * pointage est écrit dans `state.pointages`. Ce qui n'est pas vrai, c'est ce
+ * que la phrase laisse entendre — que ce temps est compté. `projeterVersTemps`
+ * et `tempsParTache` (`src/pointages.ts`) n'ont aujourd'hui AUCUN appelant :
+ * la collection est écrite-seulement. Le temps n'apparaît ni dans « Ma
+ * semaine », seule source de la marge, ni sur la tâche.
+ *
+ * Trois issues, toutes coûteuses, quand on ne le dit pas : le temps est
+ * perdu, il est ressaisi (et compté deux fois le jour du branchement), ou il
+ * est cru compté (et la marge ment dès aujourd'hui).
+ *
+ * Le message vit ICI, et la fiche tâche l'importe : deux formulations pour le
+ * même événement feraient dire au même arrêt deux choses différentes selon
+ * l'endroit d'où on l'a cliqué.
+ *
+ * Cette mention se retire au branchement de la projection (B.4/B.5/B.9 du
+ * plan) — elle est un pansement d'attente, pas un acquis.
+ */
+export function messageArretHonnete(message: string, enregistre: boolean): string {
+  if (!enregistre) return message
+  return `${message} Pas encore compté dans la feuille — à reporter dans « Ma semaine ».`
+}
+
 /** Rafraîchit chaque seconde — et seulement quand un chrono tourne. */
 function useSeconde(actif: boolean): number {
   const [tic, setTic] = useState(0)
@@ -65,7 +91,7 @@ export default function ChronoBarre({ emplacement }: { emplacement: 'topbar' | '
       d.chronos = poserChrono(d.chronos as ChronoActif[], null, moi)
       if (pointage) d.pointages = [...(d.pointages || []), pointage]
     })
-    toast(message, { tone: pointage ? 'ok' : 'warn' })
+    toast(messageArretHonnete(message, !!pointage), { tone: pointage ? 'ok' : 'warn' })
   }
 
   return (

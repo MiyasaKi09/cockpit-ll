@@ -4,7 +4,7 @@
 // « à vérifier » (rien n'entre dans les données sans validation), et
 // l'inventaire complet — cherchable, filtrable, traçable (événements).
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { DocumentRecord, PhaseCode, Projet } from '../types'
 import { useStore } from '../store'
 import { useMoi } from '../moi'
@@ -75,6 +75,7 @@ import {
   corrigerRattachement,
   useCommunications,
   type Communication,
+  type EtatCommunications,
 } from '../communications'
 import {
   LIBELLES_IMPORTANCE,
@@ -133,10 +134,41 @@ function ChampPhase({
 const phaseChoisie = (v: string): PhaseCode | null => (v ? (v as PhaseCode) : null)
 
 // ============================================================
+// Libellés composés des deux Selects du classement (S4). Un code nu
+// (« PC », « 03_APS-APD_PC ») ne dit rien à qui remplace l'agence une
+// semaine — et il ne dit pas non plus la CONSÉQUENCE du choix. Aucun
+// référentiel nouveau : la catégorie affiche le sous-dossier où elle
+// range (`DOSSIER_PAR_CATEGORIE`), le sous-dossier affiche sa
+// description (`ARBORESCENCE`). Déclarés une fois : les trois surfaces
+// de classement montrent exactement les mêmes libellés.
+// ============================================================
+
+const OPTIONS_CATEGORIE = CATEGORIES_DOC.map((c) => ({
+  value: c as string,
+  label: `${c} → ${DOSSIER_PAR_CATEGORIE[c] || '00_ADMIN'}`,
+}))
+
+const OPTIONS_DOSSIER = ARBORESCENCE.map((a) => ({
+  value: a.dossier,
+  label: `${a.dossier} — ${a.description}`,
+}))
+
+// ============================================================
 // Arrivées automatiques — les pièces captées côté serveur (Gmail)
 // et proposées ici : l'index partagé « entrants » du Supabase de
 // l'agence. Validation humaine obligatoire, comme pour le dépôt.
 // ============================================================
+
+/** ce que l'humain a retenu pour une pièce arrivée, plus les raisons que
+ *  CE POSTE ajoute à celles du serveur (voir `charger`) */
+interface ChoixEntrant {
+  projetId: string
+  categorie: string
+  dossier: string
+  phase: string
+  /** raisons du rejeu local — vides quand le poste n'a rien à ajouter */
+  raisons?: string[]
+}
 
 function CarteArriveesServeur() {
   const { state, update } = useStore()
@@ -146,13 +178,16 @@ function CarteArriveesServeur() {
   const moi = useMoi()
   const signataire = moi.nom ?? state.settings.personnes[0]
   const [liste, setListe] = useState<EntrantDistant[] | null>(null)
-  const [choix, setChoix] = useState<
-    Record<string, { projetId: string; categorie: string; dossier: string; phase: string }>
-  >({})
+  const [choix, setChoix] = useState<Record<string, ChoixEntrant>>({})
   const [message, setMessage] = useState('')
   const [occupe, setOccupe] = useState('')
   const [racine, setRacine] = useState<FSDirHandle | null>(null)
   const projetsActifs = state.projets.filter((p) => !['Livré', 'Perdu'].includes(p.statut))
+  // l'état est lu au moment du chargement, pas suivi : le mettre dans les
+  // dépendances de `charger` relancerait une lecture du serveur à chaque
+  // frappe au clavier ailleurs dans l'application
+  const etatRef = useRef(state)
+  etatRef.current = state
 
   const charger = useCallback(async () => {
     if (!syncActif()) {
@@ -166,13 +201,32 @@ function CarteArriveesServeur() {
         const c = { ...prev }
         for (const e of l) {
           if (!c[e.id]) {
-            const categorie = e.categorieProposee || 'AUTRE'
+            // la cascade est REJOUÉE ici, comme le fait la file « à rattacher »
+            // d'à côté : le poste peut en savoir plus que le serveur au moment
+            // de l'ingestion (une règle mémorisée depuis, un contact ajouté, un
+            // marché signé). Le serveur reste la proposition de tête ; le poste
+            // complète ce qu'il n'avait pas vu, et le désaccord se dit.
+            const locale = classerFichier(etatRef.current, e.nomFichier, {
+              typeMime: e.typeMime || undefined,
+              expediteur: e.expediteur,
+              objet: e.objet,
+            })
+            const categorie = e.categorieProposee || locale.categorie
             const dossier = DOSSIER_PAR_CATEGORIE[categorie] || '00_ADMIN'
+            const raisons: string[] = []
+            if (!e.projetIdPropose && locale.projetId) raisons.push(...locale.raisons)
+            else if (e.projetIdPropose && locale.projetId && locale.projetId !== e.projetIdPropose)
+              raisons.push(
+                `Ce poste, lui, désigne ${locale.projetId} — il connaît des éléments plus récents que l'ingestion : vérifiez avant de classer.`,
+              )
+            if (!e.categorieProposee && locale.categorie !== 'AUTRE')
+              raisons.push(`Catégorie ${locale.categorie} proposée d'après le nom du fichier.`)
             c[e.id] = {
-              projetId: e.projetIdPropose || '',
+              projetId: e.projetIdPropose || locale.projetId || '',
               categorie,
               dossier,
               phase: phaseDuDossier(dossier) || '',
+              raisons,
             }
           }
         }
@@ -192,10 +246,7 @@ function CarteArriveesServeur() {
     return () => clearTimeout(t)
   }, [charger])
 
-  const majChoix = (
-    id: string,
-    champs: Partial<{ projetId: string; categorie: string; dossier: string; phase: string }>,
-  ) =>
+  const majChoix = (id: string, champs: Partial<ChoixEntrant>) =>
     setChoix((prev) => {
       const courant = prev[id]
       const suivant = { ...courant, ...champs }
@@ -241,12 +292,15 @@ function CarteArriveesServeur() {
         // là — mieux vaut pas d'auteur qu'un auteur pris au hasard
         auteur: moi.nom || undefined,
         confiance: e.confiance,
+        // `raisons` porte la proposition du SERVEUR, intacte : c'est la
+        // trace qui doit survivre à la validation. Ce que le poste a
+        // ajouté part dans l'histoire du document, juste dessous.
         raisons: e.raisons,
         statut: 'classe',
       })
       update((d) => {
         const { doc } = enregistrerDocument(d, structuredClone(docPret))
-        ajouterEvenementMail(doc, e)
+        ajouterEvenementMail(doc, e, c.raisons)
       })
       await marquerEntrant(e.id, 'classe', signataire)
       setListe((prev) => (prev || []).filter((x) => x.id !== e.id))
@@ -337,11 +391,11 @@ function CarteArriveesServeur() {
                     dans Gmail avant de choisir un projet */}
                 <LienGmail source={e.sourceMessageId} />
               </p>
-              {e.raisons.length > 0 && (
+              {[...e.raisons, ...(c.raisons || [])].length > 0 && (
                 <details className="small" style={{ marginBottom: 6 }}>
                   <summary>Voir pourquoi cette proposition</summary>
                   <ul style={{ margin: '4px 0 0 18px' }}>
-                    {e.raisons.map((r, i) => (
+                    {[...e.raisons, ...(c.raisons || [])].map((r, i) => (
                       <li key={i}>{r}</li>
                     ))}
                   </ul>
@@ -362,14 +416,14 @@ function CarteArriveesServeur() {
                   <Select
                     value={c.categorie}
                     onChange={(v) => majChoix(e.id, { categorie: v })}
-                    options={CATEGORIES_DOC.map((x) => ({ value: x, label: x }))}
+                    options={OPTIONS_CATEGORIE}
                   />
                 </Field>
                 <Field label="Sous-dossier">
                   <Select
                     value={c.dossier}
                     onChange={(v) => majChoix(e.id, { dossier: v })}
-                    options={ARBORESCENCE.map((a) => ({ value: a.dossier, label: a.dossier }))}
+                    options={OPTIONS_DOSSIER}
                   />
                 </Field>
                 <ChampPhase value={c.phase} onChange={(v) => majChoix(e.id, { phase: v })} />
@@ -395,8 +449,9 @@ function CarteArriveesServeur() {
   )
 }
 
-/** journalise la provenance mail sur le document (dans le producteur) */
-function ajouterEvenementMail(doc: DocumentRecord, e: EntrantDistant): void {
+/** journalise la provenance mail sur le document (dans le producteur), et
+ *  ce que le rejeu local de la cascade a ajouté à la proposition du serveur */
+function ajouterEvenementMail(doc: DocumentRecord, e: EntrantDistant, raisonsPoste?: string[]): void {
   const lien = lienGmail(e.sourceMessageId)
   doc.evenements.push({
     date: todayISO(),
@@ -405,6 +460,12 @@ function ajouterEvenementMail(doc: DocumentRecord, e: EntrantDistant): void {
       `Pièce jointe Gmail — de ${e.expediteur}, objet « ${e.objet} ».` +
       (lien ? '' : ' Message d’origine non identifié : pas de lien de retour.'),
   })
+  if (raisonsPoste && raisonsPoste.length > 0)
+    doc.evenements.push({
+      date: todayISO(),
+      type: 'classement',
+      detail: `Ce poste a complété la proposition du serveur : ${raisonsPoste.join(' ')}`,
+    })
 }
 
 // ============================================================
@@ -642,14 +703,14 @@ function CarteEntrants() {
                     onChange={(v) =>
                       majEntrant(e.cle, { categorie: v, dossier: DOSSIER_PAR_CATEGORIE[v] || e.dossier })
                     }
-                    options={CATEGORIES_DOC.map((c) => ({ value: c, label: c }))}
+                    options={OPTIONS_CATEGORIE}
                   />
                 </Field>
                 <Field label="Sous-dossier">
                   <Select
                     value={e.dossier}
                     onChange={(v) => majEntrant(e.cle, { dossier: v })}
-                    options={ARBORESCENCE.map((a) => ({ value: a.dossier, label: a.dossier }))}
+                    options={OPTIONS_DOSSIER}
                   />
                 </Field>
                 <ChampPhase value={e.phase} onChange={(v) => majEntrant(e.cle, { phase: v })} />
@@ -766,15 +827,20 @@ function ModalRevueEntrants({
         <Field label="Catégorie">
           <Select
             value={e.categorie}
-            onChange={(v) => majEntrant(e.cle, { categorie: v })}
-            options={CATEGORIES_DOC.map((c) => ({ value: c, label: c }))}
+            // même geste qu'en liste : la catégorie entraîne le sous-dossier,
+            // sinon la revue au clavier range dans le dossier du fichier
+            // précédent sans le dire
+            onChange={(v) =>
+              majEntrant(e.cle, { categorie: v, dossier: DOSSIER_PAR_CATEGORIE[v] || e.dossier })
+            }
+            options={OPTIONS_CATEGORIE}
           />
         </Field>
         <Field label="Sous-dossier">
           <Select
             value={e.dossier}
             onChange={(v) => majEntrant(e.cle, { dossier: v })}
-            options={ARBORESCENCE.map((a) => ({ value: a.dossier, label: a.dossier }))}
+            options={OPTIONS_DOSSIER}
           />
         </Field>
         <ChampPhase value={e.phase} onChange={(v) => majEntrant(e.cle, { phase: v })} />
@@ -977,13 +1043,23 @@ function ModalDocument({ doc: docInitial, onClose }: { doc: DocumentRecord; onCl
   )
 }
 
-function CarteTous() {
+function CarteTous({ docId }: { docId?: string }) {
   const { state } = useStore()
   const [recherche, setRecherche] = useState('')
   const [filtreProjet, setFiltreProjet] = useState('')
   const [filtreCategorie, setFiltreCategorie] = useState('')
   const [filtrePhase, setFiltrePhase] = useState('')
   const [ouvert, setOuvert] = useState<DocumentRecord | null>(null)
+  // atterrissage sur L'ÉLÉMENT : `#/documents/tous/<id>` ouvre la fiche
+  // (palette « / », liens d'alerte). Le registre reste dessous, filtres
+  // intacts : fermer la fiche rend la liste, pas une page blanche.
+  const cible = docId ? documentParId(state, docId) : undefined
+  const fiche = ouvert ?? cible ?? null
+  const fermerFiche = () => {
+    setOuvert(null)
+    // l'adresse profonde se retire, sinon la fiche se rouvrirait aussitôt
+    if (docId) navigate('/documents/tous')
+  }
 
   const docs = useMemo(() => {
     const cle = fold(recherche)
@@ -1001,6 +1077,12 @@ function CarteTous() {
 
   return (
     <Card titre={`Tous les documents — ${state.registreDocuments.length} au registre`}>
+      {docId && !cible && (
+        <div className="pill-note" style={{ marginBottom: 10, borderColor: 'var(--warn)' }}>
+          Le document demandé par ce lien n'est plus au registre (supprimé, ou registre d'un autre
+          poste). Le voici cherchable ci-dessous.
+        </div>
+      )}
       <div className="form-row">
         <Field label="Rechercher">
           <TextInput value={recherche} onChange={setRecherche} placeholder="nom, chemin…" />
@@ -1092,7 +1174,7 @@ function CarteTous() {
           })}
         </Table>
       )}
-      {ouvert && <ModalDocument doc={ouvert} onClose={() => setOuvert(null)} />}
+      {fiche && <ModalDocument doc={fiche} onClose={fermerFiche} />}
     </Card>
   )
 }
@@ -1251,10 +1333,13 @@ function ChoixAxes({ message, onCorrige }: { message: Communication; onCorrige: 
   )
 }
 
-function CarteMessagesARattacher() {
+/** La lecture est faite UNE FOIS, par la page : le compteur de l'onglet et
+ *  la file lisent la même chose. Deux `useCommunications` côte à côte, c'est
+ *  deux requêtes et deux vérités possibles à l'écran. */
+function CarteMessagesARattacher({ etat }: { etat: EtatCommunications }) {
   const { state, update } = useStore()
   const moi = useMoi()
-  const { lignes, source, erreur, suite, chargerSuite, recharger } = useCommunications({ sansProjet: true })
+  const { lignes, source, erreur, suite, chargerSuite, recharger } = etat
   const [choix, setChoix] = useState<Record<string, { projetId: string; memoriser: boolean }>>({})
   const [occupe, setOccupe] = useState('')
   const [message, setMessage] = useState('')
@@ -1549,10 +1634,10 @@ function CarteRegles() {
   )
 }
 
-function OngletRattacher() {
+function OngletRattacher({ etat }: { etat: EtatCommunications }) {
   return (
     <>
-      <CarteMessagesARattacher />
+      <CarteMessagesARattacher etat={etat} />
       <CarteCourriersARattacher />
       <CarteRegles />
     </>
@@ -1575,16 +1660,28 @@ export default function Documents() {
   const { state } = useStore()
   const nbAVerifier = documentsATraiter(state).length
   const tab = ONGLETS.some((o) => o.id === route[1]) ? route[1] : 'entrants'
+  // La file « à rattacher » est lue ICI, quel que soit l'onglet ouvert :
+  // sans compteur, un message sans projet attendait des jours en silence
+  // (R5). `null` = espace partagé non connecté — « on ne sait pas » ne
+  // s'affiche pas « 0 ».
+  const filesMessages = useCommunications({ sansProjet: true })
+  const nbCourriers = courriersARattacher(state).length
+  const nbMessages = filesMessages.lignes?.length ?? null
+  const nbARattacher = nbMessages === null && nbCourriers === 0 ? null : (nbMessages ?? 0) + nbCourriers
+  const libelleOnglet = (o: (typeof ONGLETS)[number]): string => {
+    if (o.id === 'verifier' && nbAVerifier > 0) return `${o.label} (${nbAVerifier})`
+    // « + » : une page de messages est chargée, il en reste derrière
+    if (o.id === 'rattacher' && nbARattacher)
+      return `${o.label} (${nbARattacher}${filesMessages.suite ? '+' : ''})`
+    return o.label
+  }
   return (
     <Page
       titre="Documents & arrivées"
       sousTitre="Tout ce qui arrive — fichiers et messages — tracé : source, projet, version, validation."
     >
       <Tabs
-        tabs={ONGLETS.map((o) => ({
-          id: o.id,
-          label: o.id === 'verifier' && nbAVerifier > 0 ? `${o.label} (${nbAVerifier})` : o.label,
-        }))}
+        tabs={ONGLETS.map((o) => ({ id: o.id, label: libelleOnglet(o) }))}
         actif={tab}
         onSelect={(id) => navigate(`/documents/${id}`)}
       />
@@ -1595,8 +1692,9 @@ export default function Documents() {
         </>
       )}
       {tab === 'verifier' && <CarteAVerifier />}
-      {tab === 'rattacher' && <OngletRattacher />}
-      {tab === 'tous' && <CarteTous />}
+      {tab === 'rattacher' && <OngletRattacher etat={filesMessages} />}
+      {/* `#/documents/tous/<id>` ouvre la fiche du document (palette « / ») */}
+      {tab === 'tous' && <CarteTous docId={route[2]} />}
     </Page>
   )
 }

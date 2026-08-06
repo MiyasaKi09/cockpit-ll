@@ -277,7 +277,9 @@ export function creerTache(champs: NouvelleTache): TacheInterne {
 export type FiltreTemporel = 'aujourdhui' | 'en_retard' | 'cette_semaine' | 'a_venir' | 'sans_date'
 
 export interface FiltreTaches {
-  /** la personne devant l'écran — filtre par DÉFAUT de la vue (§8.3) */
+  /** la personne devant l'écran — filtre par DÉFAUT de la vue (§8.3).
+   *  Les tâches SANS responsable passent ce filtre : à deux, « à attribuer »
+   *  est l'affaire de tout le monde (voir `filtrerTaches`). */
   personne?: string | null
   temporel?: FiltreTemporel | null
   projetId?: string | null
@@ -358,7 +360,16 @@ export function filtrerTaches(
     // Le filtre par personne est celui par DÉFAUT de la vue. Sans personne
     // reconnue, on montre tout plutôt que de choisir quelqu'un au hasard —
     // même règle que la boîte « À traiter » (A.7).
-    if (moi && !filtre.creeesParMoi && t.responsable !== moi) return false
+    //
+    // UNE TÂCHE SANS RESPONSABLE EST POUR LES DEUX (audit d'usage, R5).
+    // L'agence compte deux personnes : « à attribuer » ne veut pas dire
+    // « pas la mienne », il veut dire « personne ne l'a encore prise ». La
+    // traiter comme la tâche d'un tiers la faisait disparaître de la vue par
+    // défaut des DEUX associées à la fois — le seul mode de perte que
+    // personne ne voit, puisque aucun écran ne la réclame. Elle entre donc,
+    // et la colonne « Responsable » dit « à attribuer » plutôt que de
+    // laisser croire que quelqu'un la porte.
+    if (moi && !filtre.creeesParMoi && t.responsable && t.responsable !== moi) return false
 
     if (filtre.temporel && !correspondAuTemporel(t, filtre.temporel, aujourdhui)) return false
     if (filtre.projetId && t.projetId !== filtre.projetId) return false

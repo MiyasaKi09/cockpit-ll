@@ -146,7 +146,47 @@ export const LIBELLES_PHASES: Record<PhaseCode, string> = {
   MC: 'Missions complémentaires',
 }
 
-/** coefficient d'actualisation BT01 (réf. avril 1994 = 60,989) */
+/** série INSEE qui actualise le barème (index général du bâtiment) */
+export const SERIE_BT01 = 'BT01'
+
+export interface ValeurIndice {
+  mois: string
+  valeur: number
+}
+
+export interface EtatBt01 {
+  /** la valeur qui actualise RÉELLEMENT le barème (`settings.bt01Actuel`) */
+  retenu: number
+  /** la dernière valeur publiée par l'INSEE, si elle est arrivée */
+  publie: ValeurIndice | null
+  /** le réglage colle-t-il encore à la publication ? (aucune publication
+   *  connue ⇒ rien à confronter : le réglage fait foi, sans reproche) */
+  aJour: boolean
+}
+
+/** Le BT01 du barème et d'où il vient. `settings.bt01Actuel` reste la seule
+ *  valeur lue par `coefBT01` — c'est l'OVERRIDE, celui qu'on garde la main
+ *  de figer (valeur attendue avant publication, comparaison à l'identique
+ *  avec un devis ancien). Cette fonction ne fait que DIRE l'écart avec la
+ *  dernière publication : la reprise est un clic humain, jamais une
+ *  réécriture silencieuse d'un chiffre qui change tous les honoraires.
+ *
+ *  `publie` arrive de `valeursSerie(indicesBTP, SERIE_BT01)` — l'autorité des
+ *  séries d'indices vit dans `revisionPrix.ts` et n'est pas recopiée ici (ce
+ *  module reste sans aucune dépendance d'exécution). */
+export function etatBt01(
+  settings: Pick<Settings, 'bt01Actuel'>,
+  publie: ValeurIndice | null,
+): EtatBt01 {
+  return {
+    retenu: settings.bt01Actuel,
+    publie,
+    aJour: publie === null || Math.abs(settings.bt01Actuel - publie.valeur) < 0.0005,
+  }
+}
+
+/** coefficient d'actualisation BT01 (réf. avril 1994 = 60,989).
+ *  `bt01Actuel` est l'override du BT01 publié — voir `etatBt01`. */
 export function coefBT01(settings: Pick<Settings, 'bt01Actuel' | 'bt01Ref1994'>): number {
   return settings.bt01Actuel / settings.bt01Ref1994
 }

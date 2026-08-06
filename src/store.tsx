@@ -89,6 +89,14 @@ function migrate(parsed: AppState): AppState {
   etat.chronos = Array.isArray(parsed.chronos) ? parsed.chronos : []
   etat.pointages = Array.isArray(parsed.pointages) ? parsed.pointages : []
   etat.reunions = Array.isArray(parsed.reunions) ? parsed.reunions : []
+  // C3 — points de séance. Champ ajouté sans palier, et SANS reprise : les
+  // points d'ordre du jour des réunions passées vivent dans le texte des CR
+  // déjà diffusés, et les extraire à la machine fabriquerait des lignes
+  // approximatives que personne n'a écrites — avec un état inventé, ce qui
+  // est exactement ce que ce registre existe pour ne plus faire. Un état
+  // antérieur naît donc avec un relevé vide : le premier point s'inscrit à
+  // la prochaine séance, et la machine propose déjà ce qu'elle sait.
+  etat.pointsSeance = Array.isArray(parsed.pointsSeance) ? parsed.pointsSeance : []
   // v18 → v19 : les trois axes du §5.2 (src/categorisation.ts). Le palier
   // REPREND les courriers existants sans rien inventer : le type d'échange
   // et l'importance se dérivent de `type` et `urgence`, qui restent la

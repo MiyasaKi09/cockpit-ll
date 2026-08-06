@@ -19,7 +19,7 @@
 
 import { useMemo, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
-import type { Alerte, Courrier } from '../types'
+import type { Alerte, Courrier, DecompteFige } from '../types'
 import { useStore } from '../store'
 import { Btn, Card, DateF, DateInput, EmptyState, Icon, LienGmail, Modal, Money, Page, ResumeMessage, RowMenu, Select, Stat, Table, confirmer, navigate, toast, useToday } from '../ui'
 import type { ContexteAlertes, MessageNotifiable, PropositionNotifiable, RelanceProposee } from '../alerts'
@@ -52,6 +52,9 @@ import {
   validationsAttendues,
 } from '../derive'
 import { corpsRelanceNote, sujetRelanceNote } from '../cotraitants'
+// B1 — l'accueil valide aussi des situations : il doit donc figer le décompte
+// exactement comme l'écran des situations. Le calcul est IMPORTÉ, jamais refait.
+import { empreinteDecompte, figerDecompte } from '../decompte'
 import type { ActionFinance } from '../financeActions'
 import { actionsATraiter } from '../financeActions'
 import { useNbEntrantsDistants } from '../entrants'
@@ -317,12 +320,49 @@ function trierAFaire(a: ItemAFaire, b: ItemAFaire): number {
   )
 }
 
-/** exécute un raccourci « marquer… » (mutation du store) */
-function executerRapide(update: ReturnType<typeof useStore>['update'], a: ActionRapide): void {
+/** B1 — le bloc figé d'une situation qu'on s'apprête à valider depuis
+ *  l'accueil, empreinte comprise. `null` dès que l'action ne valide rien (ou
+ *  que la situation a disparu entre-temps) : on ne fabrique pas un décompte
+ *  pour une situation qui n'existe plus.
+ *
+ *  Volontairement HORS de l'écriture : l'empreinte est asynchrone, et une
+ *  écriture qui attendrait la fin d'un calcul laisserait la fenêtre où le
+ *  statut est posé sans son bloc — c'est exactement ce que B1 ferme. */
+async function figerSituation(
+  state: ReturnType<typeof useStore>['state'],
+  situationId: string | null,
+  today: string,
+  par: string | null,
+): Promise<DecompteFige | null> {
+  if (!situationId) return null
+  const s = state.situations.find((x) => x.id === situationId)
+  if (!s) return null
+  const fige = figerDecompte(state, s, { maintenant: today, par })
+  fige.empreinte = await empreinteDecompte(fige)
+  return fige
+}
+
+/** exécute un raccourci « marquer… » (mutation du store).
+ *
+ *  B1 — valider depuis l'accueil est une validation COMME UNE AUTRE : le
+ *  décompte s'y fige, sans quoi la même situation porterait deux régimes de
+ *  vérité selon le bouton cliqué (figée depuis l'écran des situations,
+ *  reconstituée depuis la file du matin). Le bloc est calculé par l'appelant
+ *  — il est asynchrone (empreinte) et cette fonction, elle, ne l'est pas —
+ *  puis rangé dans la MÊME écriture que le statut : un seul « Annuler »
+ *  retire les deux. */
+function executerRapide(
+  update: ReturnType<typeof useStore>['update'],
+  a: ActionRapide,
+  fige: DecompteFige | null,
+): void {
   update((d) => {
     if (a.kind === 'valider_situation') {
       const s = d.situations.find((x) => x.id === a.refId)
-      if (s) s.statut = 'validee'
+      if (s) {
+        s.statut = 'validee'
+        if (fige) s.decompteFige = fige
+      }
     } else if (a.kind === 'note_faite') {
       const n = d.projets.find((x) => x.id === a.projetId)?.journal.find((x) => x.id === a.refId)
       if (n) n.fait = true
@@ -935,7 +975,12 @@ function CentreActions({ personne }: { personne: string }) {
   const faireRapide = async (a: ActionRapide) => {
     if (a.confirme && !(await confirmer({ message: a.confirme, confirmerLabel: a.label.replace('…', '') }))) return
     const snap = state
-    executerRapide(update, a)
+    // B1 — le décompte se fige AVANT l'écriture, comme au bouton « Valider »
+    // de l'écran des situations : le papier remis à l'entreprise se
+    // réimprimera à l'identique, et l'« Annuler » du toast retire le bloc en
+    // même temps que le statut
+    const fige = await figerSituation(state, a.kind === 'valider_situation' ? a.refId : null, today, moi.nom)
+    executerRapide(update, a, fige)
     const libelle = a.kind === 'valider_situation' ? 'Situation validée.' : 'Note marquée faite.'
     toast(libelle, { undo: () => replace(snap) })
   }
@@ -1005,10 +1050,24 @@ function CentreActions({ personne }: { personne: string }) {
       if (!ok) return
     }
     const snap = state
+    // B1 — même règle qu'au bouton « Valider » de l'écran des situations :
+    // le décompte se fige à la VALIDATION, dans la même écriture que le
+    // statut. Sans cela, la situation validée depuis le fil d'alertes
+    // repartirait en régime « reconstitué » et la même situation aurait deux
+    // papiers possibles selon l'endroit d'où on a cliqué.
+    const fige = await figerSituation(
+      state,
+      action.kind === 'valider_situation' ? action.refId : null,
+      today,
+      moi.nom,
+    )
     update((d) => {
       if (action.kind === 'valider_situation') {
         const s = d.situations.find((x) => x.id === action.refId)
-        if (s) s.statut = 'validee'
+        if (s) {
+          s.statut = 'validee'
+          if (fige) s.decompteFige = fige
+        }
       } else if (action.kind === 'confirmer_tache') {
         // 5.7 — la confirmation est un fait daté, pas une case cochée :
         // la date dit QUAND l'entreprise a dit oui, ce qui compte si elle

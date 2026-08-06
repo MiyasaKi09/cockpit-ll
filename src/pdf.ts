@@ -5,6 +5,7 @@
 import type {
   AppState,
   CertificatPaiement,
+  DecompteFige,
   Facture,
   FactureFigee,
   Projet,
@@ -18,6 +19,10 @@ import { MENTION_TVA_DEFAUT } from './facture'
 // S6 — le certificat ÉMIS est la pièce figée de la situation. Le décompte le
 // LIT (jamais ne le refait) pour dire lequel des deux engage.
 import { certificatDeSituation } from './certificat'
+// B1 — le décompte d'une situation validée se lit sur SON bloc figé. Le même
+// constructeur sert à mettre en forme le cas « pas encore figé », pour qu'il
+// n'existe qu'UNE façon de dresser un décompte à l'écran comme au papier.
+import { figerDecompte } from './decompte'
 import {
   LIBELLE_GARANTIE,
   analyserPeriode,
@@ -25,7 +30,6 @@ import {
   caParMois,
   caRealiseAnnee,
   coutJourObjectif,
-  decompteSituation,
   encaisseHTPeriode,
   encaissementPrevu,
   nomProjet,
@@ -33,12 +37,13 @@ import {
   tempsParPersonne,
   ttc,
 } from './derive'
-// C1 — le dossier de séance ne définit aucune règle : il relit les sélecteurs
-// qui font autorité, les MÊMES que le bloc « Préparer la réunion » à l'écran.
-import { avancementLot, tacheAConfirmer } from './chantier'
-import { LIBELLE_EVENEMENT, penaliteEncourue, prolongationDelai } from './penalites'
-import { LIBELLE_STATUT_VISA, echeanceVisa, visasEnAttente, visasEnRetard } from './visas'
-import { LIBELLE_STATUT_DESORDRE, desordresOuverts, finGPA } from './gpa'
+// C3 — le relevé de séance ne définit aucune règle et ne relit même plus les
+// registres un par un : il appelle `preparerSeance`, la MÊME fonction que le
+// bloc « Relevé de séance » de l'onglet Chantier. C'est elle qui importe les
+// autorités du chantier (avancement de lot, échéances de visa, pénalités
+// encourues, désordres GPA, entreprises à confirmer) — une seule fois, pour
+// l'écran comme pour le papier.
+import { libelleAnciennete, pointResolu, preparerSeance } from './seanceChantier'
 import { diffDays, fmtDate, fmtMois, fmtMoney, fmtPct, todayISO } from './util'
 
 function echapper(s: string): string {
@@ -227,15 +232,23 @@ ${s.iban ? `<div class="bloc"><strong>Règlement par virement</strong><br>
  *  Document interne que la MOE remet à l'entreprise : net à payer = cumul
  *  (+ révision) − retenue de garantie − déjà réglé.
  *
- *  S6 — deux régimes de vérité cohabitaient dans la même famille de PDF : la
- *  facture et le certificat se réimpriment depuis leur COPIE FIGÉE, ce
- *  décompte-ci se RECALCULE à chaque impression, et rien ne le disait. Deux
- *  impressions du même décompte peuvent donc différer si le marché, la
- *  garantie, la révision ou une situation antérieure ont bougé entretemps.
- *  Tant que la situation ne porte pas son propre bloc figé (patron :
- *  `figerCertificat`, src/certificat.ts — copie profonde, le PDF ne lirait
- *  plus que ce bloc), l'impression PORTE LA MENTION au lieu de laisser
- *  croire à une pièce stable. Un document qui engage doit dire ce qu'il est.
+ *  B1 (S6) — deux régimes de vérité cohabitaient dans la même famille de PDF :
+ *  la facture et le certificat se réimprimaient depuis leur COPIE FIGÉE, ce
+ *  décompte-ci se RECALCULAIT à chaque impression. Il porte désormais son
+ *  propre bloc figé, posé À LA VALIDATION (`figerDecompte`, src/decompte.ts,
+ *  sur le patron de `figerCertificat`). Trois régimes, et le papier dit
+ *  lequel est le sien :
+ *
+ *   · `sit.decompteFige` présent → tout le document sort de CE bloc : ni
+ *     l'état, ni le calcul ne sont relus, la réimpression est stable ;
+ *   · situation VALIDÉE sans bloc → validée avant B1 (ou hors de l'écran des
+ *     situations) : reconstitution depuis l'état courant, et l'ancienne
+ *     mention reste — c'est le cas réel des données déjà en base ;
+ *   · situation encore à vérifier → ce n'est pas une pièce, c'est une
+ *     vérification en cours, et elle le dit.
+ *
+ *  Le certificat émis, lui, se relit toujours à l'état : il est émis APRÈS la
+ *  validation, il est figé de son côté, et c'est LUI qui fait foi.
  *
  *  `editeLe` est la VRAIE date d'édition — l'écran passe son `useToday()`.
  *  La date de réception de la situation n'en a jamais été une : elle dit
@@ -245,10 +258,16 @@ export function ouvrirDecompteSituationPDF(
   sit: Situation,
   editeLe: string = todayISO(),
 ): void {
-  const s = state.settings
-  const d = decompteSituation(state, sit)
-  const p = projetById(state, sit.projetId)
-  const num = sit.numero != null ? `n° ${sit.numero}` : ''
+  // LE BLOC FIGÉ D'ABORD : quand il existe, il est la seule source du papier.
+  // Sinon, la même forme est construite pour l'AFFICHAGE seulement — rien
+  // n'est écrit nulle part : figer à l'impression ferait de deux personnes
+  // qui impriment le même jour deux vérités différentes.
+  const fige = sit.decompteFige
+  const v: DecompteFige =
+    fige ?? figerDecompte(state, sit, { maintenant: editeLe, par: null })
+  const e = v.entete
+  const d = v.lignes
+  const num = e.numero != null ? `n° ${e.numero}` : ''
   // le certificat ÉMIS, s'il existe, est la pièce FIGÉE de cette situation :
   // c'est lui qui engage vis-à-vis du maître d'ouvrage. Le décompte le dit et
   // donne son net, au lieu de laisser deux chiffres se contredire en silence.
@@ -256,8 +275,40 @@ export function ouvrirDecompteSituationPDF(
   const ligne = (libelle: string, montant: number, opts: { fort?: boolean; retrait?: boolean } = {}) =>
     `<tr${opts.fort ? ' class="fort"' : ''}><td${opts.retrait ? ' style="padding-left:24px"' : ''}>${libelle}</td><td class="r">${fmtMoney(montant, true)}</td></tr>`
 
+  // ce que le certificat de paiement ajoute (ou pas) : il est émis APRÈS la
+  // validation, donc il ne peut pas vivre dans le bloc figé — mais il est
+  // figé de son côté, et c'est LUI qui fait foi vis-à-vis du maître d'ouvrage
+  const mentionCertificat = cert
+    ? `Certificat de paiement n° ${cert.numero} émis le ${fmtDate(cert.emisLe)} par ${echapper(cert.emisPar)} — net à payer certifié ${fmtMoney(cert.netAPayerTTC, true)} TTC : en cas d'écart avec le tableau ci-dessus, <strong>c'est le certificat qui fait foi</strong>, lui seul est la pièce contractuelle.`
+    : `Aucun certificat de paiement n'a encore été émis pour cette situation : rien n'est certifié au maître d'ouvrage à ce jour.`
+
+  // la phrase que porte l'ancien régime, gardée telle quelle : elle reste
+  // VRAIE pour les situations validées avant B1, qui n'ont pas de bloc
+  const mentionRecalcul =
+    `Ce décompte de vérification n'est pas une pièce figée : ses montants se recalculent à chaque ` +
+    `impression d'après le marché, la garantie, la révision et les situations antérieures tels ` +
+    `qu'ils sont aujourd'hui. Deux impressions faites à deux dates peuvent donc différer.`
+
+  const rappel = fige
+    ? `<strong>Décompte figé à la validation</strong> le ${fmtDate(fige.figeLe)}${
+        fige.validePar ? ` par ${echapper(fige.validePar)}` : ' (auteur non identifié)'
+      }, édité le ${fmtDate(editeLe)}.
+  Ce papier est la copie retenue au moment de la validation : les montants ci-dessus sont ceux qui
+  ont été arrêtés ce jour-là et ne bougeront plus, quoi qu'il soit advenu depuis du marché, de la
+  garantie, de la révision ou des situations antérieures. Deux impressions portent les mêmes chiffres.${
+    fige.empreinte ? ` Empreinte ${echapper(fige.empreinte.slice(0, 12))}…` : ''
+  }`
+    : sit.statut === 'validee'
+      ? `<strong>Document reconstitué depuis l'état courant</strong>, édité le ${fmtDate(editeLe)}.
+  ${mentionRecalcul}
+  Aucun décompte n'a été figé à la validation de cette situation : le papier remis à l'entreprise ce
+  jour-là n'a pas été conservé, celui-ci est une reconstitution.`
+      : `<strong>Décompte de vérification — situation ${sit.statut === 'rejetee' ? 'rejetée' : 'non validée'}</strong>, édité le ${fmtDate(editeLe)}.
+  ${mentionRecalcul}
+  Le décompte sera figé au moment de la validation, et c'est cette copie-là qui se réimprimera.`
+
   const html = `<!doctype html>
-<html lang="fr"><head><meta charset="utf-8"><title>Décompte situation — ${echapper(sit.entreprise)} ${echapper(fmtMois(sit.mois))}</title>
+<html lang="fr"><head><meta charset="utf-8"><title>Décompte situation — ${echapper(e.entreprise)} ${echapper(fmtMois(e.mois))}</title>
 <style>
   body { font-family: -apple-system, 'Segoe UI', Roboto, Arial, sans-serif; color: #1a2233; margin: 48px; font-size: 14px; }
   header { display: flex; justify-content: space-between; margin-bottom: 30px; }
@@ -281,20 +332,20 @@ export function ouvrirDecompteSituationPDF(
 <button class="impression" onclick="window.print()">Imprimer / PDF</button>
 <header>
   <div>
-    <h1>${echapper(s.nomAgence)}</h1>
-    <div class="muted">Maîtrise d'œuvre — vérification des situations<br>${echapper(s.personnes.join(' · '))}${s.siretAgence ? `<br>SIRET ${echapper(s.siretAgence)}` : ''}</div>
+    <h1>${echapper(e.agence.nom)}</h1>
+    <div class="muted">Maîtrise d'œuvre — vérification des situations<br>${echapper(e.agence.personnes.join(' · '))}${e.agence.siret ? `<br>SIRET ${echapper(e.agence.siret)}` : ''}</div>
   </div>
   <div style="text-align:right">
     <h1>Décompte de situation ${echapper(num)}</h1>
-    <div class="muted">Mois ${echapper(fmtMois(sit.mois))}<br>Situation reçue le ${fmtDate(sit.dateReception)}<br>Édité le ${fmtDate(editeLe)}</div>
+    <div class="muted">Mois ${echapper(fmtMois(e.mois))}<br>Situation reçue le ${fmtDate(e.dateReception)}<br>Édité le ${fmtDate(editeLe)}</div>
   </div>
 </header>
 
 <div class="bloc">
-  <strong>Entreprise</strong> — ${echapper(sit.entreprise)}${sit.lot ? ` · ${echapper(sit.lot)}` : ''}${d.marche ? `<br><span class="muted">Marché : ${fmtMoney(d.marche.montantInitialHT + d.marche.avenantsHT, false)} HT (RG ${fmtPct(d.tauxRG, 0)}${d.garantie !== 'retenue' ? ` — ${LIBELLE_GARANTIE[d.garantie]} fournie` : ''}${d.marche.revision ? ' · révisable' : ''})</span>` : '<br><span class="muted">Situation non rattachée à un marché — RG à 0 %.</span>'}
+  <strong>Entreprise</strong> — ${echapper(e.entreprise)}${e.lot ? ` · ${echapper(e.lot)}` : ''}${e.marcheTotalHT !== null ? `<br><span class="muted">Marché : ${fmtMoney(e.marcheTotalHT, false)} HT (RG ${fmtPct(d.tauxRG, 0)}${d.garantie !== 'retenue' ? ` — ${LIBELLE_GARANTIE[d.garantie]} fournie` : ''}${e.marcheRevisable ? ' · révisable' : ''})</span>` : '<br><span class="muted">Situation non rattachée à un marché — RG à 0 %.</span>'}
 </div>
 <div class="bloc">
-  <strong>Opération</strong> — ${echapper(p ? `${p.id} — ${p.nom}` : nomProjet(state, sit.projetId))}${p?.adresse ? `<br><span class="muted">${echapper(p.adresse)}</span>` : ''}
+  <strong>Opération</strong> — ${echapper(e.projetLibelle)}${e.projetAdresse ? `<br><span class="muted">${echapper(e.projetAdresse)}</span>` : ''}
 </div>
 
 <table class="dc">
@@ -310,23 +361,16 @@ export function ouvrirDecompteSituationPDF(
 
 <div class="net"><span>Net à payer ce mois <strong>TTC</strong></span><span class="v">${fmtMoney(d.netAPayerTTC, true)}</span></div>
 
-${d.coherences.length > 0 ? `<div class="warn"><strong>Points à vérifier :</strong><br>${d.coherences.map((c) => echapper(c)).join('<br>')}</div>` : ''}
+${v.coherences.length > 0 ? `<div class="warn"><strong>Points à vérifier :</strong><br>${v.coherences.map((c) => echapper(c)).join('<br>')}</div>` : ''}
 
 <div class="rappel">
-  <strong>Document reconstitué depuis l'état courant</strong>, édité le ${fmtDate(editeLe)}.
-  Ce décompte de vérification n'est pas une pièce figée : ses montants se recalculent à chaque
-  impression d'après le marché, la garantie, la révision et les situations antérieures tels
-  qu'ils sont aujourd'hui. Deux impressions faites à deux dates peuvent donc différer.
-  ${
-    cert
-      ? `Certificat de paiement n° ${cert.numero} émis le ${fmtDate(cert.emisLe)} par ${echapper(cert.emisPar)} — net à payer certifié ${fmtMoney(cert.netAPayerTTC, true)} TTC : en cas d'écart avec le tableau ci-dessus, <strong>c'est le certificat qui fait foi</strong>, lui seul est figé.`
-      : `Aucun certificat de paiement n'a encore été émis pour cette situation : rien n'est certifié au maître d'ouvrage à ce jour.`
-  }
+  ${rappel}
+  ${mentionCertificat}
 </div>
 
 <div class="sign">
   <div class="box">Situation présentée par l'entreprise<div class="line">Date & signature</div></div>
-  <div class="box">Certifié par la maîtrise d'œuvre — ${echapper(s.nomAgence)}<div class="line">Date & signature</div></div>
+  <div class="box">Certifié par la maîtrise d'œuvre — ${echapper(e.agence.nom)}<div class="line">Date & signature</div></div>
 </div>
 <div class="muted" style="margin-top:24px;font-size:11px">Document indicatif établi par la maîtrise d'œuvre pour proposition de paiement au maître d'ouvrage. La retenue de garantie est libérée à la levée des réserves (délai de garantie de parfait achèvement), sauf caution de substitution.</div>
 </body></html>`
@@ -569,57 +613,58 @@ ${
 
 
 // ==================================================================
-// C1 — « Préparer la réunion » : le dossier de séance qu'on emporte
-// sur le chantier (R1, S3 — parcours 6 : 12 gestes sur 4 écrans et une
-// synthèse de tête → une page).
+// C3 — LE RELEVÉ DE SÉANCE : le document qu'on emporte sur le chantier
+// et qu'on envoie ensuite.
 //
-// UNE SEULE AUTORITÉ : ce gabarit ne définit AUCUNE règle. Il relit les
-// sélecteurs qui font autorité — `avancementLot` (src/chantier.ts),
-// `penaliteEncourue` + `prolongationDelai` (src/penalites.ts),
-// `visasEnAttente` / `visasEnRetard` / `echeanceVisa` (src/visas.ts),
-// `desordresOuverts` + `finGPA` (src/gpa.ts), `tacheAConfirmer`
-// (src/chantier.ts) — exactement ceux que le bloc « Préparer la réunion »
-// de l'onglet Chantier lit à l'écran (ProjetChantier.tsx). Deux lectures
-// de la même autorité ne peuvent pas diverger ; deux calculs, si (R3).
+// CE QUI A CHANGÉ, ET POURQUOI. Le lot C imprimait ici un DOSSIER DE
+// PRÉPARATION : une synthèse des registres, lot par lot, en lecture. Le
+// retour de l'agence du 06/08/2026 a refusé le principe même — « il
+// faudrait que ça soit à la limite une version du CR précédent, ajusté ;
+// une sorte de to-do améliorée, où on garde tout mais où tout se range en
+// fonction de ce qui est fait ou non ». Un tableau de bord n'est pas un
+// ordre du jour : on ne « lit » pas une réunion de chantier, on la tient,
+// point par point.
 //
-// La page imprimée DÉTAILLE ce que l'écran synthétise : à l'écran une
-// ligne par lot suffit pour décider d'y aller, en séance il faut le nom
-// du document à viser, la date du désordre et le téléphone à appeler.
-// Les totaux, eux, sont les mêmes des deux côtés — c'est la promesse du
-// bouton « mêmes chiffres que ci-dessous ».
+// Ce gabarit imprime donc le RELEVÉ : l'ordre du jour rangé, l'état de
+// chaque point, son responsable, son échéance et son ANCIENNETÉ (« 3ᵉ
+// séance » — l'information que personne n'avait avant ce livrable), suivi
+// de ce que le cockpit propose et qui reste à trancher en séance.
 //
-// C'est une PRÉPARATION, jamais un compte rendu : elle rassemble ce qu'il
-// y a à dire, elle ne décide rien. Les pénalités y sont ENCOURUES, jamais
-// appliquées — appliquer reste un geste humain, tracé, sur le marché.
+// UNE SEULE AUTORITÉ, ET PLUS SEULEMENT PAR DISCIPLINE. Le lot C écrivait
+// son filtre ici et le même filtre à l'écran, avec un commentaire jumeau de
+// chaque côté pour rappeler de les faire bouger ensemble. Ils ne bougeaient
+// ensemble que tant que quelqu'un y pensait. Ce gabarit appelle désormais
+// `preparerSeance` (src/seanceChantier.ts) — la MÊME fonction que le bloc
+// « Relevé de séance » de l'onglet Chantier (ProjetChantier.tsx, où le
+// commentaire jumeau se poursuit). Le rangement, le report des points non
+// résolus, le comptage de l'ancienneté et les propositions n'existent qu'à
+// UN endroit : l'écran et le papier ne peuvent plus montrer deux ordres du
+// jour différents, parce qu'ils n'en calculent qu'un.
+//
+// Et par construction, ce module ne redécide de rien : `preparerSeance`
+// relit lui-même les autorités du chantier (`avancementLot` et
+// `tacheAConfirmer` de src/chantier.ts, `visasEnRetard` / `echeanceVisa`
+// de src/visas.ts, `penaliteEncourue` + `prolongationDelai` de
+// src/penalites.ts, `desordresOuverts` + `finGPA` de src/gpa.ts).
+//
+// C'est un RELEVÉ, jamais un compte rendu : il porte l'état des points au
+// jour de l'édition et les propositions du cockpit ; il ne vaut ni ordre de
+// service, ni décision. Le CR de la séance, lui, se rédige et se diffuse
+// depuis l'assistant.
 // ==================================================================
-
-/** « null n'est pas 0 » : une donnée absente s'imprime « ? ». Un « 0 € »
- *  affirmerait qu'on a lu le CCAP et que la pénalité est nulle. */
-const euros = (v: number | null | undefined): string =>
-  v === null || v === undefined ? '?' : fmtMoney(v, true)
 
 /** accord du pluriel — la feuille passe de main en main en séance, elle
  *  s'écrit en français, pas en « (s) » */
 const pluriel = (n: number): string => (n > 1 ? 's' : '')
 
-/** un délai se lit en mots : le signe d'un nombre de jours se lit mal, et
- *  c'est justement celui-là qu'on ne doit pas manquer en séance. */
-const delai = (j: number | null | undefined): string =>
-  j === null || j === undefined
-    ? '?'
-    : j < 0
-      ? `en retard de ${-j} j`
-      : j === 0
-        ? "aujourd'hui"
-        : `dans ${j} j`
-
-/** ouvre le dossier de séance imprimable (→ PDF via Ctrl+P).
+/** ouvre le relevé de séance imprimable (→ PDF via Ctrl+P).
  *
  *  `today` vient de l'écran (jamais d'une horloge lue ici) : c'est lui qui
- *  date les retards de visa comme la fenêtre de confirmation, et c'est lui
- *  qui s'imprime en date d'édition — la feuille dit de quel jour elle parle.
- *  `reunion` est la prochaine séance programmée, ou null : une préparation
- *  se fait AUSSI quand la date n'est pas encore posée. */
+ *  date les retards proposés comme l'ancienneté des points, et c'est lui qui
+ *  s'imprime en date d'édition — la feuille dit de quel jour elle parle.
+ *  `reunion` est la séance visée, telle que l'écran la connaît ; à null, le
+ *  relevé la redemande à `preparerSeance` — un relevé se tient AUSSI quand
+ *  la date de la prochaine séance n'est pas encore posée. */
 export function ouvrirPreparationReunionPDF(
   state: AppState,
   projet: Projet,
@@ -627,71 +672,20 @@ export function ouvrirPreparationReunionPDF(
   reunion: ReunionChantier | null,
 ): void {
   const s = state.settings
+  // L'ORDRE DU JOUR, en une lecture : même rangement, même report, même
+  // ancienneté, mêmes propositions qu'à l'écran — c'est la même fonction.
+  const ordre = preparerSeance(state, projet.id, { maintenant: today })
+  const seance = reunion ?? ordre.seance
   const marches = state.marches.filter((m) => m.projetId === projet.id)
-  const visasProjet = state.visas.filter((v) => v.projetId === projet.id)
-  const aViser = visasEnAttente(visasProjet)
-  const enRetard = visasEnRetard(visasProjet, today)
-  const desordres = desordresOuverts(state.desordresGPA.filter((d) => d.projetId === projet.id))
-  // une pénalité APPLIQUÉE est une décision déjà signifiée : elle n'a plus
-  // sa place dans un ordre du jour, on n'annonce que ce qui reste ouvert
-  const evenements = state.evenementsMarche.filter(
-    (e) => e.projetId === projet.id && !e.penaliteAppliquee,
-  )
-  const marcheDeTache = (marcheId: string | null | undefined) =>
-    marcheId ? marches.find((m) => m.id === marcheId) ?? null : null
-  const aConfirmer = state.tachesChantier.filter(
-    (t) => t.projetId === projet.id && tacheAConfirmer(t, marcheDeTache(t.marcheId), today),
-  )
-  /** « lot — entreprise » d'une pièce rattachée à un marché ; à défaut le lot
-   *  écrit à la main (un document peut arriver avant la signature du marché),
-   *  et sinon la vérité : ce n'est rattaché à rien, quelqu'un doit le dire. */
+
+  /** « Lot 02 — Charpente · Charpentes Leroy », ou le lot écrit à la main
+   *  quand aucun marché ne porte le point (bureau de contrôle,
+   *  concessionnaire), ou rien — et alors on ne meuble pas. */
   const rattachement = (marcheId: string | null | undefined, lotTexte?: string) => {
     const m = marches.find((x) => x.id === marcheId)
     const parts = [m?.lot || lotTexte || '', m?.entreprise || ''].filter(Boolean)
-    return parts.length > 0 ? parts.join(' · ') : 'lot non rattaché'
+    return parts.length > 0 ? parts.join(' · ') : ''
   }
-
-  const lignes = marches
-    .map((m) => {
-      const visasLot = aViser.filter((v) => v.marcheId === m.id)
-      const evLot = evenements.filter((e) => e.marcheId === m.id)
-      // MÊME déduction d'intempéries que le journal des pénalités et que le
-      // bloc à l'écran : une seule source (`prolongationDelai`), sinon la
-      // feuille annoncerait un montant que l'écran de décision dément
-      const deduction = prolongationDelai(m, state.intemperies)
-      const chiffres = evLot.map((e) => penaliteEncourue(e, m.penalites, deduction))
-      const chiffrables = chiffres.filter((c) => c !== null)
-      return {
-        m,
-        avancement: avancementLot(state.tachesChantier, m.id),
-        visasLot,
-        retardLot: enRetard.filter((v) => v.marcheId === m.id),
-        evLot,
-        // l'événement ET son chiffre calculés UNE fois : la ligne de détail
-        // ne recalcule pas ce que le total a déjà compté
-        details: evLot.map((e, i) => ({ e, calcul: chiffres[i] })),
-        chiffrables: chiffrables.length,
-        totalEncouruHT: chiffrables.reduce((t, c) => t + c!.montantHT, 0),
-        tauxManquant: chiffres.some((c) => c === null),
-        desordresLot: desordres.filter((d) => d.marcheId === m.id),
-        confirmerLot: aConfirmer.filter((t) => t.marcheId === m.id),
-      }
-    })
-    // hors phase : un marché soldé qui n'a plus rien à dire ne prend pas une
-    // ligne de l'ordre du jour — MÊME tri qu'à l'écran, sinon la feuille et
-    // le bloc ne montreraient pas les mêmes lots
-    .filter(
-      (l) =>
-        l.m.actif ||
-        l.visasLot.length > 0 ||
-        l.evLot.length > 0 ||
-        l.desordresLot.length > 0 ||
-        l.confirmerLot.length > 0,
-    )
-
-  const sansLot = (id: string | null | undefined) => !id || !marches.some((m) => m.id === id)
-  const visasSansLot = aViser.filter((v) => sansLot(v.marcheId))
-  const desordresSansLot = desordres.filter((d) => sansLot(d.marcheId))
 
   /** un titre de rubrique qui porte son compte, et un corps qui dit « rien »
    *  au lieu de disparaître : une rubrique absente laisserait croire à un
@@ -700,99 +694,58 @@ export function ouvrirPreparationReunionPDF(
     `<h2>${echapper(titre)}${n > 0 ? ` <span class="n">${n}</span>` : ''}</h2>
 ${n > 0 ? corps : `<p class="rien">${echapper(rien)}</p>`}`
 
-  const lignesSynthese = lignes
-    .map(
-      (l) => `<tr>
-      <td><strong>${echapper(l.m.lot)}</strong><div class="muted">${echapper(l.m.entreprise)}</div></td>
-      <td class="r">${l.avancement === null ? '?' : `${l.avancement} %`}</td>
-      <td>${l.visasLot.length === 0 ? '<span class="muted">—</span>' : `${l.visasLot.length} à viser${l.retardLot.length > 0 ? ` <span class="retard">dont ${l.retardLot.length} en retard</span>` : ''}`}</td>
-      <td class="r">${
-        l.evLot.length === 0
-          ? '<span class="muted">—</span>'
-          : l.chiffrables === 0
-            ? '<span class="retard">taux CCAP ?</span>'
-            : `${fmtMoney(l.totalEncouruHT, true)}<div class="muted">${l.evLot.length} événement${pluriel(l.evLot.length)} non décidé${pluriel(l.evLot.length)}${l.tauxManquant ? ', dont taux CCAP manquant' : ''}</div>`
-      }</td>
-      <td>${l.confirmerLot.length === 0 ? '<span class="muted">—</span>' : `${l.confirmerLot.length} à confirmer`}</td>
+  // --- l'ordre du jour, groupe par groupe, dans l'ordre du rangement ------
+  //
+  // Les intertitres viennent de `grouperPoints` : à traiter d'abord (les
+  // plus anciens en tête, parce qu'un point repoussé quatre fois est le plus
+  // urgent), puis en cours, puis les faits, puis les sans suite. RIEN n'est
+  // masqué — un relevé qui cacherait ce qui est fait ne serait plus le
+  // document qu'on envoie après la séance.
+  const lignesRelevé = ordre.groupes
+    .map((g) => {
+      const corps = g.entrees
+        .map((e) => {
+          const point = e.point
+          const lot = rattachement(point.marcheId, point.lot)
+          const retard = !pointResolu(point) && point.echeance !== null && point.echeance !== undefined && point.echeance < today
+          const resolu = pointResolu(point)
+          return `<tr${resolu ? ' class="regle"' : ''}>
+      <td><strong>${echapper(point.libelle)}</strong>${point.notes ? `<div class="muted">${echapper(point.notes)}</div>` : ''}</td>
+      <td>${lot ? echapper(lot) : '<span class="muted">—</span>'}</td>
+      <td>${point.responsable ? echapper(point.responsable) : '<span class="muted">?</span>'}</td>
+      <td class="${retard ? 'retard' : ''}">${point.echeance ? fmtDate(point.echeance) : '<span class="muted">—</span>'}</td>
       <td>${
-        l.desordresLot.length > 0
-          ? `${l.desordresLot.length} désordre${pluriel(l.desordresLot.length)} ouvert${pluriel(l.desordresLot.length)}`
-          : l.m.dateReception
-            ? `<span class="muted">aucun désordre — GPA jusqu'au ${fmtDate(finGPA(l.m.dateReception))}</span>`
-            : '<span class="muted">—</span>'
+        resolu
+          ? `<span class="muted">${point.resoluLe ? `${point.etat === 'fait' ? 'le' : 'écarté le'} ${fmtDate(point.resoluLe)}` : '—'}</span>`
+          : e.anciennete > 1
+            ? `<span class="${e.traine ? 'retard' : ''}">${echapper(libelleAnciennete(e.anciennete))}</span>`
+            : '<span class="muted">1re séance</span>'
       }</td>
+      <td class="coche"></td>
+    </tr>`
+        })
+        .join('\n')
+      return `<tr class="groupe"><td colspan="6">${echapper(g.libelle)} — ${g.entrees.length} point${pluriel(g.entrees.length)}</td></tr>
+${corps}`
+    })
+    .join('\n')
+
+  const lignesPropositions = ordre.propositions
+    .map(
+      (prop) => `<tr>
+      <td><strong>${echapper(prop.libelle)}</strong><div class="muted">${echapper(prop.detail)}</div></td>
+      <td>${prop.responsable ? echapper(prop.responsable) : '<span class="muted">?</span>'}</td>
+      <td>${prop.echeance ? fmtDate(prop.echeance) : '<span class="muted">—</span>'}</td>
+      <td class="coche"></td>
+      <td class="coche"></td>
     </tr>`,
     )
     .join('\n')
 
-  const lignesVisas = aViser
-    .slice()
-    .sort((a, b) => (echeanceVisa(a) || '9999').localeCompare(echeanceVisa(b) || '9999'))
-    .map((v) => {
-      const echeance = echeanceVisa(v)
-      const restant = echeance === null ? null : diffDays(today, echeance)
-      return `<tr>
-      <td><strong>${echapper(v.document)}</strong><div class="muted">${echapper(rattachement(v.marcheId, v.lot))} · reçu le ${fmtDate(v.recuLe)}</div></td>
-      <td>${echeance ? fmtDate(echeance) : '<span class="muted">réception illisible</span>'}</td>
-      <td class="${restant !== null && restant < 0 ? 'retard' : ''}">${delai(restant)}</td>
-      <td>${echapper(LIBELLE_STATUT_VISA[v.statut] || v.statut)}</td>
-    </tr>`
-    })
-    .join('\n')
-
-  const lignesPenalites = lignes
-    .flatMap((l) =>
-      l.details.map(({ e, calcul }) => {
-        return `<tr>
-      <td><strong>${echapper(l.m.lot)}</strong><div class="muted">${echapper(l.m.entreprise)}</div></td>
-      <td>${echapper(LIBELLE_EVENEMENT[e.type] || e.type)}<div class="muted">${fmtDate(e.date)}${e.document ? ` · ${echapper(e.document)}` : ''}${e.commentaire ? ` — ${echapper(e.commentaire)}` : ''}</div></td>
-      <td class="r">${calcul === null || calcul.joursRetenus === null ? '<span class="muted">—</span>' : `${calcul.joursRetenus} j`}${calcul && calcul.joursDeduits > 0 ? `<div class="muted">− ${calcul.joursDeduits} j d'intempéries</div>` : ''}</td>
-      <td class="r">${euros(calcul === null ? null : calcul.montantHT)}</td>
-    </tr>`
-      }),
-    )
-    .join('\n')
-
-  const lignesDesordres = desordres
-    .slice()
-    .sort((a, b) => a.signaleLe.localeCompare(b.signaleLe))
-    .map((d) => {
-      const m = marches.find((x) => x.id === d.marcheId)
-      return `<tr>
-      <td><strong>${echapper(d.description)}</strong><div class="muted">${echapper(rattachement(d.marcheId, d.lot))}</div></td>
-      <td>${fmtDate(d.signaleLe)}${d.signalePar ? `<div class="muted">${echapper(d.signalePar)}</div>` : ''}</td>
-      <td>${m && m.dateReception ? fmtDate(finGPA(m.dateReception)) : '<span class="muted">réception non saisie</span>'}</td>
-      <td>${echapper(LIBELLE_STATUT_DESORDRE[d.statut] || d.statut)}${Array.isArray(d.relances) && d.relances.length > 0 ? `<div class="muted">${d.relances.length} relance${pluriel(d.relances.length)} tracée${pluriel(d.relances.length)}</div>` : ''}</td>
-    </tr>`
-    })
-    .join('\n')
-
-  const lignesConfirmations = aConfirmer
-    .slice()
-    .sort((a, b) => (a.debut || '9999').localeCompare(b.debut || '9999'))
-    .map((t) => {
-      const m = marcheDeTache(t.marcheId)
-      return `<tr>
-      <td><strong>${echapper(t.lot)}</strong><div class="muted">${echapper(m?.entreprise || 'entreprise à identifier')}</div></td>
-      <td>${echapper(t.designation)}</td>
-      <td>${t.debut ? fmtDate(t.debut) : '<span class="muted">non datée</span>'}</td>
-      <td>${delai(t.debut ? diffDays(today, t.debut) : null)}</td>
-      <td>${m?.contactNom ? echapper(m.contactNom) : ''}${m?.contactEmail ? `<div class="muted">${echapper(m.contactEmail)}</div>` : ''}${!m?.contactNom && !m?.contactEmail ? '<span class="muted">contact à compléter au marché</span>' : ''}</td>
-    </tr>`
-    })
-    .join('\n')
-
-  const restes = [
-    visasSansLot.length > 0
-      ? `${visasSansLot.length} visa${pluriel(visasSansLot.length)} à rendre`
-      : '',
-    desordresSansLot.length > 0
-      ? `${desordresSansLot.length} désordre${pluriel(desordresSansLot.length)} GPA ouvert${pluriel(desordresSansLot.length)}`
-      : '',
-  ].filter(Boolean)
+  const ouverts = ordre.nbParEtat.a_traiter + ordre.nbParEtat.en_cours
 
   const html = `<!doctype html>
-<html lang="fr"><head><meta charset="utf-8"><title>Préparer la réunion — ${echapper(projet.id)}</title>
+<html lang="fr"><head><meta charset="utf-8"><title>Relevé de séance — ${echapper(projet.id)}</title>
 <style>
   body { font-family: -apple-system, 'Segoe UI', Roboto, Arial, sans-serif; color: #1a2233; margin: 40px; font-size: 13px; }
   header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px; }
@@ -808,7 +761,10 @@ ${n > 0 ? corps : `<p class="rien">${echapper(rien)}</p>`}`
   th.r { text-align: right; }
   td { padding: 7px 5px; border-bottom: 1px solid #e3e6ec; vertical-align: top; }
   td.r { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  tr.groupe td { background: #eef1f7; font-weight: 700; text-transform: uppercase; font-size: 10.5px; letter-spacing: .04em; padding: 5px; }
+  tr.regle td { color: #5a6478; }
   .retard { color: #bb2233; font-weight: 700; }
+  .coche { width: 26px; border-left: 1px solid #e3e6ec; }
   .rien { color: #5a6478; font-size: 12px; margin: 6px 0 0; }
   .note { margin-top: 8px; padding: 9px 12px; background: #f2f6ff; border-radius: 6px; font-size: 11.5px; line-height: 1.6; }
   .lignes div { border-bottom: 1px solid #c8cdd8; height: 26px; }
@@ -819,13 +775,13 @@ ${n > 0 ? corps : `<p class="rien">${echapper(rien)}</p>`}`
 <button class="impression" onclick="window.print()">Imprimer / PDF</button>
 <header>
   <div>
-    <h1>Préparer la réunion de chantier</h1>
+    <h1>Relevé de séance — réunion de chantier</h1>
     <div class="muted">${echapper(s.nomAgence)} — maîtrise d'œuvre${s.personnes.length > 0 ? ` · ${echapper(s.personnes.join(' · '))}` : ''}</div>
   </div>
   <div style="text-align:right" class="muted">
     ${
-      reunion
-        ? `${echapper(reunion.titre)}<br>Séance du ${fmtDate(reunion.date)}${reunion.heure ? ` à ${echapper(reunion.heure)}` : ''}`
+      seance
+        ? `${echapper(seance.titre)}<br>Séance du ${fmtDate(seance.date)}${seance.heure ? ` à ${echapper(seance.heure)}` : ''}`
         : 'Aucune séance programmée'
     }<br>Édité le ${fmtDate(today)}
   </div>
@@ -835,78 +791,46 @@ ${n > 0 ? corps : `<p class="rien">${echapper(rien)}</p>`}`
   <div><div class="kl">Opération</div>${echapper(projet.id)} — ${echapper(projet.nom)}</div>
   ${projet.adresse ? `<div><div class="kl">Adresse</div>${echapper(projet.adresse)}</div>` : ''}
   ${projet.moa ? `<div><div class="kl">Maître d'ouvrage</div>${echapper(projet.moa)}</div>` : ''}
+  <div><div class="kl">Points ouverts</div>${ouverts}${ordre.quiTrainent > 0 ? ` <span class="retard">dont ${ordre.quiTrainent} qui traîne${pluriel(ordre.quiTrainent)}</span>` : ''}</div>
+  ${
+    ordre.seancePrecedente
+      ? `<div><div class="kl">Séance précédente</div>${echapper(ordre.seancePrecedente.titre)} du ${fmtDate(ordre.seancePrecedente.date)}</div>`
+      : ''
+  }
 </div>
 
 ${rubrique(
-    'Par lot — ce qu\'il y a à dire',
-    lignes.length,
+    'Ordre du jour — le relevé, rangé',
+    ordre.entrees.length,
     `<table>
-  <thead><tr><th>Lot / entreprise</th><th class="r">Avancement</th><th>Visas à rendre</th><th class="r">Pénalités encourues</th><th>À confirmer</th><th>Parfait achèvement</th></tr></thead>
+  <thead><tr><th>Point</th><th>Lot / entreprise</th><th>Qui agit</th><th>Pour le</th><th>Depuis</th><th></th></tr></thead>
   <tbody>
-${lignesSynthese}
+${lignesRelevé}
   </tbody>
-</table>${restes.length > 0 ? `<p class="muted">Sans lot rattaché : ${echapper(restes.join(' · '))}.</p>` : ''}`,
-    'Aucun lot à porter à l\'ordre du jour : aucun marché en cours, aucun visa en attente, aucune pénalité encourue non décidée, aucun désordre ouvert, aucune intervention à confirmer.',
+</table>
+<div class="note">Les points non résolus sont REPRIS de la séance précédente sans recopie : ils appartiennent à l'opération, pas à une réunion — c'est ce qui permet de lire depuis combien de séances un point traîne. La colonne « Depuis » compte les séances où il a déjà figuré ; la dernière colonne se coche en séance.</div>`,
+    'Aucun point au relevé : le premier s\'inscrit depuis l\'onglet Chantier, ou en acceptant l\'une des propositions ci-dessous.',
   )}
 
 ${rubrique(
-    'Visas à rendre',
-    aViser.length,
+    'Proposé par le cockpit — à trancher en séance',
+    ordre.propositions.length,
     `<table>
-  <thead><tr><th>Document</th><th>Échéance du CCAP</th><th>Délai</th><th>Statut</th></tr></thead>
+  <thead><tr><th>Point proposé</th><th>Qui agit</th><th>Pour le</th><th>Inscrire</th><th>Écarter</th></tr></thead>
   <tbody>
-${lignesVisas}
+${lignesPropositions}
   </tbody>
 </table>
-<p class="muted">Un visa en retard engage la maîtrise d'œuvre : l'entreprise exécute sans visa, et le retard du visa devient l'excuse de tous les retards du lot.</p>`,
-    'Aucun document en attente de visa.',
-  )}
-
-${rubrique(
-    'Pénalités encourues — à annoncer, non décidées',
-    lignes.reduce((n, l) => n + l.evLot.length, 0),
-    `<table>
-  <thead><tr><th>Lot / entreprise</th><th>Fait générateur</th><th class="r">Jours retenus</th><th class="r">Montant HT encouru</th></tr></thead>
-  <tbody>
-${lignesPenalites}
-  </tbody>
-</table>
-<div class="note">Ces montants sont <strong>encourus</strong> : rien n'est retenu tant que la pénalité n'a pas été appliquée, et l'appliquer est une décision qui se signe. Appliquée, elle est proposée en déduction au prochain certificat de paiement (ligne D) — ne la déduisez pas aussi de la situation, l'entreprise la paierait deux fois.</div>`,
-    'Aucun fait générateur de pénalité en attente de décision.',
-  )}
-
-${rubrique(
-    'Désordres en garantie de parfait achèvement',
-    desordres.length,
-    `<table>
-  <thead><tr><th>Désordre</th><th>Signalé le</th><th>Fin de GPA</th><th>Statut</th></tr></thead>
-  <tbody>
-${lignesDesordres}
-  </tbody>
-</table>
-<p class="muted">Un désordre contesté reste ouvert : seule la levée constatée le ferme.</p>`,
-    'Aucun désordre ouvert.',
-  )}
-
-${rubrique(
-    'Entreprises à confirmer',
-    aConfirmer.length,
-    `<table>
-  <thead><tr><th>Lot / entreprise</th><th>Intervention</th><th>Début prévu</th><th>Délai</th><th>Contact</th></tr></thead>
-  <tbody>
-${lignesConfirmations}
-  </tbody>
-</table>
-<p class="muted">Une entreprise qui découvre sa date deux semaines avant ne vient pas : l'appel se passe en séance, la confirmation se note sur la tâche du planning.</p>`,
-    'Aucune intervention à confirmer dans le mois qui vient.',
+<div class="note">Ces points ne sont <strong>pas</strong> à l'ordre du jour : ils sont relus des registres du cockpit (visas, pénalités encourues non décidées, désordres de parfait achèvement, interventions à confirmer, retards d'exécution) et attendent un geste — inscrire, ou écarter. Les montants de pénalité y sont <strong>encourus</strong> : rien n'est retenu tant que la pénalité n'a pas été appliquée, et l'appliquer est une décision qui se signe.</div>`,
+    'Rien à proposer : aucun visa en retard, aucune pénalité encourue non décidée, aucun désordre ouvert, aucune intervention à confirmer, aucun lot en retard d\'exécution.',
   )}
 
 <h2>Notes de séance</h2>
 <div class="lignes"><div></div><div></div><div></div><div></div><div></div><div></div><div></div><div></div></div>
 
 <div class="pied">
-  « ? » signale une donnée absente, jamais un zéro : un avancement sans tâche de planning rattachée, un montant sans taux de CCAP saisi, une échéance sans date de réception restent à renseigner.<br>
-  Dossier de PRÉPARATION rassemblé par la maîtrise d'œuvre depuis les registres du cockpit, à la date d'édition. Il ne vaut ni ordre de service, ni compte rendu, ni décision : viser, appliquer une pénalité, confirmer une entreprise ou lever un désordre reste un geste, tracé, dans sa carte.
+  « ? » signale une donnée absente, jamais un zéro : un point sans responsable désigné, un montant sans taux de CCAP saisi, une échéance sans date de réception restent à renseigner.<br>
+  RELEVÉ de séance édité depuis le cockpit à la date ci-dessus, dans l'ordre exact de l'écran. Il ne vaut ni ordre de service, ni compte rendu, ni décision : le compte rendu de la séance se rédige et se diffuse depuis l'assistant CR, et les gestes contractuels (viser, appliquer une pénalité, confirmer une entreprise, lever un désordre) restent chacun dans sa carte, tracés.
 </div>
 </body></html>`
 

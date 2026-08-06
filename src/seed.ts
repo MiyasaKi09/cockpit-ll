@@ -1024,6 +1024,63 @@ export function seedState(): AppState {
       },
     ],
 
+    // C3 — le relevé de séance de l'exemple. Il est REPRIS mot pour mot des
+    // points d'action du CR de la réunion n°18 ci-dessus : c'est tout ce
+    // qu'il faut montrer pour que l'idée se comprenne sans notice — un
+    // point naît à une séance, il TRAVERSE les suivantes, et son ancienneté
+    // se lit (« 3ᵉ séance »).
+    //
+    // Contrairement aux visas, désordres et pénalités d'exemple — laissés
+    // vides parce qu'un faux y ressemblerait à un constat contractuel réel —
+    // un point de séance n'écrit rien vers l'extérieur : il ne lève aucune
+    // alerte, ne produit aucun document opposable, ne modifie aucun montant.
+    // Il porte « EXEMPLE » et se ferme d'un geste.
+    pointsSeance: [
+      {
+        id: 'pt-p03-1',
+        projetId: 'P03',
+        marcheId: 'M-P03-L01',
+        libelle: 'Reprise d’enduit sur pignon nord',
+        responsable: 'SARL Martin BTP',
+        echeance: '2026-07-03',
+        etat: 'en_cours',
+        inscritLe: '2026-06-24',
+        reunionOrigineId: 'r-p03-18',
+        resoluLe: null,
+        notes: 'EXEMPLE — repris du CR de la réunion n°18.',
+        majLe: '2026-07-01',
+      },
+      {
+        id: 'pt-p03-2',
+        projetId: 'P03',
+        marcheId: 'M-P03-L02',
+        libelle: 'Plan de levage à diffuser',
+        responsable: 'Charpentes Leroy',
+        echeance: '2026-06-30',
+        etat: 'fait',
+        inscritLe: '2026-06-24',
+        reunionOrigineId: 'r-p03-18',
+        resoluLe: '2026-07-01',
+        notes: 'EXEMPLE — diffusé, constaté en séance n°19.',
+        majLe: '2026-07-01',
+      },
+      {
+        id: 'pt-p03-3',
+        projetId: 'P03',
+        marcheId: null,
+        lot: 'Bureau de contrôle',
+        libelle: 'Avis sur le ferraillage du préau',
+        responsable: 'Bureau de contrôle',
+        echeance: null,
+        etat: 'a_traiter',
+        inscritLe: '2026-06-24',
+        reunionOrigineId: 'r-p03-18',
+        resoluLe: null,
+        notes: 'EXEMPLE — « en attente » au CR n°18, relancé depuis. C’est le point qui traîne : il porte son ancienneté.',
+        majLe: '2026-07-01',
+      },
+    ],
+
     tempsHorsProjet: [],
 
     // B.1 — la collection naît VIDE, même dans le jeu d'amorce. Une tâche

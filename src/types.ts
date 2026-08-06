@@ -299,6 +299,88 @@ export interface ReunionChantier {
   notes?: string
 }
 
+/** C3 — état d'un point de séance. QUATRE états, pas cinq : au-delà, plus
+ *  personne ne sait lequel choisir en réunion, et le geste le plus fréquent
+ *  du chantier cesse d'être instantané.
+ *
+ *  « sans suite » n'est pas « fait » : un point abandonné (l'entreprise a
+ *  eu raison, la MOA a tranché autrement, le point n'avait pas lieu d'être)
+ *  se RANGE, il ne se supprime pas — six mois plus tard, la question de
+ *  savoir si on l'avait vu et écarté, ou jamais vu, est exactement celle
+ *  qu'on se pose. */
+export type EtatPointSeance = 'a_traiter' | 'en_cours' | 'fait' | 'sans_suite'
+
+/** C3 — d'où vient un point que la MACHINE a proposé et qu'un humain a
+ *  inscrit. Sert à deux choses, et à rien d'autre : dire à l'écran d'où
+ *  sort la ligne, et empêcher de reproposer indéfiniment ce qui est déjà au
+ *  relevé (`PointSeance.origineRef`). Un point saisi à la main n'a pas
+ *  d'origine — c'est le cas ordinaire. */
+export type OriginePointSeance = 'visa' | 'penalite' | 'gpa' | 'confirmation' | 'avancement'
+
+/** C3 — POINT DE SÉANCE : la ligne d'ordre du jour d'une réunion de
+ *  chantier, et le retour d'usage du 06/08/2026 (« il faudrait que ça soit
+ *  à la limite une version du CR précédent, ajusté ; une sorte de to-do
+ *  améliorée, où on garde tout mais où tout se range en fonction de ce qui
+ *  est fait ou non »).
+ *
+ *  POURQUOI RATTACHÉ AU PROJET, ET NON À LA RÉUNION — c'est toute la
+ *  question, et c'est ce qui sépare ce modèle d'une liste de tâches par
+ *  réunion. Une réunion de chantier ne part JAMAIS d'une page blanche :
+ *  elle reprend le relevé précédent, point par point, et chaque point
+ *  avance ou n'avance pas. Un point qui appartiendrait à UNE réunion
+ *  devrait être RECOPIÉ à la suivante — et une recopie, c'est deux objets
+ *  pour une seule question, donc deux histoires possibles, donc la
+ *  disparition silencieuse de la seule information que personne n'a
+ *  aujourd'hui : « ce point traîne depuis trois séances ».
+ *
+ *  Le point traverse donc les réunions et ne garde d'elles que celle où il
+ *  est APPARU (`reunionOrigineId`). Son ancienneté se COMPTE
+ *  (`ancienneteEnSeances`, src/seanceChantier.ts) au lieu de se stocker :
+ *  un compteur incrémenté à chaque séance se désynchroniserait le jour où
+ *  une réunion est reprogrammée ou supprimée.
+ *
+ *  Le CR (`ReunionChantier.cr`) reste ce qu'il est : le compte rendu d'UNE
+ *  séance, rédigé, diffusé, figé dans le temps. Le relevé le PRÉPARE et lui
+ *  SURVIT. Les deux ne se remplacent pas. */
+export interface PointSeance {
+  id: string
+  projetId: string
+  /** marché (lot + entreprise) concerné — null : point général de
+   *  l'opération (MOA, MOE, bureau de contrôle…) */
+  marcheId?: string | null
+  /** lot ou entreprise écrit à la main, quand aucun marché ne porte le
+   *  point (bureau de contrôle, concessionnaire, lot pas encore attribué) */
+  lot?: string
+  libelle: string
+  /** qui doit AGIR — texte libre : c'est ce qui s'écrit au CR (« SARL
+   *  Martin BTP », « MOE », « MOA »). null/absent = personne n'a été
+   *  désigné, et l'écran le dit : « ? », jamais un nom par défaut. */
+  responsable?: string | null
+  /** échéance FACULTATIVE (ISO) — beaucoup de points n'en ont pas, et
+   *  inventer une date au motif qu'il en faut une transformerait le relevé
+   *  en fabrique d'échéances fausses */
+  echeance?: string | null
+  etat: EtatPointSeance
+  /** date de PREMIÈRE inscription à l'ordre du jour (ISO) — jamais
+   *  réécrite : c'est elle qui fait l'ancienneté et le rangement */
+  inscritLe: string
+  /** réunion où le point est APPARU. Le « n° » de la séance est celui de
+   *  son titre (« Réunion de chantier n°18 ») ; null = point inscrit hors
+   *  séance, entre deux réunions, ce qui est fréquent. */
+  reunionOrigineId?: string | null
+  /** date de résolution (ISO) : posée en passant à « fait » ou « sans
+   *  suite », retirée si le point est rouvert (src/seanceChantier.ts) */
+  resoluLe?: string | null
+  /** proposition de la machine acceptée : sa nature… */
+  origine?: OriginePointSeance
+  /** … et sa clé stable (`visa:v-12`, `gpa:d-3`…). Un point qui la porte
+   *  ne sera plus reproposé : la question vit désormais au relevé, à un
+   *  seul endroit. */
+  origineRef?: string | null
+  notes?: string
+  majLe: string
+}
+
 /** Garantie d'un marché de travaux (CCAG Travaux art. 33) :
  *  - 'retenue' : la retenue de garantie est prélevée sur chaque situation (défaut) ;
  *  - 'caution' : caution bancaire de substitution — rien n'est retenu ;
@@ -681,6 +763,92 @@ export interface Situation {
   revisionHT?: number | null
   /** facture d'honoraires DET générée depuis cette situation validée (anti-doublon + lien) */
   factureId?: string | null
+  /** B1 — copie FIGÉE du décompte, prise AU MOMENT DE LA VALIDATION. Absente
+   *  tant que la situation n'est pas validée, et absente sur les situations
+   *  validées AVANT B1 : le PDF le DIT au lieu de faire croire à une pièce
+   *  stable (voir DecompteFige). Elle disparaît si la situation repasse « à
+   *  vérifier » — un décompte figé qui ne correspond plus à rien est pire
+   *  qu'aucun décompte. */
+  decompteFige?: DecompteFige
+}
+
+/** B1 — en-tête FIGÉ du décompte de situation : ce que le papier remis à
+ *  l'entreprise NOMMAIT au moment de la validation. Même raison d'être que
+ *  EnteteCertificat : réimprimer dans deux ans doit redonner l'agence, le
+ *  chantier et le marché D'ALORS — renommer l'agence ou saisir un avenant
+ *  ne doit pas réécrire un papier déjà parti. */
+export interface EnteteDecompte {
+  /** l'agence telle qu'elle se nommait — le papier porte sa signature */
+  agence: { nom: string; personnes: string[]; siret?: string }
+  /** l'opération, déjà libellée par `nomProjet` (une seule autorité) */
+  projetLibelle: string
+  projetAdresse?: string
+  entreprise: string
+  lot?: string
+  mois: string // 'AAAA-MM'
+  /** n° de situation — `null` quand l'entreprise n'en donne pas : « null n'est pas 0 » */
+  numero: number | null
+  dateReception: string // ISO
+  /** montant du marché avenants compris au jour de la validation — `null`
+   *  quand la situation n'est rattachée à AUCUN marché : le papier dit alors
+   *  qu'il ne retient rien parce qu'il n'y a pas de marché, pas parce que le
+   *  marché vaudrait 0 € */
+  marcheTotalHT: number | null
+  /** marché révisable — dit pourquoi une ligne de révision peut exister */
+  marcheRevisable: boolean
+}
+
+/** B1 — les lignes RETENUES du décompte au moment de la validation. Mêmes
+ *  rubriques que `DecompteSituation` (src/derive.ts, la SEULE autorité du
+ *  calcul) : ce bloc n'est pas un second calcul, c'en est la PHOTO. */
+export interface LignesDecompte {
+  travauxCumulHT: number
+  revisionHT: number
+  /** travaux + révision */
+  baseHT: number
+  /** taux EFFECTIF appliqué (0 dès qu'une caution ou une GPD couvrait le marché) */
+  tauxRG: number
+  /** type de garantie au jour de la validation — dit POURQUOI le taux vaut ce qu'il vaut */
+  garantie: TypeGarantie
+  retenueGarantieHT: number
+  /** base − retenue */
+  cumulNetHT: number
+  /** cumul net des situations antérieures, déjà réglé */
+  precedentNetHT: number
+  netAPayerHT: number
+  tauxTVA: number
+  netAPayerTTC: number
+}
+
+/** B1 — copie FIGÉE du décompte de situation (constat S6, lot B).
+ *
+ *  Trois pièces se ressemblent à l'écran : la facture, le certificat de
+ *  paiement et ce décompte. Les deux premières se réimprimaient depuis leur
+ *  copie figée ; celui-ci se RECALCULAIT depuis l'état courant — l'entreprise
+ *  recevait un décompte le 3 juillet, l'agence saisissait un avenant le 10,
+ *  réimprimait le 12 pour classer, et rangeait un papier qui ne portait plus
+ *  les mêmes chiffres que celui qui avait été envoyé.
+ *
+ *  Le bloc se pose À LA VALIDATION (src/decompte.ts, `figerDecompte`), jamais
+ *  à l'impression : ce qui fait foi est l'état validé, pas l'état de la
+ *  première impression — sinon deux personnes qui impriment le même jour
+ *  figeraient deux vérités. Le PDF ne lit ensuite QUE ce bloc. */
+export interface DecompteFige {
+  entete: EnteteDecompte
+  /** les lignes retenues — ce que le papier envoyé portait */
+  lignes: LignesDecompte
+  /** points à vérifier relevés au figeage : le papier envoyé les portait,
+   *  les taire à la réimpression donnerait un document plus propre que
+   *  l'original */
+  coherences: string[]
+  /** date du FIGEAGE = date de la validation (jamais celle de l'impression) */
+  figeLe: string // ISO
+  /** qui a validé — `null` quand le poste ne sait pas qui est là (`useMoi()`,
+   *  §identité) : un décompte ne se signe pas au nom du premier de la liste */
+  validePar: string | null
+  /** empreinte SHA-256 du bloc (audit, comme FactureFigee) — absente ou vide
+   *  si l'API crypto manque : une empreinte inventée ne prouverait rien */
+  empreinte?: string
 }
 
 /** 5.19 — les lignes d'un certificat de paiement (état d'acompte), toutes
@@ -1984,6 +2152,12 @@ export interface AppState {
   consultations: Consultation[]
   prompts: PromptTemplate[]
   reunions: ReunionChantier[]
+  /** C3 — points de séance : l'ordre du jour qui TRAVERSE les réunions.
+   *  Rattachés au projet, jamais à une réunion (voir `PointSeance`) : c'est
+   *  ce qui fait qu'une séance repart du relevé précédent au lieu d'une
+   *  page blanche, et que « ce point traîne depuis trois séances » se lit
+   *  au lieu de se deviner. */
+  pointsSeance: PointSeance[]
   courriers: Courrier[]
   /** B.1 — les tâches internes du §8.5. Restent dans le document JSONB :
    *  le volume est borné et la fréquence d'écriture est HUMAINE (§3.1). */

@@ -54,6 +54,10 @@ import {
   construireCertificat,
   figerCertificat,
 } from '../certificat'
+// B1 — le décompte se FIGE au moment de la validation (src/decompte.ts), sur
+// le patron du certificat : ce qui fait foi est l'état validé, pas l'état de
+// la première impression
+import { empreinteDecompte, figerDecompte } from '../decompte'
 import type { SurchargesCertificat } from '../certificat'
 import type { LignesCertificat } from '../types'
 import { useMoi } from '../moi'
@@ -460,6 +464,8 @@ function CarteImport() {
  *  plutôt qu'un second écran de saisie qui divergerait. */
 function ModalEdition({ sit, creation, onClose }: { sit: Situation; creation?: boolean; onClose: () => void }) {
   const { state, update, replace } = useStore()
+  const today = useToday()
+  const moi = useMoi()
   const [entreprise, setEntreprise] = useState(sit.entreprise)
   const [lot, setLot] = useState(sit.lot || '')
   const [mois, setMois] = useState(sit.mois)
@@ -499,7 +505,7 @@ function ModalEdition({ sit, creation, onClose }: { sit: Situation; creation?: b
     setNumero(prochainNumeroSituation(state, m.id))
   }
 
-  const enregistrer = () => {
+  const enregistrer = async () => {
     if (!entreprise.trim()) {
       toast('Le nom de l’entreprise est obligatoire.', { tone: 'danger' })
       return
@@ -508,51 +514,61 @@ function ModalEdition({ sit, creation, onClose }: { sit: Situation; creation?: b
       toast('Mois attendu au format AAAA-MM (ex. 2026-07).', { tone: 'danger' })
       return
     }
+    // la situation TELLE QU'ELLE SERA enregistrée — un seul objet pour la
+    // création et l'édition : c'est lui que le décompte figé photographie,
+    // avec les montants corrigés à l'instant, pas ceux d'avant la fiche
+    const suivante: Situation = {
+      ...sit,
+      entreprise: entreprise.trim(),
+      lot: lot.trim() || undefined,
+      mois,
+      numero,
+      montantMoisHT: montantMois,
+      montantCumulHT: cumul,
+      revisionHT: revision,
+      confiance: confiance === null ? null : clamp(confiance, 0, 1),
+      marcheId: marcheId || null,
+      projetId: marche ? marche.projetId : projetId,
+      dateReception: dateReception || sit.dateReception,
+      statut,
+      source: source.trim() || undefined,
+      notes: notes.trim() || undefined,
+    }
+    // B1 — le statut se change AUSSI depuis cette fiche : le décompte s'y fige
+    // donc au moment où la situation PASSE à « validée », comme au bouton
+    // « Valider » de la liste. Trois cas, et un seul fige :
+    //  · elle devient validée → on fige, daté d'aujourd'hui, ce qui est vrai ;
+    //  · elle quitte « validée » → on RETIRE le bloc : un décompte figé sur
+    //    une situation redevenue « à vérifier » ne correspondrait plus à rien
+    //    (même règle que l'« Annuler » du toast de validation) ;
+    //  · elle reste validée → on ne touche à rien. Ni pour réécrire un bloc
+    //    (le papier déjà remis à l'entreprise ne se refait pas parce qu'on
+    //    corrige un cumul après coup), ni pour en inventer un daté
+    //    d'aujourd'hui à une situation validée l'an dernier — celle-là reste
+    //    sans bloc, et son impression le dit.
+    const devientValidee = suivante.statut === 'validee' && sit.statut !== 'validee'
+    if (devientValidee) {
+      const fige = figerDecompte(state, suivante, { maintenant: today, par: moi.nom ?? null })
+      fige.empreinte = await empreinteDecompte(fige)
+      suivante.decompteFige = fige
+    } else if (suivante.statut !== 'validee' && suivante.decompteFige) {
+      delete suivante.decompteFige
+    }
+
     if (creation) {
       const snap = state
-      const nouvelle: Situation = {
-        ...sit,
-        entreprise: entreprise.trim(),
-        lot: lot.trim() || undefined,
-        mois,
-        numero,
-        montantMoisHT: montantMois,
-        montantCumulHT: cumul,
-        revisionHT: revision,
-        confiance: confiance === null ? null : clamp(confiance, 0, 1),
-        marcheId: marcheId || null,
-        projetId: marche ? marche.projetId : projetId,
-        dateReception: dateReception || sit.dateReception,
-        statut,
-        source: source.trim() || undefined,
-        notes: notes.trim() || undefined,
-      }
       update((d) => {
-        d.situations.push(nouvelle)
+        d.situations.push(suivante)
       })
-      toast(`Situation saisie : ${nouvelle.entreprise} — ${fmtMois(nouvelle.mois)}.`, {
+      toast(`Situation saisie : ${suivante.entreprise} — ${fmtMois(suivante.mois)}.`, {
         undo: () => replace(snap),
       })
       onClose()
       return
     }
     update((d) => {
-      const x = d.situations.find((s) => s.id === sit.id)
-      if (!x) return
-      x.entreprise = entreprise.trim()
-      x.lot = lot.trim() || undefined
-      x.mois = mois
-      x.numero = numero
-      x.montantMoisHT = montantMois
-      x.montantCumulHT = cumul
-      x.revisionHT = revision
-      x.confiance = confiance === null ? null : clamp(confiance, 0, 1)
-      x.marcheId = marcheId || null
-      x.projetId = marche ? marche.projetId : projetId
-      if (dateReception) x.dateReception = dateReception
-      x.statut = statut
-      x.source = source.trim() || undefined
-      x.notes = notes.trim() || undefined
+      const i = d.situations.findIndex((s) => s.id === sit.id)
+      if (i >= 0) d.situations[i] = suivante
     })
     onClose()
   }
@@ -803,6 +819,10 @@ function ModalEdition({ sit, creation, onClose }: { sit: Situation; creation?: b
 function CarteAVerifier() {
   const { state, update, replace } = useStore()
   const today = useToday()
+  // B1 — qui valide : la personne reconnue, et `null` quand le poste ne sait
+  // pas qui est là. Le décompte figé porte alors « auteur non identifié »
+  // plutôt que le nom du premier de la liste (§identité)
+  const moi = useMoi()
   const [editionId, setEditionId] = useState<string | null>(null)
   const [rejetId, setRejetId] = useState<string | null>(null)
   const [motifRejet, setMotifRejet] = useState('')
@@ -836,15 +856,30 @@ function CarteAVerifier() {
       dateReception: today,
     })
 
-  const validerVraiment = (id: string) => {
+  /** B1 — la validation FIGE le décompte, dans la MÊME écriture que le
+   *  changement de statut. Deux conséquences voulues :
+   *   · le papier remis à l'entreprise se réimprimera à l'identique, même
+   *     après un avenant saisi la semaine suivante ;
+   *   · l'« Annuler » du toast (`replace(snap)`) retire le bloc EN MÊME TEMPS
+   *     que le statut — une situation redevenue « à vérifier » qui garderait
+   *     son décompte figé ne correspondrait plus à rien.
+   *  L'empreinte se calcule AVANT l'écriture, pour que le bloc parte complet
+   *  et qu'une seule annulation suffise. */
+  const validerVraiment = async (id: string) => {
+    const s = state.situations.find((x) => x.id === id)
+    if (!s) return
     const snap = state
+    const fige = figerDecompte(state, s, { maintenant: today, par: moi.nom ?? null })
+    fige.empreinte = await empreinteDecompte(fige)
     update((d) => {
-      const x = d.situations.find((s) => s.id === id)
-      if (x) x.statut = 'validee'
+      const x = d.situations.find((y) => y.id === id)
+      if (!x) return
+      x.statut = 'validee'
+      x.decompteFige = fige
     })
     setControleId(null)
     setSuiteId(id)
-    toast('Situation validée.', {
+    toast('Situation validée — décompte figé à cette date.', {
       undo: () => {
         setSuiteId(null)
         replace(snap)
@@ -862,7 +897,7 @@ function CarteAVerifier() {
       setControleId(id)
       return
     }
-    validerVraiment(id)
+    void validerVraiment(id)
   }
 
   const confirmerRejet = () => {
@@ -1025,7 +1060,7 @@ function CarteAVerifier() {
                                 // l'entreprise ; le certificat de paiement est un autre
                                 // document, contractuel, adressé au maître d'ouvrage
                                 title:
-                                  'Décompte de vérification (interne, remis à l’entreprise) — net à payer. Recalculé à chaque impression : l’impression le dit, seul le certificat de paiement est figé.',
+                                  'Décompte de vérification (interne, remis à l’entreprise) — net à payer. Tant que la situation n’est pas validée, il se recalcule à chaque impression et le dit ; c’est la validation qui le fige.',
                               },
                               { label: 'Éditer', onClick: () => setEditionId(s.id) },
                               { label: 'Rejeter…', onClick: () => { setRejetId(s.id); setMotifRejet('') }, danger: true },
@@ -1074,7 +1109,7 @@ function CarteAVerifier() {
             >
               Éditer la situation
             </Btn>
-            <Btn kind="primary" onClick={() => validerVraiment(enControle.id)}>
+            <Btn kind="primary" onClick={() => void validerVraiment(enControle.id)}>
               Valider quand même
             </Btn>
           </div>
@@ -1380,12 +1415,17 @@ function CarteHistorique({ entrepriseInitiale = '' }: { entrepriseInitiale?: str
                         <Btn
                           small
                           kind="ghost"
-                          // S6 — recalculé à chaque impression, et l'impression le DIT :
-                          // « reconstitué depuis l'état courant », édité au jour du clic
+                          // B1 — réimpression du décompte FIGÉ à la validation quand la
+                          // situation en porte un ; sinon reconstitution, et le papier
+                          // le dit lui-même (validations antérieures à B1)
                           onClick={() => ouvrirDecompteSituationPDF(state, s, today)}
-                          title="Décompte de vérification (interne, vers l'entreprise) — reconstitué depuis l'état courant à chaque impression, contrairement au certificat qui est figé"
+                          title={
+                            s.decompteFige
+                              ? `Décompte figé le ${fmtDate(s.decompteFige.figeLe)}${s.decompteFige.validePar ? ` par ${s.decompteFige.validePar}` : ''} — réimpression à l'identique (${fmtMoney(s.decompteFige.lignes.netAPayerHT)} HT net)`
+                              : "Décompte de vérification (interne, vers l'entreprise) — aucun décompte n'a été figé à la validation : ce papier est reconstitué depuis l'état courant, et il le dit"
+                          }
                         >
-                          Décompte
+                          Décompte{s.decompteFige ? ' ✓' : ''}
                         </Btn>
                         {(() => {
                           // 5.19 — certificat de paiement vers le MO : émis = FIGÉ,

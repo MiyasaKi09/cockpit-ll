@@ -111,6 +111,9 @@ jobs:
       - name: Defects liability year registry with one authoritative end date
         run: npm run test:gpa
 
+      - name: Site meeting agenda carried over, ranked and never hidden
+        run: npm run test:releve-seance
+
       - name: Co-contractor fee notes chased per overdue month
         run: npm run test:cotraitants
 

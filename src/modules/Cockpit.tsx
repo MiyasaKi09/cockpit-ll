@@ -21,15 +21,18 @@ import { useMemo, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import type { Alerte, Courrier } from '../types'
 import { useStore } from '../store'
-import { Btn, Card, DateF, EmptyState, Icon, LienGmail, Modal, Money, Page, ResumeMessage, RowMenu, Stat, Table, confirmer, navigate, toast, useToday } from '../ui'
-import type { ContexteAlertes, MessageNotifiable } from '../alerts'
-import { alertesActives } from '../alerts'
+import { Btn, Card, DateF, DateInput, EmptyState, Icon, LienGmail, Modal, Money, Page, ResumeMessage, RowMenu, Select, Stat, Table, confirmer, navigate, toast, useToday } from '../ui'
+import type { ContexteAlertes, MessageNotifiable, RelanceProposee } from '../alerts'
+import { alertesActives, relanceDeLAlerte } from '../alerts'
 import { dateDe, fusionnerBoite, urgenceDe } from '../boite'
 import { LIBELLES_STATUT_TACHE, creerTache, estOuverte, estPrioriteTache, graviteDePriorite } from '../taches'
 import type { Communication, FiltreCommunications } from '../communications'
-import { mailsATraiterPourLaBoite, marquerTraite, useCommunications } from '../communications'
+import { corrigerRattachement, mailsATraiterPourLaBoite, marquerTraite, useCommunications } from '../communications'
+import { LIBELLES_IMPORTANCE, estImportance } from '../categorisation'
+import { projetsCorrigibles } from '../rattachement'
 import { lienGmail } from '../util'
 import {
+  LIBELLES_PHASES,
   caCible,
   caRealiseAnnee,
   meteoFinanciere,
@@ -46,7 +49,7 @@ import type { ActionFinance } from '../financeActions'
 import { actionsATraiter } from '../financeActions'
 import { useNbEntrantsDistants } from '../entrants'
 import { useMoi } from '../moi'
-import { addDays, fmtDate, fmtHeures, fmtMoney, fmtPct, mondayOf, ouvrirGmail } from '../util'
+import { addDays, diffDays, fmtDate, fmtHeures, fmtMoney, fmtPct, mondayOf, ouvrirGmail } from '../util'
 import { useSurveillanceCtx } from '../surveillance'
 
 // ---------- petits composants locaux ----------
@@ -60,8 +63,32 @@ const STYLE_GROUPE: CSSProperties = {
   margin: '12px 2px 6px',
 }
 
-// types d'alertes déjà présents comme tâches « à faire » : pas de doublon
-const TYPES_DANS_INBOX = new Set<Alerte['type']>(['situation_a_verifier', 'facture_a_emettre', 'cr_en_attente'])
+// types d'alertes déjà présents comme tâches « à faire » : pas de doublon.
+//
+// `mail_a_traiter` les rejoint : le message qualifié urgent, bloquant ou
+// contractuel est DÉJÀ dans la boîte juste au-dessus, en tête puisqu'elle
+// est triée sur cette même urgence. L'alerte le répétait une ligne plus
+// bas, avec un lien qui menait ailleurs et deux gestes de moins.
+// L'information portée par l'alerte — le niveau qualifié — ne se perd pas :
+// elle passe en badge sur la ligne de la boîte (voir `LigneCourrier`).
+const TYPES_DANS_INBOX = new Set<Alerte['type']>([
+  'situation_a_verifier',
+  'facture_a_emettre',
+  'cr_en_attente',
+  'mail_a_traiter',
+])
+
+/** dépôt d'un dossier de consultation : au-delà, ce n'est pas encore le
+ *  sujet du jour ; en deçà de −7, la remise est passée depuis assez
+ *  longtemps pour que le statut ait dû bouger */
+const HORIZON_DEPOT_JOURS = 10
+
+/** un concours en PRODUCTION : la candidature se monte, ou le projet se
+ *  dessine. Après le rendu, plus rien ne se dépose. */
+const CONCOURS_EN_PRODUCTION = new Set(['candidature', 'selectionne'])
+
+/** statuts où plus aucun dépôt n'est attendu */
+const CONSULTATION_CLOSE = new Set(['no_go', 'deposee', 'gagnee', 'perdue'])
 
 /** colonne des « Repères du jour » */
 function Repere({ titre, children }: { titre: string; children: ReactNode }) {
@@ -83,6 +110,16 @@ function Ligne({ children }: { children: ReactNode }) {
 
 function RienASignaler({ children }: { children: ReactNode }) {
   return <div className="muted small">{children}</div>
+}
+
+/** une tuile de météo financière rendue cliquable vers son détail — le
+ *  `Stat` reste inchangé, c'est son enveloppe qui porte le lien */
+function TuileLien({ href, titre, children }: { href: string; titre: string; children: ReactNode }) {
+  return (
+    <a href={href} title={titre} style={{ color: 'inherit', textDecoration: 'none', display: 'block' }}>
+      {children}
+    </a>
+  )
 }
 
 // ---------- centre d'actions : le modèle unifié ----------
@@ -151,6 +188,37 @@ function itemsAFaire(
       dateLimite: c.dateLimite || undefined,
       pour: c.pour,
       marqueur: 'square',
+    })
+  }
+  // R5 — le dépôt raté est le risque le plus coûteux du développement
+  // commercial, et il n'avait aucun rappel central : la remise se lisait
+  // sur la carte Kanban, à condition d'aller voir. L'item ne concerne que
+  // les dossiers ENGAGÉS (« go », ou concours en production) : rappeler
+  // une remise sur un avis qu'on n'a pas encore étudié ferait deux lignes
+  // pour la même consultation, dont une prématurée.
+  for (const c of state.consultations) {
+    if (CONSULTATION_CLOSE.has(c.statut)) continue
+    const engage =
+      c.statut === 'go' ||
+      (c.typeAvis === 'concours' && CONCOURS_EN_PRODUCTION.has(c.concours?.etape || ''))
+    if (!engage || !c.dateLimite) continue
+    const dj = diffDays(today, c.dateLimite)
+    if (dj > HORIZON_DEPOT_JOURS || dj < -7) continue
+    const quoi = c.typeAvis === 'concours' && c.concours?.etape === 'candidature' ? 'la candidature' : 'le dossier'
+    items.push({
+      id: `depot-${c.id}`,
+      // une remise se rate une fois : à une semaine elle est déjà rouge,
+      // et une limite dépassée reste rouge tant que le statut ne bouge pas
+      gravite: dj <= 7 ? 3 : 2,
+      titre:
+        dj < 0
+          ? `Déposer ${quoi} — remise dépassée de ${-dj} j — ${c.intitule}`
+          : `Déposer ${quoi} — J−${dj} — ${c.intitule}`,
+      detail: `${c.acheteur || 'acheteur ?'} · remise le ${fmtDate(c.dateLimite)}${c.typeAvis === 'concours' ? ' · concours' : ''} · dossier et pièces dans Développement`,
+      lien: '#/ao/dossiers',
+      dateLimite: c.dateLimite,
+      pour: c.pour,
+      marqueur: dj <= 7 ? 'triangle' : 'square',
     })
   }
   // Factures à émettre : titre, détail, lien, date et gravité viennent tels
@@ -243,22 +311,45 @@ function executerRapide(update: ReturnType<typeof useStore>['update'], a: Action
   })
 }
 
-/** menu « Reporter… » d'une alerte : 7 j, 30 j ou une date choisie */
+/** menu « Reporter… » d'une alerte : 7 j, 30 j ou une date choisie.
+ *
+ *  La date se CHOISIT, dans un champ daté du navigateur. Elle se tapait
+ *  auparavant dans un `window.prompt` au format AAAA-MM-JJ — un format de
+ *  machine, refusé sans explication à la moindre faute de frappe, et rien
+ *  ne rappelait ce qu'était « aujourd'hui ». */
 function MenuReporter({ onReporter }: { onReporter: (jours: number | string) => void }) {
+  const [choixDate, setChoixDate] = useState<string | null>(null)
+  const [ouvert, setOuvert] = useState(false)
+
+  if (ouvert)
+    return (
+      <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+        <DateInput value={choixDate} onChange={setChoixDate} style={{ width: 150 }} />
+        <Btn
+          small
+          kind="primary"
+          disabled={!choixDate}
+          onClick={() => {
+            if (!choixDate) return
+            setOuvert(false)
+            onReporter(choixDate)
+          }}
+        >
+          Reporter
+        </Btn>
+        <Btn small kind="ghost" onClick={() => setOuvert(false)}>
+          Annuler
+        </Btn>
+      </span>
+    )
+
   return (
     <RowMenu
       label="Reporter"
       items={[
         { label: '7 jours', onClick: () => onReporter(7) },
         { label: '30 jours', onClick: () => onReporter(30) },
-        {
-          label: 'Choisir la date…',
-          onClick: () => {
-            const d = window.prompt('Réveiller cette alerte le (AAAA-MM-JJ) :')
-            if (d && /^\d{4}-\d{2}-\d{2}$/.test(d)) onReporter(d)
-            else if (d) toast('Date attendue au format AAAA-MM-JJ.', { tone: 'warn' })
-          },
-        },
+        { label: 'Choisir la date…', onClick: () => setOuvert(true) },
       ]}
     />
   )
@@ -315,6 +406,19 @@ interface LigneATraiter {
   repondre: (() => void) | null
   /** B.3 — « Créer une tâche depuis ce message », en conservant sa source */
   creerTacheDepuis: () => void
+  /** S1 — rattacher le message à un projet SANS quitter l'accueil. La
+   *  cascade refuse de deviner (A.4) et son refus s'affiche ici en
+   *  « projet ? » : il faut donc que le geste soit ici aussi. */
+  rattacher: (projetId: string) => void
+}
+
+/** la boîte du jour, et de quoi en voir la suite */
+interface Boite {
+  lignes: LigneATraiter[]
+  /** d'autres messages non traités attendent derrière la page courante */
+  suite: boolean
+  chargerSuite: () => void
+  chargement: boolean
 }
 
 /**
@@ -331,10 +435,10 @@ interface LigneATraiter {
  * que la table est hors de portée (hors ligne, cache froid), et le mail
  * réapparaît traité une fois, à traiter une autre.
  */
-function useBoiteATraiter(personne: string): LigneATraiter[] {
+function useBoiteATraiter(personne: string): Boite {
   const { state, update, replace } = useStore()
   const moi = useMoi()
-  const { lignes } = useCommunications(FILTRE_BOITE)
+  const { lignes, suite, chargerSuite, chargement, recharger } = useCommunications(FILTRE_BOITE)
 
   const courriers = state.courriers
     .filter((c) => c.statut === 'a_traiter')
@@ -355,6 +459,15 @@ function useBoiteATraiter(personne: string): LigneATraiter[] {
       if (c) c.statut = 'traite'
     })
     toast('Courrier traité.', { undo: () => replace(snap) })
+  }
+
+  const rattacherCourrier = (id: string, projetId: string) => {
+    const snap = state
+    update((d) => {
+      const c = d.courriers.find((x) => x.id === id)
+      if (c) c.projetId = projetId
+    })
+    toast(`Message rattaché à ${projetId}.`, { undo: () => replace(snap) })
   }
 
   const versJournalCourrier = (id: string) => {
@@ -445,6 +558,7 @@ function useBoiteATraiter(personne: string): LigneATraiter[] {
     },
     versJournal: c.projetId ? () => versJournalCourrier(c.id) : null,
     traiter: () => traiterCourrier(c.id),
+    rattacher: (projetId: string) => rattacherCourrier(c.id, projetId),
     repondre: c.de ? () => ouvrirGmail(c.de, `Re: ${c.objet}`, corpsDeReponse(c.objet)) : null,
     creerTacheDepuis: () =>
       creerTacheDepuisMessage({
@@ -509,6 +623,40 @@ function useBoiteATraiter(personne: string): LigneATraiter[] {
     })
   }
 
+  /**
+   * S1 — le rattachement se corrige depuis l'accueil.
+   *
+   * L'écriture passe par `corrigerRattachement` (src/communications.ts),
+   * la MÊME que la file « À rattacher » de Documents : elle signe, date et
+   * commande la colonne générée du projet. Une écriture directe ici
+   * produirait un rattachement anonyme que le serveur reprendrait à la
+   * prochaine proposition.
+   *
+   * Pas de règle « adresse → projet » apprise depuis l'accueil : cette
+   * décision-là mérite sa case à cocher et sa liste consultable, elles
+   * vivent dans Documents. Un apprentissage implicite, en un clic, dans
+   * une file qu'on traite vite, serait une règle qu'on ne retrouve plus le
+   * jour où elle se trompe.
+   */
+  const rattacherMessage = async (c: Communication, projetId: string) => {
+    const defaire = async () => {
+      try {
+        await corrigerRattachement(c, null, moi.nom || '')
+        recharger()
+      } catch (e) {
+        toast(e instanceof Error ? e.message : String(e), { tone: 'warn' })
+      }
+    }
+    try {
+      await corrigerRattachement(c, projetId, moi.nom || '')
+    } catch (e) {
+      toast(e instanceof Error ? e.message : String(e), { tone: 'warn' })
+      return
+    }
+    recharger()
+    toast(`Message rattaché à ${projetId}.`, { undo: () => void defaire() })
+  }
+
   const deMessage = (c: Communication, jumeau: Courrier | null): LigneATraiter => ({
     cle: `message:${c.id}`,
     // l'échelle commune aux deux mémoires vit dans `src/boite.ts`, avec le
@@ -536,6 +684,7 @@ function useBoiteATraiter(personne: string): LigneATraiter[] {
     },
     versJournal: c.projetId ? () => void versJournalMessage(c, jumeau) : null,
     traiter: () => void traiterMessage(c, jumeau),
+    rattacher: (projetId: string) => void rattacherMessage(c, projetId),
     creerTacheDepuis: () =>
       creerTacheDepuisMessage({
         titre: c.objet || '(sans objet)',
@@ -550,18 +699,102 @@ function useBoiteATraiter(personne: string): LigneATraiter[] {
   // ----- la fusion -----
 
   const adressesAgence = state.settings.equipe.map((p) => p.email || '').filter(Boolean)
-  const miennes = state.settings.equipe
-    .filter((p) => p.nom === (personne || moi.nom))
-    .map((p) => p.email || '')
-    .filter(Boolean)
+  // R5 — « Tout » doit montrer TOUT. Le filtre retombait sur `moi.nom` dès
+  // qu'aucune personne n'était choisie : « Tout » masquait alors les
+  // messages nommément adressés à l'autre associée. À deux, la semaine où
+  // l'une couvre l'autre, c'est exactement la moitié du courrier qui
+  // disparaît sans un mot. Une liste d'adresses VIDE fait rendre la file
+  // entière par `mailsATraiterPourLaBoite` — c'est son contrat.
+  const miennes = personne
+    ? state.settings.equipe
+        .filter((p) => p.nom === personne)
+        .map((p) => p.email || '')
+        .filter(Boolean)
+    : []
 
   // `lignes` vaut `null` tant qu'on ne sait pas : ni réseau ni cache. On
   // n'en conclut PAS que la boîte relationnelle est vide — on n'affiche
   // que l'ancienne, et la file du jour reste celle d'hier.
   const messages = lignes ? mailsATraiterPourLaBoite(lignes, miennes, adressesAgence) : []
 
-  return fusionnerBoite(courriers, messages).map((e) =>
-    e.genre === 'message' ? deMessage(e.message, e.jumeau) : deCourrier(e.courrier),
+  return {
+    lignes: fusionnerBoite(courriers, messages).map((e) =>
+      e.genre === 'message' ? deMessage(e.message, e.jumeau) : deCourrier(e.courrier),
+    ),
+    // S2 — une file tronquée ressemble à une file finie. La couche d'accès
+    // pagine ; tant qu'il reste une page, l'écran le DIT et propose de la
+    // charger, au lieu d'afficher cinquante messages comme s'ils étaient
+    // les seuls.
+    suite,
+    chargerSuite,
+    chargement,
+  }
+}
+
+/**
+ * S1 — le badge « projet ? » DEVIENT le geste.
+ *
+ * Il signalait le problème et laissait aller le régler dans Documents :
+ * on voyait à l'accueil ce qu'on devait corriger ailleurs. Le sélecteur
+ * s'ouvre sur place, la liste des projets est celle de la cascade
+ * (`projetsCorrigibles`, src/rattachement.ts — terminés en dernier), et
+ * l'écriture est celle de Documents.
+ *
+ * Le composant `ChoixRattachement` de Documents.tsx n'est pas exporté :
+ * ce qu'il fallait partager — la liste des projets et l'écriture signée —
+ * l'est, et c'est là que vit le risque de divergence, pas dans le `Select`.
+ */
+function BadgeProjet({ ligne }: { ligne: LigneATraiter }) {
+  const { state } = useStore()
+  const [ouvert, setOuvert] = useState(false)
+  const [choix, setChoix] = useState('')
+
+  if (ligne.projetId)
+    return (
+      <a href={`#/projets/${ligne.projetId}`} className="badge badge-muted">
+        {ligne.projetId}
+      </a>
+    )
+
+  if (!ouvert)
+    return (
+      <button
+        className="badge badge-warn"
+        style={{ cursor: 'pointer' }}
+        onClick={() => setOuvert(true)}
+        title="Choisir le projet sans quitter l'accueil"
+      >
+        projet ? — rattacher
+      </button>
+    )
+
+  return (
+    <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+      <Select
+        value={choix}
+        onChange={setChoix}
+        style={{ maxWidth: 280 }}
+        options={[
+          { value: '', label: '— choisir un projet —' },
+          ...projetsCorrigibles(state).map((p) => ({ value: p.id, label: `${p.id} — ${p.nom}` })),
+        ]}
+      />
+      <Btn
+        small
+        kind="primary"
+        disabled={!choix}
+        onClick={() => {
+          if (!choix) return
+          setOuvert(false)
+          ligne.rattacher(choix)
+        }}
+      >
+        Rattacher
+      </Btn>
+      <Btn small kind="ghost" onClick={() => setOuvert(false)}>
+        Annuler
+      </Btn>
+    </span>
   )
 }
 
@@ -576,14 +809,19 @@ function LigneCourrier({ lignes }: { lignes: LigneATraiter[] }) {
           <div style={{ minWidth: 0 }}>
             <div className="alert-titre">
               <Icon name="mail" size={13} style={{ verticalAlign: '-0.15em' }} /> {c.objet}{' '}
-              {c.pour && <span className="badge badge-info">{c.pour}</span>}{' '}
-              {c.projetId ? (
-                <a href={`#/projets/${c.projetId}`} className="badge badge-muted">
-                  {c.projetId}
-                </a>
-              ) : (
-                <span className="badge badge-warn">projet ?</span>
+              {/* T6 — le niveau qualifié (urgent / bloquant / contractuel)
+                  s'affiche ICI, sur la ligne du message, au lieu d'être
+                  redit une ligne plus bas par une alerte jumelle dont le
+                  lien ne menait nulle part. La file est déjà triée dessus. */}
+              {estImportance(c.notifiable.importance) && (
+                <>
+                  <span className={`badge ${c.urgence === 3 ? 'badge-danger' : 'badge-warn'}`}>
+                    {LIBELLES_IMPORTANCE[c.notifiable.importance]}
+                  </span>{' '}
+                </>
               )}
+              {c.pour && <span className="badge badge-info">{c.pour}</span>}{' '}
+              <BadgeProjet ligne={c} />
             </div>
             <div className="alert-detail">
               de {c.de} · {c.resume}
@@ -731,6 +969,53 @@ function CentreActions({ personne }: { personne: string }) {
     toast(libelle, { undo: () => replace(snap) })
   }
 
+  /**
+   * S1 — « Relancer » sur l'alerte elle-même.
+   *
+   * Deux alertes montraient un problème dont le geste tient en un e-mail
+   * — situation attendue non reçue, facture impayée — et renvoyaient à un
+   * écran où il fallait retrouver la ligne : 5 gestes là où l'alerte
+   * jumelle des notes d'honoraires en demande 2.
+   *
+   * Un BROUILLON s'ouvre, rien ne part : `ouvrirGmail` → `gmailComposeUrl`,
+   * le clic final est humain (§15). Le texte vient de `src/alerts.ts`, qui
+   * le tient de `src/entreprise.ts` pour les situations — le même que
+   * l'onglet « Attendues » et la fiche entreprise.
+   */
+  const relancer = (a: Alerte, r: RelanceProposee) => {
+    if (!r.email) return
+    ouvrirGmail(r.email, r.sujet, r.corps)
+    if (a.type !== 'facture_retard') {
+      toast(`Brouillon de relance ouvert — ${r.quoi}.`, { tone: 'ok' })
+      return
+    }
+    // La trace est posée au clic, exactement comme l'écran Ventes le fait
+    // aujourd'hui : sans elle, la colonne « Dernière relance » afficherait
+    // « jamais » sur une facture relancée le matin même.
+    const snap = state
+    update((d) => {
+      const f = d.factures.find((x) => x.id === r.refId)
+      if (!f) return
+      f.derniereRelance = today
+      f.niveauRelance = 0
+      f.relances = [...(f.relances || []), { date: today, niveau: 0 }]
+    })
+    toast(`Brouillon ouvert, relance tracée — ${r.quoi}.`, { undo: () => replace(snap) })
+  }
+
+  /** le geste de relance quand l'alerte en porte un ET qu'une adresse est
+   *  connue — un brouillon sans destinataire n'irait nulle part, et un
+   *  bouton qui ne mène nulle part use la confiance dans tous les autres */
+  const boutonRelance = (a: Alerte) => {
+    const r = relanceDeLAlerte(state, a, today)
+    if (!r?.email) return null
+    return (
+      <Btn small onClick={() => relancer(a, r)} title={`Ouvre un brouillon Gmail vers ${r.email}`}>
+        Relancer
+      </Btn>
+    )
+  }
+
   // Le contexte d'A.11. `computeAlertes` reste pur : on lui passe ce que la
   // boîte a déjà chargé, il ne va rien chercher. Les deux sources y entrent
   // — un `Courrier` qualifié « urgent » au palier v19 alerte autant qu'une
@@ -744,8 +1029,8 @@ function CentreActions({ personne }: { personne: string }) {
   // d'urgences qui se trompe cesse d'être lu ; mieux vaut un producteur
   // muet qu'un producteur menteur.
   const contexteAlertes = useMemo<ContexteAlertes>(
-    () => ({ moi: personne || moi.nom, aTraiter: boite.map((l) => l.notifiable) }),
-    [boite, personne, moi.nom],
+    () => ({ moi: personne || moi.nom, aTraiter: boite.lignes.map((l) => l.notifiable) }),
+    [boite.lignes, personne, moi.nom],
   )
 
   const alertes = alertesActives(state, today, contexteAlertes).filter((a) => !TYPES_DANS_INBOX.has(a.type))
@@ -758,7 +1043,7 @@ function CentreActions({ personne }: { personne: string }) {
   const masquables = filtres.filter((i) => i.dateLimite && i.dateLimite > horizon).length
   const visibles = toutAfficher ? filtres : filtres.filter((i) => !i.dateLimite || i.dateLimite <= horizon)
 
-  const nbCourriers = boite.length
+  const nbCourriers = boite.lignes.length
 
   function alerteVersItem(a: Alerte): ItemAFaire {
     return {
@@ -771,6 +1056,13 @@ function CentreActions({ personne }: { personne: string }) {
       marqueur: 'triangle',
       actionsSpecifiques: (
         <>
+          {/* T6 — une alerte rouge garde son atterrissage : les actions
+              rapides la remplaçaient, et la ligne la plus grave de la file
+              était la seule qu'on ne pouvait pas ouvrir. */}
+          <a className="btn btn-small btn-primary" href={a.lien}>
+            Ouvrir et vérifier
+          </a>
+          {boutonRelance(a)}
           {a.action && (
             <Btn small onClick={() => void executerAlerte(a)} title="Raccourci — confirmation demandée pour le financier">
               {a.action.label}
@@ -832,6 +1124,7 @@ function CentreActions({ personne }: { personne: string }) {
         </div>
       </div>
       <div className="alert-actions">
+        {boutonRelance(a)}
         {a.action && (
           <Btn small onClick={() => void executerAlerte(a)}>
             {a.action.label}
@@ -842,10 +1135,23 @@ function CentreActions({ personne }: { personne: string }) {
     </div>
   )
 
+  // Parcours 1 — la revue séquentielle couvre TOUTE la file du matin.
+  //
+  // Elle s'arrêtait aux items et sautait les courriers : le geste du lundi
+  // matin — dépouiller la boîte — était justement celui qui n'avait pas son
+  // mode « une décision à la fois ». Les messages passent en premier, dans
+  // l'ordre où la boîte les a triés (urgence, puis date) ; les items du
+  // reste de la file suivent, dans leur ordre à eux. Aucun des deux tris
+  // n'est refait ici.
+  const revueEntrees: { cle: string; rendu: ReactNode }[] = [
+    ...boite.lignes.map((l) => ({ cle: l.cle, rendu: <LigneCourrier lignes={[l]} /> })),
+    ...visibles.map((i) => ({ cle: i.id, rendu: rendreItem(i) })),
+  ]
+
   return (
     <Card titre="Centre d'actions">
       {/* ---------- synthèse du jour + revue séquentielle ---------- */}
-      {(visibles.length > 0 || nbCourriers > 0) && (
+      {revueEntrees.length > 0 && (
         <p className="small" style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', margin: '0 0 10px' }}>
           <strong>
             {visibles.length + nbCourriers} décision{visibles.length + nbCourriers > 1 ? 's' : ''} aujourd'hui
@@ -853,17 +1159,25 @@ function CentreActions({ personne }: { personne: string }) {
           <span className="muted">
             · environ {visibles.reduce((s, i) => s + (i.gravite === 3 ? 4 : 2), 0) + nbCourriers * 2} min
           </span>
-          {visibles.length > 0 && (
-            <Btn small kind="primary" onClick={() => setRevue(0)}>
-              Commencer — une décision à la fois
-            </Btn>
-          )}
+          <Btn small kind="primary" onClick={() => setRevue(0)}>
+            Commencer — une décision à la fois
+          </Btn>
         </p>
       )}
 
       {/* ---------- à faire ---------- */}
       <div style={{ ...STYLE_GROUPE, marginTop: 0 }}>À faire</div>
-      <LigneCourrier lignes={boite} />
+      <LigneCourrier lignes={boite.lignes} />
+      {/* S2 — une file tronquée ressemble à une file finie : tant qu'il
+          reste une page de messages non traités, l'écran le dit. */}
+      {boite.suite && (
+        <p className="small" style={{ margin: '6px 2px' }}>
+          <Btn small kind="ghost" onClick={boite.chargerSuite} disabled={boite.chargement}>
+            {boite.chargement ? 'Chargement…' : 'Charger la suite des messages non traités'}
+          </Btn>{' '}
+          <span className="muted">la boîte s'affiche par pages — d'autres messages attendent derrière</span>
+        </p>
+      )}
       {visibles.length === 0 && nbCourriers === 0 ? (
         <EmptyState>Rien à faire — le centre d'actions est calme.</EmptyState>
       ) : (
@@ -929,7 +1243,7 @@ function CentreActions({ personne }: { personne: string }) {
           quand un élément est traité, la liste se raccourcit : l'index
           courant pointe alors tout seul sur la décision suivante */}
       {revue !== null &&
-        (visibles.length === 0 ? (
+        (revueEntrees.length === 0 ? (
           <Modal titre="Revue terminée" onClose={() => setRevue(null)}>
             <p>Tout est passé en revue — le centre d'actions est vide. 👏</p>
             <div className="form-foot">
@@ -938,13 +1252,18 @@ function CentreActions({ personne }: { personne: string }) {
           </Modal>
         ) : (
           (() => {
-            const idx = Math.min(revue, visibles.length - 1)
+            const idx = Math.min(revue, revueEntrees.length - 1)
             return (
-              <Modal titre={`Décision ${idx + 1} / ${visibles.length}`} onClose={() => setRevue(null)}>
-                {rendreItem(visibles[idx])}
+              <Modal titre={`Décision ${idx + 1} / ${revueEntrees.length}`} onClose={() => setRevue(null)}>
+                {/* la clé remonte l'identité de la décision : passer à la
+                    suivante repart d'un état neuf (sélecteur de projet
+                    ouvert, date de report saisie) plutôt que d'hériter de
+                    celui de la précédente */}
+                <div key={revueEntrees[idx].cle}>{revueEntrees[idx].rendu}</div>
                 <p className="muted small" style={{ margin: '8px 0 0' }}>
-                  « Ouvrir et vérifier » ouvre la fiche dans cet onglet — la revue reprendra ici au retour.
-                  Les raccourcis retirent la décision de la file.
+                  Courriers d'abord, puis le reste de la file. « Ouvrir et vérifier » ouvre la fiche
+                  dans cet onglet — la revue reprendra ici au retour. Traiter, rattacher ou classer
+                  retire la décision de la file.
                 </p>
                 <div className="form-foot">
                   <Btn onClick={() => setRevue(Math.max(0, idx - 1))} disabled={idx === 0}>
@@ -953,14 +1272,14 @@ function CentreActions({ personne }: { personne: string }) {
                   <Btn
                     kind="primary"
                     onClick={() => {
-                      if (idx + 1 < visibles.length) setRevue(idx + 1)
+                      if (idx + 1 < revueEntrees.length) setRevue(idx + 1)
                       else {
                         setRevue(null)
                         toast('Revue terminée — toutes les décisions ont été vues.', { tone: 'ok' })
                       }
                     }}
                   >
-                    {idx + 1 < visibles.length ? 'Suivante ›' : 'Terminer'}
+                    {idx + 1 < revueEntrees.length ? 'Suivante ›' : 'Terminer'}
                   </Btn>
                 </div>
               </Modal>
@@ -1093,34 +1412,48 @@ export default function Cockpit() {
         </span>
       }
     >
-      {/* ---------- météo financière ---------- */}
+      {/* ---------- météo financière ----------
+          Chaque tuile mène à l'écran où son chiffre se DÉTAILLE et se
+          corrige : trois chiffres qu'on lisait le matin et qu'il fallait
+          ensuite retrouver de mémoire dans le menu. La tuile Trésorerie
+          non renseignée garde son propre lien (« renseigner → ») : deux
+          liens imbriqués n'en font aucun. */}
       <div style={{ marginBottom: 16 }}>
         <div className="grid3">
-          <Stat
-            accent="yellow"
-            label="Trésorerie"
-            value={
-              meteo.tresorerie === null ? (
-                <a href="#/parametres" style={{ fontSize: 15, color: 'inherit' }}>renseigner →</a>
-              ) : (
-                <Money v={meteo.tresorerie} />
-              )
-            }
-            sub={meteo.tresorerieMajLe ? `relevé du ${fmtDate(meteo.tresorerieMajLe)}` : 'solde disponible en banque'}
-            tone={meteo.tresorerie !== null && meteo.tresorerie < 0 ? 'danger' : undefined}
-          />
-          <Stat
-            accent="blue"
-            label="Facturable 90 j"
-            value={<Money v={meteo.facturable90j} />}
-            sub="HT restant à encaisser ou à facturer sous 90 jours"
-          />
-          <Stat
-            accent="red"
-            label="Carnet"
-            value={<Money v={meteo.carnetHT} />}
-            sub="honoraires signés restant au carnet"
-          />
+          {meteo.tresorerie === null ? (
+            <Stat
+              accent="yellow"
+              label="Trésorerie"
+              value={<a href="#/parametres" style={{ fontSize: 15, color: 'inherit' }}>renseigner →</a>}
+              sub="solde disponible en banque"
+            />
+          ) : (
+            <TuileLien href="#/finance/banque" titre="Voir les relevés et le solde importé">
+              <Stat
+                accent="yellow"
+                label="Trésorerie"
+                value={<Money v={meteo.tresorerie} />}
+                sub={meteo.tresorerieMajLe ? `relevé du ${fmtDate(meteo.tresorerieMajLe)}` : 'solde disponible en banque'}
+                tone={meteo.tresorerie < 0 ? 'danger' : undefined}
+              />
+            </TuileLien>
+          )}
+          <TuileLien href="#/facturation" titre="Voir les échéances à émettre et les factures en attente">
+            <Stat
+              accent="blue"
+              label="Facturable 90 j"
+              value={<Money v={meteo.facturable90j} />}
+              sub="HT restant à encaisser ou à facturer sous 90 jours"
+            />
+          </TuileLien>
+          <TuileLien href="#/projets" titre="Voir les projets actifs et leurs honoraires restants">
+            <Stat
+              accent="red"
+              label="Carnet"
+              value={<Money v={meteo.carnetHT} />}
+              sub="honoraires signés restant au carnet"
+            />
+          </TuileLien>
         </div>
         {caCible(state) > 0 && (() => {
           const annee = Number(today.slice(0, 4))
@@ -1226,7 +1559,10 @@ export default function Cockpit() {
                 ) : (
                   phases.map(({ projet, phase }) => (
                     <Ligne key={`${projet.id}-${phase.code}`}>
-                      <a href={`#/projets/${projet.id}`}>
+                      {/* le code de phase nu ne se lit qu'avec l'habitude :
+                          le libellé de `LIBELLES_PHASES` (src/miqcp.ts, via
+                          derive) le dit au survol, sans allonger la ligne */}
+                      <a href={`#/projets/${projet.id}`} title={LIBELLES_PHASES[phase.code] || phase.code}>
                         {projet.id} · {phase.code}
                       </a>{' '}
                       — {projet.nom}

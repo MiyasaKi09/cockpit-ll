@@ -6,7 +6,7 @@
 // ============================================================
 
 import { useState } from 'react'
-import type { PhaseCode, Projet } from '../types'
+import type { PhaseCode, PointageLocal, Projet } from '../types'
 import { useStore } from '../store'
 import { CATEGORIES_HORS_PROJET } from '../types'
 import {
@@ -26,8 +26,17 @@ import {
 import { addDays, fmtDate, fmtHeures, mondayOf, todayISO, uid } from '../util'
 import { LIBELLES_ETAT, TONS_ETAT, bilanSemaines, etatSemaine, projetsDeLaSemaine, totalSemaine } from '../temps'
 import { syncActif } from '../sync'
+import { useMoi } from '../moi'
 import { LIBELLES_PHASES, PHASES_ORDRE } from '../miqcp'
-import { STATUTS_ACTIFS, equipeDuProjet, heuresPrevues, heuresReelles } from '../derive'
+import {
+  STATUTS_ACTIFS,
+  capacitePersonneSemaine,
+  equipeDuProjet,
+  heuresAbsenceSemaine,
+  heuresPrevues,
+  heuresReelles,
+} from '../derive'
+import { heuresDepuisMinutes, lundiDe } from '../pointages'
 
 const NB_SEMAINES = 6
 
@@ -203,7 +212,12 @@ function TableauPersonne({
   const totalLigneHP = (cat: string): number =>
     semaines.reduce((s, sem) => s + (hpDe(sem, cat) ?? 0), 0)
 
-  const theorique = state.settings.heuresParJour * 5
+  // Capacité CONGÉS DÉDUITS, semaine par semaine (audit d'usage, action 28).
+  // Une semaine à deux jours de congé n'a jamais 35 h à remplir : comparer à
+  // un forfait fixe fait crier la colonne pour rien, et un indicateur qui
+  // crie pour rien finit ignoré. La capacité a un propriétaire —
+  // `capacitePersonneSemaine` — et les trois vues du temps le lisent.
+  const capaciteDe = (semaine: string) => capacitePersonneSemaine(state, personne, semaine)
   const projetCourant = actifs.find((p) => p.id === projetSel)
   const codesPhases = projetCourant
     ? [...projetCourant.phases.map((ph) => ph.code)].sort((a, b) => indexPhase(a) - indexPhase(b))
@@ -266,8 +280,11 @@ function TableauPersonne({
               return (
                 <tr key={`${c.projetId}|${c.phase}`}>
                   <td className="col-figee">
-                    <a href={`#/projets/${c.projetId}`}>{c.projetId}</a> · {c.phase}
-                    <div className="muted small" title={LIBELLES_PHASES[c.phase]}>
+                    <a href={`#/projets/${c.projetId}`}>{c.projetId}</a> ·{' '}
+                    {/* l'infobulle appartient au CODE, pas au nom du projet :
+                        c'est le code qu'on ne sait pas lire */}
+                    <span title={LIBELLES_PHASES[c.phase]}>{c.phase}</span>
+                    <div className="muted small">
                       {p ? (p.nom.length > 30 ? p.nom.slice(0, 30) + '…' : p.nom) : 'projet inconnu'}
                     </div>
                   </td>
@@ -335,10 +352,21 @@ function TableauPersonne({
               <td className="col-figee">Total semaine</td>
               {semaines.map((s) => {
                 const t = totalColonne(s)
-                const ecart = Math.abs(t - theorique)
-                const couleur = t === 0 ? 'var(--ink-3)' : ecart < 0.5 ? 'var(--ok)' : 'var(--warn)'
+                const cap = capaciteDe(s)
+                const absence = heuresAbsenceSemaine(state, personne, s)
+                // Le verdict vient de `etatSemaine`, comme le badge de « Ma
+                // semaine » : une seconde règle de couleur avait déjà produit
+                // une pastille verte portant le mot « incomplet ».
+                const etat = etatSemaine(t, cap)
+                const couleur =
+                  etat === 'vide' ? 'var(--ink-3)' : etat === 'complete' ? 'var(--ok)' : 'var(--warn)'
                 return (
-                  <td key={s} className="right num" style={{ color: couleur }} title={`théorique ${fmtHeures(theorique)}`}>
+                  <td
+                    key={s}
+                    className="right num"
+                    style={{ color: couleur }}
+                    title={`capacité ${fmtHeures(cap)}${absence > 0 ? ` — ${fmtHeures(absence)} de congés déduites` : ''}`}
+                  >
                     {t > 0 ? fmtHeures(t) : '·'}
                   </td>
                 )
@@ -466,11 +494,22 @@ export function RecapDerives() {
  *  6 semaines vit dans l'onglet Historique. */
 function SaisieSemaine({ today }: { today: string }) {
   const { state, update, replace } = useStore()
+  const moi = useMoi()
   const personnes = state.settings.personnes
-  const [personne, setPersonne] = useState(personnes[0] || '')
+  // « Ma semaine » s'ouvre sur MA semaine (audit d'usage, action 27).
+  // `personnes[0]` affichait la feuille de l'autre associée une fois sur
+  // deux : on lisait ses heures en croyant lire les siennes, et on les
+  // corrigeait. Le choix explicite l'emporte dès qu'il est fait ; sans
+  // identité reconnue, on retombe sur la première personne — les deux
+  // boutons segmentés disent laquelle, l'écran n'affirme rien en silence.
+  const [choixPersonne, setChoixPersonne] = useState('')
+  const personne =
+    choixPersonne || (moi.nom && personnes.includes(moi.nom) ? moi.nom : personnes[0] || '')
+  const setPersonne = setChoixPersonne
   const [semaine, setSemaine] = useState(() => mondayOf(today))
   const [ajoutes, setAjoutes] = useState<Couple[]>([])
   const [activitesVisibles, setActivitesVisibles] = useState<string[]>([])
+  const [chronosDeplies, setChronosDeplies] = useState(false)
   const semaineCourante = mondayOf(today)
 
   const actifs = state.projets.filter((p) => STATUTS_ACTIFS.includes(p.statut))
@@ -580,9 +619,62 @@ function SaisieSemaine({ today }: { today: string }) {
   }
 
   const total = totalSemaine(state, personne, semaine)
-  const theorique = state.settings.heuresParJour * 5
-  const etat = etatSemaine(total, theorique)
+  // Congés DÉDUITS (audit d'usage, action 28) : comparé à 35 h fixes, une
+  // semaine avec deux jours de congé restait « incomplet » à jamais, quoi
+  // qu'on saisisse. Le badge est l'indicateur principal de cet écran ; un
+  // indicateur qui ment à chaque congé cesse d'être regardé, et avec lui la
+  // feuille de temps. `capacitePersonneSemaine` fait autorité.
+  const capacite = capacitePersonneSemaine(state, personne, semaine)
+  const absence = heuresAbsenceSemaine(state, personne, semaine)
+  const etat = etatSemaine(total, capacite)
   const projetsHorsListe = actifs.filter((p) => !couples.some((c) => c.projetId === p.id))
+
+  // --- garde-fou du chrono (audit d'usage, action 26) ---------------------
+  //
+  // `state.pointages` est écrite-seulement : `projeterVersTemps` n'a aucun
+  // appelant, donc le temps chronométré n'entre NI dans le total ci-dessus,
+  // NI dans la marge. Tant que la projection n'est pas branchée (B.4/B.5/B.9
+  // au plan), l'écran le dit et donne les trois gestes qui restent humains :
+  // voir, corriger, supprimer. Le report dans la grille reste une décision —
+  // la machine propose, elle n'écrit pas un temps à la place de quelqu'un.
+  //
+  // Un chrono EN COURS n'est pas compté : ce n'est pas du temps passé, c'est
+  // du temps en train de passer — la même règle que `projeterVersTemps`.
+  const chronosSemaine = (state.pointages || []).filter(
+    (p) => p.personne === personne && p.fin && lundiDe(p.debut) === semaine,
+  )
+  // On additionne des entiers et on ne divise qu'à la fin : c'est la règle de
+  // `pointages.ts`, et `heuresDepuisMinutes` est le seul endroit qui divise.
+  const heuresChrono = heuresDepuisMinutes(
+    chronosSemaine.reduce((s, p) => s + (p.minutes || 0), 0),
+  )
+
+  const corrigerDuree = (id: string, heures: number | null) =>
+    update((d) => {
+      const cible = (d.pointages || []).find((p) => p.id === id)
+      if (!cible || heures === null || heures <= 0) return
+      cible.minutes = Math.max(1, Math.round(heures * 60))
+      cible.majLe = new Date().toISOString()
+    })
+
+  const supprimerPointage = (p: PointageLocal) => {
+    const snap = state
+    update((d) => {
+      d.pointages = (d.pointages || []).filter((x) => x.id !== p.id)
+    })
+    toast(`Chrono supprimé (${fmtHeures(heuresDepuisMinutes(p.minutes || 0))}).`, {
+      tone: 'warn',
+      undo: () => replace(snap),
+    })
+  }
+
+  /** ce que le chrono visait — projet · phase, tâche, ou le libellé saisi */
+  const cibleDuPointage = (p: PointageLocal): string => {
+    if (p.projetId) return `${p.projetId}${p.phase ? ` · ${p.phase}` : ' · phase ?'}`
+    const tache = p.tacheId ? state.taches.find((t) => t.id === p.tacheId) : null
+    if (tache) return tache.titre
+    return 'sans projet'
+  }
 
   const ligneStyle: React.CSSProperties = {
     display: 'flex',
@@ -616,17 +708,101 @@ function SaisieSemaine({ today }: { today: string }) {
 
       <p className="small" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', margin: '4px 0 8px' }}>
         <strong>{fmtHeures(total)} saisies</strong>
-        <span className="muted">sur {fmtHeures(theorique)} théoriques</span>
-        <Badge tone={TONS_ETAT[etat]}>{LIBELLES_ETAT[etat]}</Badge>
+        {capacite > 0 ? (
+          <>
+            <span
+              className="muted"
+              title={
+                absence > 0
+                  ? `${fmtHeures(absence)} de congés déduites de la capacité de la semaine`
+                  : `${fmtHeures(state.settings.heuresParJour)} par jour, 5 jours`
+              }
+            >
+              sur {fmtHeures(capacite)} {absence > 0 ? '(congés déduits)' : 'théoriques'}
+            </span>
+            <Badge tone={TONS_ETAT[etat]}>{LIBELLES_ETAT[etat]}</Badge>
+          </>
+        ) : (
+          // Semaine entièrement absente : aucune heure n'est attendue, donc
+          // aucun verdict n'a de sens. Le badge se tait plutôt que de réclamer.
+          <Badge tone="muted">semaine d’absence — rien n’est attendu</Badge>
+        )}
         <IndicateurEnregistrement />
         <span className="spacer" />
         <Btn small onClick={copierSemainePrecedente}>Copier la semaine précédente</Btn>
       </p>
 
+      {heuresChrono > 0 && (
+        <div
+          style={{
+            border: '1px solid var(--line)',
+            borderRadius: 6,
+            padding: '8px 10px',
+            marginBottom: 10,
+          }}
+        >
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <Badge tone="warn">chrono</Badge>
+            <strong className="small">Temps chronométré non reporté : {fmtHeures(heuresChrono)}</strong>
+            <span className="spacer" />
+            <Btn small kind="ghost" onClick={() => setChronosDeplies(!chronosDeplies)}>
+              {chronosDeplies ? 'Replier' : `Voir le détail (${chronosSemaine.length})`}
+            </Btn>
+          </div>
+          <div className="muted small" style={{ marginTop: 4 }}>
+            Enregistré par le chrono, mais pas encore compté : ni dans le total ci-dessus, ni dans la
+            marge des projets. À reporter à la main dans les lignes ci-dessous — le report
+            automatique arrive avec le branchement de la projection.
+          </div>
+          {chronosDeplies && (
+            <div style={{ marginTop: 8 }}>
+              <Table compact head={['Jour', 'Sur quoi', 'Durée', '']}>
+                {chronosSemaine.map((p) => (
+                  <tr key={p.id}>
+                    <td className="small">
+                      {fmtDate(p.debut.slice(0, 10))}{' '}
+                      <span className="muted">
+                        {new Date(p.debut).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                    </td>
+                    <td className="small">
+                      {cibleDuPointage(p)}
+                      {p.commentaire && <div className="muted small">{p.commentaire}</div>}
+                    </td>
+                    <td className="right">
+                      <NumInput
+                        value={heuresDepuisMinutes(p.minutes || 0)}
+                        onChange={(v) => corrigerDuree(p.id, v)}
+                        style={{ width: 70 }}
+                        ariaLabel={`Durée du chrono du ${fmtDate(p.debut.slice(0, 10))} sur ${cibleDuPointage(p)}`}
+                      />
+                    </td>
+                    <td className="right">
+                      <Btn
+                        small
+                        kind="ghost"
+                        title="Supprimer ce chrono (un chrono oublié, une fausse manœuvre)"
+                        onClick={() => supprimerPointage(p)}
+                      >
+                        ✕
+                      </Btn>
+                    </td>
+                  </tr>
+                ))}
+              </Table>
+            </div>
+          )}
+        </div>
+      )}
+
       {couples.length === 0 ? (
         <EmptyState>
-          Aucun projet affecté à {personne || '—'} — l'affectation se fait sur la version bureau ou
-          dans la fiche projet.
+          Aucun projet affecté à {personne || '—'}. L’affectation vit à deux endroits : les puces
+          « Affecté·e à » en tête du tableau de l’onglet <strong>Historique</strong>, et l’équipe de
+          la <a href="#/projets">fiche projet</a>.
+          {projetsHorsListe.length > 0
+            ? ' Pour une semaine isolée, « + Ajouter un projet » ci-dessous suffit — sans rien affecter.'
+            : ' Aucun projet actif pour l’instant : seul un projet « Signé » ou « En cours » reçoit des heures.'}
         </EmptyState>
       ) : (
         couples.map((c) => {
@@ -634,8 +810,14 @@ function SaisieSemaine({ today }: { today: string }) {
           return (
             <div key={`${c.projetId}|${c.phase}`} style={ligneStyle}>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <a href={`#/projets/${c.projetId}`}>{c.projetId}</a> · {c.phase}
-                <div className="muted small">{p?.nom || 'projet inconnu'}</div>
+                {/* le code de phase nu ne dit rien à qui ne le pratique pas
+                    tous les jours : le libellé de `LIBELLES_PHASES` est en
+                    clair sous le nom du projet, et en infobulle sur le code */}
+                <a href={`#/projets/${c.projetId}`}>{c.projetId}</a> ·{' '}
+                <span title={LIBELLES_PHASES[c.phase]}>{c.phase}</span>
+                <div className="muted small">
+                  {p?.nom || 'projet inconnu'} · {LIBELLES_PHASES[c.phase] || c.phase}
+                </div>
               </div>
               <NumInput
                 value={heuresDe(c)}
@@ -739,8 +921,15 @@ function IndicateurEnregistrement() {
  */
 function FichePersonneMobile({ personne, semaines }: { personne: string; semaines: string[] }) {
   const { state } = useStore()
-  const theorique = state.settings.heuresParJour * 5
-  const bilans = bilanSemaines(state, personne, semaines, theorique)
+  // Une capacité par semaine, congés déduits — `bilanSemaines` n'en prend
+  // qu'une, on l'appelle donc semaine par semaine plutôt que de recopier son
+  // verdict. Un forfait unique aurait fait dire à cette fiche autre chose
+  // qu'à « Ma semaine » sur la MÊME semaine de congés, et deux verdicts
+  // contradictoires sur une feuille de temps, c'est la feuille qu'on cesse
+  // de croire (audit d'usage, action 28).
+  const bilans = semaines.map(
+    (s) => bilanSemaines(state, personne, [s], capacitePersonneSemaine(state, personne, s))[0],
+  )
   const total = bilans.reduce((s, b) => s + b.heures, 0)
 
   return (

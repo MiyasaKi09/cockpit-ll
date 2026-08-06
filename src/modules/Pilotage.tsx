@@ -7,7 +7,7 @@
 import { useMemo } from 'react'
 import { useStore } from '../store'
 import { Badge, Card, EmptyState, Page, Progress, Stat, Table, Tabs, navigate, useRoute, useToday } from '../ui'
-import { fmtMoney, fmtPct, todayISO } from '../util'
+import { fmtDate, fmtMoney, fmtPct } from '../util'
 import {
   analyserPeriode,
   caCible,
@@ -17,6 +17,9 @@ import {
   tempsParPersonne,
 } from '../derive'
 import { alertesActives } from '../alerts'
+// même lecture du solde que la prévision 13 semaines (src/tresorerie.ts) :
+// une seule autorité, sinon deux écrans annoncent deux trésoreries
+import { soldeBancaire } from '../banque'
 import { CarteComparaison, MissionsContenu } from './Analyse'
 import { RevueContenu } from './Revue'
 
@@ -68,7 +71,11 @@ function SyntheseContenu() {
         }
       : null
 
-  const treso = state.settings.tresorerieDispo
+  // le relevé importé fait foi quand il existe ; le solde saisi à la main ne
+  // sert que tant qu'aucun relevé n'est entré (T3 — l'outil sait, il fait
+  // retaper). Un solde absent reste « — », jamais 0 €.
+  const soldeReleve = soldeBancaire(state)
+  const treso = soldeReleve ? soldeReleve.solde : state.settings.tresorerieDispo
 
   return (
     <>
@@ -98,7 +105,17 @@ function SyntheseContenu() {
         <Stat
           label="Trésorerie disponible"
           value={treso != null ? fmtMoney(treso) : '—'}
-          sub={treso != null ? 'saisie dans Paramètres' : <a href="#/parametres">à renseigner dans Paramètres</a>}
+          sub={
+            soldeReleve ? (
+              <a href="#/finance/banque">relevé importé au {fmtDate(soldeReleve.date)}</a>
+            ) : treso != null ? (
+              <>
+                saisie dans Paramètres — <a href="#/finance/banque">importer un relevé</a>
+              </>
+            ) : (
+              <a href="#/parametres">à renseigner dans Paramètres</a>
+            )
+          }
         />
         <Stat
           label="Marge sur coûts directs (mois)"

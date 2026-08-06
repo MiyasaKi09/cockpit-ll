@@ -28,7 +28,9 @@ import {
   useRoute,
   useToday, RowMenu } from '../ui'
 import { DOMAINE_AGENCE, download, fmtDate, fmtMois, fmtMoney, fmtPct, fold, todayISO, uid } from '../util'
-import { cleSerie } from '../revisionPrix'
+import { cleSerie, valeursSerie } from '../revisionPrix'
+import { SERIE_BT01, etatBt01, seuilPlancherActualise } from '../miqcp'
+import { ecartSoldeManuel, soldeBancaire } from '../banque'
 import { rafraichirIndicesInsee } from '../majIndices'
 import { coefSuggere, coutAgenceAnnuel, coutAnnuelPersonne, coutHorairePersonne, coutHoraireMoyen, coutJourObjectif, objectifCA, tauxVente, tauxVenteObjectif } from '../derive'
 import { assurerJeton, connecterGoogle, deconnecter, estConnecte } from '../google'
@@ -427,7 +429,9 @@ function CarteIngestionServeur() {
   const { state } = useStore()
   const [statut, setStatut] = useState<StatutIngestion | null>(null)
   const [message, setMessage] = useState('')
-  const [clientId, setClientId] = useState('')
+  // le Client ID est le MÊME que celui de la surveillance, déjà saisi
+  // au-dessus : le retaper à l'identique était une ressaisie pure
+  const [clientId, setClientId] = useState(state.settings.surveillance?.clientId?.trim() || '')
   const [clientSecret, setClientSecret] = useState('')
   const [compteEmail, setCompteEmail] = useState('')
   const [occupe, setOccupe] = useState(false)
@@ -530,7 +534,14 @@ function CarteIngestionServeur() {
             <Field label="Compte Gmail à lire" hint="seul ce compte pourra se connecter">
               <TextInput value={compteEmail} onChange={setCompteEmail} placeholder="agence.ll@gmail.com" />
             </Field>
-            <Field label="Client ID Google (OAuth)" hint="le même que la surveillance ci-dessus">
+            <Field
+              label="Client ID Google (OAuth)"
+              hint={
+                state.settings.surveillance?.clientId?.trim()
+                  ? 'repris de la surveillance ci-dessus — modifiable'
+                  : 'le même que la surveillance ci-dessus'
+              }
+            >
               <TextInput value={clientId} onChange={setClientId} placeholder="1234…apps.googleusercontent.com" />
             </Field>
             <Field label="Secret client" hint="enregistré côté serveur, jamais relu ici">
@@ -784,6 +795,13 @@ function CarteSync() {
   )
 }
 
+/** valeur d'indice à la française (137,5) — jamais « 137.5 » */
+const fmtIndice = (v: number) => v.toLocaleString('fr-FR', { maximumFractionDigits: 3 })
+
+/** nombre de mois montrés par série tant qu'on n'a pas déplié : l'historique
+ *  complet (récupération INSEE) noierait les réglages annuels de l'onglet */
+const MOIS_MONTRES = 12
+
 /** 5.4 — référentiel des valeurs d'indices de révision BTP (BT01, BT02, TP08…).
  *  ICI et pas dans l'onglet Chantier d'un projet : une série INSEE est
  *  NATIONALE — la même valeur BT01 sert tous les marchés de tous les
@@ -797,12 +815,27 @@ function CarteIndicesBTP() {
   const [mois, setMois] = useState('')
   const [valeur, setValeur] = useState<number | null>(null)
   const [majEnCours, setMajEnCours] = useState(false)
+  const [filtreSerie, setFiltreSerie] = useState('')
+  const [voirTout, setVoirTout] = useState(false)
 
   // série puis mois DÉCROISSANT : la question du quotidien est « quel est le
   // dernier BT01 saisi ? », pas l'historique complet
-  const lignes = [...state.indicesBTP].sort(
+  const toutes = [...state.indicesBTP].sort(
     (a, b) => cleSerie(a.indice).localeCompare(cleSerie(b.indice)) || b.mois.localeCompare(a.mois),
   )
+  const seriesPresentes = [...new Set(toutes.map((i) => cleSerie(i.indice)).filter(Boolean))].sort()
+  const filtrees = filtreSerie ? toutes.filter((i) => cleSerie(i.indice) === filtreSerie) : toutes
+  // 12 derniers mois PAR SÉRIE (la liste est déjà triée par mois décroissant) :
+  // borner le tout à 12 lignes ferait disparaître les séries suivantes
+  const compte = new Map<string, number>()
+  const recentes = filtrees.filter((i) => {
+    const cle = cleSerie(i.indice)
+    const n = (compte.get(cle) || 0) + 1
+    compte.set(cle, n)
+    return n <= MOIS_MONTRES
+  })
+  const masquees = filtrees.length - recentes.length
+  const lignes = voirTout ? filtrees : recentes
 
   // les séries que les marchés révisables citent : la saisie part de la
   // demande réelle du carnet de marchés, pas d'une liste théorique
@@ -832,6 +865,8 @@ function CarteIndicesBTP() {
     })
     setMois('')
     setValeur(null)
+    // le filtre de série ne doit jamais faire croire que la saisie a échoué
+    if (filtreSerie && filtreSerie !== code) setFiltreSerie(code)
   }
 
   const retirer = (id: string) => {
@@ -886,23 +921,52 @@ function CarteIndicesBTP() {
         <NumInput value={valeur} onChange={setValeur} placeholder="valeur publiée" style={{ maxWidth: 140 }} ariaLabel="Valeur publiée de l'indice" />
         <Btn small kind="primary" onClick={ajouter}>Enregistrer la valeur</Btn>
       </div>
-      {lignes.length === 0 ? (
+      {toutes.length === 0 ? (
         <p className="small muted">
           Aucune valeur saisie — sans elles, aucune révision théorique ne peut se calculer.
         </p>
       ) : (
-        <Table compact head={['Série', 'Mois', <span key="v" className="right">Valeur</span>, '']}>
-          {lignes.map((i) => (
-            <tr key={i.id}>
-              <td><strong>{i.indice}</strong></td>
-              <td>{fmtMois(i.mois)}</td>
-              <td className="num right">{i.valeur}</td>
-              <td className="right">
-                <Btn small kind="ghost" onClick={() => retirer(i.id)}>Retirer</Btn>
-              </td>
-            </tr>
-          ))}
-        </Table>
+        <>
+          <div className="toolbar" style={{ marginBottom: 6 }}>
+            <Select
+              value={filtreSerie}
+              onChange={(v) => {
+                setFiltreSerie(v)
+                setVoirTout(false)
+              }}
+              options={[
+                { value: '', label: `Toutes les séries (${seriesPresentes.length})` },
+                ...seriesPresentes.map((s) => ({
+                  value: s,
+                  label: `${s} (${toutes.filter((i) => cleSerie(i.indice) === s).length} mois)`,
+                })),
+              ]}
+            />
+            <span className="spacer" />
+            <span className="muted small">
+              {voirTout
+                ? `${lignes.length} valeur(s) — historique complet`
+                : `${MOIS_MONTRES} derniers mois par série`}
+            </span>
+            {masquees > 0 && (
+              <Btn small kind="ghost" onClick={() => setVoirTout(!voirTout)}>
+                {voirTout ? 'Replier' : `Voir tout (${masquees} de plus)`}
+              </Btn>
+            )}
+          </div>
+          <Table compact head={['Série', 'Mois', <span key="v" className="right">Valeur</span>, '']}>
+            {lignes.map((i) => (
+              <tr key={i.id}>
+                <td><strong>{i.indice}</strong></td>
+                <td>{fmtMois(i.mois)}</td>
+                <td className="num right">{fmtIndice(i.valeur)}</td>
+                <td className="right">
+                  <Btn small kind="ghost" onClick={() => retirer(i.id)}>Retirer</Btn>
+                </td>
+              </tr>
+            ))}
+          </Table>
+        </>
       )}
     </Card>
   )
@@ -1052,22 +1116,79 @@ export default function Parametres({ ongletInitial = 'agence' }: { ongletInitial
         <>
       <div className="grid2">
         <Card titre="Trésorerie disponible (météo financière)">
-          <div className="form-row">
-            <Field label="Solde disponible (€)" hint="saisi À LA MAIN depuis le relevé bancaire — rien ne le met à jour automatiquement (rapprochement bancaire : lot F3)">
-              <NumInput
-                value={s.tresorerieDispo}
-                onChange={(v) => maj((d) => void (d.settings.tresorerieDispo = v))}
-              />
-            </Field>
-            <Field label="Mise à jour">
-              <div className="toolbar" style={{ marginBottom: 0 }}>
-                <span className="small muted">{s.tresorerieMajLe ? fmtDate(s.tresorerieMajLe) : 'jamais'}</span>
-                <Btn small onClick={() => maj((d) => void (d.settings.tresorerieMajLe = todayISO()))}>
-                  MAJ aujourd'hui
-                </Btn>
-              </div>
-            </Field>
-          </div>
+          {/* T3 — l'import de relevé connaît déjà ce solde : le retaper ici,
+              c'est se donner deux vérités. Quand un relevé existe, il fait foi
+              (Finance, Pilotage, prévision 13 semaines) et cette carte ne fait
+              plus que renvoyer vers Banque ; le champ manuel reste, replié,
+              pour la période où aucun relevé n'est encore entré. */}
+          {(() => {
+            // l'écart se calcule dans banque.ts (même chiffre que la carte
+            // Écart de Banque) — le recopier ici, c'est deux vérités
+            const releve = soldeBancaire(state)
+            const ecart = ecartSoldeManuel(state)
+            return (
+              <>
+                {releve ? (
+                  <>
+                    <dl className="kv" style={{ marginTop: 0 }}>
+                      <dt>Solde du dernier relevé</dt>
+                      <dd>
+                        <strong>{fmtMoney(releve.solde)}</strong>{' '}
+                        <span className="muted">au {fmtDate(releve.date)}</span>
+                      </dd>
+                    </dl>
+                    <p className="small muted" style={{ marginBottom: 6 }}>
+                      C'est ce solde-là que lisent <a href="#/finance">Finance « L'essentiel »</a>, la
+                      prévision 13 semaines et le <a href="#/pilotage">Pilotage</a> — rien à ressaisir
+                      ici. Il se met à jour à chaque{' '}
+                      <a href="#/finance/banque">import de relevé (Banque)</a>.
+                    </p>
+                    {ecart !== null && Math.abs(ecart) > 1 && (
+                      <p className="small warn-text" style={{ marginBottom: 6 }}>
+                        Le solde saisi à la main ci-dessous ({fmtMoney(s.tresorerieDispo)}) s'en écarte de{' '}
+                        {fmtMoney(ecart)}, et c'est encore lui qu'affiche la météo de l'accueil : le geste
+                        « Reprendre le solde importé » vit dans la carte Écart de{' '}
+                        <a href="#/finance/banque">Banque</a>.
+                      </p>
+                    )}
+                  </>
+                ) : (
+                  <p className="small" style={{ marginBottom: 6 }}>
+                    Aucun relevé importé.{' '}
+                    <a href="#/finance/banque">Importer un relevé (CSV, OFX, QIF) →</a> : son solde de
+                    fin alimente alors Finance, le Pilotage et la prévision 13 semaines, sans aucune
+                    ressaisie — c'est le même geste qui rapproche les paiements.
+                  </p>
+                )}
+                <details open={!releve}>
+                  <summary className="small" style={{ cursor: 'pointer', color: 'var(--accent)' }}>
+                    Solde saisi à la main {releve ? '(dépannage — le relevé fait foi)' : '(en attendant un relevé)'}
+                  </summary>
+                  <div className="form-row" style={{ marginTop: 8 }}>
+                    <Field
+                      label="Solde disponible (€)"
+                      hint="recopié du relevé bancaire — utilisé seulement tant qu'aucun relevé n'est importé"
+                    >
+                      <NumInput
+                        value={s.tresorerieDispo}
+                        onChange={(v) => maj((d) => void (d.settings.tresorerieDispo = v))}
+                      />
+                    </Field>
+                    <Field label="Mise à jour">
+                      <div className="toolbar" style={{ marginBottom: 0 }}>
+                        <span className="small muted">
+                          {s.tresorerieMajLe ? fmtDate(s.tresorerieMajLe) : 'jamais'}
+                        </span>
+                        <Btn small onClick={() => maj((d) => void (d.settings.tresorerieMajLe = todayISO()))}>
+                          MAJ aujourd'hui
+                        </Btn>
+                      </div>
+                    </Field>
+                  </div>
+                </details>
+              </>
+            )
+          })()}
         </Card>
 
         <Card titre="Excel maître (import mensuel)">
@@ -1248,8 +1369,8 @@ export default function Parametres({ ongletInitial = 'agence' }: { ongletInitial
         </div>
         <div className="form-row">
           <Field
-            label="Indice BT01 actuel"
-            hint="dernier connu : 137,5 (avril 2026, JO du 14/06/2026) — série Insee 001710986, ~2 mois de décalage. Réf. avril 1994 = 60,989."
+            label="Indice BT01 du barème"
+            hint="actualise le barème MIQCP (réf. avril 1994 = 60,989) — récupéré de l'INSEE, ce champ ne sert qu'à le figer"
           >
             <NumInput value={s.bt01Actuel} onChange={(v) => maj((d) => void (d.settings.bt01Actuel = v ?? 137.5))} />
           </Field>
@@ -1257,9 +1378,60 @@ export default function Parametres({ ongletInitial = 'agence' }: { ongletInitial
             <TextInput value={s.nomenclature} onChange={(v) => maj((d) => void (d.settings.nomenclature = v))} />
           </Field>
         </div>
+        {/* T3 — le BT01 arrive tout seul de l'INSEE (série 001710986, ~2 mois
+            de décalage) et se recopiait à la main ici. Le champ ci-dessus reste
+            l'override : la machine dit la valeur publiée et propose de la
+            reprendre, l'humain clique. */}
+        {(() => {
+          const publiees = valeursSerie(state.indicesBTP, SERIE_BT01)
+          const bt = etatBt01(s, publiees.length > 0 ? publiees[publiees.length - 1] : null)
+          if (!bt.publie)
+            return (
+              <p className="small muted" style={{ marginTop: -4 }}>
+                Aucune valeur BT01 récupérée pour l'instant : la valeur saisie fait foi. La
+                récupération INSEE se déclenche au démarrage — le bouton « Actualiser depuis
+                l'INSEE » de la carte des indices, ci-dessous, la force.
+              </p>
+            )
+          return (
+            <p
+              className="small"
+              style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: -4 }}
+            >
+              <span className="muted">
+                auto : <strong>{fmtIndice(bt.publie.valeur)}</strong> — {fmtMois(bt.publie.mois)} (dernière
+                valeur publiée, INSEE)
+              </span>
+              {bt.aJour ? (
+                <Badge tone="ok">le barème utilise cette valeur</Badge>
+              ) : (
+                <>
+                  <Badge tone="warn">valeur figée à la main : {fmtIndice(bt.retenu)}</Badge>
+                  <Btn
+                    small
+                    onClick={() => {
+                      const avant = s.bt01Actuel
+                      const cible = bt.publie!.valeur
+                      maj((d) => void (d.settings.bt01Actuel = cible))
+                      toast(
+                        `BT01 du barème aligné sur la publication : ${fmtIndice(cible)} (${fmtMois(bt.publie!.mois)}).`,
+                        {
+                          tone: 'ok',
+                          undo: () => maj((d) => void (d.settings.bt01Actuel = avant)),
+                        },
+                      )
+                    }}
+                  >
+                    Reprendre {fmtIndice(bt.publie.valeur)}
+                  </Btn>
+                </>
+              )}
+            </p>
+          )
+        })()}
         <p className="small muted">
           Le barème MIQCP n'a aucune valeur réglementaire (interdiction des barèmes depuis 2016) : c'est une
-          référence de négociation. Sous ~{fmtMoney((457347.05 * s.bt01Actuel) / s.bt01Ref1994)} de travaux
+          référence de négociation. Sous ~{fmtMoney(seuilPlancherActualise(s))} de travaux
           actualisés, le guide renvoie au chiffrage en temps passé.
         </p>
       </Card>

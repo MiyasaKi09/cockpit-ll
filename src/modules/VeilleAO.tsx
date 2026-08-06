@@ -95,6 +95,111 @@ function CelluleEcheance({ c, today }: { c: Consultation; today: string }) {
   )
 }
 
+// ---------- événements du cycle de vie de l'avis (R4) ----------
+//
+// Les rectificatifs, reports et ANNULATIONS BOAMP se rattachent tout seuls
+// aux consultations suivies (`appliquerEvenements` ci-dessous) — mais aucun
+// écran ne les montrait : on pouvait monter le dossier d'un avis annulé
+// sans jamais le savoir. Ils s'affichent désormais partout où la
+// consultation se lit : la liste, et la fiche AVANT tout le reste.
+
+type EvenementConsultation = { date: string; type: string; detail?: string }
+
+const LIBELLE_EVENEMENT: Record<string, string> = {
+  annulation: 'avis annulé',
+  rectificatif: 'rectifié',
+  modification: 'modifié',
+  resultat: 'résultat publié',
+}
+
+const TON_EVENEMENT: Record<string, Tone> = {
+  annulation: 'danger',
+  rectificatif: 'warn',
+  modification: 'warn',
+  resultat: 'info',
+}
+
+/** événements du plus récent au plus ancien (l'ordre d'arrivée ne dit rien) */
+function evenementsTries(c: Consultation): EvenementConsultation[] {
+  return [...(c.evenements || [])].sort((a, b) => (b.date || '').localeCompare(a.date || ''))
+}
+
+/** l'avis a-t-il été annulé ? — la seule question qui arrête un dossier */
+function estAnnulee(c: Consultation): boolean {
+  return (c.evenements || []).some((e) => e.type === 'annulation')
+}
+
+/** lien de l'avis officiel tracé dans le détail (`… (https://…)`) */
+function lienEvenement(e: EvenementConsultation): string | null {
+  return (e.detail || '').match(/https?:\/\/[^\s)]+/)?.[0] || null
+}
+
+/** les badges du cycle de vie : annulation d'abord, puis le dernier
+ *  rectificatif, puis le résultat. Rien si l'avis n'a rien connu. */
+function BadgesEvenements({ c }: { c: Consultation }) {
+  const evts = evenementsTries(c)
+  if (evts.length === 0) return null
+  const annulation = evts.find((e) => e.type === 'annulation')
+  const rectif = evts.find((e) => e.type === 'rectificatif' || e.type === 'modification')
+  const resultat = evts.find((e) => e.type === 'resultat')
+  return (
+    <>
+      {[annulation, rectif, resultat].filter(Boolean).map((e, i) => (
+        <Badge key={i} tone={TON_EVENEMENT[e!.type] || 'muted'}>
+          {LIBELLE_EVENEMENT[e!.type] || e!.type}
+          {e!.date ? ` le ${fmtDate(e!.date)}` : ''}
+        </Badge>
+      ))}
+    </>
+  )
+}
+
+/** le journal complet des événements — en TÊTE de la fiche : monter un
+ *  dossier sur un avis annulé est l'erreur la plus coûteuse du domaine. */
+function BlocEvenements({ c }: { c: Consultation }) {
+  const evts = evenementsTries(c)
+  if (evts.length === 0) return null
+  const annulee = estAnnulee(c)
+  return (
+    <div
+      className="card"
+      style={{
+        padding: 10,
+        marginBottom: 12,
+        borderLeft: `3px solid var(--${annulee ? 'danger' : 'warn'})`,
+      }}
+    >
+      <div className="small" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <strong>Cycle de vie de l'avis</strong>
+        <BadgesEvenements c={c} />
+      </div>
+      {annulee && (
+        <p className="small danger-text" style={{ margin: '6px 0 0' }}>
+          L'acheteur a publié un avis d'annulation : ne montez pas (ou n'achevez pas) le dossier sans
+          l'avoir vérifié sur l'avis officiel.
+        </p>
+      )}
+      {evts.map((e, i) => {
+        const url = lienEvenement(e)
+        return (
+          <p key={i} className="small muted" style={{ margin: '4px 0 0' }}>
+            {e.date ? <DateF d={e.date} /> : '—'} · {LIBELLE_EVENEMENT[e.type] || e.type}
+            {e.detail && <> — {e.detail.replace(/\s*\(https?:\/\/[^\s)]+\)\s*$/, '')}</>}
+            {url && (
+              <>
+                {' '}
+                <a href={url} target="_blank" rel="noreferrer">
+                  avis ↗
+                </a>
+              </>
+            )}
+          </p>
+        )
+      })}
+    </div>
+  )
+}
+
 /** source tronquée, texte complet dans le title (traçabilité) */
 function CelluleSource({ source }: { source?: string }) {
   if (!source) return <span className="muted">—</span>
@@ -435,6 +540,26 @@ function CarteBoamp() {
       {noteEvenements && <p className="small ok-text">{noteEvenements}</p>}
       {annonces && annonces.length === 0 && (
         <EmptyState>Aucune annonce récente pour ces critères — élargissez les mots-clés ou la période.</EmptyState>
+      )}
+      {/* premier usage : sans critères réglés, aucune recherche ne part —
+          l'écran restait vide sans dire quoi faire */}
+      {annonces === null && !erreur && (
+        <EmptyState>
+          {enCours ? (
+            'Interrogation du BOAMP et de TED…'
+          ) : state.settings.veilleBoamp ? (
+            <>
+              Rien reçu pour l'instant : le service de fond collecte toutes les 4 h, et «&nbsp;Rechercher&nbsp;»
+              interroge le BOAMP tout de suite.
+            </>
+          ) : (
+            <>
+              Premier usage du Radar : renseignez vos <strong>mots-clés</strong> et vos{' '}
+              <strong>départements</strong> ci-dessus, puis «&nbsp;Rechercher&nbsp;». Les avis arrivent notés et
+              expliqués ; ensuite le service de fond prend le relais toutes les 4 h, même Cockpit fermé.
+            </>
+          )}
+        </EmptyState>
       )}
       <p className="muted small" style={{ marginBottom: 10 }}>
         Chercher aussi sur{' '}
@@ -932,7 +1057,14 @@ function FicheModal({
       toast("L'intitulé de la consultation est obligatoire.", { tone: 'danger' })
       return
     }
-    const propre: Consultation = { ...c, intitule }
+    // le vieillissement des cartes (Pipeline) et la suggestion de débriefing
+    // lisent `dernierMouvement` : changer le statut ICI sans le poser laissait
+    // la carte « stagnante » le jour même où on venait de la faire avancer.
+    const propre: Consultation = {
+      ...c,
+      intitule,
+      ...(c.statut !== initial.statut ? { dernierMouvement: todayISO() } : {}),
+    }
     let projetCree: string | null = null
     update((d) => {
       let finale = propre
@@ -965,6 +1097,7 @@ function FicheModal({
     <Modal titre={nouveau ? 'Nouvelle consultation' : 'Fiche consultation — Go / No-Go'} onClose={onClose} large>
       {!nouveau && (
         <>
+          <BlocEvenements c={c} />
           <ResumeConsultation c={c} />
           <p className="small muted" style={{ marginBottom: 8 }}>
             Pré-prompts : un clic copie le prompt assemblé (fiche + références + charge
@@ -1334,6 +1467,11 @@ function ConsultationsContenu() {
               <tr key={c.id} className="clickable" {...ligneActivable(() => ouvrir(c))}>
                 <td>
                   <strong>{c.intitule}</strong>
+                  {(c.evenements || []).length > 0 && (
+                    <div style={{ marginTop: 2 }}>
+                      <BadgesEvenements c={c} />
+                    </div>
+                  )}
                 </td>
                 <td>{c.acheteur || '—'}</td>
                 <td>{c.lieu || '—'}</td>

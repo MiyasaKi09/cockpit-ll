@@ -214,6 +214,8 @@ function LigneMouvement({ t }: { t: TransactionBancaire }) {
   const { state, update } = useStore()
   const today = useToday()
   const [ouvert, setOuvert] = useState(false)
+  const [saisieMotif, setSaisieMotif] = useState(false)
+  const [motif, setMotif] = useState('')
 
   const validerPaiementClient = async (factures: Facture[], montants: number[]) => {
     // calculé AVANT la mutation (producteur rejouable)
@@ -336,7 +338,21 @@ function LigneMouvement({ t }: { t: TransactionBancaire }) {
     })
     if (!resultat.ok) {
       toast(resultat.erreur || 'Ce rapprochement n’a pas pu être enregistré.', { tone: 'danger' })
+      return
     }
+    toast(
+      type === 'interne'
+        ? 'Mouvement marqué interne — il sort de la file « à rapprocher ».'
+        : `Mouvement justifié sans pièce${detail ? ` : ${detail}` : ''}.`,
+      {
+        tone: 'ok',
+        undo: () =>
+          update((d) => {
+            const tx = d.transactionsBancaires.find((y) => y.id === t.id)
+            if (tx) tx.rapprochement = null
+          }),
+      },
+    )
   }
 
   const suggestionsCredit = t.montant > 0 && !t.rapprochement ? suggestionsPourCredit(state, t) : []
@@ -376,19 +392,48 @@ function LigneMouvement({ t }: { t: TransactionBancaire }) {
                 Ressemble au contrat « {c.intitule} » — saisir la facture dans <a href="#/finance/achats">Achats & frais</a>
               </span>
             ))}
-            <span style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            <span style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
               <Btn small onClick={() => void justifier('interne', 'virement interne / mouvement d’épargne')}>
                 Mouvement interne
               </Btn>
-              <Btn
-                small
-                onClick={() => {
-                  const motif = window.prompt('Justification (sans pièce) :')
-                  if (motif) void justifier('justifie', motif)
-                }}
-              >
-                Justifier sans pièce…
-              </Btn>
+              {saisieMotif ? (
+                // S4 — la justification se tape DANS l'écran : une boîte système
+                // ne montre ni le mouvement, ni ce qu'on est en train d'écrire
+                <span style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <TextInput
+                    value={motif}
+                    onChange={setMotif}
+                    placeholder="Justification (sans pièce) : ex. frais bancaires trimestriels"
+                  />
+                  <Btn
+                    small
+                    kind="primary"
+                    disabled={!motif.trim()}
+                    onClick={() => {
+                      const m = motif.trim()
+                      if (!m) return
+                      setSaisieMotif(false)
+                      setMotif('')
+                      void justifier('justifie', m)
+                    }}
+                  >
+                    Enregistrer la justification
+                  </Btn>
+                  <Btn
+                    small
+                    onClick={() => {
+                      setSaisieMotif(false)
+                      setMotif('')
+                    }}
+                  >
+                    Annuler
+                  </Btn>
+                </span>
+              ) : (
+                <Btn small onClick={() => setSaisieMotif(true)}>
+                  Justifier sans pièce…
+                </Btn>
+              )}
             </span>
             {suggestionsCredit.length === 0 && suggestionsDebit.length === 0 && notesCandidates.length === 0 && (
               <span className="small muted">Aucune correspondance automatique — le Cockpit ne rapproche jamais de force.</span>
@@ -495,7 +540,7 @@ function CartePrevision({ state, today }: { state: AppState; today: string }) {
 // ------------------------------------------------------------------
 
 export default function Banque() {
-  const { state } = useStore()
+  const { state, update } = useStore()
   const today = useToday()
   const refFichier = useRef<HTMLInputElement>(null)
   const [importEnCours, setImportEnCours] = useState<{ texte: string; nom: string } | null>(null)
@@ -503,6 +548,27 @@ export default function Banque() {
 
   const banque = soldeBancaire(state)
   const ecart = ecartSoldeManuel(state)
+
+  /** S1 — la carte montrait l'écart sans offrir le geste qui le règle : le
+   *  solde manuel (météo financière, Pilotage) se recopiait à la main alors
+   *  que le relevé importé est là. La machine propose, le clic est humain. */
+  const reprendreSoldeImporte = () => {
+    if (!banque) return
+    const avantSolde = state.settings.tresorerieDispo
+    const avantMaj = state.settings.tresorerieMajLe
+    update((d) => {
+      d.settings.tresorerieDispo = banque.solde
+      d.settings.tresorerieMajLe = today
+    })
+    toast(`Solde manuel aligné sur le relevé : ${fmtMoney(banque.solde, true)} au ${fmtDate(banque.date)}.`, {
+      tone: 'ok',
+      undo: () =>
+        update((d) => {
+          d.settings.tresorerieDispo = avantSolde
+          d.settings.tresorerieMajLe = avantMaj
+        }),
+    })
+  }
   const nonRapprochees = state.transactionsBancaires.filter((t) => !t.rapprochement)
   const mouvements = useMemo(
     () =>
@@ -537,7 +603,24 @@ export default function Banque() {
           label="Écart avec le solde manuel"
           value={ecart != null ? fmtMoney(ecart) : '—'}
           tone={ecart != null && Math.abs(ecart) > 1 ? 'warn' : undefined}
-          sub={ecart != null ? 'solde importé − solde saisi' : 'visible dès qu’un relevé est importé'}
+          sub={
+            ecart == null ? (
+              'visible dès qu’un relevé est importé'
+            ) : Math.abs(ecart) <= 0.01 ? (
+              'solde importé − solde saisi : aligné ✓'
+            ) : (
+              <>
+                <div>solde importé − solde saisi (météo financière, Pilotage)</div>
+                <Btn
+                  small
+                  onClick={reprendreSoldeImporte}
+                  title="Recopie le solde du relevé dans le solde manuel des Paramètres — annulable"
+                >
+                  Reprendre le solde importé
+                </Btn>
+              </>
+            )
+          }
         />
         <Stat
           label="À rapprocher"

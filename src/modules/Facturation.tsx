@@ -12,14 +12,13 @@
 // sont des brouillons à relire avant tout envoi.
 // ============================================================
 
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { AppState, EcheanceFacturation, EvenementTransmission, Facture, LigneFacture, PhaseCode, TypeMO } from '../types'
 import { useStore } from '../store'
 import {
   Badge,
   Btn,
   Card,
-  CopyBtn,
   DateF,
   DateInput,
   EmptyState,
@@ -48,6 +47,10 @@ import {
   retardFacture,
   ttc,
 } from '../derive'
+// le TEXTE de la relance d'impayé a UN propriétaire (src/alerts.ts) : le fil
+// d'urgences et cet écran relancent avec les mêmes mots — jamais deux
+// rédactions concurrentes du même courrier au client (constat R3).
+import { corpsRelanceImpaye, sujetRelanceImpaye } from '../alerts'
 import {
   brouillonAvoir,
   construireFigee,
@@ -71,8 +74,8 @@ import {
 } from '../facture'
 import type { BrouillonFacture } from '../facture'
 import { LIBELLES_PHASES, PHASES_ORDRE } from '../miqcp'
-import { assemble, contexteFacture } from '../prompts'
-import { download, fmtDate, fmtMoney, ouvrirGmail, uid } from '../util'
+import { assemble, contexteFacture, copier } from '../prompts'
+import { download, fmtDate, fmtMoney, fold, ouvrirGmail, uid } from '../util'
 import { ouvrirFacturePDF } from '../pdf'
 import { genererCII, nomFichierCII } from '../facturx'
 import FinanceNav from './FinanceNav'
@@ -412,7 +415,8 @@ function EmissionModal({
         return
       }
       terminee = true
-      toast(`Facture ${nouvelle.numero} émise et figée — PDF et e-mail dans le menu de la ligne.`, { tone: 'ok' })
+      // pas de toast ici : la fin d'émission ouvre la confirmation qui PORTE
+      // les deux gestes suivants (PDF, e-mail) — audit T8, action n° 20
       onClose()
     } catch (e) {
       toast(e instanceof Error ? e.message : 'La facture n’a pas pu être émise.', { tone: 'danger' })
@@ -544,6 +548,53 @@ function EmissionModal({
           {emissionEnCours ? 'Émission en cours…' : `Émettre (${numeroPrevu})`}
         </Btn>
       </div>
+    </Modal>
+  )
+}
+
+// ---------- fin d'émission : la confirmation PORTE les deux gestes suivants ----------
+// Audit T8 (action n° 20) : émettre n'est pas la fin du geste — il reste à
+// sortir le PDF et à préparer l'e-mail. Les renvoyer « au menu de la ligne »
+// obligeait à retrouver la facture en bas d'une liste triée à l'envers :
+// 3 à 4 gestes de trop sur le geste central du mois. Les deux fonctions
+// existent déjà (ouvrirFacturePDF, emailFacture) — elles sont ici.
+
+function EmiseModal({ f, state, onClose }: { f: Facture; state: AppState; onClose: () => void }) {
+  const projet = projetById(state, f.projetId)
+  return (
+    <Modal titre={`Facture ${f.numero || f.id} émise`} onClose={onClose}>
+      <p className="muted small" style={{ margin: '0 0 12px' }}>
+        Pièce figée{f.figee?.empreinte ? ` (empreinte ${f.figee.empreinte.slice(0, 12)}…)` : ''} : elle n'est plus
+        modifiable — toute correction passera par un avoir. Il reste deux gestes, ils sont ici.
+      </p>
+      <dl className="kv" style={{ marginBottom: 14 }}>
+        <dt>Projet</dt>
+        <dd>
+          {f.projetId} — {nomProjet(state, f.projetId)}
+        </dd>
+        <dt>Libellé</dt>
+        <dd>{f.libelle}</dd>
+        <dt>Montant TTC</dt>
+        <dd>
+          <strong>{fmtMoney(ttc(f), true)}</strong> ({fmtMoney(f.figee?.totalHT ?? f.montantHT, true)} HT)
+        </dd>
+        <dt>Paiement attendu</dt>
+        <dd>{fmtDate(encaissementPrevu(f))}</dd>
+        <dt>Destinataire</dt>
+        <dd>{projet?.emailMOA || <span className="muted">adresse inconnue — à compléter dans la fiche projet</span>}</dd>
+      </dl>
+      <div className="form-foot">
+        <Btn onClick={onClose}>Fermer</Btn>
+        <Btn onClick={() => ouvrirFacturePDF(state, f)} title="Vue imprimable de la copie figée — jamais un recalcul">
+          Ouvrir le PDF
+        </Btn>
+        <Btn kind="primary" onClick={() => emailFacture(state, f)} title="Ouvre un brouillon Gmail pré-rempli — l'envoi reste votre clic">
+          Préparer l'e-mail
+        </Btn>
+      </div>
+      <p className="muted small" style={{ margin: '10px 2px 0' }}>
+        Les deux gestes restent disponibles plus tard dans le menu de la ligne.
+      </p>
     </Modal>
   )
 }
@@ -1041,15 +1092,65 @@ function CarteRelances({ state, today }: { state: AppState; today: string }) {
     .filter((f) => f.type !== 'avoir' && retardFacture(state, f, today) > 0)
     .sort((a, b) => retardFacture(state, b, today) - retardFacture(state, a, today))
 
-  // trace la relance quand son brouillon est copié (date + niveau + historique)
-  const marquerRelance = (id: string, niveau: number) =>
+  // trace la relance au clic (date + niveau + historique) et RENVOIE de quoi
+  // l'annuler : un geste tracé reste un geste rattrapable (patron ui.tsx)
+  const marquerRelance = (f: Facture, niveau: number): (() => void) => {
+    const avant = {
+      derniereRelance: f.derniereRelance ?? null,
+      niveauRelance: f.niveauRelance ?? null,
+      relances: f.relances ? f.relances.map((r) => ({ ...r })) : undefined,
+    }
     update((d) => {
-      const x = d.factures.find((y) => y.id === id)
+      const x = d.factures.find((y) => y.id === f.id)
       if (!x) return
       x.derniereRelance = today
       x.niveauRelance = niveau
       x.relances = [...(x.relances || []), { date: today, niveau }]
     })
+    return () =>
+      update((d) => {
+        const x = d.factures.find((y) => y.id === f.id)
+        if (!x) return
+        x.derniereRelance = avant.derniereRelance
+        x.niveauRelance = avant.niveauRelance
+        x.relances = avant.relances
+      })
+  }
+
+  /** Le geste courant : un brouillon Gmail PRÊT (destinataire, sujet, corps),
+   *  relance de niveau 1 — factuelle, celle qu'on envoie neuf fois sur dix.
+   *  Le texte vient de src/alerts.ts, la trace est posée au clic comme avant,
+   *  et l'envoi reste un clic humain (§15). */
+  const relancerParEmail = (f: Facture, retard: number) => {
+    const email = projetById(state, f.projetId)?.emailMOA || ''
+    ouvrirGmail(
+      email,
+      sujetRelanceImpaye(f),
+      corpsRelanceImpaye(f, encaissementPrevu(f), retard, nomProjet(state, f.projetId), state.settings.nomAgence),
+    )
+    const annuler = marquerRelance(f, 0)
+    toast(
+      email
+        ? `Brouillon de relance ouvert pour ${email} — relance tracée (courtoise). L'envoi reste votre clic.`
+        : "Brouillon ouvert — aucune adresse connue pour ce maître d'ouvrage : le destinataire est à compléter (fiche projet).",
+      { tone: email ? 'ok' : 'warn', undo: annuler },
+    )
+  }
+
+  /** Les rédactions plus fermes restent des brouillons Claude à relire : un
+   *  fil d'actions ne doit pas pouvoir durcir le ton d'un courrier au client
+   *  d'un seul clic. */
+  const copierBrouillon = async (f: Facture, niveau: number, corps: string, projetClaude: string) => {
+    if (!(await copier(assemble(corps, contexteFacture(state, f))))) {
+      toast('La copie dans le presse-papier a échoué.', { tone: 'danger' })
+      return
+    }
+    const annuler = marquerRelance(f, niveau)
+    toast(
+      `Brouillon « ${NIVEAUX_RELANCE[niveau].label} » copié — à coller dans le Projet Claude « ${projetClaude} ». Relance tracée.`,
+      { tone: 'ok', undo: annuler },
+    )
+  }
 
   return (
     <Card titre="Relances à faire">
@@ -1058,11 +1159,12 @@ function CarteRelances({ state, today }: { state: AppState; today: string }) {
       ) : (
         <>
           <p className="muted small" style={{ marginBottom: 10 }}>
-            Trois niveaux ; le conseillé est en bleu.
+            « Relancer par e-mail » ouvre un brouillon Gmail déjà rempli (destinataire, objet, corps) — relance
+            courtoise, envoi humain. Les niveaux plus fermes restent des brouillons à faire rédiger et relire.
           </p>
           <Table
             compact
-            head={['N°', 'Projet', 'Libellé', <span key="ttc" style={{ display: 'block', textAlign: 'right' }}>Solde TTC</span>, 'Retard', 'Dernière relance', 'Relance (brouillon)']}
+            head={['N°', 'Projet', 'Libellé', <span key="ttc" style={{ display: 'block', textAlign: 'right' }}>Solde TTC</span>, 'Retard', 'Dernière relance', 'Relancer']}
           >
             {enRetard.map((f) => {
               const retard = retardFacture(state, f, today)
@@ -1094,27 +1196,34 @@ function CarteRelances({ state, today }: { state: AppState; today: string }) {
                     )}
                   </td>
                   <td>
-                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                      {NIVEAUX_RELANCE.map((n, i) => {
-                        const t = state.prompts.find((x) => x.id === n.tplId)
-                        if (!t) {
-                          return (
-                            <Btn key={n.tplId} small disabled title={`Gabarit « ${n.tplId} » introuvable dans la bibliothèque de prompts`}>
-                              {n.label}
-                            </Btn>
-                          )
-                        }
-                        return (
-                          <CopyBtn
-                            key={n.tplId}
-                            small
-                            kind={i === conseille ? 'primary' : 'default'}
-                            label={n.label}
-                            text={() => assemble(t.corps, contexteFacture(state, f))}
-                            onCopied={() => marquerRelance(f.id, i)}
-                          />
-                        )
-                      })}
+                    <div style={{ display: 'flex', gap: 6, alignItems: 'center', justifyContent: 'flex-end' }}>
+                      <Btn
+                        small
+                        kind="primary"
+                        onClick={() => relancerParEmail(f, retard)}
+                        title="Ouvre Gmail avec la relance déjà rédigée (destinataire, objet, corps) — l'envoi reste votre clic"
+                      >
+                        Relancer par e-mail…
+                      </Btn>
+                      <RowMenu
+                        label="Brouillon Claude"
+                        items={NIVEAUX_RELANCE.map((n, i) => {
+                          const t = state.prompts.find((x) => x.id === n.tplId)
+                          return {
+                            label: `${n.label}${i === conseille ? ' · conseillé' : ''}${t ? '' : ' (gabarit absent)'}`,
+                            title: t
+                              ? `Copie le brouillon à faire rédiger dans le Projet Claude « ${t.projetClaude} » — relu avant envoi`
+                              : `Gabarit « ${n.tplId} » introuvable dans la bibliothèque de prompts`,
+                            onClick: () => {
+                              if (!t) {
+                                toast(`Gabarit « ${n.tplId} » introuvable dans la bibliothèque de prompts.`, { tone: 'danger' })
+                                return
+                              }
+                              void copierBrouillon(f, i, t.corps, t.projetClaude)
+                            },
+                          }
+                        })}
+                      />
                     </div>
                   </td>
                 </tr>
@@ -1156,6 +1265,7 @@ export default function Facturation() {
 
   const [filtreProjet, setFiltreProjet] = useState('')
   const [filtreEtat, setFiltreEtat] = useState('')
+  const [recherche, setRecherche] = useState('')
   const [creation, setCreation] = useState(false)
   const [editionEcheance, setEditionEcheance] = useState<EcheanceFacturation | null>(null)
   const [emissionLocale, setEmissionLocale] = useState<EcheanceFacturation | null>(null)
@@ -1163,9 +1273,21 @@ export default function Facturation() {
   const [avoir, setAvoir] = useState<Facture | null>(null)
   const [rapprochement, setRapprochement] = useState<Facture | null>(null)
   const [transmission, setTransmission] = useState<Facture | null>(null)
+  /** facture qui vient d'être émise : sa confirmation porte les deux gestes
+   *  suivants (PDF, e-mail) au lieu de renvoyer au menu de la ligne (T8) */
+  const [emise, setEmise] = useState<Facture | null>(null)
 
   // route profonde `#/facturation/emettre/<id>` (Cockpit, alertes) → parcours d'émission
   const emissionRouteId = route[1] === 'emettre' ? route[2] : null
+
+  // route profonde `#/facturation/chercher/<terme>` (palette « / ») : le terme
+  // cherché voyage dans le lien et se dépose dans la recherche de la liste —
+  // il était retapé à l'arrivée (T6, parcours 9). Le champ reste modifiable :
+  // la route PROPOSE le filtre, elle ne le verrouille pas.
+  const termeRoute = route[1] === 'chercher' ? route[2] || '' : ''
+  useEffect(() => {
+    if (termeRoute) setRecherche(termeRoute)
+  }, [termeRoute])
   const echeanceEmission =
     emissionLocale ?? (emissionRouteId ? state.echeancesFacturation.find((e) => e.id === emissionRouteId) ?? null : null)
   const fermerEmission = () => {
@@ -1176,8 +1298,15 @@ export default function Facturation() {
   // ----- stats de tête -----
   const enRetard = state.factures.filter((f) => f.type !== 'avoir' && retardFacture(state, f, today) > 0)
   const montantRetardTTC = enRetard.reduce((s, f) => s + soldeFacture(state, f), 0)
-  const factureCumulHT = state.factures.reduce((s, f) => s + f.montantHT, 0)
-  const encaisseCumulTTC = state.paiements.reduce((s, p) => s + p.montant, 0)
+  // cumuls bornés à l'ANNÉE en cours : « depuis toujours » ne se compare à
+  // rien (ni à l'objectif de CA, ni à la déclaration) et gonfle chaque année
+  const annee = today.slice(0, 4)
+  const factureCumulHT = state.factures
+    .filter((f) => f.emission.slice(0, 4) === annee)
+    .reduce((s, f) => s + f.montantHT, 0)
+  const encaisseCumulTTC = state.paiements
+    .filter((p) => p.date.slice(0, 4) === annee)
+    .reduce((s, p) => s + p.montant, 0)
   const delaiGlobal = delaiMoyenPaiement(state)
   const delaisParMO = TYPES_MO.map((t) => ({ t, v: delaiMoyenPaiement(state, t) })).filter(
     (x) => x.v !== null,
@@ -1199,11 +1328,15 @@ export default function Facturation() {
     [state.echeancesFacturation, filtreProjet],
   )
 
-  // ----- factures (pièces), filtrées et triées par émission -----
+  // ----- factures (pièces), filtrées, cherchées, triées par émission DÉCROISSANTE -----
+  // la pièce qu'on cherche est presque toujours la plus récente (T5) ; passé
+  // quelques dizaines de lignes, la recherche numéro/libellé prend le relais
   const factures = useMemo(
-    () =>
-      state.factures
+    () => {
+      const q = fold(recherche.trim())
+      return state.factures
         .filter((f) => !filtreProjet || f.projetId === filtreProjet)
+        .filter((f) => !q || fold(`${f.numero || f.id} ${f.libelle}`).includes(q))
         .filter((f) => {
           if (!filtreEtat) return true
           if (filtreEtat === 'retard') return f.type !== 'avoir' && retardFacture(state, f, today) > 0
@@ -1213,8 +1346,9 @@ export default function Facturation() {
           if (filtreEtat === 'payee') return f.type !== 'avoir' && etat === 'payee'
           return f.type !== 'avoir' && etat !== 'payee' // 'attente'
         })
-        .sort((a, b) => a.emission.localeCompare(b.emission) || (a.numero || a.id).localeCompare(b.numero || b.id)),
-    [state, filtreProjet, filtreEtat, today],
+        .sort((a, b) => b.emission.localeCompare(a.emission) || (b.numero || b.id).localeCompare(a.numero || a.id))
+    },
+    [state, filtreProjet, filtreEtat, recherche, today],
   )
 
   // ----- actions -----
@@ -1260,13 +1394,13 @@ export default function Facturation() {
     toast('Échéance supprimée.', { undo: () => replace(snap) })
   }
 
-  const emettreDepuisEcheance = (
+  const emettreDepuisEcheance = async (
     nouvelle: Facture,
     adresseFacturation: string,
     echeanceAttendue: EcheanceFacturation,
     brouillonAttendu: BrouillonFacture,
-  ): Promise<ResultatMutation> =>
-    new Promise((resolve) => {
+  ): Promise<ResultatMutation> => {
+    const resultat = await new Promise<ResultatMutation>((resolve) => {
       const echeanceId = nouvelle.id
       update((d) => {
         const echeanceCourante = d.echeancesFacturation.find((e) => e.id === echeanceId)
@@ -1336,6 +1470,10 @@ export default function Facturation() {
         resolve({ ok: true })
       })
     })
+    // la pièce est en base : la confirmation prend le relais avec ses deux gestes
+    if (resultat.ok) setEmise(nouvelle)
+    return resultat
+  }
 
   const enregistrerPaiement = (
     f: Facture,
@@ -1553,8 +1691,8 @@ export default function Facturation() {
           value={enRetard.length}
           tone={enRetard.length > 0 ? 'danger' : 'ok'}
         />
-        <Stat label="Facturé HT net (cumul)" value={<Money v={factureCumulHT} />} sub="factures émises, avoirs déduits" />
-        <Stat label="Encaissé TTC (cumul)" value={<Money v={encaisseCumulTTC} />} sub="somme des paiements enregistrés" />
+        <Stat label={`Facturé HT net ${annee}`} value={<Money v={factureCumulHT} />} sub="factures émises cette année, avoirs déduits" />
+        <Stat label={`Encaissé TTC ${annee}`} value={<Money v={encaisseCumulTTC} />} sub="paiements enregistrés cette année" />
         <Stat
           label="Délai moyen de paiement"
           value={delaiGlobal !== null ? `${delaiGlobal} j` : '—'}
@@ -1697,13 +1835,19 @@ export default function Facturation() {
               { value: 'controler', label: 'À contrôler (migrées)' },
             ]}
           />
+          <TextInput value={recherche} onChange={setRecherche} placeholder="Chercher un n° ou un libellé…" />
           <div className="spacer" />
+          <span className="small muted">
+            {factures.length} pièce(s) · plus récente en tête
+          </span>
         </div>
 
         {state.factures.length === 0 ? (
           <EmptyState>Aucune facture émise — tout commence par une échéance, puis « Émettre… ».</EmptyState>
         ) : factures.length === 0 ? (
-          <EmptyState>Aucune facture ne correspond aux filtres.</EmptyState>
+          <EmptyState>
+            Aucune facture ne correspond {recherche.trim() ? `à « ${recherche.trim()} »` : 'aux filtres'}.
+          </EmptyState>
         ) : (
           <Table
             compact
@@ -1905,6 +2049,7 @@ export default function Facturation() {
           onAjouter={(e) => ajouterTransmission(transmission, e)}
         />
       )}
+      {emise && <EmiseModal f={emise} state={state} onClose={() => setEmise(null)} />}
     </Page>
   )
 }

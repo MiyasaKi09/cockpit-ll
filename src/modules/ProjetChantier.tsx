@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from 'react'
 import type {
   DesordreGPA,
   EvenementMarche,
+  Intemperie,
   MarcheTravaux,
   NatureIntemperie,
   PhaseCode,
@@ -19,6 +20,11 @@ import type {
 import { useStore } from '../store'
 import { useMoi } from '../moi'
 import { LIBELLE_GARANTIE, garantieDuMarche } from '../derive'
+// R2 — le rapprochement nom → entreprise canonique a DÉJÀ son autorité
+// (src/entreprise.ts) : la datalist du marché la réutilise au lieu d'en
+// écrire une seconde, sinon « Martin BTP » et « SARL Martin BTP »
+// continueraient de scinder la fiche transverse en silence.
+import { entrepriseDe, marchesDe } from '../entreprise'
 import { serieEnRetard } from '../indicesInsee'
 import {
   DELAI_VISA_DEFAUT,
@@ -64,7 +70,7 @@ import {
   confirmer,
   toast, RowMenu } from '../ui'
 import type { Tone } from '../ui'
-import { diffDays, fmtDate, fmtMoney, fmtPct, ouvrirGmail, todayISO, uid } from '../util'
+import { addDays, diffDays, fmtDate, fmtMoney, fmtPct, fold, ouvrirGmail, todayISO, uid } from '../util'
 import { MODELES_WHISPER, transcrireFichier, type ProgresTranscription } from '../transcription'
 import { CONTRAT_CR, genererDocxCR, parseRetourCR, retourVersTexte } from '../crdocx'
 import { lireRacine, nomConforme, rangerFichier, supporteFS, type ResultatRangement } from '../fsdrive'
@@ -82,8 +88,28 @@ export function CarteMarches({ projet: p }: { projet: Projet }) {
   const [modal, setModal] = useState<{ marche?: MarcheTravaux } | null>(null)
   // 5.20 — le nom de l'entreprise ouvre sa fiche transverse (lecture)
   const [fiche, setFiche] = useState<string | null>(null)
+  // R3 — l'explication de l'écart reste repliée : le pied dit les deux
+  // chiffres, le badge s'ouvre quand on veut savoir ce qu'il coûte
+  const [ecartOuvert, setEcartOuvert] = useState(false)
 
   const marches = state.marches.filter((m) => m.projetId === p.id)
+
+  // R3 — LES DEUX montants de travaux du projet, confrontés ici pour la
+  // première fois : la somme des marchés signés (cet écran) et le montant
+  // de travaux de l'OPÉRATION (fiche projet). C'est le second, et lui seul,
+  // que lit `honorairesDETduMois` (derive.ts) pour proposer les honoraires
+  // DET du mois — un écart non vu fausse chaque note DET sans un mot.
+  const totalMarchesHT = marches.reduce((t, m) => t + m.montantInitialHT + m.avenantsHT, 0)
+  // null ≠ 0 : un montant d'opération non saisi se dit, il ne s'affiche pas « 0 € »
+  const travauxOperationHT = p.montantTravauxHT ?? null
+  const ecartHT = travauxOperationHT === null ? null : totalMarchesHT - travauxOperationHT
+  const partEcart =
+    travauxOperationHT !== null && travauxOperationHT > 0 && ecartHT !== null
+      ? Math.abs(ecartHT) / travauxOperationHT
+      : null
+  // sous 1 %, les deux chiffres se lisent côte à côte sans badge : un badge
+  // qui crie pour un arrondi finit ignoré, et avec lui ceux qui comptent
+  const ecartNotable = partEcart !== null && partEcart >= 0.01
 
   const supprimer = async (m: MarcheTravaux) => {
     const snap = state
@@ -119,107 +145,156 @@ export function CarteMarches({ projet: p }: { projet: Projet }) {
           des relances et des CR.
         </EmptyState>
       ) : (
-        <Table
-          compact
-          head={[
-            'Lot',
-            'Entreprise',
-            <span key="m" className="right">Montant HT (avenants inclus)</span>,
-            'RG',
-            'Révision',
-            'Intervention',
-            'Chantier',
-            'Contact',
-            'Délai vérif.',
-            '',
-          ]}
-        >
-          {marches.map((m) => (
-            <tr key={m.id}>
-              <td><strong>{m.lot}</strong></td>
-              <td>
-                {/* 5.20 — la fiche transverse : marchés tous projets, RG,
-                    certificats, GPA, visas, pénalités — en lecture */}
-                <BtnLien
-                  title="Ouvrir la fiche entreprise — tout ce qu'on sait d'elle, tous projets"
-                  onClick={() => setFiche(m.entrepriseId || m.entreprise)}
-                >
-                  {m.entreprise}
-                </BtnLien>
-                {m.notes && <div className="muted small">{m.notes}</div>}
-              </td>
-              <td className="right">
-                <Money v={m.montantInitialHT + m.avenantsHT} />
-                {m.avenantsHT !== 0 && (
-                  <div className="muted small">dont avenants {fmtMoney(m.avenantsHT)}</div>
-                )}
-              </td>
-              <td className="num">
-                {garantieDuMarche(m) === 'retenue' ? (
-                  fmtPct(m.tauxRG, 0)
-                ) : (
-                  // la raison du 0 % doit se lire dans la liste, pas se deviner
-                  <span title={`RG 0 % — ${LIBELLE_GARANTIE[garantieDuMarche(m)]}${m.garantieRecueLe ? ` reçue le ${fmtDate(m.garantieRecueLe)}` : ''}`}>
-                    {garantieDuMarche(m) === 'caution' ? 'caution' : 'GPD'}
-                  </span>
-                )}
-              </td>
-              <td>
-                {m.revision ? (
-                  m.indiceRevision ? (
-                    (() => {
-                      // 5.18 — deux manques à montrer, pas un : aucune valeur
-                      // du tout, et des valeurs PÉRIMÉES (> 4 mois d'écart —
-                      // l'INSEE publie à ~3 mois, au-delà c'est que la
-                      // récupération automatique échoue et il faut le voir ICI,
-                      // sur le marché concerné, pas dans une console).
-                      const retard = serieEnRetard(state.indicesBTP, m.indiceRevision!, today.slice(0, 7))
-                      return (
-                        <span className="small">
-                          {m.indiceRevision}
-                          {m.moisZero ? <span className="muted"> · base {m.moisZero}</span> : ''}
-                          {retard.enRetard && (
-                            <>
-                              {' '}
-                              <Badge tone="warn">
-                                {retard.dernierMois ? `indice périmé (${retard.dernierMois})` : 'indice ?'}
-                              </Badge>
-                            </>
-                          )}
-                        </span>
-                      )
-                    })()
+        <>
+          <Table
+            compact
+            head={[
+              'Lot',
+              'Entreprise',
+              <span key="m" className="right">Montant HT (avenants inclus)</span>,
+              'RG',
+              'Révision',
+              'Intervention',
+              'Chantier',
+              'Contact',
+              'Délai vérif.',
+              '',
+            ]}
+          >
+            {marches.map((m) => (
+              <tr key={m.id}>
+                <td><strong>{m.lot}</strong></td>
+                <td>
+                  {/* 5.20 — la fiche transverse : marchés tous projets, RG,
+                      certificats, GPA, visas, pénalités — en lecture */}
+                  <BtnLien
+                    title="Ouvrir la fiche entreprise — tout ce qu'on sait d'elle, tous projets"
+                    onClick={() => setFiche(m.entrepriseId || m.entreprise)}
+                  >
+                    {m.entreprise}
+                  </BtnLien>
+                  {m.notes && <div className="muted small">{m.notes}</div>}
+                </td>
+                <td className="right">
+                  <Money v={m.montantInitialHT + m.avenantsHT} />
+                  {m.avenantsHT !== 0 && (
+                    <div className="muted small">dont avenants {fmtMoney(m.avenantsHT)}</div>
+                  )}
+                </td>
+                <td className="num">
+                  {garantieDuMarche(m) === 'retenue' ? (
+                    fmtPct(m.tauxRG, 0)
                   ) : (
-                    // révisable mais sans série : la révision théorique (5.4)
-                    // répondra null — le manque doit se voir dans la liste
-                    <Badge tone="warn">indice ?</Badge>
-                  )
-                ) : (
-                  '—'
-                )}
-              </td>
-              <td className="small">
-                {m.dateDebut || m.dateFin ? (
-                  <>{m.dateDebut ? fmtDate(m.dateDebut) : '?'} → {m.dateFin ? fmtDate(m.dateFin) : '?'}</>
-                ) : (
-                  <a href="#/planning" className="muted">à planifier</a>
-                )}
-              </td>
-              <td>{m.actif ? <Badge tone="ok">en cours</Badge> : <span className="muted">—</span>}</td>
-              <td className="small">
-                {m.contactNom || <span className="muted">—</span>}
-                {m.contactEmail && <div className="muted">{m.contactEmail}</div>}
-              </td>
-              <td className="num">{m.delaiVerifJours} j</td>
-              <td className="right">
-                <span style={{ display: 'inline-flex', gap: 6 }}>
-                  <Btn small onClick={() => setModal({ marche: m })}>Modifier</Btn>
-                  <RowMenu items={[{ label: 'Supprimer le marché', onClick: () => supprimer(m), danger: true }]} />
-                </span>
-              </td>
-            </tr>
-          ))}
-        </Table>
+                    // la raison du 0 % doit se lire dans la liste, pas se deviner
+                    <span title={`RG 0 % — ${LIBELLE_GARANTIE[garantieDuMarche(m)]}${m.garantieRecueLe ? ` reçue le ${fmtDate(m.garantieRecueLe)}` : ''}`}>
+                      {garantieDuMarche(m) === 'caution' ? 'caution' : 'GPD'}
+                    </span>
+                  )}
+                </td>
+                <td>
+                  {m.revision ? (
+                    m.indiceRevision ? (
+                      (() => {
+                        // 5.18 — deux manques à montrer, pas un : aucune valeur
+                        // du tout, et des valeurs PÉRIMÉES (> 4 mois d'écart —
+                        // l'INSEE publie à ~3 mois, au-delà c'est que la
+                        // récupération automatique échoue et il faut le voir ICI,
+                        // sur le marché concerné, pas dans une console).
+                        const retard = serieEnRetard(state.indicesBTP, m.indiceRevision!, today.slice(0, 7))
+                        return (
+                          <span className="small">
+                            {m.indiceRevision}
+                            {m.moisZero ? <span className="muted"> · base {m.moisZero}</span> : ''}
+                            {retard.enRetard && (
+                              <>
+                                {' '}
+                                <Badge tone="warn">
+                                  {retard.dernierMois ? `indice périmé (${retard.dernierMois})` : 'indice ?'}
+                                </Badge>
+                              </>
+                            )}
+                          </span>
+                        )
+                      })()
+                    ) : (
+                      // révisable mais sans série : la révision théorique (5.4)
+                      // répondra null — le manque doit se voir dans la liste
+                      <Badge tone="warn">indice ?</Badge>
+                    )
+                  ) : (
+                    '—'
+                  )}
+                </td>
+                <td className="small">
+                  {m.dateDebut || m.dateFin ? (
+                    <>{m.dateDebut ? fmtDate(m.dateDebut) : '?'} → {m.dateFin ? fmtDate(m.dateFin) : '?'}</>
+                  ) : (
+                    <a href="#/planning" className="muted">à planifier</a>
+                  )}
+                </td>
+                <td>{m.actif ? <Badge tone="ok">en cours</Badge> : <span className="muted">—</span>}</td>
+                <td className="small">
+                  {m.contactNom || <span className="muted">—</span>}
+                  {m.contactEmail && <div className="muted">{m.contactEmail}</div>}
+                </td>
+                <td className="num">{m.delaiVerifJours} j</td>
+                <td className="right">
+                  <span style={{ display: 'inline-flex', gap: 6 }}>
+                    <Btn small onClick={() => setModal({ marche: m })}>Modifier</Btn>
+                    <RowMenu items={[{ label: 'Supprimer le marché', onClick: () => supprimer(m), danger: true }]} />
+                  </span>
+                </td>
+              </tr>
+            ))}
+          </Table>
+          {/* R3 — le pied confronte les deux montants. Sans lui, ils vivaient
+              sur deux écrans et personne ne les comparait jamais. */}
+          <p
+            className="small"
+            style={{ marginTop: 8, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}
+          >
+            <span>
+              Total marchés : <strong>{fmtMoney(totalMarchesHT)}</strong> HT — travaux de l'opération :{' '}
+              {travauxOperationHT === null ? (
+                <span className="muted">non saisi</span>
+              ) : (
+                <strong>{fmtMoney(travauxOperationHT)}</strong>
+              )}
+              {travauxOperationHT !== null && ' HT'}
+            </span>
+            {(ecartNotable || travauxOperationHT === null) && (
+              <BtnLien
+                title="Ce que cet écart change à la facturation DET"
+                onClick={() => setEcartOuvert((x) => !x)}
+              >
+                <Badge tone="warn">
+                  {travauxOperationHT === null
+                    ? 'travaux de l’opération ?'
+                    : `écart ${ecartHT! > 0 ? '+' : '−'}${fmtMoney(Math.abs(ecartHT!))} (${fmtPct(partEcart, 0)})`}
+                </Badge>
+              </BtnLien>
+            )}
+          </p>
+          {ecartOuvert && (
+            <div
+              className="small"
+              style={{ marginTop: 6, border: '1px solid var(--line)', borderRadius: 8, padding: 10 }}
+            >
+              <p style={{ margin: '0 0 6px' }}>
+                Les honoraires DET du mois sont proposés au prorata du montant de travaux de
+                l'<strong>opération</strong> (montant du mois ÷ travaux de l'opération × honoraires DET) :
+                c'est ce montant-là, saisi sur la fiche projet, qui fait la facturation — pas la somme
+                des marchés affichée ci-dessus.
+              </p>
+              <p className="muted" style={{ margin: '0 0 8px' }}>
+                {travauxOperationHT === null
+                  ? "Sans montant de travaux sur la fiche projet, aucun honoraire DET ne se propose : la note se chiffre à la main, état après état."
+                  : `Tant que tous les lots ne sont pas attribués, l'écart est normal. Une fois le dernier marché signé, il ne l'est plus : chaque note DET serait proposée ${ecartHT! > 0 ? 'au-dessus' : 'en dessous'} du réel d'environ ${fmtPct(partEcart, 0)}.`}
+              </p>
+              <a href={`#/projets/${p.id}`}>Fiche projet — vérifier le montant de travaux →</a>
+            </div>
+          )}
+        </>
       )}
 
       {modal && <ModalMarche projetId={p.id} marche={modal.marche} onClose={() => setModal(null)} />}
@@ -237,11 +312,19 @@ function ModalMarche({
   marche?: MarcheTravaux
   onClose: () => void
 }) {
-  const { update } = useStore()
+  const { state, update } = useStore()
   const creation = !marche
 
   const [lot, setLot] = useState(marche?.lot || '')
   const [entreprise, setEntreprise] = useState(marche?.entreprise || '')
+  // R2 — l'entreprise canonique du registre : posée par la datalist, elle
+  // regroupe marchés, RG, certificats et GPA sous UNE fiche transverse.
+  // Le nom reste affiché tel qu'il est écrit au marché (l'acte contractuel).
+  // À l'ouverture d'un marché ANCIEN (le lien n'existait pas), on repropose
+  // celui que le nom désigne : enregistrer le pose enfin.
+  const [entrepriseId, setEntrepriseId] = useState<string | null>(
+    marche?.entrepriseId ?? entrepriseDe(state, marche?.entreprise ?? '')?.id ?? null,
+  )
   const [montantInitial, setMontantInitial] = useState<number | null>(marche?.montantInitialHT ?? null)
   const [avenants, setAvenants] = useState<number | null>(marche?.avenantsHT ?? 0)
   const [tauxRG, setTauxRG] = useState<number | null>(marche?.tauxRG ?? 0.05)
@@ -268,7 +351,52 @@ function ModalMarche({
   const [actif, setActif] = useState(marche?.actif ? 'oui' : 'non')
   const [dateDebut, setDateDebut] = useState<string | null>(marche?.dateDebut ?? null)
   const [dateFin, setDateFin] = useState<string | null>(marche?.dateFin ?? null)
+  // 5.19 — avance forfaitaire du CCAG (art. 13). Le champ existait au type et
+  // le certificat de paiement le LIT (avance versée + résorption proposée) ;
+  // personne ne l'écrivait : chaque état mensuel proposait donc 0 d'avance et
+  // 0 de résorption, à corriger à la main état après état.
+  const [avance, setAvance] = useState<number | null>(marche?.avanceForfaitaireHT ?? null)
+  // la proposition à 5 % suit le montant initial tant qu'elle est cochée —
+  // décochable, parce qu'un marché SANS avance existe (l'entreprise peut y
+  // renoncer, le CCAP écrire un autre taux) et qu'une avance inventée
+  // ferait résorber au titulaire un argent qu'il n'a jamais reçu
+  const [avanceAuto, setAvanceAuto] = useState(creation)
   const [notes, setNotes] = useState(marche?.notes || '')
+
+  const propositionAvance =
+    montantInitial !== null && montantInitial > 0 ? Math.round(montantInitial * 0.05) : null
+  const avanceRetenue = avanceAuto ? propositionAvance : avance
+
+  // les entreprises déjà connues : le registre (fiches transverses) ET les
+  // noms portés par les marchés existants — un marché saisi avant l'amorce du
+  // registre doit rester proposable, sinon on retape ce que l'outil sait
+  const entreprisesConnues = (() => {
+    const noms = new Map<string, string>()
+    for (const e of state.entreprises) if (e?.raisonSociale) noms.set(fold(e.raisonSociale), e.raisonSociale)
+    for (const m of state.marches) if (m?.entreprise && !noms.has(fold(m.entreprise))) noms.set(fold(m.entreprise), m.entreprise)
+    return [...noms.values()].sort((a, b) => a.localeCompare(b))
+  })()
+
+  // le nom d'abord (c'est ce qu'on lit à l'écran), l'identifiant en repli —
+  // un marché lié à une fiche dont la raison sociale a changé reste lié
+  const entrepriseReconnue =
+    entrepriseDe(state, entreprise.trim()) ?? (entrepriseId ? entrepriseDe(state, entrepriseId) : null)
+
+  /** saisie du nom : on repose l'identité canonique à chaque frappe (le
+   *  rapprochement est celui de la fiche 5.20, pas un second) et on
+   *  pré-remplit le contact — sans JAMAIS écraser une saisie en cours */
+  const saisirEntreprise = (v: string) => {
+    setEntreprise(v)
+    const ent = entrepriseDe(state, v.trim())
+    setEntrepriseId(ent?.id ?? null)
+    const dernier = marchesDe(state, v.trim())
+      .filter((m) => m.id !== marche?.id && (m.contactNom || m.contactEmail))
+      .slice(-1)[0]
+    const nom = ent?.contactNom || dernier?.contactNom || ''
+    const email = ent?.contactEmail || dernier?.contactEmail || ''
+    if (nom && !contactNom.trim()) setContactNom(nom)
+    if (email && !contactEmail.trim()) setContactEmail(email)
+  }
 
   const valide = lot.trim() !== '' && entreprise.trim() !== ''
 
@@ -284,6 +412,10 @@ function ModalMarche({
       const champs = {
         lot: lot.trim(),
         entreprise: entreprise.trim(),
+        // R2 — l'identité canonique quand le nom est reconnu ; null sinon
+        // (une entreprise pas encore au registre reste un nom libre, mais
+        // elle le DIT à l'écran au lieu de scinder la fiche en silence)
+        entrepriseId,
         montantInitialHT: montantInitial ?? 0,
         avenantsHT: avenants ?? 0,
         tauxRG: tauxRG ?? 0.05,
@@ -314,6 +446,9 @@ function ModalMarche({
         actif: actif === 'oui',
         dateDebut,
         dateFin,
+        // 5.19 — null (et non 0) quand il n'y a pas d'avance : le certificat
+        // n'a alors rien à résorber ; 0 affirmerait une avance nulle décidée
+        avanceForfaitaireHT: avanceRetenue !== null && avanceRetenue > 0 ? avanceRetenue : null,
         notes: notes.trim() || undefined,
       }
       if (creation) {
@@ -332,8 +467,33 @@ function ModalMarche({
         <Field label="Lot">
           <TextInput value={lot} onChange={setLot} placeholder="Ex. Lot 01 — Gros œuvre" />
         </Field>
-        <Field label="Entreprise">
-          <TextInput value={entreprise} onChange={setEntreprise} />
+        <Field
+          label="Entreprise"
+          hint={
+            entrepriseReconnue
+              ? `Fiche « ${entrepriseReconnue.raisonSociale} » reconnue : marchés, RG, certificats et GPA se regrouperont dessus.`
+              : entreprise.trim()
+                ? 'Nom libre — pas encore de fiche : reprenez à l’identique le nom déjà utilisé ailleurs, sinon la fiche entreprise se scinde en deux.'
+                : 'Choisissez dans la liste des entreprises déjà connues — le contact se pré-remplit.'
+          }
+        >
+          {/* R2 — datalist : les entreprises déjà connues se choisissent, le
+              nom reste saisissable (un nouveau titulaire n'est pas encore au
+              registre). `TextInput` (ui.tsx) ne porte pas d'attribut `list` :
+              l'input est écrit ici, aux mêmes classes. */}
+          <input
+            className="input"
+            type="text"
+            list="marche-entreprises-connues"
+            value={entreprise}
+            onChange={(e) => saisirEntreprise(e.target.value)}
+            aria-label="Entreprise titulaire du lot"
+          />
+          <datalist id="marche-entreprises-connues">
+            {entreprisesConnues.map((n) => (
+              <option key={n} value={n} />
+            ))}
+          </datalist>
         </Field>
       </div>
       <div className="form-row">
@@ -343,6 +503,40 @@ function ModalMarche({
         <Field label="Avenants HT (€)">
           <NumInput value={avenants} onChange={setAvenants} />
         </Field>
+        {/* <div> et non <Field> : la case à cocher est un second contrôle,
+            et deux <label> imbriqués renverraient le clic au champ montant */}
+        <div className="field">
+          <span className="field-label">Avance forfaitaire HT (€)</span>
+          <NumInput
+            value={avanceRetenue}
+            onChange={(v) => {
+              // taper décoche : la valeur saisie fait foi sur la proposition
+              setAvanceAuto(false)
+              setAvance(v)
+            }}
+            ariaLabel="Avance forfaitaire du marché en euros HT"
+          />
+          <label
+            className="small muted"
+            style={{ display: 'flex', gap: 6, alignItems: 'center', cursor: 'pointer' }}
+          >
+            <input
+              type="checkbox"
+              checked={avanceAuto}
+              onChange={(e) => {
+                setAvanceAuto(e.target.checked)
+                // décocher garde le chiffre sous la main : on l'ajuste, on ne le retape pas
+                if (!e.target.checked) setAvance(propositionAvance)
+              }}
+            />
+            proposer 5 % du montant initial
+            {avanceAuto && propositionAvance === null && ' (montant initial à saisir)'}
+          </label>
+          <span className="field-hint">
+            CCAG art. 13 — versée au démarrage. Le certificat de paiement la résorbe entre 65 % et
+            80 % d'avancement ; vide = pas d'avance.
+          </span>
+        </div>
       </div>
       <div className="form-row">
         <Field
@@ -862,8 +1056,12 @@ export function CartePenalites({ projet: p }: { projet: Projet }) {
         message:
           `Appliquer la pénalité de ${fmtMoney(encouru.montantHT, true)} HT — ${LIBELLE_EVENEMENT[e.type]}` +
           `${m ? ` (${m.lot} — ${m.entreprise})` : ''} ?\n` +
-          `Le montant sera figé et la décision signée « ${signataire} ». Le report sur la situation reste à faire à la main : ` +
-          `une pénalité est un acte contractuel.`,
+          `Le montant sera figé et la décision signée « ${signataire} ».\n` +
+          // S2 — le message disait « report à la main » alors que le
+          // certificat (certificat.ts) déduit DÉJÀ les pénalités appliquées :
+          // le suivre faisait payer la pénalité DEUX FOIS à l'entreprise.
+          `Elle sera proposée en déduction au prochain certificat de paiement (ligne D) — ` +
+          `ne la déduisez pas aussi de la situation.`,
         danger: true,
         confirmerLabel: 'Appliquer la pénalité',
       }))
@@ -879,7 +1077,10 @@ export function CartePenalites({ projet: p }: { projet: Projet }) {
       x.decidePar = signataire
       x.decideLe = todayISO()
     })
-    toast('Pénalité appliquée — montant figé, décision signée.', { tone: 'ok' })
+    toast(
+      'Pénalité appliquée — montant figé, décision signée. Le prochain certificat la proposera en déduction (ligne D).',
+      { tone: 'ok' },
+    )
   }
 
   const annulerApplication = async (e: EvenementMarche) => {
@@ -1022,7 +1223,7 @@ export function CartePenalites({ projet: p }: { projet: Projet }) {
                         kind="primary"
                         disabled={!encouru}
                         onClick={() => void appliquer(e)}
-                        title="Fige le montant encouru et signe la décision — le report sur la situation reste manuel"
+                        title="Fige le montant encouru et signe la décision — la déduction est ensuite PROPOSÉE au prochain certificat (ligne D) : ne la reprenez pas sur la situation"
                       >
                         Appliquer
                       </Btn>
@@ -1047,6 +1248,13 @@ export function CartePenalites({ projet: p }: { projet: Projet }) {
               )
             })}
           </Table>
+          {/* S2 — dit UNE fois, là où l'on décide : la déduction est
+              automatique au certificat, la reprendre sur la situation ferait
+              payer deux fois (certificat.ts, ligne D) */}
+          <p className="muted small" style={{ marginTop: 8 }}>
+            Une pénalité appliquée est proposée en déduction du prochain certificat de paiement
+            (ligne D), une seule fois : ne la déduisez pas en plus de la situation de l'entreprise.
+          </p>
           {marchesAvecEvenements.length > 0 && (
             <p className="muted small" style={{ marginTop: 8 }}>
               {marchesAvecEvenements.map((m) => (
@@ -1179,11 +1387,35 @@ function ModalEvenement({
 // des pénalités ci-dessus) — même chiffre, même fonction.
 // ============================================================
 
+/** garde-fou de saisie : au-delà, ce n'est plus un épisode d'intempéries
+ *  mais une date mal tapée — 90 jours couvrent un hiver entier */
+const MAX_JOURS_PERIODE = 90
+
+/** les jours OUVRÉS d'une période, bornes incluses. L'énumération s'appuie
+ *  sur `estJourOuvre` (src/penalites.ts), seule autorité du dépôt sur « un
+ *  samedi n'est pas un jour de chantier » — le décompte affiché ici est donc
+ *  exactement celui que `prolongationDelai` retiendra. */
+function joursOuvresEntre(debut: string, fin: string): string[] {
+  const jours: string[] = []
+  let j = debut
+  while (j <= fin && jours.length <= MAX_JOURS_PERIODE) {
+    if (estJourOuvre(j)) jours.push(j)
+    j = addDays(j, 1)
+  }
+  return jours
+}
+
 export function CarteIntemperies({ projet: p }: { projet: Projet }) {
   const { state, update, replace } = useStore()
   const [date, setDate] = useState<string | null>(todayISO())
+  // 5.3 — la période : une semaine de gel se consigne d'un geste au lieu de
+  // cinq. Vide = un seul jour (le geste d'avant, inchangé).
+  const [dateFin, setDateFin] = useState<string | null>(null)
   const [nature, setNature] = useState<NatureIntemperie>('pluie')
   const [commentaire, setCommentaire] = useState('')
+  // ... et le même gel arrête TOUS les chantiers : la case évite de rouvrir
+  // chaque projet pour retaper les mêmes jours
+  const [aussiAutres, setAussiAutres] = useState(false)
 
   const intemperies = state.intemperies
     .filter((i) => i.projetId === p.id)
@@ -1195,18 +1427,73 @@ export function CarteIntemperies({ projet: p }: { projet: Projet }) {
     (m) => m.projetId === p.id && (m.dateDebut || m.dateFin),
   )
 
+  // « les autres chantiers en cours » : les projets qui ont au moins un
+  // marché actif — le MÊME critère que « Chantier en cours » du marché, celui
+  // qui fait attendre une situation mensuelle
+  const autresChantiers = state.projets.filter(
+    (x) => x.id !== p.id && state.marches.some((m) => m.projetId === x.id && m.actif),
+  )
+
+  // les jours qui seront consignés : un seul (bornes égales ou fin vide) ou
+  // les jours ouvrés de la période — jamais les week-ends, qui ne comptent ni
+  // dans la prolongation ni dans la déduction
+  const periode = Boolean(date && dateFin && dateFin > date)
+  const joursASaisir: string[] = !date ? [] : periode ? joursOuvresEntre(date, dateFin!) : [date]
+  const tropLongue = Boolean(periode && diffDays(date!, dateFin!) + 1 > MAX_JOURS_PERIODE)
+  const projetsVises = aussiAutres ? [p, ...autresChantiers] : [p]
+
   const ajouter = () => {
     if (!date) return
-    update((d) => {
-      d.intemperies.push({
-        id: uid('intemp'),
-        projetId: p.id,
-        date,
-        nature,
-        commentaire: commentaire.trim(),
+    if (dateFin && dateFin < date) {
+      toast('La fin de période précède son début.', { tone: 'danger' })
+      return
+    }
+    if (tropLongue) {
+      toast(`Période trop longue (plus de ${MAX_JOURS_PERIODE} jours) — consignez mois par mois.`, {
+        tone: 'danger',
       })
+      return
+    }
+    if (joursASaisir.length === 0) {
+      toast('Aucun jour ouvré dans cette période — rien à consigner.', { tone: 'warn' })
+      return
+    }
+    // ce qui sera écrit se décide AVANT l'écriture, sur l'état lisible ici :
+    // un même (chantier, jour, nature) ne se consigne pas deux fois — le
+    // registre est une trace opposable, pas un journal de clics
+    const nouveaux: Intemperie[] = []
+    let deja = 0
+    for (const pr of projetsVises) {
+      for (const j of joursASaisir) {
+        if (state.intemperies.some((i) => i.projetId === pr.id && i.date === j && i.nature === nature)) {
+          deja++
+          continue
+        }
+        nouveaux.push({
+          id: uid('intemp'),
+          projetId: pr.id,
+          date: j,
+          nature,
+          commentaire: commentaire.trim(),
+        })
+      }
+    }
+    if (nouveaux.length === 0) {
+      toast('Ces jours sont déjà au registre — rien de nouveau consigné.', { tone: 'warn' })
+      return
+    }
+    const snap = state
+    update((d) => {
+      d.intemperies.push(...nouveaux)
     })
     setCommentaire('')
+    toast(
+      `${nouveaux.length} jour${nouveaux.length > 1 ? 's' : ''} consigné${nouveaux.length > 1 ? 's' : ''}` +
+        (projetsVises.length > 1 ? ` sur ${projetsVises.length} chantiers` : '') +
+        (deja > 0 ? ` — ${deja} déjà au registre, ignoré${deja > 1 ? 's' : ''}` : '') +
+        '.',
+      { tone: 'ok', undo: () => replace(snap) },
+    )
   }
 
   const supprimer = (i: (typeof intemperies)[number]) => {
@@ -1220,7 +1507,10 @@ export function CarteIntemperies({ projet: p }: { projet: Projet }) {
   return (
     <Card titre="Registre des intempéries">
       <div className="toolbar">
-        <DateInput value={date} onChange={setDate} style={{ maxWidth: 170 }} />
+        <span className="small muted">du</span>
+        <DateInput value={date} onChange={setDate} style={{ maxWidth: 160 }} />
+        <span className="small muted">au</span>
+        <DateInput value={dateFin} onChange={setDateFin} style={{ maxWidth: 160 }} />
         <Select
           value={nature}
           onChange={(v) => setNature(v as NatureIntemperie)}
@@ -1234,11 +1524,45 @@ export function CarteIntemperies({ projet: p }: { projet: Projet }) {
           value={commentaire}
           onChange={setCommentaire}
           placeholder="Constat opposable : seuil du CCAP atteint, CR n°…, relevé météo…"
-          style={{ maxWidth: 420 }}
+          style={{ maxWidth: 360 }}
         />
         <Btn small kind="primary" onClick={ajouter} disabled={!date}>
-          Consigner le jour
+          {periode ? `Consigner ${joursASaisir.length} jour${joursASaisir.length > 1 ? 's' : ''}` : 'Consigner le jour'}
         </Btn>
+      </div>
+      <div
+        className="small"
+        style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', marginTop: 6 }}
+      >
+        {autresChantiers.length > 0 && (
+          <label style={{ display: 'flex', gap: 6, alignItems: 'center', cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={aussiAutres}
+              onChange={(e) => setAussiAutres(e.target.checked)}
+            />
+            <span>
+              appliquer aussi aux {autresChantiers.length} autre
+              {autresChantiers.length > 1 ? 's' : ''} chantier{autresChantiers.length > 1 ? 's' : ''} en
+              cours{' '}
+              <span className="muted" title={autresChantiers.map((x) => x.nom).join(', ')}>
+                ({autresChantiers.map((x) => x.id).join(', ')})
+              </span>
+            </span>
+          </label>
+        )}
+        <span className="muted">
+          {!date
+            ? 'Indiquez la date du constat.'
+            : tropLongue
+              ? `Période de plus de ${MAX_JOURS_PERIODE} jours : à consigner mois par mois.`
+              : periode
+                ? `${fmtDate(date)} → ${fmtDate(dateFin)} : ${joursASaisir.length} jour${joursASaisir.length > 1 ? 's' : ''} ouvré${joursASaisir.length > 1 ? 's' : ''} (week-ends ignorés)` +
+                  (projetsVises.length > 1
+                    ? ` × ${projetsVises.length} chantiers = ${joursASaisir.length * projetsVises.length} lignes`
+                    : '')
+                : "« au » vide : un seul jour. Une semaine d'arrêt se consigne d'un geste en renseignant la fin."}
+        </span>
       </div>
       {intemperies.length === 0 ? (
         <EmptyState>
@@ -1288,8 +1612,9 @@ export function CarteIntemperies({ projet: p }: { projet: Projet }) {
             </p>
           )}
           <p className="muted small" style={{ marginTop: 4 }}>
-            Deux natures le même jour comptent UN jour ; les week-ends sont consignés mais non
-            comptés.
+            Deux natures le même jour comptent UN jour. Un jour isolé se consigne même le week-end
+            (pour mémoire) ; sur une période, les week-ends ne sont pas consignés — dans les deux cas
+            ils ne comptent pas.
           </p>
         </>
       )}
@@ -1788,6 +2113,25 @@ const LIBELLE_STATUT: Record<StatutReunion, { label: string; tone: Tone }> = {
   diffuse: { label: 'CR diffusé', tone: 'ok' },
 }
 
+/** S2 — le badge de la ligne : le statut stocké, lu AVEC la date. Une réunion
+ *  de la semaine prochaine affichée « CR à générer » en orange, c'est un
+ *  retard qui n'existe pas — et un badge qui crie pour rien finit ignoré, y
+ *  compris le jour où il dit vrai. Symétriquement, une réunion passée restée
+ *  « à préparer » ne s'annonce pas « à venir » : elle dit ce que dit déjà
+ *  l'alerte de l'accueil (alerts.ts) — le CR est à sortir. */
+function badgeReunion(r: ReunionChantier, today: string): { label: string; tone: Tone; title?: string } {
+  if (r.statut !== 'a_preparer') return LIBELLE_STATUT[r.statut]
+  if (r.date > today)
+    return { label: 'à venir', tone: 'muted', title: `Réunion du ${fmtDate(r.date)} — rien à sortir avant` }
+  if (r.date === today)
+    return { label: 'aujourd’hui', tone: 'info', title: 'Réunion du jour — déposez l’enregistrement à la sortie' }
+  return {
+    label: 'CR à générer',
+    tone: 'warn',
+    title: 'Réunion passée restée « à préparer » : le CR n’a pas encore été produit',
+  }
+}
+
 function participantsParDefaut(state: ReturnType<typeof useStore>['state'], p: Projet): string {
   const lignes = [
     `MOE : ${state.settings.nomAgence} (${state.settings.personnes.join(', ')})`,
@@ -1801,22 +2145,27 @@ function participantsParDefaut(state: ReturnType<typeof useStore>['state'], p: P
 
 export function CarteReunions({ projet: p }: { projet: Projet }) {
   const { state, update, replace } = useStore()
+  const today = todayISO()
   const [assistant, setAssistant] = useState<{ reunion: ReunionChantier; fichier?: File } | null>(null)
   const [reprog, setReprog] = useState<ReunionChantier | null>(null)
   const [lectureCR, setLectureCR] = useState<ReunionChantier | null>(null)
+  const [nouvelle, setNouvelle] = useState(false)
 
   const reunions = state.reunions
     .filter((r) => r.projetId === p.id)
     .sort((a, b) => b.date.localeCompare(a.date))
 
+  const titreParDefaut = `Réunion de chantier n°${reunions.length + 1}`
+
+  /** dépôt d'un enregistrement : la réunion a EU LIEU, elle naît donc avec
+   *  son CR à générer et l'assistant s'ouvre sur la transcription */
   const creer = (fichier?: File) => {
-    const n = reunions.length + 1
     const reunion: ReunionChantier = {
       id: uid('reu'),
       projetId: p.id,
-      date: todayISO(),
+      date: today,
       heure: '14:00',
-      titre: `Réunion de chantier n°${n}`,
+      titre: titreParDefaut,
       participants: participantsParDefaut(state, p),
       statut: 'cr_a_generer',
     }
@@ -1824,6 +2173,51 @@ export function CarteReunions({ projet: p }: { projet: Projet }) {
       d.reunions.push(reunion)
     })
     setAssistant({ reunion, fichier })
+  }
+
+  /** réunion posée à l'agenda : c'est la DATE qui décide du statut de départ
+   *  (S2). À venir → « à préparer », et l'assistant ne s'ouvre pas : il n'y a
+   *  rien à transcrire avant qu'elle ait eu lieu. */
+  const creerPlanifiee = (champs: { date: string; heure: string; titre: string }) => {
+    const snap = state
+    const aVenir = champs.date > today
+    const reunion: ReunionChantier = {
+      id: uid('reu'),
+      projetId: p.id,
+      date: champs.date,
+      heure: champs.heure || undefined,
+      titre: champs.titre.trim() || titreParDefaut,
+      participants: participantsParDefaut(state, p),
+      statut: aVenir ? 'a_preparer' : 'cr_a_generer',
+    }
+    update((d) => {
+      d.reunions.push(reunion)
+    })
+    setNouvelle(false)
+    if (aVenir) {
+      toast(`« ${reunion.titre} » créée pour le ${fmtDate(reunion.date)} — à préparer.`, {
+        tone: 'ok',
+        undo: () => replace(snap),
+      })
+    } else {
+      setAssistant({ reunion })
+    }
+  }
+
+  const supprimer = async (r: ReunionChantier) => {
+    const snap = state
+    if (
+      !(await confirmer({
+        message: `Supprimer « ${r.titre} » ?${r.cr ? '\nLe CR conservé sur la réunion sera supprimé avec elle.' : ''}`,
+        danger: true,
+        confirmerLabel: 'Supprimer',
+      }))
+    )
+      return
+    update((d) => {
+      d.reunions = d.reunions.filter((x) => x.id !== r.id)
+    })
+    toast('Réunion supprimée.', { undo: () => replace(snap) })
   }
 
   return (
@@ -1844,7 +2238,7 @@ export function CarteReunions({ projet: p }: { projet: Projet }) {
               }}
             />
           </label>
-          <Btn small onClick={() => creer()}>Nouvelle réunion</Btn>
+          <Btn small onClick={() => setNouvelle(true)}>Nouvelle réunion</Btn>
         </>
       }
     >
@@ -1855,51 +2249,50 @@ export function CarteReunions({ projet: p }: { projet: Projet }) {
         </EmptyState>
       ) : (
         <Table compact head={['Réunion', 'Quand', 'Statut', 'CR', '']}>
-          {reunions.map((r) => (
-            <tr key={r.id}>
-              <td>
-                <strong>{r.titre}</strong>
-                {r.notes && <div className="muted small">{r.notes}</div>}
-              </td>
-              <td style={{ whiteSpace: 'nowrap' }}>
-                {fmtDate(r.date)}
-                {r.heure && <span className="mono"> · {r.heure}</span>}
-              </td>
-              <td><Badge tone={LIBELLE_STATUT[r.statut].tone}>{LIBELLE_STATUT[r.statut].label}</Badge></td>
-              <td>
-                {r.cr ? (
-                  <Btn small kind="ghost" onClick={() => setLectureCR(r)}>Voir le CR</Btn>
-                ) : (
-                  <span className="muted small">—</span>
-                )}
-              </td>
-              <td className="right">
-                <span style={{ display: 'inline-flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                  <Btn small onClick={() => setReprog(r)} title="Changer la date ou l'heure en un geste">
-                    Reprogrammer
-                  </Btn>
-                  <Btn small kind={r.statut === 'diffuse' ? 'default' : 'primary'} onClick={() => setAssistant({ reunion: r })}>
-                    {r.statut === 'diffuse' ? 'Rouvrir' : 'Assistant CR'}
-                  </Btn>
-                  <Btn
-                    small
-                    kind="danger"
-                    onClick={async () => {
-                      const snap = state
-                      if (await confirmer({ message: `Supprimer « ${r.titre} » ?`, danger: true, confirmerLabel: 'Supprimer' })) {
-                        update((d) => {
-                          d.reunions = d.reunions.filter((x) => x.id !== r.id)
-                        })
-                        toast('Réunion supprimée.', { undo: () => replace(snap) })
-                      }
-                    }}
-                  >
-                    Suppr.
-                  </Btn>
-                </span>
-              </td>
-            </tr>
-          ))}
+          {reunions.map((r) => {
+            const badge = badgeReunion(r, today)
+            return (
+              <tr key={r.id}>
+                <td>
+                  <strong>{r.titre}</strong>
+                  {r.notes && <div className="muted small">{r.notes}</div>}
+                </td>
+                <td style={{ whiteSpace: 'nowrap' }}>
+                  {fmtDate(r.date)}
+                  {r.heure && <span className="mono"> · {r.heure}</span>}
+                </td>
+                <td>
+                  <span title={badge.title}>
+                    <Badge tone={badge.tone}>{badge.label}</Badge>
+                  </span>
+                </td>
+                <td>
+                  {r.cr ? (
+                    <Btn small kind="ghost" onClick={() => setLectureCR(r)}>Voir le CR</Btn>
+                  ) : (
+                    <span className="muted small">—</span>
+                  )}
+                </td>
+                <td className="right">
+                  <span style={{ display: 'inline-flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                    <Btn small onClick={() => setReprog(r)} title="Changer la date ou l'heure en un geste">
+                      Reprogrammer
+                    </Btn>
+                    <Btn small kind={r.statut === 'diffuse' ? 'default' : 'primary'} onClick={() => setAssistant({ reunion: r })}>
+                      {r.statut === 'diffuse' ? 'Rouvrir' : r.statut === 'a_preparer' && r.date > today ? 'Préparer' : 'Assistant CR'}
+                    </Btn>
+                    {/* « Supprimer » rangé comme partout ailleurs : un bouton
+                        rouge à nu au bout de chaque ligne se clique un jour */}
+                    <RowMenu
+                      items={[
+                        { label: 'Supprimer la réunion', danger: true, onClick: () => void supprimer(r) },
+                      ]}
+                    />
+                  </span>
+                </td>
+              </tr>
+            )
+          })}
         </Table>
       )}
 
@@ -1909,6 +2302,14 @@ export function CarteReunions({ projet: p }: { projet: Projet }) {
           reunion={state.reunions.find((r) => r.id === assistant.reunion.id) || assistant.reunion}
           fichierInitial={assistant.fichier}
           onClose={() => setAssistant(null)}
+        />
+      )}
+      {nouvelle && (
+        <ModalNouvelleReunion
+          titreParDefaut={titreParDefaut}
+          today={today}
+          onValider={creerPlanifiee}
+          onClose={() => setNouvelle(false)}
         />
       )}
       {reprog && <ModalReprogrammation reunion={reprog} onClose={() => setReprog(null)} />}
@@ -1922,21 +2323,95 @@ export function CarteReunions({ projet: p }: { projet: Projet }) {
   )
 }
 
+/** poser une réunion à l'agenda : date, heure, titre — trois champs. La date
+ *  décide du statut de départ (S2), c'est la seule raison d'être de cette
+ *  modale plutôt que d'une création silencieuse au jour même. */
+function ModalNouvelleReunion({
+  titreParDefaut,
+  today,
+  onValider,
+  onClose,
+}: {
+  titreParDefaut: string
+  today: string
+  onValider: (champs: { date: string; heure: string; titre: string }) => void
+  onClose: () => void
+}) {
+  const [date, setDate] = useState<string | null>(today)
+  const [heure, setHeure] = useState('14:00')
+  const [titre, setTitre] = useState(titreParDefaut)
+  const aVenir = Boolean(date && date > today)
+
+  return (
+    <Modal titre="Nouvelle réunion de chantier" onClose={onClose}>
+      <div className="form-row">
+        <Field label="Titre">
+          <TextInput value={titre} onChange={setTitre} />
+        </Field>
+        <Field label="Date">
+          <DateInput value={date} onChange={setDate} />
+        </Field>
+        <Field label="Heure">
+          <input
+            className="input"
+            type="time"
+            value={heure}
+            onChange={(e) => setHeure(e.target.value)}
+            aria-label="Heure de la réunion"
+          />
+        </Field>
+      </div>
+      <p className="small muted" style={{ marginTop: 0 }}>
+        {aVenir
+          ? 'Réunion à venir : elle naît « à préparer » — pas de CR réclamé avant qu’elle ait eu lieu. Les convoqués sont repris des marchés et de la MOA.'
+          : 'Réunion du jour ou passée : l’assistant CR s’ouvre pour la transcription et le compte-rendu.'}
+      </p>
+      <div className="form-foot">
+        <Btn onClick={onClose}>Annuler</Btn>
+        <Btn
+          kind="primary"
+          disabled={!date}
+          onClick={() => date && onValider({ date, heure, titre })}
+        >
+          {aVenir ? 'Créer la réunion' : 'Créer et ouvrir l’assistant'}
+        </Btn>
+      </div>
+    </Modal>
+  )
+}
+
 /** reprogrammation « dernière minute » : date + heure, rien d'autre */
 function ModalReprogrammation({ reunion, onClose }: { reunion: ReunionChantier; onClose: () => void }) {
   const { update } = useStore()
+  const today = todayISO()
   const [date, setDate] = useState<string | null>(reunion.date)
   const [heure, setHeure] = useState(reunion.heure || '')
 
   const enregistrer = () => {
     if (!date) return toast('Indiquer la date.', { tone: 'danger' })
+    // S2 — le statut suit la date tant qu'aucun CR n'existe : reporter une
+    // réunion à la semaine prochaine ne doit pas laisser un « CR à générer »
+    // orange derrière soi, et la ramener à hier ne doit pas la laisser
+    // « à venir ». Dès qu'un CR est écrit, on ne touche plus à rien.
+    const bascule =
+      !reunion.cr && reunion.statut === 'cr_a_generer' && date > today
+        ? 'a_preparer'
+        : !reunion.cr && reunion.statut === 'a_preparer' && date <= today
+          ? 'cr_a_generer'
+          : null
     update((d) => {
       const r = d.reunions.find((x) => x.id === reunion.id)
       if (!r) return
       r.date = date
       r.heure = heure || undefined
+      if (bascule) r.statut = bascule
     })
-    toast(`« ${reunion.titre} » reprogrammée au ${fmtDate(date)}${heure ? ` à ${heure}` : ''}.`, { tone: 'ok' })
+    toast(
+      `« ${reunion.titre} » reprogrammée au ${fmtDate(date)}${heure ? ` à ${heure}` : ''}` +
+        (bascule === 'a_preparer' ? ' — à préparer' : bascule === 'cr_a_generer' ? ' — CR à générer' : '') +
+        '.',
+      { tone: 'ok' },
+    )
     onClose()
   }
 

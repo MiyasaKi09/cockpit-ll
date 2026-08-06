@@ -41,10 +41,20 @@ import {
 } from '../achats'
 import type { AttenduOuvert, BrouillonAchat } from '../achats'
 import { lireFactureXML } from '../facturx'
-import { PHASES_ORDRE } from '../miqcp'
+import { LIBELLES_PHASES, PHASES_ORDRE } from '../miqcp'
+import { nomProjet } from '../derive'
 import { addDays, fmtDate, fmtMoney, uid } from '../util'
 
 const CATEGORIES_OPTIONS = CATEGORIES_ACHAT.map((c) => ({ value: c, label: c }))
+
+/** phases proposées avec leur libellé : « DCE » seul ne dit rien à qui reprend
+ *  la saisie — le code reste en tête pour rester reconnaissable (S4) */
+const PHASES_OPTIONS = PHASES_ORDRE.map((c) => ({ value: c, label: `${c} — ${LIBELLES_PHASES[c]}` }))
+
+/** barème kilométrique par défaut (€/km) — ordre de grandeur d'un véhicule
+ *  5 CV. C'est une PROPOSITION : le champ reste modifiable note par note, la
+ *  machine ne décide pas de l'indemnité à la place de l'humain. */
+const BAREME_KM_DEFAUT = 0.6
 
 // ------------------------------------------------------------------
 // Modal facture fournisseur (création / validation / répartition)
@@ -169,11 +179,11 @@ function AchatModal({
                   options={[{ value: '', label: 'Agence' }, ...state.projets.map((p) => ({ value: p.id, label: p.id }))]}
                 />
               </td>
-              <td style={{ width: 100 }}>
+              <td style={{ width: 150 }}>
                 <Select
                   value={vent.phase || ''}
                   onChange={(ph) => majVentilation(vent.id, { phase: (ph || null) as PhaseCode | null })}
-                  options={[{ value: '', label: '—' }, ...PHASES_ORDRE.map((c) => ({ value: c, label: c }))]}
+                  options={[{ value: '', label: '— aucune phase —' }, ...PHASES_OPTIONS]}
                 />
               </td>
               <td style={{ minWidth: 170 }}>
@@ -258,6 +268,18 @@ function NoteFraisModal({ onClose, onSave }: { onClose: () => void; onSave: (n: 
   const [phase, setPhase] = useState('')
   const [categorie, setCategorie] = useState('Déplacements / hébergement')
   const [kilometres, setKilometres] = useState<number | null>(null)
+  const [bareme, setBareme] = useState<number | null>(BAREME_KM_DEFAUT)
+  // le montant se PROPOSE (km × barème) et reste corrigeable : on ne réécrit
+  // jamais un montant saisi à la main, seulement celui qu'on a proposé
+  const [montantPropose, setMontantPropose] = useState<number | null>(null)
+  const proposerMontant = (km: number | null, b: number | null) => {
+    setKilometres(km)
+    setBareme(b)
+    if (km == null || b == null) return
+    const calcule = Math.round(km * b * 100) / 100
+    setMontantTTC((actuel) => (actuel == null || actuel === montantPropose ? calcule : actuel))
+    setMontantPropose(calcule)
+  }
   return (
     <Modal titre="Note de frais" onClose={onClose}>
       <div className="form-row">
@@ -291,7 +313,7 @@ function NoteFraisModal({ onClose, onSave }: { onClose: () => void; onSave: (n: 
           <Select value={projetId} onChange={setProjetId} options={[{ value: '', label: 'Agence' }, ...state.projets.map((p) => ({ value: p.id, label: p.id }))]} />
         </Field>
         <Field label="Phase">
-          <Select value={phase} onChange={setPhase} options={[{ value: '', label: '—' }, ...PHASES_ORDRE.map((c) => ({ value: c, label: c }))]} />
+          <Select value={phase} onChange={setPhase} options={[{ value: '', label: '— aucune phase —' }, ...PHASES_OPTIONS]} />
         </Field>
         <Field label="Catégorie">
           <Select value={categorie} onChange={setCategorie} options={CATEGORIES_OPTIONS} />
@@ -299,7 +321,10 @@ function NoteFraisModal({ onClose, onSave }: { onClose: () => void; onSave: (n: 
       </div>
       <div className="form-row" style={{ marginTop: 10 }}>
         <Field label="Kilométrage (km)" hint="indemnités km — séparées d'une facture classique">
-          <NumInput value={kilometres} onChange={setKilometres} />
+          <NumInput value={kilometres} onChange={(km) => proposerMontant(km, bareme)} />
+        </Field>
+        <Field label="Barème (€/km)" hint="proposition modifiable — le TTC ci-dessus suit km × barème">
+          <NumInput value={bareme} onChange={(b) => proposerMontant(kilometres, b)} />
         </Field>
       </div>
       <div className="form-foot">
@@ -407,6 +432,9 @@ export default function Achats() {
   const [creation, setCreation] = useState<{ initial: ValeursAchat; source: FactureAchat['source']; contratId?: string } | null>(null)
   const [validation, setValidation] = useState<FactureAchat | null>(null)
   const [noteOuverte, setNoteOuverte] = useState(false)
+  /** l'échéancier ne montrait QUE le reste à payer : une facture réglée
+   *  disparaissait de l'écran, impossible à relire ou à corriger (action 23) */
+  const [etatDecaissement, setEtatDecaissement] = useState<'a_payer' | 'payees' | 'toutes'>('a_payer')
 
   const aValider = state.facturesAchat.filter((f) => f.statut === 'a_valider')
   const validees = useMemo(
@@ -414,8 +442,19 @@ export default function Achats() {
     [state.facturesAchat],
   )
   const aPayer = validees.filter((f) => !f.payeLe)
+  const payees = validees.filter((f) => !!f.payeLe)
   const totalAPayer = aPayer.reduce((s, f) => s + f.montantTTC, 0)
   const enRetard = aPayer.filter((f) => (f.dateEcheance || f.dateFacture) < today)
+  // à payer d'abord, par échéance ; les réglées ensuite, la plus récente en tête
+  const decaissements = useMemo(() => {
+    const attente = [...aPayer].sort((a, b) =>
+      (a.dateEcheance || a.dateFacture).localeCompare(b.dateEcheance || b.dateFacture),
+    )
+    const reglees = [...payees].sort((a, b) => (b.payeLe || '').localeCompare(a.payeLe || ''))
+    if (etatDecaissement === 'a_payer') return attente
+    if (etatDecaissement === 'payees') return reglees
+    return [...attente, ...reglees]
+  }, [aPayer, payees, etatDecaissement])
   const attendus = useMemo(() => attendusOuverts(state, today), [state, today])
   const balance = useMemo(() => balanceFournisseurs(state, today), [state, today])
   const frais = [...state.notesFrais].sort((a, b) => b.date.localeCompare(a.date))
@@ -479,7 +518,8 @@ export default function Achats() {
     toast('Proposition écartée.', { undo: () => replace(snap) })
   }
 
-  const marquerPayee = (f: FactureAchat, date: string) =>
+  const marquerPayee = (f: FactureAchat, date: string) => {
+    const snap = state
     update((d) => {
       const x = d.facturesAchat.find((y) => y.id === f.id)
       if (x) {
@@ -490,6 +530,10 @@ export default function Achats() {
         x.evenements = [...(x.evenements || []), { date, type: 'paiement', detail: 'Marquée payée à la main (hors banque) — à confirmer par rapprochement.' }]
       }
     })
+    toast(`${f.fournisseur} marquée payée le ${fmtDate(date)} — à confirmer par rapprochement bancaire.`, {
+      undo: () => replace(snap),
+    })
+  }
 
   const importerXml = (file: File) => {
     const lecteur = new FileReader()
@@ -622,30 +666,70 @@ export default function Achats() {
       </Card>
 
       {/* ----- échéancier de décaissement ----- */}
-      <Card titre={`À payer — échéancier de décaissement (${aPayer.length})`}>
-        {aPayer.length === 0 ? (
-          <EmptyState>Aucune facture fournisseur en attente de paiement.</EmptyState>
+      <Card
+        titre={`Échéancier de décaissement — ${aPayer.length} à payer`}
+        actions={
+          <Select
+            value={etatDecaissement}
+            onChange={(v) => setEtatDecaissement(v as 'a_payer' | 'payees' | 'toutes')}
+            options={[
+              { value: 'a_payer', label: `À payer (${aPayer.length})` },
+              { value: 'payees', label: `Payées (${payees.length})` },
+              { value: 'toutes', label: `Toutes (${validees.length})` },
+            ]}
+          />
+        }
+      >
+        {decaissements.length === 0 ? (
+          <EmptyState>
+            {etatDecaissement === 'payees'
+              ? 'Aucune facture fournisseur réglée pour l’instant.'
+              : etatDecaissement === 'a_payer'
+                ? 'Aucune facture fournisseur en attente de paiement.'
+                : 'Aucune facture fournisseur validée.'}
+          </EmptyState>
         ) : (
-          <Table compact head={['Échéance', 'Fournisseur', 'Affectation', <span key="t" className="right">TTC</span>, '']}>
-            {[...aPayer]
-              .sort((a, b) => (a.dateEcheance || a.dateFacture).localeCompare(b.dateEcheance || b.dateFacture))
-              .map((f) => (
-                <tr key={f.id}>
-                  <td className={(f.dateEcheance || f.dateFacture) < today ? 'danger-text' : undefined}>
-                    <DateF d={f.dateEcheance || f.dateFacture} />
-                  </td>
-                  <td>
-                    {f.fournisseur}
-                    {f.numeroFournisseur && <span className="muted small"> · {f.numeroFournisseur}</span>}
-                  </td>
-                  <td className="small">
-                    {f.ventilations.map((v) => (v.projetId ? `${v.projetId}${v.phase ? '/' + v.phase : ''}` : 'agence')).join(' · ')}
-                  </td>
-                  <td className="right">
-                    <Money v={f.montantTTC} cents />
-                  </td>
-                  <td>
-                    <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+          <Table compact head={['Échéance', 'Fournisseur', 'Affectation', <span key="t" className="right">TTC</span>, 'État', '']}>
+            {decaissements.map((f) => (
+              <tr key={f.id}>
+                <td className={!f.payeLe && (f.dateEcheance || f.dateFacture) < today ? 'danger-text' : undefined}>
+                  <DateF d={f.dateEcheance || f.dateFacture} />
+                </td>
+                <td>
+                  {f.fournisseur}
+                  {f.numeroFournisseur && <span className="muted small"> · {f.numeroFournisseur}</span>}
+                </td>
+                <td
+                  className="small"
+                  title={f.ventilations
+                    .map((v) =>
+                      v.projetId
+                        ? `${nomProjet(state, v.projetId)}${v.phase ? ` · ${LIBELLES_PHASES[v.phase]}` : ''}`
+                        : 'Agence',
+                    )
+                    .join(' · ')}
+                >
+                  {f.ventilations.map((v) => (v.projetId ? `${v.projetId}${v.phase ? '/' + v.phase : ''}` : 'agence')).join(' · ')}
+                </td>
+                <td className="right">
+                  <Money v={f.montantTTC} cents />
+                </td>
+                <td>
+                  {f.payeLe ? (
+                    <>
+                      <Badge tone="ok">payée</Badge>
+                      <div className="muted small">le {fmtDate(f.payeLe)}</div>
+                      {f.paiementAConfirmer && <Badge tone="warn">à confirmer en banque</Badge>}
+                    </>
+                  ) : (f.dateEcheance || f.dateFacture) < today ? (
+                    <Badge tone="danger">échue</Badge>
+                  ) : (
+                    <Badge tone="muted">à payer</Badge>
+                  )}
+                </td>
+                <td>
+                  <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                    {!f.payeLe && (
                       <Btn
                         small
                         onClick={() => marquerPayee(f, today)}
@@ -653,11 +737,12 @@ export default function Achats() {
                       >
                         Payée
                       </Btn>
-                      <RowMenu items={[{ label: 'Modifier / répartir…', onClick: () => setValidation(f) }]} />
-                    </div>
-                  </td>
-                </tr>
-              ))}
+                    )}
+                    <RowMenu items={[{ label: 'Modifier / répartir…', onClick: () => setValidation(f) }]} />
+                  </div>
+                </td>
+              </tr>
+            ))}
           </Table>
         )}
         <p className="muted small" style={{ margin: '10px 2px 0' }}>

@@ -7,9 +7,12 @@
 
 import { Fragment, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { BaselineHeures, Cotraitant, Phase, PhaseCode, Projet, StatutProjet, TypeCotraitant, TypeMO } from '../types'
+import type { Alerte, BaselineHeures, Cotraitant, Phase, PhaseCode, Projet, StatutProjet, TypeCotraitant, TypeMO } from '../types'
 import { useStore } from '../store'
 import { useMoi } from '../moi'
+import { alertesActives } from '../alerts'
+import { type ChronoActif, arreterChrono, basculerChrono, chronoDe, poserChrono } from '../chrono'
+import { messageArretHonnete } from './ChronoBarre'
 import { ligneActivable,
   Badge,
   Btn,
@@ -87,6 +90,35 @@ function toneStatut(s: StatutProjet): Tone {
 
 function fmtCoef(c: number | null | undefined): string {
   return c === null || c === undefined ? '—' : c.toFixed(2).replace('.', ',')
+}
+
+/** la phase en cours aujourd'hui — définie UNE fois pour cet écran : le
+ *  bandeau, la barre compacte des sous-pages et le chrono de la fiche en
+ *  disent forcément la même chose. `today` est passé, jamais lu ici. */
+function phaseCourante(p: Projet, today: string): Phase | undefined {
+  return p.phases.find((ph) => ph.debut && ph.fin && ph.debut <= today && today <= ph.fin)
+}
+
+/** « Terminés » = ce qui ne demande plus rien. Volontairement PAS
+ *  `STATUTS_ACTIFS` (src/derive.ts) : cette constante-là répond à une autre
+ *  question — quels projets produisent de la charge — et rangerait un
+ *  prospect ou une offre remise avec les projets morts. */
+const STATUTS_TERMINES: StatutProjet[] = ['Livré', 'Perdu']
+
+/** Une fois le projet signé, les honoraires MIQCP et la grille de complexité
+ *  sont réglés une fois pour toutes : ils cessent d'occuper le haut de
+ *  l'écran au profit du tableau des phases, qui s'ouvre tous les jours. */
+const STATUTS_HONORAIRES_REGLES: StatutProjet[] = ['Signé', 'En cours', 'Livré']
+
+/** dernier choix de vue de la liste — un réglage d'écran, jamais synchronisé */
+const CLE_VUE_PROJETS = 'cockpit.projets.vue'
+
+function lireVueProjets(): string {
+  try {
+    return localStorage.getItem(CLE_VUE_PROJETS) || 'actifs'
+  } catch {
+    return 'actifs'
+  }
 }
 
 /** badge d'écart heures réelles / prévues (cohérent avec le fil d'urgences) */
@@ -194,17 +226,42 @@ export default function Projets() {
 function ListeProjets() {
   const { state } = useStore()
   const [recherche, setRecherche] = useState('')
-  const [filtreStatut, setFiltreStatut] = useState('')
+  // T5 — vivants et terminés étaient mélangés, triés par ordre de création :
+  // la liste grossit d'un projet livré par mois, et les vivants descendent.
+  // Défaut « Actifs », les terminés à un clic, et le dernier choix retenu.
+  const [vue, setVue] = useState<string>(lireVueProjets)
   const [wizard, setWizard] = useState(false)
+
+  const choisirVue = (v: string) => {
+    setVue(v)
+    try {
+      localStorage.setItem(CLE_VUE_PROJETS, v)
+    } catch {
+      // navigation privée : le choix vaut pour la session, rien de plus
+    }
+  }
+
+  const termine = (p: Projet) => STATUTS_TERMINES.includes(p.statut)
+  const nActifs = state.projets.filter((p) => !termine(p)).length
+  const nTermines = state.projets.length - nActifs
+
+  const dansLaVue = (p: Projet) => {
+    if (vue === 'tous') return true
+    if (vue === 'termines') return termine(p)
+    if (vue.startsWith('statut:')) return p.statut === vue.slice(7)
+    return !termine(p)
+  }
 
   const projets = state.projets
     .filter((p) => {
-      if (filtreStatut && p.statut !== filtreStatut) return false
+      if (!dansLaVue(p)) return false
       if (recherche.trim() === '') return true
       return fold(`${p.id} ${p.nom} ${p.moa || ''} ${p.adresse || ''}`).includes(fold(recherche))
     })
     .slice()
-    .sort((a, b) => a.id.localeCompare(b.id))
+    // en vue « Tous », les vivants d'abord : un projet livré ne doit pas
+    // s'intercaler entre deux chantiers en cours
+    .sort((a, b) => Number(termine(a)) - Number(termine(b)) || a.id.localeCompare(b.id))
 
   return (
     <Page
@@ -220,9 +277,18 @@ function ListeProjets() {
           style={{ width: 260 }}
         />
         <Select
-          value={filtreStatut}
-          onChange={setFiltreStatut}
-          options={[{ value: '', label: 'Tous les statuts' }, ...STATUTS.map((s) => ({ value: s, label: s }))]}
+          value={vue}
+          onChange={choisirVue}
+          options={[
+            { value: 'actifs', label: `Actifs (${nActifs})` },
+            { value: 'termines', label: `Terminés (${nTermines})` },
+            { value: 'tous', label: `Tous (${state.projets.length})` },
+            ...STATUTS.map((s) => ({
+              value: `statut:${s}`,
+              label: `— ${s} (${state.projets.filter((p) => p.statut === s).length})`,
+            })),
+          ]}
+          style={{ maxWidth: 210 }}
         />
       </div>
 
@@ -231,7 +297,9 @@ function ListeProjets() {
           <EmptyState>
             {state.projets.length === 0
               ? 'Aucun projet — « Nouveau projet » : 3 étapes, 2 minutes, phases et factures générées automatiquement.'
-              : 'Aucun projet ne correspond à la recherche ou au filtre.'}
+              : vue === 'actifs' && recherche.trim() === '' && nTermines > 0
+                ? `Aucun projet actif — ${nTermines} projet(s) terminé(s) sont repliés : choisissez « Terminés » ci-dessus.`
+                : 'Aucun projet ne correspond à la recherche ou au filtre.'}
           </EmptyState>
         </Card>
       ) : (
@@ -275,6 +343,15 @@ function ListeProjets() {
               )
             })}
           </Table>
+          {/* « replié » doit se voir : un filtre silencieux fait croire à une
+              liste complète (le mode de panne du courrier tronqué, S2) */}
+          {vue === 'actifs' && nTermines > 0 && (
+            <p className="muted small" style={{ margin: '10px 2px 0', display: 'flex', gap: 8, alignItems: 'center' }}>
+              {nTermines} projet{nTermines > 1 ? 's' : ''} terminé{nTermines > 1 ? 's' : ''} (livrés, perdus) replié
+              {nTermines > 1 ? 's' : ''}
+              <Btn small kind="ghost" onClick={() => choisirVue('termines')}>les afficher</Btn>
+            </p>
+          )}
         </Card>
       )}
 
@@ -330,19 +407,52 @@ function EspaceProjet({ projetId, onglet }: { projetId: string; onglet?: string 
   const promptsProjet = state.prompts.filter((t) => t.contexte === 'projet')
 
   const supprimer = async () => {
+    // les PIÈCES qui engagent bloquent la suppression — elles ne se
+    // suppriment pas en cascade, elles se réaffectent à la main
     const nbFactures = state.factures.filter((f) => f.projetId === p.id).length
     const nbSituations = state.situations.filter((s) => s.projetId === p.id).length
-    if (nbFactures > 0 || nbSituations > 0) {
+    const nbCertificats = state.certificats.filter((c) => c.projetId === p.id).length
+    if (nbFactures > 0 || nbSituations > 0 || nbCertificats > 0) {
       toast(
-        `Suppression impossible : ${nbFactures} facture(s) et ${nbSituations} situation(s) liées à ${p.id}. Supprimez-les ou réaffectez-les d'abord.`,
+        `Suppression impossible : ${nbFactures} facture(s), ${nbSituations} situation(s) et ${nbCertificats} certificat(s) liés à ${p.id}. Supprimez-les ou réaffectez-les d'abord.`,
         { tone: 'danger' },
       )
       return
     }
+    // ce que la cascade emporte, compté AVANT : la confirmation dit ce
+    // qu'on perd, chiffre par chiffre. Les collections qui manquaient ici
+    // laissaient des lignes orphelines rattachées à un projet disparu —
+    // notes de cotraitants, échéances prévues, visas, désordres GPA.
+    const cotraitantsIds = state.cotraitants.filter((c) => c.projetId === p.id).map((c) => c.id)
+    const lies: [string, number][] = [
+      ['marché(s)', state.marches.filter((x) => x.projetId === p.id).length],
+      ['saisie(s) de temps', state.temps.filter((x) => x.projetId === p.id).length],
+      ['réunion(s) de chantier', state.reunions.filter((x) => x.projetId === p.id).length],
+      ['lot(s) DCE', state.lotsDce.filter((x) => x.projetId === p.id).length],
+      ['tâche(s) de planning travaux', state.tachesChantier.filter((x) => x.projetId === p.id).length],
+      ['échéance(s) de facturation prévue(s)', state.echeancesFacturation.filter((x) => x.projetId === p.id).length],
+      [
+        'cotraitant(s) et leurs notes',
+        cotraitantsIds.length + state.notesHonoraires.filter((x) => x.projetId === p.id).length,
+      ],
+      ['visa(s)', state.visas.filter((x) => x.projetId === p.id).length],
+      ['désordre(s) GPA', state.desordresGPA.filter((x) => x.projetId === p.id).length],
+      ['intempérie(s)', state.intemperies.filter((x) => x.projetId === p.id).length],
+      ['événement(s) de marché', state.evenementsMarche.filter((x) => x.projetId === p.id).length],
+      ['révision(s) du reste à faire', state.revisionsResteAFaire.filter((x) => x.projetId === p.id).length],
+      ["évaluation(s) d'entreprise", state.evaluations.filter((x) => x.projetId === p.id).length],
+      ["piste(s) d'avenant", state.pistesAvenant.filter((x) => x.projetId === p.id).length],
+    ]
+    const detail = lies
+      .filter(([, n]) => n > 0)
+      .map(([quoi, n]) => `${n} ${quoi}`)
+      .join(', ')
     const snap = state
     if (
       !(await confirmer({
-        message: `Supprimer définitivement le projet ${p.id} — ${p.nom} (et ses marchés, réunions, notes) ?`,
+        message:
+          `Supprimer définitivement le projet ${p.id} — ${p.nom} ?` +
+          (detail ? `\nSeront supprimés avec lui : ${detail}.` : '\nAucune donnée rattachée.'),
         danger: true,
         confirmerLabel: 'Supprimer',
       }))
@@ -355,6 +465,19 @@ function EspaceProjet({ projetId, onglet }: { projetId: string; onglet?: string 
       d.reunions = d.reunions.filter((r) => r.projetId !== p.id)
       d.lotsDce = d.lotsDce.filter((l) => l.projetId !== p.id)
       d.tachesChantier = d.tachesChantier.filter((t) => t.projetId !== p.id)
+      d.echeancesFacturation = d.echeancesFacturation.filter((e) => e.projetId !== p.id)
+      d.cotraitants = d.cotraitants.filter((c) => c.projetId !== p.id)
+      // une note suit son cotraitant, qu'elle porte le projet ou non
+      d.notesHonoraires = d.notesHonoraires.filter(
+        (n) => n.projetId !== p.id && !cotraitantsIds.includes(n.cotraitantId),
+      )
+      d.visas = d.visas.filter((v) => v.projetId !== p.id)
+      d.desordresGPA = d.desordresGPA.filter((g) => g.projetId !== p.id)
+      d.intemperies = d.intemperies.filter((i) => i.projetId !== p.id)
+      d.evenementsMarche = d.evenementsMarche.filter((e) => e.projetId !== p.id)
+      d.revisionsResteAFaire = d.revisionsResteAFaire.filter((r) => r.projetId !== p.id)
+      d.evaluations = d.evaluations.filter((e) => e.projetId !== p.id)
+      d.pistesAvenant = d.pistesAvenant.filter((a) => a.projetId !== p.id)
     })
     navigate('/projets')
     toast(`Projet ${p.id} supprimé.`, { undo: () => replace(snap) })
@@ -389,6 +512,7 @@ function EspaceProjet({ projetId, onglet }: { projetId: string; onglet?: string 
       <div className="toolbar" style={{ marginTop: -6, marginBottom: 12 }}>
         <a href="#/projets" className="small">← Tous les projets</a>
         <span className="spacer" />
+        <BoutonChronoProjet projet={p} />
         {actif === 'pilotage' &&
           (enChantier ? (
             <Btn kind="primary" onClick={() => navigate(`/projets/${p.id}/chantier`)}>Nouveau CR</Btn>
@@ -444,11 +568,25 @@ function EspaceProjet({ projetId, onglet }: { projetId: string; onglet?: string 
 
       {actif === 'pilotage' && (
         <>
-          <div className="grid2">
-            <CarteHonoraires projet={p} />
-            <CarteComplexite projet={p} />
-          </div>
-          <CartePhases projet={p} />
+          {/* R1 — ce qui crie sur CE projet, en tête : ces alertes existent
+              déjà, elles ne se lisaient qu'à l'accueil, mêlées à celles des
+              autres projets — et l'accueil ne filtre que par personne. */}
+          <ATraiterSurCeProjet projet={p} />
+          {STATUTS_HONORAIRES_REGLES.includes(p.statut) ? (
+            <>
+              {/* S3 — projet signé : les phases d'abord, le barème ensuite */}
+              <CartePhases projet={p} />
+              <ResumeHonoraires projet={p} />
+            </>
+          ) : (
+            <>
+              <div className="grid2">
+                <CarteHonoraires projet={p} />
+                <CarteComplexite projet={p} />
+              </div>
+              <CartePhases projet={p} />
+            </>
+          )}
         </>
       )}
       {actif === 'planning' && <ProjetPlanning projet={p} />}
@@ -462,6 +600,179 @@ function EspaceProjet({ projetId, onglet }: { projetId: string; onglet?: string 
 
       {modalEdition && <ModalEditionProjet projet={p} onClose={() => setModalEdition(false)} />}
     </Page>
+  )
+}
+
+/** L'alerte parle-t-elle de CE projet ?
+ *
+ *  `projetId` d'abord : c'est le champ prévu pour ça (types.ts). Mais six
+ *  producteurs sur vingt seulement le posent aujourd'hui — « CR à sortir »,
+ *  « rendu de phase » et « dérive d'heures », tous trois cités par le
+ *  constat R1, ne l'ont pas. Leur DESTINATION, elle, est déjà la fiche du
+ *  projet, et `lien` est un champ public de l'alerte (« route hash vers la
+ *  source »), pas la forme de son identifiant : on s'en sert en second, sur
+ *  des segments entiers — « #/projets/P1 » ne doit pas attraper P10.
+ *  Ce repli se retire le jour où ces producteurs posent `projetId` ; il ne
+ *  dispense pas de le faire, il évite d'attendre. */
+function concerneLeProjet(a: Alerte, id: string): boolean {
+  if (a.projetId) return a.projetId === id
+  return a.lien === `#/projets/${id}` || a.lien.startsWith(`#/projets/${id}/`)
+}
+
+/** R1 — « À traiter sur ce projet » : la file du matin, réduite à ce projet.
+ *
+ *  AUCUN calcul nouveau. `alertesActives` (src/alerts.ts) est l'autorité —
+ *  snooze, « vu » et tri compris — on ne fait que filtrer, et chaque ligne
+ *  garde SON lien, celui que le producteur lui a donné. Avant, préparer une
+ *  réunion de chantier demandait d'ouvrir l'accueil et d'y repérer à l'œil
+ *  les lignes du projet parmi toutes les autres — l'accueil, lui, ne filtre
+ *  que par personne.
+ *
+ *  Le contexte des messages n'est pas passé : il vit dans le cache de la
+ *  boîte, que seul l'accueil charge. Une alerte de courrier ne manque donc
+ *  pas ici — elle n'existe simplement pas hors de l'accueil. */
+function ATraiterSurCeProjet({ projet: p }: { projet: Projet }) {
+  const { state } = useStore()
+  const today = useToday()
+  const alertes = alertesActives(state, today).filter((a) => concerneLeProjet(a, p.id))
+
+  if (alertes.length === 0)
+    return (
+      <p className="muted small" style={{ margin: '0 2px 12px' }}>
+        Rien à traiter sur ce projet aujourd'hui.
+      </p>
+    )
+
+  return (
+    <Card
+      titre={`À traiter sur ce projet (${alertes.length})`}
+      actions={<a href="#/" className="small">tout le fil d'urgences →</a>}
+    >
+      {alertes.map((a) => (
+        <div key={a.id} className={`alert-item alert-${a.gravite}`}>
+          <span className="alert-dot" />
+          <div style={{ minWidth: 0 }}>
+            <div className="alert-titre">{a.titre}</div>
+            <div className="alert-detail">
+              {a.detail ? <>{a.detail} · </> : null}
+              <a href={a.lien}>ouvrir</a>
+            </div>
+          </div>
+        </div>
+      ))}
+      {/* ce que ce bloc ne couvre PAS se dit, plutôt que de manquer en
+          silence : ces deux familles d'alertes ne portent pas encore le
+          projet qu'elles concernent (src/alerts.ts) */}
+      <p className="muted small" style={{ margin: '4px 2px 0' }}>
+        Factures à émettre et impayés : bandeau ci-dessus et <a href="#/facturation">Facturation</a>.
+        Situations à vérifier : <a href="#/situations">Situations</a>.
+      </p>
+    </Card>
+  )
+}
+
+/** M.3 — démarrer le chrono depuis la fiche projet (action 30 du plan
+ *  d'usage : le bouton de la fiche tâche était livré, celui-ci non).
+ *
+ *  La cible est déjà connue — le projet, et sa phase en cours — donc le
+ *  geste tient en un bouton. Toute la logique (bascule, seuil de la minute,
+ *  durée) vit dans `src/chrono.ts` ; le message d'arrêt est celui de la
+ *  barre de chrono : deux formulations feraient dire au même arrêt deux
+ *  choses différentes selon l'endroit d'où on l'a cliqué. */
+function BoutonChronoProjet({ projet: p }: { projet: Projet }) {
+  const { state, update } = useStore()
+  const today = useToday()
+  const qui = useMoi().nom || ''
+  const chrono = chronoDe(state.chronos as ChronoActif[], qui) as ChronoActif | null
+  // « ici » = ce projet, sans tâche : le chrono d'une tâche du projet
+  // s'arrête depuis sa fiche, là où on l'a lancé
+  const iciEnCours = Boolean(chrono && chrono.projetId === p.id && !chrono.tacheId)
+  const phase = phaseCourante(p, today)
+
+  const demarrer = () => {
+    if (!qui) {
+      toast('Indiquez d’abord qui vous êtes (menu du haut) : un temps sans personne ne se rattache à rien.', { tone: 'warn' })
+      return
+    }
+    const maintenant = new Date().toISOString()
+    const { chrono: nouveau, arret } = basculerChrono(
+      chrono,
+      qui,
+      { projetId: p.id, phase: phase?.code ?? null, libelle: `${p.id} — ${p.nom}` },
+      maintenant,
+    )
+    update((d) => {
+      if (arret?.pointage) d.pointages = [...(d.pointages || []), arret.pointage]
+      d.chronos = poserChrono(d.chronos as ChronoActif[], nouveau, qui)
+    })
+    const demarrage = `Chrono démarré sur ${p.id}${phase ? ` · ${phase.code}` : ''}.`
+    // la bascule est silencieuse si on ne la dit pas : le chrono précédent
+    // vient d'être arrêté ET enregistré
+    toast(arret ? `${messageArretHonnete(arret.message, !!arret.pointage)} ${demarrage}` : demarrage, { tone: 'ok' })
+  }
+
+  const arreter = () => {
+    if (!chrono) return
+    const { pointage, message } = arreterChrono(chrono, new Date().toISOString())
+    update((d) => {
+      d.chronos = poserChrono(d.chronos as ChronoActif[], null, qui)
+      if (pointage) d.pointages = [...(d.pointages || []), pointage]
+    })
+    toast(messageArretHonnete(message, !!pointage), { tone: pointage ? 'ok' : 'warn' })
+  }
+
+  return iciEnCours ? (
+    <Btn small onClick={arreter} title={`Arrêter le chrono de ${p.id} et enregistrer le temps`}>
+      ■ Arrêter le chrono
+    </Btn>
+  ) : (
+    <Btn
+      small
+      onClick={demarrer}
+      title={
+        `Démarrer le chrono sur ${p.id}${phase ? ` · ${phase.code}` : ''}` +
+        (chrono ? ' — le chrono en cours sera arrêté et enregistré' : '')
+      }
+    >
+      ▶ Chrono
+    </Btn>
+  )
+}
+
+/** S3 — le résumé qui remplace les deux cartes après la signature. Rien
+ *  n'est supprimé : « Déplier » rend le barème MIQCP et les 27 critères
+ *  tels quels, et aucun chiffre n'est recalculé ici (`calculHonoraires`). */
+function ResumeHonoraires({ projet: p }: { projet: Projet }) {
+  const { state } = useStore()
+  const [ouvert, setOuvert] = useState(false)
+  const h = calculHonoraires(p, state.settings)
+
+  if (ouvert)
+    return (
+      <>
+        <div className="grid2">
+          <CarteHonoraires projet={p} />
+          <CarteComplexite projet={p} />
+        </div>
+        <p style={{ margin: '0 2px 12px' }}>
+          <Btn small onClick={() => setOuvert(false)}>Replier honoraires & complexité</Btn>
+        </p>
+      </>
+    )
+
+  return (
+    <Card
+      titre="Honoraires & complexité"
+      actions={<Btn small onClick={() => setOuvert(true)}>Déplier</Btn>}
+    >
+      <p className="small" style={{ margin: 0 }}>
+        <strong><Money v={h.honorairesTotauxHT} /> HT</strong> · taux retenu {fmtPct(h.tauxFinal, 2)} · coefficient{' '}
+        {fmtCoef(h.coef)}
+        {p.coefManuel !== null && p.coefManuel !== undefined ? ' (manuel)' : ''} · travaux{' '}
+        <Money v={p.montantTravauxHT} /> HT
+        <span className="muted"> — réglés à la signature ; « Déplier » pour le barème et les 27 critères.</span>
+      </p>
+    </Card>
   )
 }
 
@@ -489,7 +800,7 @@ function OngletDocumentsProjet({ projet: p, vueInitiale }: { projet: Projet; vue
 function BarreProjetCompacte({ projet: p }: { projet: Projet }) {
   const { state } = useStore()
   const today = useToday()
-  const phaseCourante = p.phases.find((ph) => ph.debut && ph.fin && ph.debut <= today && today <= ph.fin)
+  const phase = phaseCourante(p, today)
   const prochainePhase = p.phases
     .filter((ph) => ph.fin && ph.fin >= today && ph.montantHT > 0)
     .sort((a, b) => (a.fin || '').localeCompare(b.fin || ''))[0]
@@ -502,7 +813,11 @@ function BarreProjetCompacte({ projet: p }: { projet: Projet }) {
       className="small"
       style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center', margin: '0 2px 12px' }}
     >
-      {phaseCourante && <Badge tone="info">phase {phaseCourante.code}</Badge>}
+      {phase && (
+        <span title={LIBELLES_PHASES[phase.code]}>
+          <Badge tone="info">phase {phase.code}</Badge>
+        </span>
+      )}
       {prochaineEcheance ? (
         <span>
           Prochaine échéance : <strong>{fmtMoney(prochaineEcheance.montantHT)} HT à facturer</strong> le{' '}
@@ -586,7 +901,20 @@ function BandeauProjet({ projet: p }: { projet: Projet }) {
 
 /** ligne « carte d'identité » sous le bandeau (dates, équipe, accès commande…) */
 function LigneIdentite({ projet: p }: { projet: Projet }) {
+  const today = useToday()
   const items: ReactNode[] = []
+  // « où en est-on ? » se lisait sur les sous-pages (barre compacte) mais pas
+  // sur la vue d'ensemble, qui est pourtant la page d'arrivée du projet
+  {
+    const phase = phaseCourante(p, today)
+    if (phase)
+      items.push(
+        <span key="phase" title={`phase en cours — ${LIBELLES_PHASES[phase.code]}`}>
+          <Badge tone="info">phase {phase.code}</Badge>{' '}
+          <span className="muted">{LIBELLES_PHASES[phase.code]}</span>
+        </span>,
+      )
+  }
   if (p.codeExterne)
     items.push(
       <span key="code" title="code du projet côté client">
@@ -873,8 +1201,11 @@ function NotesCotraitant({
 }) {
   const { state, update, replace } = useStore()
   const today = useToday()
-  // par défaut on consigne la note du mois DERNIER : c'est elle qu'on attend
-  const [mois, setMois] = useState('')
+  // T3 — le commentaire promettait le mois attendu, le champ arrivait vide et
+  // se retapait à chaque note : `moisManquants` (src/cotraitants.ts) le connaît
+  // déjà, c'est le PREMIER manquant qu'on consigne. Rien n'est écrit pour
+  // autant : la proposition reste modifiable avant « Consigner ».
+  const [mois, setMois] = useState(manquants[0] || '')
   const [montant, setMontant] = useState<number | null>(null)
 
   const siennes = state.notesHonoraires
@@ -908,7 +1239,9 @@ function NotesCotraitant({
         reglee: false,
       })
     })
-    setMois('')
+    // le mois suivant qui manque prend la place : à la fin du mois on en
+    // consigne souvent plusieurs d'affilée
+    setMois(manquants.find((x) => x !== m) || '')
     setMontant(null)
   }
 
@@ -1516,7 +1849,6 @@ function CartePhases({ projet: p }: { projet: Projet }) {
   const { state, update } = useStore()
   const today = useToday()
   const moi = useMoi()
-  const seuil = state.settings.seuilDeriveHeures
   const [edition, setEdition] = useState(false)
   const [colonnesDetaillees, setColonnesDetaillees] = useState(false)
   const detail = edition || colonnesDetaillees
@@ -1603,11 +1935,10 @@ function CartePhases({ projet: p }: { projet: Projet }) {
         facture: t.facture + fact,
         reste: t.reste + (ph.montantHT - fact),
         hPrev: t.hPrev + ph.heuresPrevues,
-        hReel: t.hReel + heuresReelles(state, p.id, ph.code),
         externe: t.externe + (ph.coutExterneHT || 0),
       }
     },
-    { montant: 0, facture: 0, reste: 0, hPrev: 0, hReel: 0, externe: 0 },
+    { montant: 0, facture: 0, reste: 0, hPrev: 0, externe: 0 },
   )
 
   return (
@@ -1655,14 +1986,11 @@ function CartePhases({ projet: p }: { projet: Projet }) {
             <span key="f" className="right">% fact.</span>,
             ...(detail ? [<span key="pay" className="right">% payé</span>] : []),
             <span key="r" className="right">Reste HT</span>,
-            ...(detail ? [<span key="hr" className="right">H. réelles</span>] : []),
-            ...(detail ? ['Écart heures'] : []),
           ]}
         >
           {p.phases.map((ph) => {
             const fact = factureHT(state, p.id, ph.code)
             const reste = ph.montantHT - fact
-            const hReel = heuresReelles(state, p.id, ph.code)
             return (
               <tr key={ph.code}>
                 <td>
@@ -1724,8 +2052,6 @@ function CartePhases({ projet: p }: { projet: Projet }) {
                   <td className="right num">{ph.montantHT > 0 ? fmtPct(encaissePhase(ph.code) / ph.montantHT, 0) : '—'}</td>
                 )}
                 <td className={`right ${reste < 0 ? 'danger-text' : ''}`}><Money v={reste} /></td>
-                {detail && <td className="right num">{fmtHeures(hReel)}</td>}
-                {detail && <td><EcartHeures reel={hReel} prevu={ph.heuresPrevues} seuil={seuil} /></td>}
               </tr>
             )
           })}
@@ -1750,11 +2076,19 @@ function CartePhases({ projet: p }: { projet: Projet }) {
             <td className={`right ${totaux.reste < 0 ? 'danger-text' : ''}`}>
               <strong><Money v={totaux.reste} /></strong>
             </td>
-            {detail && <td className="right"><strong>{fmtHeures(totaux.hReel)}</strong></td>}
-            {detail && <td><EcartHeures reel={totaux.hReel} prevu={totaux.hPrev} seuil={seuil} /></td>}
           </tr>
         </Table>
       )}
+      {/* R3 — la même fiche affichait DEUX fois le prévu / réel par phase,
+          avec deux dénominateurs : ici la répartition courante, dans
+          l'onglet Finance la prévision de référence. Après un recalcul, la
+          même phase pouvait s'afficher à 105 % d'un côté et 80 % de
+          l'autre. Une seule table désormais — celle qui mesure sur la
+          référence du §11.3 ; ici, ce qui se saisit : la répartition. */}
+      <p className="muted small" style={{ margin: '10px 2px 0' }}>
+        Heures pointées et écart prévu / réel : <a href={`#/projets/${p.id}/finances`}>onglet Finance</a> — une
+        seule table, mesurée sur la prévision de référence (§11.3). Ici se saisit la répartition prévue.
+      </p>
     </Card>
   )
 }

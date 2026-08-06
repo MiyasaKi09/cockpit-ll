@@ -24,7 +24,7 @@ import {
 import { diffDays, fmtDate, fmtMoney, fold, ouvrirGmail, todayISO, uid } from '../util'
 import { montantElement, sommeLignes } from '../dpgf'
 import { avancementLot, avancementTache, clampPourcent, tacheAConfirmer, tacheDeReprise } from '../chantier'
-import { couleurPhase } from './Planning'
+import { EditionChantier, EditionDates, couleurPhase } from './Planning'
 
 const NOMS_MOIS = ['janv.', 'févr.', 'mars', 'avr.', 'mai', 'juin', 'juil.', 'août', 'sept.', 'oct.', 'nov.', 'déc.']
 
@@ -68,8 +68,14 @@ function moisDe(debut: string, fin: string): string[] {
 export default function ProjetPlanning({ projet: p }: { projet: Projet }) {
   const { state } = useStore()
   const today = useToday()
+  // T2 — constater un retard ici et devoir aller le décaler dans le Planning
+  // GLOBAL était le trajet le plus fréquent d'une phase de chantier. Les deux
+  // éditeurs sont montés ICI, tels quels (src/modules/Planning.tsx) : même
+  // propagation, même réalignement d'échéancier, aucune seconde version.
+  const [ajuster, setAjuster] = useState(false)
 
   const phases = p.phases.filter((ph) => ph.debut && ph.fin)
+  const marchesDuProjet = state.marches.filter((m) => m.projetId === p.id)
   const lots = state.marches.filter((m) => m.projetId === p.id && (m.dateDebut || m.dateFin))
   const taches = state.tachesChantier.filter((t) => t.projetId === p.id)
   const tachesDatees = taches.filter((t) => t.debut && t.fin)
@@ -81,6 +87,18 @@ export default function ProjetPlanning({ projet: p }: { projet: Projet }) {
   // groupes de tâches par lot (ordre alphabétique = ordre des numéros de lots)
   const groupes = [...new Set(taches.map((t) => t.lot))].sort((a, b) => a.localeCompare(b))
 
+  const boutonAjuster = (
+    <Btn small onClick={() => setAjuster(!ajuster)} title="Décaler une phase ou un lot d'ici, sans passer par le Planning global">
+      {ajuster ? "Fermer l'ajustement" : 'Ajuster les dates'}
+    </Btn>
+  )
+  const blocsAjustement = ajuster && (
+    <>
+      <EditionDates projet={p} />
+      {marchesDuProjet.length > 0 && <EditionChantier projet={p} />}
+    </>
+  )
+
   const dates = [
     ...phases.flatMap((ph) => [ph.debut!, ph.fin!]),
     ...lots.flatMap((m) => [m.dateDebut, m.dateFin, m.dateReception].filter((d): d is string => Boolean(d))),
@@ -90,13 +108,14 @@ export default function ProjetPlanning({ projet: p }: { projet: Projet }) {
   if (dates.length === 0) {
     return (
       <>
-        <Card titre="Planning du projet">
+        <Card titre="Planning du projet" actions={boutonAjuster}>
           <EmptyState>
-            Rien de daté pour l'instant — datez les phases (onglet Pilotage, « Modifier les phases »),
-            les lots (onglet Chantier), et importez les CCTP (onglet DCE & CCTP) pour voir chaque
-            élément prévu au DCE se poser sur le planning.
+            Rien de daté pour l'instant — « Ajuster les dates » pose les phases d'un coup (début des
+            études, durées) ou une par une. Les lots se datent dans l'onglet Chantier, et les CCTP
+            importés (onglet DCE & CCTP) posent chaque élément prévu au DCE sur le planning.
           </EmptyState>
         </Card>
+        {blocsAjustement}
         <CarteTaches projet={p} taches={taches} groupes={groupes} />
       </>
     )
@@ -155,7 +174,12 @@ export default function ProjetPlanning({ projet: p }: { projet: Projet }) {
     <>
       <Card
         titre="Planning du projet"
-        actions={<a href="#/planning" className="small">tous les projets →</a>}
+        actions={
+          <>
+            {boutonAjuster}
+            <a href="#/planning" className="small">tous les projets →</a>
+          </>
+        }
       >
         <div style={{ overflowX: 'auto' }}>
           <div style={{ display: 'grid', rowGap: 6 }}>
@@ -288,11 +312,14 @@ export default function ProjetPlanning({ projet: p }: { projet: Projet }) {
           </p>
         )}
         <p className="muted small" style={{ marginTop: 8 }}>
-          Dates de phases : onglet Pilotage → « Modifier les phases ». Dates de lots : onglet Chantier.
-          Tâches du DCE : tableau ci-dessous. Trait rouge = aujourd'hui · triangle vert = réception ·
-          bord rouge = lot en retard · segment rouge = tâche dépassée non faite.
+          Un retard ? « Ajuster les dates » décale phases et lots d'ici (les suivants glissent avec).
+          Les dates se saisissent aussi une par une : phases dans Pilotage, lots dans Chantier ; les
+          tâches du DCE dans le tableau ci-dessous. Trait rouge = aujourd'hui · triangle vert =
+          réception · bord rouge = lot en retard · segment rouge = tâche dépassée non faite.
         </p>
       </Card>
+
+      {blocsAjustement}
 
       <CarteTaches projet={p} taches={taches} groupes={groupes} />
     </>

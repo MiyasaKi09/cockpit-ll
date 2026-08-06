@@ -481,7 +481,11 @@ export default function Contrats() {
           tone={nbProvisoires > 0 ? 'warn' : 'ok'}
           sub="migrés des phases — à valider"
         />
-        <Stat label="Contrats d'agence" value={agence.length} sub={<a href="#/agenda">échéances agence →</a>} />
+        <Stat
+          label="Contrats d'agence"
+          value={agence.length}
+          sub={<a href="#/agenda/contrats">échéances agence →</a>}
+        />
       </div>
 
       {sansContrat.length > 0 && (
@@ -540,7 +544,7 @@ export default function Contrats() {
         ) : (
           <Table
             compact
-            head={['Intitulé', 'Tiers', <span key="m" className="right">Attendu / période</span>, 'Périodicité', 'Renouvellement']}
+            head={['Intitulé', 'Tiers', <span key="m" className="right">Attendu / période</span>, 'Périodicité', 'Renouvellement', '']}
           >
             {agence.map((c) => (
               <tr key={c.id}>
@@ -549,6 +553,23 @@ export default function Contrats() {
                 <td className="right">{c.montantAttenduHT != null ? <Money v={c.montantAttenduHT} /> : '—'}</td>
                 <td className="small">{c.periodiciteMois ? `${c.periodiciteMois} mois` : '—'}</td>
                 <td className="small">{c.dateRenouvellement ? <DateF d={c.dateRenouvellement} /> : '—'}</td>
+                {/* le contrat d'agence EST une échéance de l'agenda : le
+                    paiement, le rappel et le « ✓ Fait » vivent là-bas — sans
+                    ce lien, le geste suivant se cherchait de mémoire */}
+                <td className="right small">
+                  {c.obligationId ? (
+                    <a
+                      href={`#/agenda/contrats/${c.obligationId}`}
+                      title={`Ouvrir « ${c.intitule} » dans les échéances agence (paiements, rappel, renouvellement)`}
+                    >
+                      ouvrir dans l'agenda →
+                    </a>
+                  ) : (
+                    <span className="muted" title="Contrat sans échéance liée : il ne produit ni rappel ni décaissement prévisionnel.">
+                      sans échéance liée
+                    </span>
+                  )}
+                </td>
               </tr>
             ))}
           </Table>

@@ -27,6 +27,8 @@ import {
 } from '../ui'
 import FinanceNav from './FinanceNav'
 import CarteTVA from './CarteTVA'
+// une seule autorité pour le régime et pour la phrase qui le dit (src/tva.ts)
+import { libelleConvention, regimeTVAEffectif, type RegimeTVA } from '../tva'
 import {
   PROFIL_DEFAUT,
   construirePaquet,
@@ -48,6 +50,29 @@ function CarteProfil() {
   const { state, update } = useStore()
   const profil = state.settings.profilComptable || PROFIL_DEFAUT
   const [ouvert, setOuvert] = useState(false)
+  const regime = regimeTVAEffectif(state.settings)
+  const ancienneNote = (profil.regimeTVA || '').trim()
+  /** un changement de régime déplace la TVA collectée d'un mois à l'autre :
+   *  le geste se dit, et se reprend (patron ui.tsx) */
+  const changerRegime = (v: RegimeTVA) => {
+    if (v === regime) return
+    const avant = state.settings.regimeTVA
+    update((d) => {
+      d.settings.regimeTVA = v
+    })
+    toast(
+      v === 'debits'
+        ? 'Option sur les débits : la TVA collectée naît désormais à l’émission des factures.'
+        : 'Encaissements : la TVA collectée naît au paiement des factures.',
+      {
+        tone: 'ok',
+        undo: () =>
+          update((d) => {
+            d.settings.regimeTVA = avant
+          }),
+      },
+    )
+  }
   const maj = (patch: Partial<ProfilComptable>) =>
     update((d) => {
       d.settings.profilComptable = { ...(d.settings.profilComptable || PROFIL_DEFAUT), ...patch }
@@ -70,8 +95,9 @@ function CarteProfil() {
       <p className="small muted" style={{ margin: 0 }}>
         {profil.logiciel ? `Logiciel : ${profil.logiciel} · ` : ''}journaux {profil.journaux.ventes}/{profil.journaux.achats}/
         {profil.journaux.banque}/{profil.journaux.od} · dates {profil.formatDate} · séparateur « {profil.separateur} » ·
-        analytique {profil.analytique ? 'projet/phase' : 'désactivée'} — les comptes sont des PROPOSITIONS à confirmer
-        (le plan réel appartient au cabinet, audit §11.7).
+        analytique {profil.analytique ? 'projet/phase' : 'désactivée'} · TVA{' '}
+        {regime === 'debits' ? 'sur les débits' : 'sur les encaissements'} — les comptes sont des PROPOSITIONS à
+        confirmer (le plan réel appartient au cabinet, audit §11.7).
       </p>
       {ouvert && (
         <>
@@ -131,11 +157,33 @@ function CarteProfil() {
               </Field>
             ))}
           </div>
+          {/* S5 — le régime de TVA était un champ LIBRE sans effet : taper
+              « option débits » ne changeait rien au calcul. Le seul réglage lu
+              par positionTVA (src/tva.ts) est settings.regimeTVA — c'est lui
+              qu'on règle ici, et la convention appliquée s'affiche dessous. */}
           <div className="form-row" style={{ marginTop: 10 }}>
-            <Field label="Régime de TVA (confirmé par le cabinet)">
-              <TextInput value={profil.regimeTVA || ''} onChange={(v) => maj({ regimeTVA: v })} placeholder="ex. réel normal, TVA sur les encaissements" />
+            <Field label="Régime de TVA (réponse du cabinet)" hint="c'est ce réglage qui pilote le calcul de la position TVA">
+              <Select
+                value={regime}
+                onChange={(v) => changerRegime(v as RegimeTVA)}
+                options={[
+                  { value: 'encaissements', label: 'Encaissements (droit commun des prestations)' },
+                  { value: 'debits', label: 'Débits (option exercée auprès du SIE)' },
+                ]}
+              />
             </Field>
           </div>
+          <p className="small muted" style={{ margin: '6px 2px 0' }}>
+            Convention appliquée : {libelleConvention(regime)} — questions au cabinet :{' '}
+            <code>docs/QUESTIONS_CABINET_TVA.md</code>.
+            {ancienneNote && (
+              <>
+                <br />
+                Note libre saisie avant ce réglage : « {ancienneNote} » — conservée pour mémoire, sans effet sur le
+                calcul.
+              </>
+            )}
+          </p>
         </>
       )}
     </Card>

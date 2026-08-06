@@ -17,9 +17,26 @@
 import { useMemo, useState } from 'react'
 import type { TacheInterne } from '../types'
 import { useStore } from '../store'
-import { Btn, Card, DateF, EmptyState, Icon, Page, Table, toast, useToday } from '../ui'
+import {
+  Btn,
+  Card,
+  DateF,
+  DateInput,
+  EmptyState,
+  Field,
+  Icon,
+  Modal,
+  Page,
+  Select,
+  Table,
+  TextInput,
+  navigate,
+  toast,
+  useRoute,
+  useToday,
+} from '../ui'
 import { useMoi } from '../moi'
-import FicheTache from './FicheTache'
+import FicheTache, { useChronoTache } from './FicheTache'
 import { lienGmail } from '../util'
 import {
   type FiltreTaches,
@@ -29,6 +46,7 @@ import {
   LIBELLES_STATUT_TACHE,
   PRIORITES_TACHE,
   STATUTS_TACHE,
+  STATUTS_TACHE_AU_MENU,
   creerTache,
   estPrioriteTache,
   estStatutTache,
@@ -49,22 +67,113 @@ function Puce({
   actif,
   onClick,
   children,
+  title,
 }: {
   actif: boolean
   onClick: () => void
   children: React.ReactNode
+  title?: string
 }) {
   return (
-    <Btn small kind={actif ? 'primary' : 'ghost'} onClick={onClick}>
+    <Btn small kind={actif ? 'primary' : 'ghost'} onClick={onClick} title={title}>
       {children}
     </Btn>
   )
 }
 
+/**
+ * Le mini-formulaire de création (audit d'usage, « en passant » du §3.1).
+ *
+ * Il remplace la boîte de saisie grise du navigateur : sans nom d'écran, sans
+ * projet, sans échéance — donc une tâche qui naissait nue et qu'il fallait
+ * rouvrir pour la compléter. Trois champs suffisent, et le troisième
+ * (l'échéance) est celui qui décide si la tâche entrera un jour dans une file
+ * du matin. La vérification de l'audit se grepe : plus aucune boîte de ce
+ * genre dans `src/modules/`.
+ */
+function ModalNouvelleTache({
+  projetParDefaut,
+  onClose,
+}: {
+  projetParDefaut: string | null
+  onClose: () => void
+}) {
+  const { state, update, replace } = useStore()
+  const moi = useMoi()
+  const [titre, setTitre] = useState('')
+  const [projetId, setProjetId] = useState(projetParDefaut || '')
+  const [echeance, setEcheance] = useState<string | null>(null)
+
+  const creer = () => {
+    if (!titre.trim()) return
+    const snap = state
+    const tache = creerTache({
+      titre,
+      createur: moi.nom,
+      // Responsable = moi : une tâche qu'on saisit est une tâche qu'on prend.
+      // Sans identité reconnue on n'attribue à PERSONNE plutôt qu'au premier
+      // de la liste — et depuis l'action 29 une tâche sans responsable reste
+      // visible des deux côtés au lieu de disparaître.
+      responsable: moi.nom,
+      projetId: projetId || null,
+      echeance,
+      source: { type: 'manuelle', id: null },
+    })
+    update((d) => {
+      d.taches.push(tache)
+    })
+    onClose()
+    toast(moi.nom ? `Tâche créée pour ${moi.nom}.` : 'Tâche créée — à attribuer.', {
+      undo: () => replace(snap),
+    })
+  }
+
+  return (
+    <Modal titre="Nouvelle tâche" onClose={onClose}>
+      <Field label="Titre" hint="Une action, pas un sujet : c’est ce qu’on lira dans la liste.">
+        <TextInput
+          value={titre}
+          onChange={setTitre}
+          placeholder="Relancer le BET sur la ventilation"
+          ariaLabel="Titre de la tâche"
+        />
+      </Field>
+      <Field
+        label="Projet"
+        hint="Facultatif — mais sans projet, le temps passé dessus ne rejoindra aucune marge."
+      >
+        <Select
+          value={projetId}
+          onChange={setProjetId}
+          options={[
+            { value: '', label: 'Aucun projet' },
+            ...state.projets.map((p) => ({ value: p.id, label: `${p.id} — ${p.nom}` })),
+          ]}
+        />
+      </Field>
+      <Field
+        label="Échéance"
+        hint="Sans date, la tâche n’est ni en retard ni pour aujourd’hui : elle attend dans « Sans date »."
+      >
+        <DateInput value={echeance} onChange={setEcheance} />
+      </Field>
+      <div className="form-foot">
+        <Btn onClick={onClose}>Annuler</Btn>
+        <Btn kind="primary" onClick={creer} disabled={!titre.trim()}>
+          Créer la tâche
+        </Btn>
+      </div>
+    </Modal>
+  )
+}
+
 export default function Taches() {
-  const { state, update } = useStore()
+  const { state, update, replace } = useStore()
   const moi = useMoi()
   const today = useToday()
+  const route = useRoute()
+  // le chrono d'une ligne : MÊME glu que la fiche tâche (action 30)
+  const chrono = useChronoTache()
 
   // Le filtre par personne est celui par DÉFAUT (§8.3) : la vue s'appelle
   // « Mes tâches ». Il reste débrayable — à deux, on regarde souvent ce que
@@ -99,36 +208,41 @@ export default function Taches() {
     [state.taches, filtre, today],
   )
 
-  const ajouter = () => {
-    const titre = window.prompt('Titre de la tâche :')
-    if (!titre || !titre.trim()) return
-    const tache = creerTache({
-      titre,
-      createur: moi.nom,
-      responsable: moi.nom,
-      projetId,
-      source: { type: 'manuelle', id: null },
-    })
-    update((d) => {
-      d.taches.push(tache)
-    })
-    toast('Tâche créée.')
-  }
+  const [creation, setCreation] = useState(false)
 
   const changerStatut = (t: TacheInterne, nouveau: string) => {
+    const snap = state
     update((d) => {
       const cible = d.taches.find((x) => x.id === t.id)
       if (!cible) return
       cible.statut = nouveau
       cible.majLe = new Date().toISOString()
     })
+    // Passer une tâche à « terminée » la fait SORTIR de la liste : sans ce
+    // toast, un mauvais choix dans le menu n'a plus de retour visible du tout.
+    toast(
+      `« ${t.titre} » → ${LIBELLES_STATUT_TACHE[nouveau as keyof typeof LIBELLES_STATUT_TACHE] || nouveau}.`,
+      { undo: () => replace(snap) },
+    )
   }
 
   // B.8 : la fiche s'ouvre EN MODALE. Quitter la liste pour ouvrir une
   // tâche ferait perdre les filtres à chaque fois, et la revue d'une file
   // de vingt tâches deviendrait insupportable.
   const [ouverte, setOuverte] = useState<string | null>(null)
-  const tacheOuverte = ouverte ? state.taches.find((x) => x.id === ouverte) : null
+  // Route profonde `#/taches/<id>` : la recherche « / » indexe les tâches mais
+  // n'avait aucune adresse où les déposer — le résultat atterrissait en haut de
+  // la liste, à re-chercher à l'œil (T6, parcours 9). La modale l'emporte sur
+  // l'écran : ouvrir une tâche ne fait pas perdre les filtres de la liste.
+  const idRoute = route[1] || null
+  const idOuvert = ouverte ?? idRoute
+  const tacheOuverte = idOuvert ? state.taches.find((x) => x.id === idOuvert) : null
+  const fermerFiche = () => {
+    setOuverte(null)
+    // revenir à la liste nue : sans cela, l'adresse garderait la tâche fermée
+    // et un rechargement la rouvrirait
+    if (idRoute) navigate('/taches')
+  }
 
   const projets = state.projets.map((p) => p.id)
   const nbSansFiltre = state.taches.length
@@ -137,14 +251,22 @@ export default function Taches() {
     <Page
       titre="Mes tâches"
       actions={
-        <Btn small kind="primary" onClick={ajouter}>
+        <Btn small kind="primary" onClick={() => setCreation(true)}>
           Nouvelle tâche
         </Btn>
       }
     >
       <Card titre="Filtres">
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
-          <Puce actif={mien} onClick={() => setMien(!mien)}>
+          <Puce
+            actif={mien}
+            onClick={() => setMien(!mien)}
+            title={
+              moi.nom
+                ? 'Vos tâches ET celles que personne n’a encore prises : à deux, « à attribuer » est l’affaire de tout le monde.'
+                : undefined
+            }
+          >
             {moi.nom ? `Mes tâches (${moi.nom})` : 'Personne non reconnue — tout est affiché'}
           </Puce>
           {TEMPORELS.map((f) => (
@@ -205,7 +327,7 @@ export default function Taches() {
           </EmptyState>
         ) : (
           <Table
-            head={['Tâche', 'Projet', 'Responsable', 'Échéance', 'Priorité', 'Statut', 'Source']}
+            head={['Tâche', 'Projet', 'Responsable', 'Échéance', 'Priorité', 'Statut', 'Source', 'Chrono']}
           >
             {visibles.map((t) => (
               <tr key={t.id}>
@@ -253,7 +375,18 @@ export default function Taches() {
                     onChange={(e) => changerStatut(t, e.target.value)}
                     aria-label={`Statut de ${t.titre}`}
                   >
-                    {STATUTS_TACHE.map((s) => (
+                    {/* Les CINQ statuts qui se posent à la main, comme dans la
+                        fiche : neuf entrées se lisent moins bien, et quatre
+                        d'entre elles ne se choisissent pas ici (« à qualifier »
+                        vient d'une proposition non revue, « planifiée » du
+                        planning). Le statut courant reste dans la liste même
+                        hors menu, sinon ouvrir l'écran reclasserait la tâche. */}
+                    {!(estStatutTache(t.statut) && STATUTS_TACHE_AU_MENU.includes(t.statut)) && (
+                      <option value={t.statut}>
+                        {LIBELLES_STATUT_TACHE[t.statut as keyof typeof LIBELLES_STATUT_TACHE] || t.statut}
+                      </option>
+                    )}
+                    {STATUTS_TACHE_AU_MENU.map((s) => (
                       <option key={s} value={s}>
                         {LIBELLES_STATUT_TACHE[s]}
                       </option>
@@ -263,13 +396,39 @@ export default function Taches() {
                 <td className="small muted">
                   {LIBELLES_SOURCE_TACHE[t.source?.type as keyof typeof LIBELLES_SOURCE_TACHE] || t.source?.type}
                 </td>
+                {/* M.3 était livré à moitié : la bascule un-geste existait dans
+                    `chrono.ts` et seule la fiche l'offrait — il fallait ouvrir
+                    une modale pour lancer un chrono sur la tâche qu'on a sous
+                    les yeux. Démarrer ici arrête et enregistre le chrono en
+                    cours : c'est la même bascule, jamais deux compteurs. */}
+                <td>
+                  {chrono.enCoursSur(t.id) ? (
+                    <Btn small onClick={() => chrono.arreter()} title="Arrêter le chrono en cours">
+                      ■ Arrêter
+                    </Btn>
+                  ) : (
+                    <Btn
+                      small
+                      kind="ghost"
+                      onClick={() => chrono.demarrer(t)}
+                      title={
+                        chrono.courant
+                          ? `Démarrer le chrono sur « ${t.titre} » — le chrono en cours sera arrêté et enregistré`
+                          : `Démarrer le chrono sur « ${t.titre} »`
+                      }
+                    >
+                      ▶
+                    </Btn>
+                  )}
+                </td>
               </tr>
             ))}
           </Table>
         )}
       </Card>
 
-      {tacheOuverte && <FicheTache tache={tacheOuverte} onClose={() => setOuverte(null)} />}
+      {tacheOuverte && <FicheTache tache={tacheOuverte} onClose={fermerFiche} />}
+      {creation && <ModalNouvelleTache projetParDefaut={projetId} onClose={() => setCreation(false)} />}
     </Page>
   )
 }

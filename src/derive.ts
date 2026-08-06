@@ -13,6 +13,13 @@ import {
 import { addDays, diffDays, fmtDate, fmtMoney, fold } from './util'
 import { finGPA } from './gpa'
 
+/** Les libellés des phases de mission appartiennent à `src/miqcp.ts` — ils
+ *  sont RÉEXPORTÉS ici, pas recopiés, pour les écrans dont le contrat de
+ *  modules borne les imports de calcul (l'accueil, `test-accueil.cjs`).
+ *  Un code de phase nu (« ACT-DCE ») ne se lit qu'après six mois d'usage :
+ *  la personne qui remplace l'autre une semaine, elle, ne le lit pas. */
+export { LIBELLES_PHASES } from './miqcp'
+
 export function projetById(state: AppState, id: string): Projet | undefined {
   return state.projets.find((p) => p.id === id)
 }
@@ -1298,15 +1305,33 @@ export function evenements(state: AppState): EvtCal[] {
     })
   }
 
+  // La pastille CRM mène là où le contact ET son geste « Relancer » vivent
+  // depuis leur déménagement : l'onglet Contacts des Ressources. Elle
+  // pointait encore l'Agenda, c'est-à-dire l'écran d'où ils sont partis.
   for (const c of state.contacts) {
     if (c.dateProchaineAction)
       evts.push({
         date: c.dateProchaineAction,
         label: c.nom.split(' ')[0],
         icon: 'user',
-        lien: '#/agenda',
+        lien: '#/ressources/contacts',
         couleur: COULEURS_ECHEANCE.crm,
         titreLong: `CRM — ${c.nom} : ${c.prochaineAction || 'action prévue'}`,
+      })
+  }
+
+  // Même saisie, même échéance, même pastille : « prochaine action » d'une
+  // ORGANISATION. Elle se saisit depuis le Lot 5 et n'était relue par
+  // personne — ni le calendrier, ni le fil d'urgences.
+  for (const o of Array.isArray(state.organisations) ? state.organisations : []) {
+    if (o && o.dateProchaineAction)
+      evts.push({
+        date: o.dateProchaineAction,
+        label: o.nom.slice(0, 12),
+        icon: 'user',
+        lien: '#/ao/acheteurs',
+        couleur: COULEURS_ECHEANCE.crm,
+        titreLong: `CRM — ${o.nom} : ${o.prochaineAction || 'action prévue'}`,
       })
   }
 

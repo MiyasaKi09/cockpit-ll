@@ -23,11 +23,35 @@ import { MODELES_WHISPER, testerModele } from '../transcription'
 
 // ---------- briques ----------
 
-type Etat = 'ok' | 'attention' | 'coupe'
+// « inconnu » n'est pas « ok » : un branchement jamais éprouvé ne mérite pas
+// une pastille verte — la confiance dans les pastilles est ce qui fait ouvrir
+// cette page. Vert = ça a réellement tourné ici, au moins une fois.
+type Etat = 'ok' | 'attention' | 'coupe' | 'inconnu'
+
+const COULEUR_ETAT: Record<Etat, string> = {
+  ok: 'var(--ok)',
+  attention: 'var(--warn)',
+  coupe: 'var(--danger)',
+  // creuse, et non grise : l'œil doit distinguer « pas encore su » de « éteint »
+  inconnu: 'transparent',
+}
 
 function Pastille({ etat }: { etat: Etat }) {
-  const c = etat === 'ok' ? 'var(--ok)' : etat === 'attention' ? 'var(--warn)' : 'var(--danger)'
-  return <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 5, background: c, marginRight: 8 }} />
+  return (
+    <span
+      title={etat === 'inconnu' ? 'jamais testé depuis ce poste' : undefined}
+      style={{
+        display: 'inline-block',
+        width: 10,
+        height: 10,
+        borderRadius: 5,
+        background: COULEUR_ETAT[etat],
+        border: etat === 'inconnu' ? '2px solid var(--ink-3)' : undefined,
+        boxSizing: 'border-box',
+        marginRight: 8,
+      }}
+    />
+  )
 }
 
 function Branchement({
@@ -173,7 +197,10 @@ function SanteBoamp() {
   const [verdict, setVerdict] = useState<{ ok: boolean; texte: string } | null>(null)
   const [enCours, setEnCours] = useState(false)
 
-  const etat: Etat = derniere?.erreur ? 'attention' : 'ok'
+  // vert seulement si le BOAMP a RÉPONDU au moins une fois depuis ce poste :
+  // une pastille verte sur un branchement jamais éprouvé, c'est la promesse
+  // qui use la confiance dans toutes les autres
+  const etat: Etat = !derniere ? 'inconnu' : derniere.erreur ? 'attention' : 'ok'
 
   const tester = async () => {
     setEnCours(true)
@@ -204,7 +231,8 @@ function SanteBoamp() {
     >
       <p className="small">
         Le site interroge directement l'API ouverte du BOAMP (DILA) — gratuite, sans clé, sans
-        compte. Les annonces s'ajoutent en un clic dans la page <a href="#/ao">Appels d'offres</a>.
+        compte. Les annonces s'ajoutent en un clic dans la page <a href="#/ao">Appels d'offres</a>.{' '}
+        {!derniere && <Badge tone="muted">jamais testé depuis ce poste</Badge>}
         {derniere && (
           <span className="muted">
             {' '}
@@ -556,7 +584,8 @@ export function SanteContenu() {
   return (
     <>
       <p className="small muted" style={{ margin: '0 0 4px' }}>
-        Un bouton pour tester chaque branchement. Vert = ça tourne.
+        Un bouton pour tester chaque branchement. Vert = ça a réellement tourné ici ; pastille
+        creuse = jamais testé depuis ce poste (ce n'est pas une panne, c'est une inconnue).
       </p>
       <SanteGoogle />
       <SanteBoamp />

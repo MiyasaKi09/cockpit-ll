@@ -78,6 +78,9 @@ jobs:
       - name: Payment certificate matches the real document, frozen once issued
         run: npm run test:certificat
 
+      - name: Contract advance payment is enterable and reaches the certificate
+        run: npm run test:avance-forfaitaire
+
       - name: Margin drift audited against hand-computed cases
         run: npm run test:derive-marge
 
@@ -92,6 +95,9 @@ jobs:
 
       - name: Market penalties incurred, applied only by a signed human decision
         run: npm run test:penalites
+
+      - name: An applied penalty is never charged twice to the contractor
+        run: npm run test:double-penalite
 
       - name: Weather days registry offsets delays in distinct working days
         run: npm run test:intemperies
@@ -216,11 +222,17 @@ jobs:
       - name: Week total is computed once for both time views
         run: npm run test:temps-mobile
 
+      - name: Week badge deducts leave, timed work stays visible
+        run: npm run test:badge-semaine
+
       - name: INSEE index feed parsing, merge authority and daily throttle
         run: npm run test:indices-insee
 
       - name: No raw JSX tables outside the recensed files
         run: npm run test:tableaux
+
+      - name: No dead internal links, no native browser dialogs in screens
+        run: npm run test:criteres-usage
 
       - name: Finance entry screen reuses existing selectors, nine destinations kept
         run: npm run test:finance-essentiel

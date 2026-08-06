@@ -94,9 +94,19 @@ function HistogrammeMensuel({ annee }: { annee: number }) {
 
 // ---------- récap CA par mois (matrice = la vue table du graphique) ----------
 
-function CarteCAMensuel() {
+/** La carte « CA facturé par mois » — histogramme + matrice. EXPORTÉE : la
+ *  Revue (Pilotage → Revue / PDF) en portait une recopie de 55 lignes dont
+ *  les libellés avaient déjà divergé (« dont encaissé » contre « dont
+ *  encaissé (date réelle) »). Les deux écrans lisent maintenant la même.
+ *
+ *  `annee` : quand elle est donnée, la carte suit l'année de l'écran hôte (la
+ *  période de la Revue) et n'affiche pas ses flèches — deux sélecteurs d'année
+ *  sur le même écran donneraient deux réponses à la même question. Sans elle,
+ *  la carte se pilote toute seule, comme dans Pilotage → Missions. */
+export function CarteCAMensuel({ annee: anneeImposee }: { annee?: number }) {
   const { state } = useStore()
-  const [annee, setAnnee] = useState(Number(todayISO().slice(0, 4)))
+  const [anneeLocale, setAnnee] = useState(Number(todayISO().slice(0, 4)))
+  const annee = anneeImposee ?? anneeLocale
 
   const donnees = useMemo(() => caParMois(state, annee), [state, annee])
 
@@ -110,11 +120,15 @@ function CarteCAMensuel() {
     <Card
       titre={`CA facturé par mois — ${annee}`}
       actions={
-        <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
-          <button className="btn btn-small" onClick={() => setAnnee(annee - 1)} aria-label="Année précédente">‹</button>
-          <strong>{annee}</strong>
-          <button className="btn btn-small" onClick={() => setAnnee(annee + 1)} aria-label="Année suivante">›</button>
-        </span>
+        anneeImposee === undefined ? (
+          <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+            <button className="btn btn-small" onClick={() => setAnnee(annee - 1)} aria-label="Année précédente">‹</button>
+            <strong>{annee}</strong>
+            <button className="btn btn-small" onClick={() => setAnnee(annee + 1)} aria-label="Année suivante">›</button>
+          </span>
+        ) : (
+          <span className="muted small">année de la période affichée</span>
+        )
       }
     >
       {donnees.lignes.length === 0 && donnees.prevuParMois.every((x) => x === 0) ? (

@@ -19,6 +19,11 @@ import type { Projet, StatutProjet, TypeMO } from '../types'
 import { useStore } from '../store'
 import { OUVRAGES, calculHonoraires, phasesParDefaut, seuilPlancherActualise } from '../miqcp'
 import { baselineDepuisPhases, equipeDuProjet, tauxVente } from '../derive'
+// Le rapprochement nom → organisation a DÉJÀ son autorité (le CRM,
+// src/organisations.ts) : la datalist du maître d'ouvrage la réutilise au
+// lieu d'en écrire une seconde — sinon « OPAC de l'Oise » et « OPAC de
+// l'OISE » deviendraient deux relations dans le radar, en silence.
+import { trouverOrganisation } from '../organisations'
 import { useMoi } from '../moi'
 import { daterPhases, echeancesParDefaut } from '../echeancier'
 import {
@@ -31,7 +36,7 @@ import {
   type FSDirHandle,
 } from '../fsdrive'
 import { Badge, Btn, Field, Modal, NumInput, PctInput, Select, TextInput, navigate, toast } from '../ui'
-import { addDays, adresseProjetProposee, codeExternePropose, fmtMoney, fmtPct, todayISO, uid } from '../util'
+import { addDays, adresseProjetProposee, codeExternePropose, fmtMoney, fmtPct, fold, todayISO, uid } from '../util'
 
 const TYPES_MO: TypeMO[] = ['Public', 'Privé pro', 'Particulier']
 const STATUTS: StatutProjet[] = ['Prospect', 'Offre remise', 'Signé', 'En cours']
@@ -160,6 +165,23 @@ export default function ProjetNouveau({ onClose }: { onClose: () => void }) {
     ],
   )
 
+  // Les maîtres d'ouvrage déjà connus : le CRM (`state.organisations`) ET les
+  // MOA portés par les projets existants — un projet saisi avant le CRM doit
+  // rester proposable, sinon on retape ce que l'outil sait déjà. Dédoublonnage
+  // par `fold`, la même normalisation que `trouverOrganisation`.
+  const moaConnus = useMemo(() => {
+    const noms = new Map<string, string>()
+    for (const o of state.organisations) if (o?.nom?.trim()) noms.set(fold(o.nom), o.nom.trim())
+    for (const p of state.projets) {
+      const n = p.moa?.trim()
+      if (n && !noms.has(fold(n))) noms.set(fold(n), n)
+    }
+    return [...noms.values()].sort((a, b) => a.localeCompare(b))
+  }, [state.organisations, state.projets])
+
+  // l'organisation que le nom désigne — le rapprochement du CRM, pas un second
+  const orgReconnue = trouverOrganisation(state, moa.trim())
+
   // qui travaillera sur le projet, selon la règle de derive.ts et elle seule
   // — la recopier ici ferait diverger l'aperçu de l'assistant du plan de
   // charge le jour où la règle bouge
@@ -260,8 +282,36 @@ export default function ProjetNouveau({ onClose }: { onClose: () => void }) {
             </Field>
           </div>
           <div className="form-row">
-            <Field label="Maître d'ouvrage">
-              <TextInput value={moa} onChange={setMoa} placeholder="Ex. OPAC de l'Oise" />
+            <Field
+              label="Maître d'ouvrage"
+              hint={
+                orgReconnue
+                  ? `Organisation « ${orgReconnue.nom} » reconnue : consultations, contacts et références se regrouperont dessus.`
+                  : moa.trim()
+                    ? 'Nouveau maître d’ouvrage — reprenez à l’identique le nom déjà utilisé ailleurs, sinon la fiche organisation se scinde en deux.'
+                    : moaConnus.length > 0
+                      ? `${moaConnus.length} maîtres d’ouvrage déjà connus vous sont proposés — la saisie reste libre.`
+                      : 'aucun maître d’ouvrage connu pour l’instant'
+              }
+            >
+              {/* la datalist PROPOSE ce que le CRM et les projets savent déjà ;
+                  elle n'enferme pas (un nouveau MOA n'est encore nulle part).
+                  `TextInput` (ui.tsx) ne porte pas d'attribut `list` : l'input
+                  est écrit ici, aux mêmes classes. */}
+              <input
+                className="input"
+                type="text"
+                list="projet-moa-connus"
+                value={moa}
+                onChange={(e) => setMoa(e.target.value)}
+                placeholder="Ex. OPAC de l'Oise"
+                aria-label="Maître d’ouvrage"
+              />
+              <datalist id="projet-moa-connus">
+                {moaConnus.map((n) => (
+                  <option key={n} value={n} />
+                ))}
+              </datalist>
             </Field>
             <Field label="Adresse / commune">
               <TextInput value={adresse} onChange={setAdresse} />

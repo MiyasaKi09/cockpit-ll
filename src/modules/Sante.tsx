@@ -246,7 +246,8 @@ function SanteBoamp() {
     >
       <p className="small">
         Le site interroge directement l'API ouverte du BOAMP (DILA) — gratuite, sans clé, sans
-        compte. Les annonces s'ajoutent en un clic dans la page <a href="#/ao">Appels d'offres</a>.{' '}
+        compte. Les annonces s'ajoutent en un clic dans le{' '}
+        <a href="#/ao/veille">Radar de Développement</a>.{' '}
         {!derniere && <Badge tone="muted">jamais testé depuis ce poste</Badge>}
         {derniere && (
           <span className="muted">
@@ -259,7 +260,7 @@ function SanteBoamp() {
       <Verdict v={verdict} />
       <CommentTester>
         cliquez « Tester la connexion » — un résultat en moins d'une seconde confirme que la veille
-        marchera aussi depuis la page Appels d'offres.
+        marchera aussi depuis la page Développement.
       </CommentTester>
     </Branchement>
   )
@@ -309,7 +310,7 @@ function SanteRelais() {
         {dispo === null ? (
           'Vérification…'
         ) : dispo ? (
-          <Badge tone="ok">relais actif — TED alimente la veille Appels d'offres</Badge>
+          <Badge tone="ok">relais actif — TED alimente le Radar de Développement</Badge>
         ) : (
           <Badge tone="warn">relais injoignable</Badge>
         )}{' '}
@@ -321,8 +322,8 @@ function SanteRelais() {
       </p>
       <Verdict v={verdict} />
       <CommentTester>
-        cliquez le test : quelques avis européens doivent remonter. Ensuite, page Appels d'offres →
-        « Rechercher » : les lignes marquées TED viennent du relais.
+        cliquez le test : quelques avis européens doivent remonter. Ensuite, page Développement →
+        Radar → « Rechercher » : les lignes marquées TED viennent du relais.
       </CommentTester>
     </Branchement>
   )

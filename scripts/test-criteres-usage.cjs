@@ -309,6 +309,123 @@ function alertesDeclarees() {
   }
 }
 
+// --- 4. un lien à identifiant DOIT avoir une porte, et elle est nommée ------
+//
+// POURQUOI CE CONTRÔLE EXISTE, ET CE QU'IL RÉPARE
+// ------------------------------------------------
+// Le critère `lienIdentifie` ci-dessus juge une alerte « atterrie » sur un
+// seul fait : son lien est un gabarit plutôt qu'une chaîne littérale. C'est
+// une propriété de l'ÉMETTEUR. Elle ne dit rien du DESTINATAIRE.
+//
+// Ce n'est pas une critique théorique : une vérification du 06/08/2026 a
+// trouvé que `#/situations/verifier/${sit.id}` était émis depuis des semaines
+// et lu par personne — `Situations.tsx` n'inspectait `route[2]` que pour y
+// chercher le mot « chercher », et ignorait un identifiant en silence.
+// L'alerte « situation à vérifier » déposait donc en haut de la liste non
+// filtrée, exactement le défaut T6 qu'on croyait fermé. Le test, lui, était
+// vert : il regardait la forme du lien, et la forme était bonne.
+//
+// Un test qui valide l'émission d'une adresse sans vérifier qu'elle mène
+// quelque part ne mesure rien. Pire : il rassure.
+//
+// CE QUE CE CONTRÔLE PEUT, ET CE QU'IL NE PEUT PAS
+// -------------------------------------------------
+// Prouver statiquement qu'un écran « traite correctement » un segment de
+// route demanderait de comprendre sa sémantique — hors de portée d'une
+// analyse d'arbre, et une heuristique s'y tromperait en silence (c'est
+// précisément ce qu'on répare). On applique donc le patron déjà éprouvé par
+// l'inventaire de `test-tableaux.cjs` : la porte est NOMMÉE à la main, et
+// l'inventaire se compare à la réalité DANS LES DEUX SENS.
+//
+//   · une famille de lien qui apparaît dans alerts.ts sans être inventoriée
+//     ⇒ échec : personne n'a dit où elle atterrit ;
+//   · une famille inventoriée qui a disparu d'alerts.ts ⇒ échec : l'entrée
+//     est périmée et couvrirait n'importe quoi ;
+//   · une porte dont la preuve n'est plus dans le fichier consommateur
+//     ⇒ échec : quelqu'un a retiré la lecture, le lien est redevenu mort.
+//
+// Ce n'est pas une preuve de correction. C'est l'impossibilité d'ajouter un
+// lien à identifiant sans que quelqu'un désigne le code qui le lit — et
+// l'alarme le jour où ce code disparaît.
+
+const PORTES_ATTENDUES = {
+  // `#/projets/<id>` et `#/projets/<id>/<onglet>` — six alertes s'y rendent
+  projets: { fichier: 'src/modules/Projets.tsx', preuve: 'const id = route[1]' },
+  // `#/facturation/chercher/<terme>` — le terme se dépose dans la recherche
+  facturation: { fichier: 'src/modules/Facturation.tsx', preuve: "route[1] === 'chercher'" },
+  // `#/situations/verifier/<id>` — LA porte qui manquait le 06/08/2026
+  situations: { fichier: 'src/modules/Situations.tsx', preuve: 'cibleId' },
+  // `#/finance/banque/<id>` — la connexion bancaire visée par l'alerte
+  finance: { fichier: 'src/modules/Banque.tsx', preuve: 'cibleConnexion' },
+  // `#/ressources/artisan/<id>` — la fiche entreprise, pas l'annuaire entier
+  ressources: { fichier: 'src/modules/Ressources.tsx', preuve: "route[1] === 'artisan' && route[2]" },
+}
+
+{
+  // les familles réellement émises, lues dans l'arbre : on ne cherche que les
+  // gabarits (`lien: \`#/…\``), puisqu'une chaîne littérale ne porte par
+  // construction aucun identifiant
+  const sf = ts.createSourceFile(
+    'src/alerts.ts',
+    lire('src/alerts.ts'),
+    ts.ScriptTarget.ES2022,
+    true,
+    ts.ScriptKind.TS,
+  )
+  const familles = new Set()
+  const parcourir = (n) => {
+    if (
+      ts.isPropertyAssignment(n) &&
+      n.name.getText(sf) === 'lien' &&
+      ts.isTemplateExpression(n.initializer)
+    ) {
+      const debut = n.initializer.head.text // ex. « #/situations/verifier/ »
+      const segments = debut.replace(/^#\//, '').split('/').filter(Boolean)
+      if (segments.length) familles.add(segments[0])
+    }
+    ts.forEachChild(n, parcourir)
+  }
+  parcourir(sf)
+
+  assert.ok(
+    familles.size >= 4,
+    `le balayage n’a trouvé que ${familles.size} famille(s) de lien à identifiant dans alerts.ts : ` +
+      'la lecture de l’arbre est cassée, et ce contrôle validerait à vide.',
+  )
+
+  assert.deepEqual(
+    [...familles].sort(),
+    Object.keys(PORTES_ATTENDUES).sort(),
+    'INVENTAIRE des familles de liens d’alerte portant un identifiant.\n' +
+      '  · une famille EN TROP = un lien à identifiant a été ajouté sans qu’on dise où il atterrit.\n' +
+      '    Ajoutez-la à PORTES_ATTENDUES avec le fichier qui la lit ET la preuve — après avoir VÉRIFIÉ\n' +
+      '    dans ce fichier qu’il lit vraiment le segment. C’est ce contrôle-là qui a manqué le 06/08.\n' +
+      '  · une famille MANQUANTE = l’entrée est périmée : retirez-la, sinon elle couvre le vide.',
+  )
+
+  for (const [famille, { fichier, preuve }] of Object.entries(PORTES_ATTENDUES)) {
+    assert.ok(
+      fs.existsSync(path.join(racine, fichier)),
+      `${fichier} est désigné comme la porte de « #/${famille}/… » mais n’existe plus.`,
+    )
+    assert.ok(
+      lire(fichier).includes(preuve),
+      `PORTE PERDUE — « #/${famille}/<identifiant> » est encore émis par src/alerts.ts, mais\n` +
+        `  ${fichier} ne contient plus « ${preuve} » : plus rien n’y lit l’identifiant.\n` +
+        '  Le lien est redevenu un dépôt en haut d’une liste, en silence — c’est exactement le\n' +
+        '  défaut du 06/08/2026, où l’alerte « situation à vérifier » pointait dans le vide\n' +
+        '  pendant que ce test restait vert.\n' +
+        '  Si la lecture a simplement changé de forme, mettez la preuve à jour APRÈS avoir vérifié\n' +
+        '  qu’une porte existe encore.',
+    )
+  }
+
+  console.log(
+    `Portes des liens d’alerte : ${familles.size} familles à identifiant, chacune avec le fichier ` +
+      'qui la lit et la preuve de sa lecture — un lien nouveau ne peut plus être ajouté sans porte.',
+  )
+}
+
 console.log(
   `Critères mécaniques du §5.2 : ${SOURCES.length} fichiers lus par le compilateur — aucune adresse interne ` +
     'hors du routeur (« #/messages » compris), aucune boîte native du navigateur dans les écrans, et ' +

@@ -5,7 +5,7 @@
 // → visa. Claude propose, l'humain valide.
 // ============================================================
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { AppState, Situation, StatutSituation, TypeGarantie } from '../types'
 import { useStore } from '../store'
 import {
@@ -816,7 +816,27 @@ function ModalEdition({ sit, creation, onClose }: { sit: Situation; creation?: b
 
 // ---------- tableau « à vérifier » ----------
 
-function CarteAVerifier() {
+/** T6 — l'ARRIVÉE des deux liens profonds de l'onglet « À vérifier ». Ils
+ *  existaient tous les deux, écrits ailleurs, et tombaient tous les deux dans
+ *  le vide : on atterrissait en haut de la liste NON FILTRÉE, à retrouver la
+ *  ligne à l'œil parmi huit — le geste le plus fréquent du module.
+ *   · `cibleId` — `#/situations/verifier/<id>`, écrit par l'alerte
+ *     « situation à vérifier » (`alerts.ts`) : la ligne est mise en évidence
+ *     et ramenée à l'écran. Rien ne s'ouvre à sa place : la vérification se
+ *     lit dans le tableau (limite, écart de cumul, net à payer) AVANT de
+ *     trancher, et « Valider » reste le geste humain.
+ *   · `entrepriseInitiale` — `#/situations/verifier/chercher/<entreprise>`,
+ *     écrit par la palette « / » : le filtre entreprise arrive pré-rempli,
+ *     comme l'Historique le faisait déjà seul.
+ *  Les deux formes ne peuvent pas se confondre : aucun identifiant ne vaut
+ *  « chercher » (le découpage se fait dans `Situations()`, plus bas). */
+function CarteAVerifier({
+  cibleId = '',
+  entrepriseInitiale = '',
+}: {
+  cibleId?: string
+  entrepriseInitiale?: string
+}) {
   const { state, update, replace } = useStore()
   const today = useToday()
   // B1 — qui valide : la personne reconnue, et `null` quand le poste ne sait
@@ -835,9 +855,32 @@ function CarteAVerifier() {
   const [creation, setCreation] = useState<Situation | null>(null)
 
   const tplVerif = gabarit(state, 'tpl-verif-situation')
-  const aVerifier = state.situations
+  const aVerifierToutes = state.situations
     .filter((s) => s.statut === 'a_verifier')
     .sort((a, b) => dateLimiteVerif(state, a).localeCompare(dateLimiteVerif(state, b)))
+  const entreprisesConnues = [...new Set(aVerifierToutes.map((s) => s.entreprise))].sort((a, b) =>
+    a.localeCompare(b),
+  )
+  // le filtre porté par la route ne s'applique que s'il désigne une entreprise
+  // réellement en attente ICI : sinon la carte s'ouvrirait vide sans dire
+  // pourquoi, ce qui est pire que de ne pas pré-remplir (même règle que
+  // l'Historique). Le parent remonte la carte quand la route change (`key`).
+  const [filtreEntreprise, setFiltreEntreprise] = useState(
+    entreprisesConnues.includes(entrepriseInitiale) ? entrepriseInitiale : '',
+  )
+  const aVerifier = filtreEntreprise
+    ? aVerifierToutes.filter((s) => s.entreprise === filtreEntreprise)
+    : aVerifierToutes
+
+  // la situation désignée par le lien : trouvée ici (mise en évidence), ou
+  // ailleurs dans la base (déjà vérifiée → l'Historique le dit), ou nulle part
+  const cible = cibleId ? aVerifierToutes.find((s) => s.id === cibleId) : undefined
+  const cibleAilleurs = cibleId && !cible ? state.situations.find((s) => s.id === cibleId) : undefined
+  const refCible = useRef<HTMLTableRowElement | null>(null)
+  useEffect(() => {
+    // la ligne peut être au bas d'un troisième projet : on la ramène à l'écran
+    refCible.current?.scrollIntoView({ block: 'center' })
+  }, [cibleId])
 
   const saisirSituation = () =>
     setCreation({
@@ -932,7 +975,7 @@ function CarteAVerifier() {
 
   return (
     <Card
-      titre={`À vérifier (${aVerifier.length})`}
+      titre={`À vérifier (${aVerifierToutes.length})`}
       actions={
         <Btn
           small
@@ -962,10 +1005,77 @@ function CarteAVerifier() {
           </Btn>
         </div>
       )}
-      {aVerifier.length === 0 ? (
+      {/* T6 — le lien d'alerte a désigné UNE situation : on dit laquelle, et
+          « Retirer la mise en évidence » rend la liste entière (chaque geste
+          laisse un retour en arrière) */}
+      {cible && (
+        <div className="pill-note" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <span>
+            Lien direct — <strong>{cible.entreprise}</strong> ({fmtMois(cible.mois)}) est mise en
+            évidence ci-dessous ; à vérifier avant le {fmtDate(dateLimiteVerif(state, cible))}.
+          </span>
+          <Btn
+            small
+            kind="ghost"
+            onClick={() => navigate('/situations/verifier')}
+            title="Retirer la mise en évidence et revenir à la liste complète"
+          >
+            Retirer la mise en évidence
+          </Btn>
+        </div>
+      )}
+      {cibleId && !cible && (
+        <div className="pill-note" style={{ borderColor: 'var(--warn)' }}>
+          {cibleAilleurs ? (
+            <>
+              La situation <strong>{cibleAilleurs.entreprise}</strong> ({fmtMois(cibleAilleurs.mois)}) n’est
+              plus à vérifier : <BadgeStatutSituation statut={cibleAilleurs.statut} />{' '}
+              <a
+                href={`#/situations/historique/chercher/${encodeURIComponent(cibleAilleurs.entreprise)}`}
+              >
+                la voir dans l’Historique
+              </a>
+              .
+            </>
+          ) : (
+            <>
+              La situation demandée par ce lien est introuvable (supprimée, ou base d’un autre poste).
+              Les situations en attente restent listées ci-dessous.
+            </>
+          )}
+        </div>
+      )}
+      {/* filtre entreprise — pré-rempli par `#/situations/verifier/chercher/<entreprise>`
+          (palette « / »), et utilisable à la main quand plusieurs entreprises attendent */}
+      {(entreprisesConnues.length > 1 || filtreEntreprise) && (
+        <div className="toolbar" style={{ marginTop: 0 }}>
+          <Select
+            value={filtreEntreprise}
+            onChange={setFiltreEntreprise}
+            options={[
+              { value: '', label: 'Toutes les entreprises' },
+              ...entreprisesConnues.map((e) => ({ value: e, label: e })),
+            ]}
+          />
+          <span className="muted small">
+            {aVerifier.length} situation{aVerifier.length > 1 ? 's' : ''}
+            {filtreEntreprise ? ` sur ${aVerifierToutes.length}` : ''}
+          </span>
+          {filtreEntreprise && (
+            <Btn small kind="ghost" onClick={() => setFiltreEntreprise('')}>
+              Retirer le filtre
+            </Btn>
+          )}
+        </div>
+      )}
+      {aVerifierToutes.length === 0 ? (
         <EmptyState>
           Aucune situation en attente de vérification — « Saisir une situation » pour celle qui
           arrive autrement que par situations@.
+        </EmptyState>
+      ) : aVerifier.length === 0 ? (
+        <EmptyState>
+          Aucune situation à vérifier pour cette entreprise — « Retirer le filtre » les remet toutes.
         </EmptyState>
       ) : (
         projetIds.map((pid) => {
@@ -990,10 +1100,31 @@ function CarteAVerifier() {
                   const marche = s.marcheId ? state.marches.find((m) => m.id === s.marcheId) : undefined
                   const limite = dateLimiteVerif(state, s)
                   const jours = diffDays(today, limite)
+                  // la ligne désignée par le lien : trait d'accent + aplat doux.
+                  // `outline` plutôt que `border` — il ne déplace rien, ni en
+                  // tableau ni dans le repli en cartes sous 700 px
+                  const visee = s.id === cibleId
                   return (
-                    <tr key={s.id}>
+                    <tr
+                      key={s.id}
+                      ref={visee ? refCible : undefined}
+                      style={
+                        visee
+                          ? {
+                              outline: '2px solid var(--accent)',
+                              outlineOffset: '-2px',
+                              background: 'var(--accent-soft)',
+                            }
+                          : undefined
+                      }
+                    >
                       <td>
                         <strong>{s.entreprise}</strong>
+                        {visee && (
+                          <span className="muted small" style={{ marginLeft: 6 }}>
+                            (situation du lien)
+                          </span>
+                        )}
                         <div className="muted small">
                           {s.lot || '—'}
                           {s.source ? ` · ${s.source}` : ''}
@@ -1745,10 +1876,19 @@ export default function Situations() {
   const { state } = useStore()
   const route = useRoute()
   const vue = ONGLETS_SITUATIONS.includes(route[1] || '') ? route[1] : 'verifier'
-  // route profonde `#/situations/<onglet>/chercher/<entreprise>` (palette « / ») :
-  // la palette envoie déjà sur le BON onglet en portant le nom de l'entreprise ;
-  // sans cette lecture, l'onglet était bon et le filtre vide (T6, parcours 9).
+  // Deux routes profondes, distinguées par le SEUL segment `route[2]` — et
+  // elles ne peuvent pas se confondre : aucun identifiant ne vaut « chercher ».
+  //   · `#/situations/<onglet>/chercher/<entreprise>` (palette « / ») : la
+  //     palette envoie déjà sur le BON onglet en portant le nom de
+  //     l'entreprise ; sans cette lecture, l'onglet était bon et le filtre
+  //     vide (T6, parcours 9).
+  //   · `#/situations/<onglet>/<id>` (alerte « situation à vérifier », écrite
+  //     par alerts.ts) : l'identifiant voyageait depuis le début et personne
+  //     ne le lisait — le lien déposait en haut de la liste NON filtrée, à
+  //     retrouver la ligne à l'œil. C'est la carte qui met la ligne en
+  //     évidence, ici on ne fait que découper l'adresse.
   const entrepriseRoute = route[2] === 'chercher' ? route[3] || '' : ''
+  const idRoute = route[2] && route[2] !== 'chercher' ? route[2] : ''
   const nbAVerifier = state.situations.filter((s) => s.statut === 'a_verifier').length
   return (
     <Page
@@ -1771,7 +1911,14 @@ export default function Situations() {
             La maîtrise d'œuvre porte le risque sur le délai de paiement : la date limite de
             vérification est calculée d'après le délai du marché (15 j par défaut).
           </div>
-          <CarteAVerifier />
+          {/* `key` : arriver depuis une AUTRE alerte (ou une autre entreprise)
+              repose le filtre et la mise en évidence — sans lui, le second
+              lien laisserait l'état du premier en place */}
+          <CarteAVerifier
+            key={`${idRoute}|${entrepriseRoute}`}
+            cibleId={idRoute}
+            entrepriseInitiale={entrepriseRoute}
+          />
           <details style={{ marginTop: 8 }}>
             <summary className="small" style={{ cursor: 'pointer', color: 'var(--accent)' }}>
               Dépannage — coller à la main le retour JSON de la routine

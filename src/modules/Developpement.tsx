@@ -233,14 +233,19 @@ export function PipelineContenu() {
         </Card>
         <Card titre="À étudier">
           <div style={{ fontSize: 24, fontWeight: 700 }}>{parStatut('a_etudier').length}</div>
-          <div className="muted small">nouvelles opportunités — <a href="#/ao">veille AO</a></div>
+          {/* un seul nom pour cet écran : « Développement », celui du menu.
+              Le Radar en est l'onglet de veille (#/ao/veille). */}
+          <div className="muted small">
+            nouvelles opportunités — <a href="#/ao/veille">Radar de Développement</a>
+          </div>
         </Card>
       </div>
 
       <Card titre="Pipeline des consultations">
         {state.consultations.length === 0 ? (
           <EmptyState>
-            Aucune consultation — la veille <a href="#/ao">Appels d'offres</a> les alimente automatiquement.
+            Aucune consultation — le <a href="#/ao/veille">Radar de Développement</a> les alimente
+            automatiquement.
           </EmptyState>
         ) : (
           <div style={{ display: 'flex', gap: 12, overflowX: 'auto', alignItems: 'flex-start' }}>

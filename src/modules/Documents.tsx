@@ -63,8 +63,11 @@ import {
 import { LIBELLES_PHASES, PHASES_ORDRE } from '../miqcp'
 // le triplet de statuts « en attente d'un geste humain » se déclare une
 // seule fois, dans derive.ts : recopié, il diverge du compteur du menu
-// et du bloc « validations attendues » de l'accueil
-import { documentsATraiter } from '../derive'
+// et du bloc « validations attendues » de l'accueil. Même règle pour la
+// composition du compteur « à rattacher » (courriers locaux + messages
+// distants, `null` quand l'espace partagé n'a pas répondu) : l'accueil
+// l'annonce, cet onglet la montre, et une seule fonction en décide.
+import { documentsATraiter, nombreARattacher } from '../derive'
 import { syncActif } from '../sync'
 import {
   listerEntrantsDistants,
@@ -135,6 +138,64 @@ function ChampPhase({
 
 /** la valeur du formulaire (chaîne) rangée telle que l'état l'attend */
 const phaseChoisie = (v: string): PhaseCode | null => (v ? (v as PhaseCode) : null)
+
+// ============================================================
+// NOMMER LE FICHIER (rapatriement de l'écran « Classement »)
+//
+// L'écran « Classement » portait un générateur de noms : quatre champs,
+// un nom conforme, un bouton « Copier ». Il n'était plus relié à aucun
+// menu — et il tenait sa PROPRE formule de nomenclature, à côté de
+// `nomConforme` (src/fsdrive.ts) qui, elle, nomme réellement les
+// fichiers rangés. Deux formules pour une convention : celle qu'on
+// lisait à l'écran et celle qui s'écrivait sur le disque, libres de
+// diverger. Le générateur revient donc ICI, là où le fichier se range,
+// et ne calcule plus rien lui-même :
+//   — l'« objet » est le seul champ qui manquait (`nomConforme` l'accepte
+//     depuis toujours ; les deux arrivées lui passaient une chaîne vide,
+//     si bien que le nom retombait sur celui du fichier reçu) ;
+//   — le nom montré est celui que le rangement écrira, au caractère près ;
+//   — le « _vNN » ne se saisit plus à la main : `rangerFichier` attribue
+//     la version au moment d'écrire, et seulement si un homonyme existe.
+// ============================================================
+
+/** l'objet du document, en clair : « reunion chantier lot 3 ». Vide, le nom
+ *  du fichier reçu fait foi — c'est le comportement d'avant, inchangé. */
+function ChampObjet({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  return (
+    <Field label="Objet" hint="facultatif — minuscules-sans-accents automatique">
+      <TextInput value={value} onChange={onChange} placeholder="reunion chantier lot 3" />
+    </Field>
+  )
+}
+
+/** Ce que le fichier deviendra une fois rangé : le chemin, le nom, et de
+ *  quoi le copier (renommer la pièce restée ailleurs, la retrouver dans le
+ *  Drive). Le nom vient de `nomConforme` — jamais d'un second calcul. */
+function ConsequenceRangement({
+  projet,
+  dossier,
+  categorie,
+  objet,
+  nomFichier,
+}: {
+  projet: Projet
+  dossier: string
+  categorie: string
+  objet: string
+  nomFichier: string
+}) {
+  const { state } = useStore()
+  const nom = nomConforme(projet, categorie, objet, nomFichier)
+  return (
+    <p className="small muted" style={{ margin: '4px 0 0' }}>
+      Conséquence : copié dans <code>{projet.id} › {dossier}</code> sous <code>{nom}</code>{' '}
+      <CopyBtn text={nom} label="Copier le nom" kind="ghost" small /> + entrée au registre. Rien n'est
+      écrasé (versions _v02 si besoin). Nomenclature de l'agence :{' '}
+      <code>{state.settings.nomenclature}</code> — modifiable dans{' '}
+      <a href="#/parametres">Paramètres</a>.
+    </p>
+  )
+}
 
 // ============================================================
 // RELIRE UNE PIÈCE (constat T7) — le geste le plus fréquent du
@@ -280,6 +341,8 @@ interface ChoixEntrant {
   categorie: string
   dossier: string
   phase: string
+  /** objet en clair pour le nom du fichier — vide : le nom reçu fait foi */
+  objet: string
   /** raisons du rejeu local — vides quand le poste n'a rien à ajouter */
   raisons?: string[]
 }
@@ -340,6 +403,10 @@ function CarteArriveesServeur() {
               categorie,
               dossier,
               phase: phaseDuDossier(dossier) || '',
+              // l'objet du MAIL ne devient pas l'objet du fichier : « Re: TR:
+              // votre demande » ferait un nom illisible. À défaut, le nom du
+              // fichier reçu reste la meilleure trace de ce qu'il contient.
+              objet: '',
               raisons,
             }
           }
@@ -383,7 +450,7 @@ function CarteArriveesServeur() {
       let chemin: string | undefined
       let nomFinal = e.nomFichier
       if (racine) {
-        const r = await rangerFichier(racine, projet, c.dossier, file, nomConforme(projet, c.categorie, '', file.name))
+        const r = await rangerFichier(racine, projet, c.dossier, file, nomConforme(projet, c.categorie, c.objet, file.name))
         chemin = r.chemin
         nomFinal = r.nomFinal
       }
@@ -490,7 +557,7 @@ function CarteArriveesServeur() {
         <EmptyState>Rien en attente côté serveur — le scan tourne toutes les 10 minutes.</EmptyState>
       ) : (
         liste.map((e) => {
-          const c = choix[e.id] || { projetId: '', categorie: 'AUTRE', dossier: '00_ADMIN', phase: '' }
+          const c = choix[e.id] || { projetId: '', categorie: 'AUTRE', dossier: '00_ADMIN', phase: '', objet: '' }
           const projet = state.projets.find((p) => p.id === c.projetId)
           return (
             <div key={e.id} style={{ border: '1px solid var(--line)', borderRadius: 6, padding: 10, marginBottom: 10 }}>
@@ -541,7 +608,17 @@ function CarteArriveesServeur() {
                   />
                 </Field>
                 <ChampPhase value={c.phase} onChange={(v) => majChoix(e.id, { phase: v })} />
+                <ChampObjet value={c.objet} onChange={(v) => majChoix(e.id, { objet: v })} />
               </div>
+              {projet && (
+                <ConsequenceRangement
+                  projet={projet}
+                  dossier={c.dossier}
+                  categorie={c.categorie}
+                  objet={c.objet}
+                  nomFichier={e.nomFichier}
+                />
+              )}
               <div className="toolbar" style={{ marginTop: 6, marginBottom: 0 }}>
                 <Btn small kind="primary" disabled={!projet || occupe === e.id} onClick={() => void classer(e)}>
                   {occupe === e.id
@@ -601,6 +678,8 @@ interface Entrant {
   dossier: string
   /** phase de la mission — proposée par le sous-dossier, '' = aucune */
   phase: string
+  /** objet en clair pour le nom du fichier — vide : le nom déposé fait foi */
+  objet: string
 }
 
 function BadgeConfiance({ confiance }: { confiance: number }) {
@@ -643,6 +722,7 @@ function CarteEntrants() {
         categorie,
         dossier,
         phase: phaseDuDossier(dossier) || '',
+        objet: '',
       }
     },
     [state],
@@ -696,7 +776,7 @@ function CarteEntrants() {
       let nomFinal = e.file.name
       let empreinte = e.empreinte
       if (racine) {
-        const r = await rangerFichier(racine, projet, e.dossier, e.file, nomConforme(projet, e.categorie, '', e.file.name))
+        const r = await rangerFichier(racine, projet, e.dossier, e.file, nomConforme(projet, e.categorie, e.objet, e.file.name))
         chemin = r.chemin
         nomFinal = r.nomFinal
         empreinte = r.empreinte || empreinte
@@ -828,7 +908,17 @@ function CarteEntrants() {
                   />
                 </Field>
                 <ChampPhase value={e.phase} onChange={(v) => majEntrant(e.cle, { phase: v })} />
+                <ChampObjet value={e.objet} onChange={(v) => majEntrant(e.cle, { objet: v })} />
               </div>
+              {projet && (
+                <ConsequenceRangement
+                  projet={projet}
+                  dossier={e.dossier}
+                  categorie={e.categorie}
+                  objet={e.objet}
+                  nomFichier={e.file.name}
+                />
+              )}
               <div className="toolbar" style={{ marginTop: 6, marginBottom: 0 }}>
                 <Btn small kind="primary" disabled={!e.projetId} onClick={() => void classer(e)}>
                   {projet ? `Classer dans ${projet.id} › ${e.dossier}` : 'Classer (choisir un projet)'}
@@ -958,13 +1048,16 @@ function ModalRevueEntrants({
           />
         </Field>
         <ChampPhase value={e.phase} onChange={(v) => majEntrant(e.cle, { phase: v })} />
+        <ChampObjet value={e.objet} onChange={(v) => majEntrant(e.cle, { objet: v })} />
       </div>
       {projet && (
-        <p className="small muted" style={{ margin: '4px 0 0' }}>
-          Conséquence : copié dans <code>{projet.id} › {e.dossier}</code> sous{' '}
-          <code>{nomConforme(projet, e.categorie, '', e.file.name)}</code> + entrée au registre. Rien
-          n'est écrasé (versions _v02 si besoin).
-        </p>
+        <ConsequenceRangement
+          projet={projet}
+          dossier={e.dossier}
+          categorie={e.categorie}
+          objet={e.objet}
+          nomFichier={e.file.name}
+        />
       )}
       <div className="form-foot" style={{ flexWrap: 'wrap' }}>
         <Btn onClick={() => setIndex(Math.max(0, idx - 1))} disabled={idx === 0}>‹</Btn>
@@ -1810,11 +1903,13 @@ export default function Documents() {
   // La file « à rattacher » est lue ICI, quel que soit l'onglet ouvert :
   // sans compteur, un message sans projet attendait des jours en silence
   // (R5). `null` = espace partagé non connecté — « on ne sait pas » ne
-  // s'affiche pas « 0 ».
+  // s'affiche pas « 0 ». La règle vit dans derive.nombreARattacher, que
+  // l'accueil lit aussi pour sa ligne « validations attendues ».
   const filesMessages = useCommunications({ sansProjet: true })
-  const nbCourriers = courriersARattacher(state).length
-  const nbMessages = filesMessages.lignes?.length ?? null
-  const nbARattacher = nbMessages === null && nbCourriers === 0 ? null : (nbMessages ?? 0) + nbCourriers
+  const nbARattacher = nombreARattacher(
+    courriersARattacher(state).length,
+    filesMessages.lignes?.length ?? null,
+  )
   const libelleOnglet = (o: (typeof ONGLETS)[number]): string => {
     if (o.id === 'verifier' && nbAVerifier > 0) return `${o.label} (${nbAVerifier})`
     // « + » : une page de messages est chargée, il en reste derrière

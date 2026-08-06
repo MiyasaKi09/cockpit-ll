@@ -159,8 +159,11 @@ function chercher(state: AppState, q: string): Resultat[] {
         titre: `${c.nom}${c.organisme ? ` (${c.organisme})` : ''}`,
         detail: c.email,
         // les contacts ont déménagé dans Ressources : l'agenda n'en montre
-        // plus la liste, on y arrivait devant un écran sans le contact
-        lien: '#/ressources/contacts',
+        // plus la liste, on y arrivait devant un écran sans le contact.
+        // `#/ressources/contacts/<id>` ouvre LA fiche : Ressources.tsx passe
+        // `route[2]` à `OngletContacts` (prop `cibleId`), qui affiche la fiche
+        // et son journal d'échanges — la porte a été LUE avant d'écrire le lien.
+        lien: `#/ressources/contacts/${c.id}`,
       })
   }
 
@@ -170,6 +173,16 @@ function chercher(state: AppState, q: string): Resultat[] {
         groupe: 'Références',
         titre: r.nom,
         detail: [r.lieu, r.annee ? String(r.annee) : null].filter(Boolean).join(' · '),
+        // SEUL groupe qui dépose encore en haut d'une liste, et c'est DÉLIBÉRÉ :
+        // l'onglet Références n'a aucune porte d'arrivée. `ReferencesContenu()`
+        // (References.tsx) ne prend pas de prop et n'appelle pas `useRoute` ;
+        // `VeilleAO.tsx` le monte sans rien lui passer. Émettre
+        // `#/ao/references/<id>` ou `…/chercher/<nom>` ferait exactement le
+        // défaut qu'on répare ailleurs dans ce fichier : un lien qui pointe
+        // dans le vide, avec l'air d'atterrir. À reprendre le jour où
+        // `ReferencesContenu` lira un segment (id ou terme de recherche) —
+        // aucune route nouvelle n'est nécessaire dans App.tsx, `#/ao/<onglet>/…`
+        // arrive déjà jusqu'à VeilleAO.
         lien: '#/ao/references',
       })
   }
@@ -216,7 +229,10 @@ function chercher(state: AppState, q: string): Resultat[] {
         titre: `${s.entreprise} — ${s.mois}`,
         detail: s.montantMoisHT !== null ? `${fmtMoney(s.montantMoisHT)} HT` : undefined,
         // l'onglet où la situation se trouve VRAIMENT : une situation validée
-        // n'est pas dans « À vérifier », et on repartait la chercher
+        // n'est pas dans « À vérifier », et on repartait la chercher.
+        // Le nom de l'entreprise pré-remplit le filtre des DEUX onglets :
+        // l'Historique le lisait déjà, « À vérifier » l'ignorait en silence
+        // (Situations.tsx, prop `entrepriseInitiale` de `CarteAVerifier`).
         lien: lienRecherche(
           s.statut === 'a_verifier' ? '#/situations/verifier' : '#/situations/historique',
           s.entreprise,
@@ -231,7 +247,10 @@ function chercher(state: AppState, q: string): Resultat[] {
         groupe: 'Consultations (AO)',
         titre: c.intitule,
         detail: c.acheteur,
-        lien: '#/ao/consultations',
+        // la FICHE de la consultation : `#/ao/consultations/<id>` est lu par
+        // `ConsultationsContenu` (VeilleAO.tsx, `idRoute`) qui l'ouvre — trois
+        // écrans l'écrivaient déjà, la palette déposait encore sur la liste
+        lien: `#/ao/consultations/${c.id}`,
       })
   }
 

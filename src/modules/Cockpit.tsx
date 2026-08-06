@@ -36,7 +36,7 @@ import {
 } from '../communications'
 import { usePropositions } from '../propositions'
 import { LIBELLES_IMPORTANCE, estImportance } from '../categorisation'
-import { projetsCorrigibles } from '../rattachement'
+import { courriersARattacher, projetsCorrigibles } from '../rattachement'
 import { lienGmail } from '../util'
 import {
   LIBELLES_PHASES,
@@ -44,6 +44,7 @@ import {
   caRealiseAnnee,
   meteoFinanciere,
   nomProjet,
+  nombreARattacher,
   phasesEnCours,
   prochainesEcheances,
   reunionsDuJour,
@@ -436,6 +437,12 @@ function MenuReporter({ onReporter }: { onReporter: (jours: number | string) => 
 /** le filtre est une constante de module : il ne doit pas se reconstruire
  *  à chaque rendu, sans quoi la couche d'accès repagine en boucle */
 const FILTRE_BOITE: FiltreCommunications = { direction: 'entrant', nonTraite: true }
+
+/** la file « à rattacher » du module Documents, à l'identique : le même
+ *  filtre que l'onglet, jamais une seconde définition — ce que l'accueil
+ *  annonce et ce que l'onglet montre doivent être le même ensemble.
+ *  Constante de module pour la même raison que `FILTRE_BOITE`. */
+const FILTRE_A_RATTACHER: FiltreCommunications = { sansProjet: true }
 
 /** A2 — la fenêtre des fils observés pour « quelqu'un attend une réponse ».
  *  Trente jours : au-delà, un fil sans réponse n'est plus un oubli, c'est
@@ -959,6 +966,15 @@ function CentreActions({ personne }: { personne: string }) {
   const [revue, setRevue] = useState<number | null>(null)
   /** pièces captées côté serveur — hors état local, donc lues, pas dérivées */
   const nbEntrants = useNbEntrantsDistants()
+  /** la file « à rattacher » : deux mémoires, l'une dérivée de l'état
+   *  (`courriersARattacher`), l'autre lue sur l'espace partagé. La
+   *  composition — et la règle « null n'est pas 0 » — appartient à
+   *  `derive.nombreARattacher`, que l'onglet Documents lit aussi. */
+  const messagesSansProjet = useCommunications(FILTRE_A_RATTACHER)
+  const nbARattacher = nombreARattacher(
+    courriersARattacher(state).length,
+    messagesSansProjet.lignes?.length ?? null,
+  )
   /** la boîte « À traiter », les deux mémoires fusionnées (A.7) */
   const boite = useBoiteATraiter(personne)
   const moi = useMoi()
@@ -968,8 +984,8 @@ function CentreActions({ personne }: { personne: string }) {
   // la seule construction de la file finance de la journée
   const actionsFinance = useMemo(() => actionsATraiter(state, today), [state, today])
   const validations = useMemo(
-    () => validationsAttendues(state, today, actionsFinance, nbEntrants),
-    [state, today, actionsFinance, nbEntrants],
+    () => validationsAttendues(state, today, actionsFinance, nbEntrants, nbARattacher),
+    [state, today, actionsFinance, nbEntrants, nbARattacher],
   )
 
   const faireRapide = async (a: ActionRapide) => {
@@ -1360,8 +1376,9 @@ function CentreActions({ personne }: { personne: string }) {
       )}
 
       {/* ---------- validations attendues (CDC §8.1) ----------
-          Un groupe, quatre familles : factures fournisseurs, documents du
-          registre, situations de travaux, pièces arrivées côté serveur.
+          Un groupe, cinq familles : factures fournisseurs, documents du
+          registre, situations de travaux, pièces arrivées côté serveur et
+          messages sans projet à rattacher.
           Les situations figurent aussi, une par une, dans « À faire »
           au-dessus — elles y portent leur raccourci ; ici elles se
           comptent avec le reste de ce qui attend une signature. */}

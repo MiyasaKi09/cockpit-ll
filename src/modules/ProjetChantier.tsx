@@ -57,6 +57,11 @@ import { entrepriseDe, marchesDe } from '../entreprise'
 // en attendant sa livraison ne vérifiait rien.
 import { ouvrirPreparationReunionPDF } from '../pdf'
 import { serieEnRetard } from '../indicesInsee'
+// La normalisation d'un code de série (« bt 01 » ≡ « BT01 ») et la lecture
+// d'une série vivent dans src/revisionPrix.ts — c'est ce rapprochement-là qui
+// décidera du calcul de révision. La datalist propose donc EXACTEMENT ce que
+// le calcul saura rapprocher, au lieu d'une seconde liste écrite à côté.
+import { cleSerie, valeursSerie } from '../revisionPrix'
 import {
   DELAI_VISA_DEFAUT,
   LIBELLE_STATUT_VISA,
@@ -409,6 +414,17 @@ function ModalMarche({
     return [...noms.values()].sort((a, b) => a.localeCompare(b))
   })()
 
+  // 5.18 — les séries dont l'agence a des valeurs : `state.indicesBTP` les
+  // connaît (récupération INSEE + saisies), la personne n'a pas à retaper de
+  // mémoire le code d'un CCAP. La liste PROPOSE, elle n'enferme pas : un CCAP
+  // peut citer une série jamais suivie ici, la saisie reste libre.
+  const seriesConnues = [...new Set(state.indicesBTP.map((i) => cleSerie(i?.indice)).filter(Boolean))].sort()
+  // ce que le référentiel sait de la série SAISIE — dit à l'écran plutôt que
+  // découvert au moment du certificat de paiement, quand la révision répond
+  // null sans expliquer pourquoi
+  const valeursIndiceSaisi = valeursSerie(state.indicesBTP, indiceRevision)
+  const dernierIndiceSaisi = valeursIndiceSaisi[valeursIndiceSaisi.length - 1] ?? null
+
   // le nom d'abord (c'est ce qu'on lit à l'écran), l'identifiant en repli —
   // un marché lié à une fiche dont la raison sociale a changé reste lié
   const entrepriseReconnue =
@@ -611,8 +627,39 @@ function ModalMarche({
       </div>
       {revision === 'oui' && (
         <div className="form-row">
-          <Field label="Indice (CCAP)" hint="la série de cette entreprise : BT01, BT02, TP08… — valeurs à saisir dans Paramètres">
-            <TextInput value={indiceRevision} onChange={setIndiceRevision} placeholder="BT01" />
+          <Field
+            label="Indice (CCAP)"
+            hint={
+              !indiceRevision.trim()
+                ? `la série de cette entreprise : BT01, BT02, TP08… — ${
+                    seriesConnues.length > 0
+                      ? `${seriesConnues.length} séries déjà suivies vous sont proposées`
+                      : 'aucune série connue pour l’instant (Paramètres → Indices)'
+                  }`
+                : dernierIndiceSaisi
+                  ? `Série suivie : ${valeursIndiceSaisi.length} valeurs, dernière publiée ${dernierIndiceSaisi.mois}.`
+                  : 'Série inconnue du référentiel — elle reste enregistrable, mais la révision restera sans indice tant qu’aucune valeur ne sera publiée (Paramètres → Indices).'
+            }
+          >
+            {/* la liste PROPOSE ce que `state.indicesBTP` connaît ; elle
+                n'enferme pas (un CCAP peut citer une série jamais suivie).
+                `TextInput` (ui.tsx) ne porte pas d'attribut `list` : l'input
+                est écrit ici, aux mêmes classes — même patron que la
+                datalist des entreprises ci-dessus. */}
+            <input
+              className="input"
+              type="text"
+              list="marche-series-indices"
+              value={indiceRevision}
+              onChange={(e) => setIndiceRevision(e.target.value)}
+              placeholder="BT01"
+              aria-label="Série d’indice de révision du CCAP"
+            />
+            <datalist id="marche-series-indices">
+              {seriesConnues.map((c) => (
+                <option key={c} value={c} />
+              ))}
+            </datalist>
           </Field>
           <Field label="Mois zéro" hint="mois d'établissement des prix — le I0 de la formule">
             <TextInput value={moisZero} onChange={setMoisZero} placeholder="2025-10" />

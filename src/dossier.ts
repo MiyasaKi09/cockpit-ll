@@ -19,7 +19,7 @@ import type {
   StatutConsultation,
 } from './types'
 import { coutHoraireMoyen } from './derive'
-import { diffDays, uid } from './util'
+import { diffDays, fmtDate, uid } from './util'
 
 // ---------- référentiels ----------
 
@@ -215,6 +215,37 @@ export function extraireExigencesRC(texte: string): ExtractionRC {
   return { exigences, criteres, reperes, lignesLues: lignes.length }
 }
 
+// ---------- cycle de vie de l'avis (annulation, rectificatif) ----------
+//
+// R4 : les rectificatifs et les ANNULATIONS BOAMP se rattachent tout seuls
+// à la consultation (`evenements`), mais seule la veille les regardait — on
+// pouvait monter un dossier entier, et le déposer, sur un avis annulé.
+// La notion vit ICI, en logique pure, pour que la carte, la fiche ET le
+// contrôle avant dépôt disent la même chose : une seule autorité.
+
+/** un événement publié sur l'avis : rectificatif, modification, annulation… */
+export type EvenementAvis = NonNullable<Consultation['evenements']>[number]
+
+function plusRecent(evts: EvenementAvis[]): EvenementAvis | null {
+  if (evts.length === 0) return null
+  return evts.reduce((a, b) => ((b.date || '').localeCompare(a.date || '') > 0 ? b : a))
+}
+
+/** l'avis a-t-il été ANNULÉ ? — la seule question qui arrête un dossier.
+ *  Renvoie l'événement (avec sa date) et non un booléen : « annulé le … »
+ *  se lit, « true » ne se lit pas. */
+export function annulationAvis(c: Consultation): EvenementAvis | null {
+  return plusRecent((c.evenements || []).filter((e) => e.type === 'annulation'))
+}
+
+/** le dernier rectificatif / la dernière modification publiée sur l'avis —
+ *  il change souvent les pièces demandées ou la date limite */
+export function rectificatifAvis(c: Consultation): EvenementAvis | null {
+  return plusRecent(
+    (c.evenements || []).filter((e) => e.type === 'rectificatif' || e.type === 'modification'),
+  )
+}
+
 // ---------- avancement & contrôle avant dépôt ----------
 
 export interface AvancementDossier {
@@ -231,7 +262,12 @@ export function avancementDossier(c: Consultation): AvancementDossier {
 
 export interface ControleDepot {
   pret: boolean
+  /** ce qui interdit le dépôt tant que ce n'est pas fait */
   bloquants: string[]
+  /** GRAVE mais non bloquant : la machine signale, l'humain décide.
+   *  Un avis annulé n'empêche pas de cliquer — il empêche de cliquer
+   *  SANS SAVOIR, ce qui n'est pas la même chose. */
+  alertes: string[]
   avertissements: string[]
 }
 
@@ -239,7 +275,27 @@ export interface ControleDepot {
  *  chaque blocage est une phrase lisible, jamais un refus muet */
 export function controleAvantDepot(state: AppState, c: Consultation, today: string): ControleDepot {
   const bloquants: string[] = []
+  const alertes: string[] = []
   const avertissements: string[] = []
+
+  // R4 — l'avis a pu être annulé PENDANT qu'on montait le dossier : c'est
+  // l'erreur la plus coûteuse du domaine (des jours de production pour un
+  // marché qui n'existe plus). On la signale fort, on ne bloque pas : un
+  // avis annulé est parfois republié, et seul l'avis officiel fait foi.
+  const annulation = annulationAvis(c)
+  if (annulation) {
+    alertes.push(
+      `L'acheteur a publié un AVIS D'ANNULATION${annulation.date ? ` le ${fmtDate(annulation.date)}` : ''}` +
+        ' — vérifiez l’avis officiel avant de continuer à monter ce dossier, et avant tout dépôt.',
+    )
+  }
+  const rectificatif = rectificatifAvis(c)
+  if (rectificatif) {
+    avertissements.push(
+      `Avis rectifié${rectificatif.date ? ` le ${fmtDate(rectificatif.date)}` : ''}` +
+        ' — relisez le RC : les pièces demandées ou la date limite ont pu changer.',
+    )
+  }
 
   const actives = (c.exigences || []).filter((e) => e.statut !== 'sans_objet')
   if (actives.length === 0) {
@@ -280,7 +336,7 @@ export function controleAvantDepot(state: AppState, c: Consultation, today: stri
     avertissements.push('Date de jury non renseignée.')
   }
 
-  return { pret: bloquants.length === 0, bloquants, avertissements }
+  return { pret: bloquants.length === 0, bloquants, alertes, avertissements }
 }
 
 // ---------- réutilisation des pièces administratives ----------

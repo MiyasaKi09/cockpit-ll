@@ -45,7 +45,12 @@ const RECENSES = new Set([
   'src/modules/Analyse.tsx',
   'src/modules/Planning.tsx',
   'src/modules/Prompts.tsx',
-  'src/modules/Revue.tsx',
+  // `src/modules/Revue.tsx` a quitté cette liste : sa recopie de
+  // `CarteCAMensuel` — deux blocs d'une cinquantaine de lignes dont les
+  // LIBELLÉS avaient déjà divergé — a été remplacée par un import du composant
+  // d'`Analyse.tsx`. C'est la bonne nouvelle que le contrôle n°2 ci-dessous
+  // guette : un fichier recensé qui ne porte plus de `<table>` brut sort de
+  // l'inventaire, pour ne pas pouvoir en reprendre un en silence.
   'src/modules/Situations.tsx',
   'src/modules/Temps.tsx',
   'src/modules/VeilleAO.tsx',

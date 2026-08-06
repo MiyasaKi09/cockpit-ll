@@ -38,7 +38,7 @@ import {
   useRoute,
   useToday,
 } from '../ui'
-import { diffDays, fmtHeures, fold, mondayOf, todayISO, uid } from '../util'
+import { diffDays, fmtDate, fmtHeures, fold, mondayOf, todayISO, uid } from '../util'
 import { useMoi } from '../moi'
 import { probaConsultation } from '../derive'
 import { unzipSync } from 'fflate'
@@ -46,16 +46,46 @@ import { extraireTexteFichier } from '../cctp'
 import {
   CATEGORIES_EXIGENCE,
   ETAPES_CONCOURS,
+  annulationAvis,
   avancementDossier,
   checklistDeBase,
   controleAvantDepot,
   coutDossier,
   extraireExigencesRC,
   piecesAdminReutilisables,
+  rectificatifAvis,
   statutPourEtapeConcours,
   valeurAttendue,
+  type ControleDepot,
   type ExtractionRC,
 } from '../dossier'
+
+// ---------- cycle de vie de l'avis, vu du dossier ----------
+
+/** Les badges « avis annulé » / « rectifié le … ». Le Radar (VeilleAO.tsx)
+ *  a les siens mais ne les exporte pas ; ce qui compte — QUEL événement
+ *  compte, et lequel est le plus récent — a une seule autorité :
+ *  `annulationAvis` / `rectificatifAvis` (src/dossier.ts), partagée avec le
+ *  contrôle avant dépôt. Ici, il ne reste que la mise en forme. */
+function BadgesAvis({ c }: { c: Consultation }) {
+  const annulation = annulationAvis(c)
+  const rectificatif = rectificatifAvis(c)
+  if (!annulation && !rectificatif) return null
+  return (
+    <>
+      {annulation && (
+        <Badge tone="danger">
+          avis annulé{annulation.date ? ` le ${fmtDate(annulation.date)}` : ''}
+        </Badge>
+      )}
+      {rectificatif && (
+        <Badge tone="warn">
+          rectifié{rectificatif.date ? ` le ${fmtDate(rectificatif.date)}` : ''}
+        </Badge>
+      )}
+    </>
+  )
+}
 
 // ---------- liste ----------
 
@@ -116,6 +146,8 @@ function CarteDossier({ c, today }: { c: Consultation; today: string }) {
       <div style={{ fontWeight: 700, lineHeight: 1.3 }}>{c.intitule}</div>
       <div className="muted small" style={{ marginTop: 2 }}>{c.acheteur || 'acheteur à renseigner'}</div>
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8, alignItems: 'center' }}>
+        {/* R4 — l'annulation d'abord : elle décide s'il faut encore ouvrir la carte */}
+        <BadgesAvis c={c} />
         <Badge tone={c.typeAvis === 'concours' ? 'info' : 'muted'}>
           {c.typeAvis === 'concours' ? 'Concours' : 'Appel d’offres'}
         </Badge>
@@ -150,7 +182,7 @@ function CarteDossier({ c, today }: { c: Consultation; today: string }) {
 // ---------- fiche dossier ----------
 
 function FicheDossier({ c }: { c: Consultation }) {
-  const { state, update } = useStore()
+  const { state, update, replace } = useStore()
   const today = useToday()
 
   const maj = (patch: Partial<Consultation>) => {
@@ -164,6 +196,7 @@ function FicheDossier({ c }: { c: Consultation }) {
   const av = avancementDossier(c)
   const cout = coutDossier(state, c.id)
   const controle = controleAvantDepot(state, c, today)
+  const annulation = annulationAvis(c)
   const concours = c.typeAvis === 'concours'
   const etape = c.concours?.etape || 'candidature'
   const echeance = c.dateLimite || (concours ? c.concours?.dateJury || null : null)
@@ -184,6 +217,9 @@ function FicheDossier({ c }: { c: Consultation }) {
       toast('Dépôt bloqué : ' + controle.bloquants[0], { tone: 'danger' })
       return
     }
+    // « marquer déposé » fait bouger le pipeline : comme tout geste, il
+    // laisse un « Annuler » — d'autant plus utile si l'avis était annulé.
+    const snap = state
     if (concours) {
       const suivante: EtapeConcours = etape === 'candidature' ? 'candidature_deposee' : 'rendu'
       maj({
@@ -194,7 +230,12 @@ function FicheDossier({ c }: { c: Consultation }) {
     } else {
       maj({ statut: 'deposee', dernierMouvement: todayISO() })
     }
-    toast('Dossier marqué déposé — le résultat se saisit dans la fiche consultation.')
+    toast(
+      annulation
+        ? 'Dossier marqué déposé MALGRÉ l’avis d’annulation — le résultat se saisit dans la fiche consultation.'
+        : 'Dossier marqué déposé — le résultat se saisit dans la fiche consultation.',
+      { tone: annulation ? 'warn' : undefined, undo: () => replace(snap) },
+    )
   }
 
   return (
@@ -217,7 +258,8 @@ function FicheDossier({ c }: { c: Consultation }) {
         <div className="muted small" style={{ marginTop: -6, marginBottom: 10 }}>
           {c.acheteur || 'acheteur à renseigner'}
           {' · '}
-          <Badge tone={concours ? 'info' : 'muted'}>{concours ? 'Concours' : 'Appel d’offres'}</Badge>
+          <Badge tone={concours ? 'info' : 'muted'}>{concours ? 'Concours' : 'Appel d’offres'}</Badge>{' '}
+          <BadgesAvis c={c} />
           {c.sourceUrl && (
             <>
               {' · '}
@@ -227,6 +269,30 @@ function FicheDossier({ c }: { c: Consultation }) {
             </>
           )}
         </div>
+        {/* R4 — monter un dossier sur un avis annulé, c'est produire des jours
+            entiers pour un marché qui n'existe plus : la fiche le dit AVANT
+            l'état d'avancement, pas dans un journal qu'on déroule. */}
+        {annulation && (
+          <p
+            className="small danger-text"
+            style={{ margin: '0 0 10px', borderLeft: '3px solid var(--danger)', paddingLeft: 8 }}
+          >
+            <strong>Avis annulé{annulation.date ? ` le ${fmtDate(annulation.date)}` : ''}.</strong>{' '}
+            {annulation.detail
+              ? `${annulation.detail.replace(/\s*\(https?:\/\/[^\s)]+\)\s*$/, '')} — `
+              : ''}
+            n’engagez pas (et n’achevez pas) ce dossier sans l’avoir vérifié sur l’avis officiel
+            {c.sourceUrl ? (
+              <>
+                {' '}
+                <a href={c.sourceUrl} target="_blank" rel="noreferrer">
+                  ↗
+                </a>
+              </>
+            ) : null}
+            . Le dépôt reste possible : c’est vous qui décidez, pas l’écran.
+          </p>
+        )}
         {/* en-tête opérationnel : répondre en 5 s à « où en est-on ? » */}
         <div className="grid4">
           <Stat
@@ -255,9 +321,24 @@ function FicheDossier({ c }: { c: Consultation }) {
           <Stat
             label="État"
             value={
-              controle.pret ? <Badge tone="ok">prêt à déposer</Badge> : <Badge tone="warn">en préparation</Badge>
+              // un « prêt à déposer » vert sur un avis annulé serait le badge
+              // qui ment : l'alerte passe devant la complétude
+              controle.alertes.length > 0 ? (
+                <Badge tone="danger">avis annulé</Badge>
+              ) : controle.pret ? (
+                <Badge tone="ok">prêt à déposer</Badge>
+              ) : (
+                <Badge tone="warn">en préparation</Badge>
+              )
             }
-            sub={controle.bloquants.length > 0 ? `${controle.bloquants.length} point(s) bloquant(s)` : 'contrôles passés'}
+            tone={controle.alertes.length > 0 ? 'danger' : undefined}
+            sub={
+              controle.alertes.length > 0
+                ? 'à vérifier sur l’avis officiel avant tout dépôt'
+                : controle.bloquants.length > 0
+                  ? `${controle.bloquants.length} point(s) bloquant(s)`
+                  : 'contrôles passés'
+            }
           />
         </div>
         <div className="form-row" style={{ marginTop: 12 }}>
@@ -296,7 +377,9 @@ function FicheDossier({ c }: { c: Consultation }) {
         <CarteTempsDossier c={c} />
         <CarteValeurDossier c={c} />
       </div>
-      <CarteDepot controle={controle} labelDepot={labelDepot} onDeposer={deposer} />
+      {/* la `key` remet la confirmation à zéro dès que l'étape bouge —
+          y compris après un « Annuler » : on ne reste pas armé sans le savoir */}
+      <CarteDepot key={labelDepot || 'depose'} controle={controle} labelDepot={labelDepot} onDeposer={deposer} />
     </>
   )
 }
@@ -867,9 +950,16 @@ function CarteValeurDossier({ c }: { c: Consultation }) {
 
   return (
     <Card titre="Valeur attendue">
+      {/* S2 — la phrase promettait « ou de votre saisie sur la fiche » : aucun
+          écran ne permet de saisir `probabilite`. À deux, une probabilité tapée
+          à la main est un chiffre que personne ne tient à jour, et elle vaudrait
+          une seconde autorité pour une notion qui sert AUSSI au prévisionnel
+          pondéré de l'agence. On garde une seule règle — l'étape — et on la dit. */}
       <p className="small muted" style={{ marginTop: 0, marginBottom: 8 }}>
-        Chaque terme est affiché — pas de formule cachée. La probabilité vient de l’étape du
-        pipeline (ou de votre saisie sur la fiche).
+        Chaque terme est affiché — pas de formule cachée. La probabilité ne se saisit pas : elle
+        est <strong>déduite de l’étape du pipeline</strong> ({Math.round(proba * 100)} % ici), la
+        même règle que le prévisionnel pondéré. Pour la faire bouger, faites bouger le dossier
+        dans le pipeline.
       </p>
       <Field label="Honoraires estimés si gagné (HT)" hint="Votre estimation — jamais déduite automatiquement du budget.">
         <NumInput value={c.honorairesEstimes ?? null} onChange={majHonoraires} />
@@ -901,14 +991,30 @@ function CarteDepot({
   labelDepot,
   onDeposer,
 }: {
-  controle: { pret: boolean; bloquants: string[]; avertissements: string[] }
+  controle: ControleDepot
   labelDepot: string | null
   onDeposer: () => void
 }) {
+  // R4 — l'alerte ne bloque pas le bouton : elle oblige à le regarder deux
+  // fois. Un clic pour dire « je sais », un second pour déposer. Pas de
+  // window.confirm : la décision se lit à l'écran, avec son motif.
+  const [assume, setAssume] = useState(false)
+  const alerte = controle.alertes.length > 0
   return (
     <Card titre="Contrôle avant dépôt">
+      {controle.alertes.map((a, i) => (
+        <p
+          key={i}
+          className="small danger-text"
+          style={{ marginTop: 0, borderLeft: '3px solid var(--danger)', paddingLeft: 8 }}
+        >
+          ⛔ {a}
+        </p>
+      ))}
       {controle.bloquants.length === 0 ? (
-        <p className="small ok-text" style={{ marginTop: 0 }}>✓ Aucun point bloquant — le dossier peut être déposé.</p>
+        <p className="small ok-text" style={{ marginTop: 0 }}>
+          ✓ Aucun point bloquant{alerte ? ' dans la checklist — mais lisez l’alerte ci-dessus.' : ' — le dossier peut être déposé.'}
+        </p>
       ) : (
         <ul className="small" style={{ marginTop: 0, paddingLeft: 18 }}>
           {controle.bloquants.map((b, i) => (
@@ -928,14 +1034,37 @@ function CarteDepot({
         </ul>
       )}
       {labelDepot && (
-        <Btn
-          kind="primary"
-          onClick={onDeposer}
-          disabled={!controle.pret}
-          title={controle.pret ? undefined : `Bloqué : ${controle.bloquants[0] || ''}`}
-        >
-          {labelDepot}
-        </Btn>
+        <div className="toolbar" style={{ flexWrap: 'wrap' }}>
+          {alerte && !assume ? (
+            <Btn
+              kind="danger"
+              onClick={() => setAssume(true)}
+              disabled={!controle.pret}
+              title={controle.pret ? 'Vous confirmerez ensuite le dépôt' : `Bloqué : ${controle.bloquants[0] || ''}`}
+            >
+              {labelDepot} malgré l’alerte…
+            </Btn>
+          ) : (
+            <Btn
+              kind="primary"
+              onClick={onDeposer}
+              disabled={!controle.pret}
+              title={controle.pret ? undefined : `Bloqué : ${controle.bloquants[0] || ''}`}
+            >
+              {labelDepot}
+            </Btn>
+          )}
+          {alerte && assume && (
+            <>
+              <span className="small danger-text" style={{ alignSelf: 'center' }}>
+                Vous déposez sur un avis annulé — l’action reste annulable une fois faite.
+              </span>
+              <Btn small kind="ghost" onClick={() => setAssume(false)}>
+                Revenir
+              </Btn>
+            </>
+          )}
+        </div>
       )}
       {!labelDepot && (
         <p className="muted small" style={{ marginBottom: 0 }}>

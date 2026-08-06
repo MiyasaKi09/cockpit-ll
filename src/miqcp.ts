@@ -155,8 +155,12 @@ export interface ValeurIndice {
 }
 
 export interface EtatBt01 {
-  /** la valeur qui actualise RÉELLEMENT le barème (`settings.bt01Actuel`) */
+  /** la valeur qui actualise RÉELLEMENT le barème (voir `bt01Applique`) */
   retenu: number
+  /** `retenu` vient-il d'une saisie humaine ? Faux quand rien n'a jamais été
+   *  saisi : `retenu` est alors le repli, pas un choix — et l'écran ne doit
+   *  pas parler de « valeur figée à la main ». */
+  saisi: boolean
   /** la dernière valeur publiée par l'INSEE, si elle est arrivée */
   publie: ValeurIndice | null
   /** le réglage colle-t-il encore à la publication ? (aucune publication
@@ -164,12 +168,53 @@ export interface EtatBt01 {
   aJour: boolean
 }
 
-/** Le BT01 du barème et d'où il vient. `settings.bt01Actuel` reste la seule
- *  valeur lue par `coefBT01` — c'est l'OVERRIDE, celui qu'on garde la main
- *  de figer (valeur attendue avant publication, comparaison à l'identique
- *  avec un devis ancien). Cette fonction ne fait que DIRE l'écart avec la
- *  dernière publication : la reprise est un clic humain, jamais une
- *  réécriture silencieuse d'un chiffre qui change tous les honoraires.
+/** dernière valeur BT01 publiée connue à l'écriture du module — celle que
+ *  l'application installe d'origine (`seed.ts`). Ce n'est PAS une autorité
+ *  concurrente : la valeur saisie la bat, et la publication INSEE passée en
+ *  argument aussi. C'est le dernier repli d'un module qui n'a le droit
+ *  d'appeler personne. */
+export const BT01_DERNIER_CONNU = 137.5
+
+/** l'indice du barème en avril 1994 — la référence du guide MIQCP. Repli
+ *  quand `settings.bt01Ref1994` est absent : diviser par 0 rendrait un
+ *  Infinity qui traverserait tous les honoraires sans lever d'erreur. */
+export const BT01_REF_1994 = 60.989
+
+/** une valeur d'indice exploitable : ni absente, ni nulle, ni négative, ni NaN */
+function utilisable(v: unknown): v is number {
+  return typeof v === 'number' && Number.isFinite(v) && v > 0
+}
+
+/** Le BT01 réellement appliqué au barème, dans l'ordre :
+ *  1. `settings.bt01Actuel` — l'OVERRIDE, un choix humain (voir `etatBt01`) ;
+ *  2. `publie` — la dernière valeur publiée par l'INSEE, si on la lui donne ;
+ *  3. `BT01_DERNIER_CONNU`.
+ *
+ *  Absent, nul ou négatif ⇒ JAMAIS saisi : une valeur jamais saisie n'est pas
+ *  une valeur figée par choix, et sans repli le barème partait en silence —
+ *  `bt01Actuel / bt01Ref1994` rendait NaN (ou 0), `tauxBareme` s'écrasait sur
+ *  son dernier palier (8,22 %) et `sousPlancher` répondait faux pour tout
+ *  montant. Aucune erreur nulle part, des honoraires faux partout. */
+export function bt01Applique(
+  settings: Pick<Settings, 'bt01Actuel'>,
+  publie?: ValeurIndice | null,
+): number {
+  if (utilisable(settings.bt01Actuel)) return settings.bt01Actuel
+  if (publie && utilisable(publie.valeur)) return publie.valeur
+  return BT01_DERNIER_CONNU
+}
+
+/** Le BT01 du barème et d'où il vient. L'override `settings.bt01Actuel` reste
+ *  celui qu'on garde la main de figer (valeur attendue avant publication,
+ *  comparaison à l'identique avec un devis ancien). Cette fonction ne fait que
+ *  DIRE l'écart avec la dernière publication : la reprise est un clic humain,
+ *  jamais une réécriture silencieuse d'un chiffre qui change tous les
+ *  honoraires.
+ *
+ *  `retenu` est calculé SANS `publie` — volontairement : c'est ce que
+ *  `coefBT01` calcule dans tous les écrans, qui eux ne passent pas la
+ *  publication. Afficher ici la publication comme « retenue » alors que les
+ *  honoraires ne l'utilisent pas serait un mensonge d'écran.
  *
  *  `publie` arrive de `valeursSerie(indicesBTP, SERIE_BT01)` — l'autorité des
  *  séries d'indices vit dans `revisionPrix.ts` et n'est pas recopiée ici (ce
@@ -178,22 +223,37 @@ export function etatBt01(
   settings: Pick<Settings, 'bt01Actuel'>,
   publie: ValeurIndice | null,
 ): EtatBt01 {
+  const retenu = bt01Applique(settings)
   return {
-    retenu: settings.bt01Actuel,
+    retenu,
+    saisi: utilisable(settings.bt01Actuel),
     publie,
-    aJour: publie === null || Math.abs(settings.bt01Actuel - publie.valeur) < 0.0005,
+    aJour: publie === null || Math.abs(retenu - publie.valeur) < 0.0005,
   }
 }
 
 /** coefficient d'actualisation BT01 (réf. avril 1994 = 60,989).
- *  `bt01Actuel` est l'override du BT01 publié — voir `etatBt01`. */
-export function coefBT01(settings: Pick<Settings, 'bt01Actuel' | 'bt01Ref1994'>): number {
-  return settings.bt01Actuel / settings.bt01Ref1994
+ *  `bt01Actuel` est l'override du BT01 publié — voir `etatBt01` ; `publie`
+ *  est le repli quand il n'a jamais été saisi (voir `bt01Applique`).
+ *
+ *  ATTENTION le jour où l'on branchera `publie` : le brancher dans UN écran
+ *  seulement ferait afficher deux honoraires différents pour le même projet.
+ *  C'est tout le chemin (derive.ts, Projets.tsx, ProjetNouveau.tsx,
+ *  consultations.ts, prompts.ts) ou aucun. Aujourd'hui : aucun. */
+export function coefBT01(
+  settings: Pick<Settings, 'bt01Actuel' | 'bt01Ref1994'>,
+  publie?: ValeurIndice | null,
+): number {
+  const ref = utilisable(settings.bt01Ref1994) ? settings.bt01Ref1994 : BT01_REF_1994
+  return bt01Applique(settings, publie) / ref
 }
 
 /** seuil du barème sous lequel le guide renvoie au temps passé (≈ 1,03 M€ actualisés) */
-export function seuilPlancherActualise(settings: Pick<Settings, 'bt01Actuel' | 'bt01Ref1994'>): number {
-  return BAREME_1994[0].seuil * coefBT01(settings)
+export function seuilPlancherActualise(
+  settings: Pick<Settings, 'bt01Actuel' | 'bt01Ref1994'>,
+  publie?: ValeurIndice | null,
+): number {
+  return BAREME_1994[0].seuil * coefBT01(settings, publie)
 }
 
 /**
@@ -202,8 +262,12 @@ export function seuilPlancherActualise(settings: Pick<Settings, 'bt01Actuel' | '
  * (le guide renvoie alors au chiffrage en temps passé) ; au-dessus du
  * dernier : 8,22 %.
  */
-export function tauxBareme(montantTravauxHT: number, settings: Pick<Settings, 'bt01Actuel' | 'bt01Ref1994'>): number {
-  const k = coefBT01(settings)
+export function tauxBareme(
+  montantTravauxHT: number,
+  settings: Pick<Settings, 'bt01Actuel' | 'bt01Ref1994'>,
+  publie?: ValeurIndice | null,
+): number {
+  const k = coefBT01(settings, publie)
   const pts = BAREME_1994.map((b) => ({ seuil: b.seuil * k, taux: b.taux }))
   if (montantTravauxHT <= pts[0].seuil) return pts[0].taux
   for (let i = 1; i < pts.length; i++) {
@@ -254,9 +318,15 @@ export interface CalculHonoraires {
   sousPlancher: boolean
 }
 
-export function calculHonoraires(projet: Projet, settings: Settings): CalculHonoraires {
+export function calculHonoraires(
+  projet: Projet,
+  settings: Settings,
+  /** dernière publication BT01 — repli quand aucune valeur n'a été saisie ;
+   *  à passer PARTOUT ou nulle part (voir `coefBT01`) */
+  publie?: ValeurIndice | null,
+): CalculHonoraires {
   const m = projet.montantTravauxHT
-  const tb = m ? tauxBareme(m, settings) : null
+  const tb = m ? tauxBareme(m, settings, publie) : null
   const coef = coefComplexite(projet)
   const tauxAjuste = tb !== null && coef !== null ? tb * coef : null
   const tauxFinal = projet.tauxRetenu ?? tauxAjuste
@@ -269,7 +339,7 @@ export function calculHonoraires(projet: Projet, settings: Settings): CalculHono
     honorairesBaseHT: base,
     missionsComplHT: projet.missionsComplHT || 0,
     honorairesTotauxHT: base + (projet.missionsComplHT || 0),
-    sousPlancher: m !== null && m > 0 && m < seuilPlancherActualise(settings),
+    sousPlancher: m !== null && m > 0 && m < seuilPlancherActualise(settings, publie),
   }
 }
 

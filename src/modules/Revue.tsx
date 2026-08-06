@@ -10,19 +10,21 @@ import { useStore } from '../store'
 import {
   analyserPeriode,
   caCible,
-  caParMois,
   caRealiseAnnee,
   coutJourObjectif,
   encaisseHTPeriode,
   nomProjet,
   tempsParPersonne,
 } from '../derive'
+// Le « CA facturé par mois » de la Revue ÉTAIT une recopie de celui de
+// l'onglet Missions : mêmes chiffres, libellés déjà partis chacun de leur
+// côté. Une seule carte désormais, importée — c'est elle qui décide de ses
+// libellés, de son histogramme et de sa note de bas de carte.
+import { CarteCAMensuel } from './Analyse'
 import { alertesActives } from '../alerts'
 import { Badge, Btn, Card, EmptyState, Icon, Money, Progress, Stat, Table, useToday } from '../ui'
 import { ouvrirRevuePDF } from '../pdf'
 import { addDays, addMonths, fmtDate, fmtMoney, fmtPct, monthKey } from '../util'
-
-const MOIS_COURTS = ['janv.', 'févr.', 'mars', 'avr.', 'mai', 'juin', 'juil.', 'août', 'sept.', 'oct.', 'nov.', 'déc.']
 
 const GROUPES_ALERTES: { gravite: Alerte['gravite']; label: string }[] = [
   { gravite: 3, label: 'Critique' },
@@ -87,7 +89,6 @@ export function RevueContenu() {
   const tpp = useMemo(() => tempsParPersonne(state, debut, fin), [state, debut, fin])
   const objectif = coutJourObjectif(state)
   const annee = Number(debut.slice(0, 4))
-  const cam = useMemo(() => caParMois(state, annee), [state, annee])
   const caRealise = caRealiseAnnee(state, annee)
   const cible = caCible(state)
   const alertes = alertesActives(state, today)
@@ -250,61 +251,8 @@ export function RevueContenu() {
       </Card>
 
       {/* ---------- CA par mois ---------- */}
-      <Card titre={`CA facturé par mois — ${annee}`}>
-        {cam.lignes.length === 0 && cam.prevuParMois.every((x) => x === 0) ? (
-          <EmptyState>Aucune facture sur {annee}.</EmptyState>
-        ) : (
-          <div style={{ overflowX: 'auto' }}>
-            <table className="table table-compact">
-              <thead>
-                <tr>
-                  <th className="col-figee">Mission</th>
-                  {MOIS_COURTS.map((m) => (
-                    <th key={m} className="right">{m}</th>
-                  ))}
-                  <th className="right">Total</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr style={{ fontWeight: 650 }}>
-                  <td className="col-figee">Total émis HT</td>
-                  {cam.emisParMois.map((v, i) => (
-                    <td key={i} className="right num">{v > 0 ? fmtMoney(v) : <span className="muted">·</span>}</td>
-                  ))}
-                  <td className="right num">{fmtMoney(cam.emisParMois.reduce((s, x) => s + x, 0))}</td>
-                </tr>
-                <tr className="muted">
-                  <td className="col-figee">dont encaissé</td>
-                  {cam.encaisseParMois.map((v, i) => (
-                    <td key={i} className="right num">{v > 0 ? fmtMoney(v) : '·'}</td>
-                  ))}
-                  <td className="right num">{fmtMoney(cam.encaisseParMois.reduce((s, x) => s + x, 0))}</td>
-                </tr>
-                <tr className="muted">
-                  <td className="col-figee">à venir (prévu)</td>
-                  {cam.prevuParMois.map((v, i) => (
-                    <td key={i} className="right num">{v > 0 ? fmtMoney(v) : '·'}</td>
-                  ))}
-                  <td className="right num">{fmtMoney(cam.prevuParMois.reduce((s, x) => s + x, 0))}</td>
-                </tr>
-                {cam.lignes.map((l) => (
-                  <tr key={l.projetId}>
-                    <td className="col-figee">
-                      <a href={`#/projets/${l.projetId}`} title={nomProjet(state, l.projetId)}>
-                        {nomProjet(state, l.projetId).slice(0, 38)}
-                      </a>
-                    </td>
-                    {l.mois.map((v, i) => (
-                      <td key={i} className="right num">{v > 0 ? fmtMoney(v) : <span className="muted">·</span>}</td>
-                    ))}
-                    <td className="right num" style={{ fontWeight: 650 }}>{fmtMoney(l.total)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </Card>
+      {/* la carte vient d'Analyse.tsx : c'est LA carte, plus une recopie */}
+      <CarteCAMensuel annee={annee} />
 
       {/* ---------- échéances à émettre sur la période ---------- */}
       <Card titre="Factures à émettre sur la période">

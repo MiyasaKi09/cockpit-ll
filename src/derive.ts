@@ -1042,7 +1042,7 @@ export function situationsAVerifier(state: AppState): Situation[] {
 
 /** une famille de validations en attente, telle qu'affichée sur l'accueil */
 export interface GroupeValidation {
-  cle: 'facture_achat' | 'document' | 'situation' | 'entrant'
+  cle: 'facture_achat' | 'document' | 'situation' | 'entrant' | 'rattacher'
   titre: string
   nombre: number
   detail: string
@@ -1053,20 +1053,41 @@ export interface GroupeValidation {
 const pluriel = (n: number) => (n > 1 ? 's' : '')
 
 /**
+ * Combien de courriers et de messages attendent qu'on leur DÉSIGNE un projet
+ * — la file « À rattacher » du module Documents, comptée une seule fois pour
+ * les deux écrans qui l'annoncent (l'onglet et l'accueil).
+ *
+ * Deux mémoires, deux natures : les courriers viennent de l'état local et se
+ * comptent (`courriersARattacher`, src/rattachement.ts) ; les messages
+ * viennent de l'espace partagé et se LISENT — d'où le `null`, qui veut dire
+ * « on ne sait pas encore » et jamais « aucun ». Sans espace partagé connecté
+ * ET sans courrier local, le compteur reste `null` : un « 0 » affirmé ferait
+ * croire la file vide alors qu'elle est seulement hors de portée.
+ */
+export function nombreARattacher(courriersLocaux: number, messagesDistants: number | null): number | null {
+  if (messagesDistants === null && courriersLocaux === 0) return null
+  return (messagesDistants ?? 0) + courriersLocaux
+}
+
+/**
  * Validations attendues (CDC §8.1) — factures fournisseurs, documents du
- * registre, situations de travaux et pièces arrivées côté serveur.
+ * registre, situations de travaux, pièces arrivées côté serveur et
+ * courriers sans projet.
  *
  * Les factures fournisseurs ne sont PAS refiltrées ici : elles arrivent
  * par `actionsFinance`, la liste que `financeActions.actionsATraiter`
- * produit déjà pour le badge Finance. `entrantsDistants` est passé par
- * l'appelant parce qu'il vient d'une requête réseau (index partagé
- * Supabase) et non de l'état local ; `null` = espace partagé non lu.
+ * produit déjà pour le badge Finance. `entrantsDistants` et `aRattacher`
+ * sont passés par l'appelant parce qu'ils dépendent d'une requête réseau
+ * (index partagé Supabase, table `communications`) et non du seul état
+ * local ; `null` = espace partagé non lu, et l'absence de ligne dit
+ * « on ne sait pas » — jamais « rien ».
  */
 export function validationsAttendues(
   state: AppState,
   today: string,
   actionsFinance: readonly ActionFinance[],
   entrantsDistants?: number | null,
+  aRattacher?: number | null,
 ): GroupeValidation[] {
   const groupes: GroupeValidation[] = []
 
@@ -1120,6 +1141,21 @@ export function validationsAttendues(
       nombre: entrantsDistants,
       detail: 'captée côté serveur — classement à confirmer à la main',
       lien: '#/documents',
+      gravite: 2,
+    })
+  }
+
+  // La file « à rattacher » : la cascade a REFUSÉ de deviner le projet
+  // (§3.7) plutôt que de se tromper. Son refus ne se voyait que dans le
+  // module Documents ; un message sans projet pouvait donc attendre des
+  // jours en silence, invisible depuis l'accueil.
+  if (aRattacher && aRattacher > 0) {
+    groupes.push({
+      cle: 'rattacher',
+      titre: `${aRattacher} message${pluriel(aRattacher)} sans projet à rattacher`,
+      nombre: aRattacher,
+      detail: 'la cascade a refusé de deviner — le projet se désigne à la main, et la règle se mémorise pour la suite',
+      lien: '#/documents/rattacher',
       gravite: 2,
     })
   }

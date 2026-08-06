@@ -1420,8 +1420,11 @@ export default function Parametres({ ongletInitial = 'agence' }: { ongletInitial
           if (!bt.publie)
             return (
               <p className="small muted" style={{ marginTop: -4 }}>
-                Aucune valeur BT01 récupérée pour l'instant : la valeur saisie fait foi. La
-                récupération INSEE se déclenche au démarrage — le bouton « Actualiser depuis
+                Aucune valeur BT01 récupérée pour l'instant :{' '}
+                {bt.saisi
+                  ? 'la valeur saisie fait foi.'
+                  : `rien n'ayant jamais été saisi, le barème se replie sur ${fmtIndice(bt.retenu)}.`}{' '}
+                La récupération INSEE se déclenche au démarrage — le bouton « Actualiser depuis
                 l'INSEE » de la carte des indices, ci-dessous, la force.
               </p>
             )
@@ -1438,7 +1441,14 @@ export default function Parametres({ ongletInitial = 'agence' }: { ongletInitial
                 <Badge tone="ok">le barème utilise cette valeur</Badge>
               ) : (
                 <>
-                  <Badge tone="warn">valeur figée à la main : {fmtIndice(bt.retenu)}</Badge>
+                  {/* « figée à la main » ne se dit que d'une valeur SAISIE :
+                      sans saisie, ce qu'affiche le barème est le repli du
+                      module, pas un choix de l'agence (voir `etatBt01`). */}
+                  <Badge tone="warn">
+                    {bt.saisi
+                      ? `valeur figée à la main : ${fmtIndice(bt.retenu)}`
+                      : `aucune valeur saisie — repli du barème : ${fmtIndice(bt.retenu)}`}
+                  </Badge>
                   <Btn
                     small
                     onClick={() => {

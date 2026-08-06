@@ -58,7 +58,6 @@ const Connecteurs = lazy(() => import('./modules/Connecteurs'))
 const Temps = lazy(() => import('./modules/Temps'))
 const VeilleAO = lazy(() => import('./modules/VeilleAO'))
 const Claude = lazy(() => import('./modules/Claude'))
-const Classement = lazy(() => import('./modules/Classement'))
 const Ressources = lazy(() => import('./modules/Ressources'))
 const Agenda = lazy(() => import('./modules/Agenda'))
 const Parametres = lazy(() => import('./modules/Parametres'))
@@ -316,9 +315,13 @@ export default function App() {
     case 'routines':
       page = <Claude ongletInitial="routines" />
       break
-    case 'classement':
-      page = <Classement />
-      break
+    // `#/classement` a été retiré : l'écran tenait une SECONDE formule de
+    // nomenclature à côté de `nomConforme` (src/fsdrive.ts), celle qui nomme
+    // réellement les fichiers rangés — deux noms pour un même fichier, libres
+    // de diverger. Son seul apport, le champ « Objet », vit désormais dans
+    // Documents, là où le fichier se range ; son pré-prompt « batch hebdo »
+    // était déjà servi par `#/prompts` (gabarit `tpl-classement-batch`).
+    // Aucun lien ne pointait dessus, aucune entrée de menu : rien ne casse.
     case 'ressources':
       page = <Ressources />
       break

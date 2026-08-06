@@ -53,6 +53,31 @@ export function piecesPeriode(state: AppState, periode: string): PiecesPeriode {
   }
 }
 
+// ---------- justificatifs manquants (plan d'usage, lot D1) ----------
+//
+// Le contrôle bloquant « une dépense sans justificatif » disait un NOMBRE et
+// menait à la liste entière des achats : on ne savait pas LESQUELLES, et la
+// clôture finissait tous les mois par « Exporter malgré tout » — un contrôle
+// qu'on contourne chaque mois n'apprend plus rien à personne. Les trois
+// fonctions ci-dessous sont l'autorité UNIQUE de cette notion : la checklist
+// de clôture et l'écran Achats & frais lisent la même liste et la même
+// adresse, elles ne peuvent donc pas se contredire.
+
+/** achats VALIDÉS de la période qui n'ont aucune pièce au registre */
+export function achatsSansJustificatif(state: AppState, periode: string): FactureAchat[] {
+  return piecesPeriode(state, periode).achats.filter((f) => !f.documentId)
+}
+
+/** de quoi reconnaître la pièce dans la pile de papier — jamais son id technique */
+export function libellePieceAchat(f: FactureAchat): string {
+  return `${f.fournisseur}${f.numeroFournisseur ? ` n° ${f.numeroFournisseur}` : ''} du ${f.dateFacture.split('-').reverse().join('/')}`
+}
+
+/** adresse de la liste « pièces sans justificatif » d'une période (Achats & frais) */
+export function lienJustificatifsManquants(periode: string): string {
+  return `#/finance/achats/justificatifs/${periode}`
+}
+
 // ---------- checklist de clôture (audit §5.6 / §8.2) ----------
 
 export interface ControleCloture {
@@ -111,12 +136,21 @@ export function controlesCloture(state: AppState, periode: string, today: string
       ? { libelle: 'Banque rapprochée', niveau: 'ok' }
       : { libelle: 'Banque rapprochée', niveau: 'a_verifier', detail: `${nonRapprochees.length} mouvement(s) non rapproché(s)`, lien: '#/finance/banque' },
   )
-  // pièces présentes — audit F6 : une dépense SANS justificatif BLOQUE la clôture
+  // pièces présentes — audit F6 : une dépense SANS justificatif BLOQUE la clôture.
+  // Le contrôle NOMME les pièces (au plus quatre, le reste se compte) et mène à
+  // la liste de la période, où chacune porte son geste de rattachement : sans
+  // ça, le bloquant se lisait « 3 dépenses » et se contournait (lot D1).
   const sansPiece = p.achats.filter((f) => !f.documentId)
+  const nommees = sansPiece.map(libellePieceAchat)
   controles.push(
     sansPiece.length === 0
       ? { libelle: 'Justificatifs des achats présents', niveau: 'ok' }
-      : { libelle: 'Justificatifs des achats présents', niveau: 'bloquant', detail: `${sansPiece.length} dépense(s) sans justificatif — bloque la clôture`, lien: '#/finance/achats' },
+      : {
+          libelle: `Justificatifs manquants (${sansPiece.length})`,
+          niveau: 'bloquant',
+          detail: `${nommees.slice(0, 4).join(' · ')}${nommees.length > 4 ? ` · +${nommees.length - 4} autre(s)` : ''} — bloque la clôture tant que la pièce n'est pas rattachée`,
+          lien: lienJustificatifsManquants(periode),
+        },
   )
   // ventes migrées à contrôler
   const aControler = p.ventes.filter((f) => f.historiqueAControler)
@@ -378,8 +412,8 @@ export async function construirePaquet(
     }
   }
   for (const f of p.achats) {
-    if (f.documentId) recuperables.push(`Achat ${f.fournisseur} ${f.numeroFournisseur || f.id} — justificatif ${f.documentId} (Drive)`)
-    else indisponibles.push(`Achat ${f.fournisseur} ${f.numeroFournisseur || f.id} — AUCUN justificatif (bloque la clôture)`)
+    if (f.documentId) recuperables.push(`Achat ${libellePieceAchat(f)} — justificatif ${f.documentId} (Drive)`)
+    else indisponibles.push(`Achat ${libellePieceAchat(f)} — AUCUN justificatif (bloque la clôture)`)
   }
   const index = [
     `# Index du paquet — ${periode} (v${version})`,

@@ -204,7 +204,11 @@ function FicheDossier({ c }: { c: Consultation }) {
           ← Tous les dossiers
         </Btn>
         <span className="spacer" />
-        <Btn small kind="ghost" onClick={() => navigate('/ao/consultations')}>
+        {/* T6 — on vient du dossier de CETTE affaire : déposer devant la liste
+            complète des consultations obligeait à la re-chercher pour saisir
+            un résultat qu'on a sous les yeux. L'identifiant voyage dans
+            l'adresse (`#/ao/consultations/<id>`). */}
+        <Btn small kind="ghost" onClick={() => navigate(`/ao/consultations/${c.id}`)}>
           Fiche consultation (Go/No-Go, résultat)
         </Btn>
       </div>

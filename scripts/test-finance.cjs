@@ -515,40 +515,109 @@ async function attendrePort(url, essais = 60) {
     else ko('décision', JSON.stringify(dec))
 
     // ========================================================
-    // F10 — Connecteurs : diagnostic + imports
+    // F10a — Banque : LE point d'import de relevé (lot D2)
+    // ========================================================
+    //
+    // Le scénario est le même qu'avant, à UNE chose près : son adresse. Il
+    // se jouait sur #/finance/connecteurs, dans une carte qui lisait les
+    // quatre formats mais enregistrait `soldeFinal: null` en dur — un OFX
+    // déposé là entrait bien en mouvements et ne mettait JAMAIS à jour la
+    // trésorerie affichée, sans un mot. Le lot D2 a fondu cet import dans
+    // la carte « Mouvements » de Banque & trésorerie, la seule qui porte le
+    // champ « solde de fin ». Ce n'est pas le résultat du geste qui change,
+    // c'est l'endroit où il se fait — et le fait qu'il ne puisse plus
+    // perdre le solde en silence.
+    await page.goto(BASE + '#/finance/banque', { waitUntil: 'networkidle' })
+    await page.waitForSelector('text=Banque & trésorerie')
+    const champReleve = page.locator('.card', { hasText: 'Importer un relevé' }).locator('input[type=file]')
+
+    // -- import CAMT.053, SANS solde de fin : la trésorerie ne bouge pas,
+    //    et l'écran le DIT (« null n'est pas 0 ») --
+    const fCamt = ecrire('releve.camt.xml', CAMT)
+    await champReleve.setInputFiles(fCamt)
+    await page.waitForSelector('text=Format reconnu : CAMT.053 (ISO 20022)')
+    await page.waitForSelector('text=Aperçu : 2 ligne(s) lisible(s)')
+    await page.getByRole('button', { name: /Importer 2 mouvement/ }).click()
+    await page.waitForSelector('text=CAMT : 2 mouvement(s) importé(s), 0 déjà connu(s)')
+    ok('F10 · import CAMT.053 (ISO 20022) : 2 mouvements lus et intégrés')
+    await page.waitForSelector('text=sans solde de fin, la trésorerie affichée ne bouge pas')
+    ok('F10 · sans solde de fin, l’import le DIT au lieu de laisser croire que la trésorerie est à jour')
+
+    // -- réimport du même fichier : idempotent --
+    await champReleve.setInputFiles(fCamt)
+    await page.waitForSelector('text=Format reconnu : CAMT.053 (ISO 20022)')
+    await page.getByRole('button', { name: /Importer 2 mouvement/ }).click()
+    await page.waitForSelector('text=CAMT : 0 mouvement(s) importé(s), 2 déjà connu(s)')
+    ok('F10 · réimport du même CAMT n’ajoute AUCUNE ligne (idempotent : date + montant + libellé)')
+
+    // -- import OFX AVEC le solde de fin : c'est le défaut que D2 ferme --
+    const fOfx = ecrire('releve.ofx', OFX)
+    await champReleve.setInputFiles(fOfx)
+    await page.waitForSelector('text=Format reconnu : OFX / QFX')
+    await page
+      .locator('label.field', { hasText: 'Solde de fin de relevé' })
+      .locator('input')
+      .fill('12345.67')
+    await page.getByRole('button', { name: /Importer 2 mouvement/ }).click()
+    await page.waitForSelector('text=OFX : 2 mouvement(s) importé(s)')
+    ok('F10 · import OFX/QFX : 2 mouvements lus')
+
+    // le solde est ENREGISTRÉ, et sa date se déduit de la dernière ligne du
+    // relevé quand elle n'est pas saisie — c'est exactement ce que l'ancien
+    // import de Connecteurs ne faisait pas
+    const releve = await page.evaluate(() => {
+      const e = JSON.parse(localStorage.getItem('cockpit-ll-v1'))
+      return [...e.importsBancaires].pop()
+    })
+    if (releve.soldeFinal === 12345.67 && releve.dateSolde === J(-4))
+      ok('F10 · le solde de fin saisi est CONSERVÉ, daté de la dernière ligne du relevé (un OFX n’est plus muet)')
+    else ko('solde de fin conservé', JSON.stringify(releve))
+
+    // et il se VOIT : la tuile cesse d'annoncer un solde d'ouverture manuel.
+    // La valeur n'est pas le solde de fin tout nu — c'est lui PLUS les
+    // mouvements postérieurs à sa date (ceux d'avant y sont déjà, les
+    // compter deux fois doublerait la moitié du relevé). On recalcule donc
+    // l'attendu depuis les données, plutôt que d'écrire un chiffre en dur
+    // qui bougerait au prochain jeu d'essai.
+    await page.waitForSelector('.stat-label:text-is("Solde bancaire (importé)")')
+    const attenduSolde = await page.evaluate(() => {
+      const e = JSON.parse(localStorage.getItem('cockpit-ll-v1'))
+      const dernier = [...e.importsBancaires].filter((i) => i.soldeFinal != null && i.dateSolde).pop()
+      const apres = e.transactionsBancaires
+        .filter((t) => t.date > dernier.dateSolde)
+        .reduce((s, t) => s + t.montant, 0)
+      return Math.round((dernier.soldeFinal + apres) * 100) / 100
+    })
+    const soldeAffiche = await valStat(page, 'Solde bancaire (importé)')
+    if (attenduSolde !== 12345.67 && Math.abs(soldeAffiche - attenduSolde) <= 1)
+      ok(`F10 · la tuile affiche le solde du relevé + les mouvements postérieurs (${attenduSolde} €) — l’ancien import laissait « solde d’ouverture manuel »`)
+    else ko('trésorerie calée sur le relevé', `affiché ${soldeAffiche} / attendu ${attenduSolde}`)
+
+    // -- import QIF --
+    const fQif = ecrire('releve.qif', QIF)
+    await champReleve.setInputFiles(fQif)
+    await page.waitForSelector('text=Format reconnu : QIF')
+    await page.getByRole('button', { name: /Importer 2 mouvement/ }).click()
+    await page.waitForSelector('text=QIF : 2 mouvement(s) importé(s)')
+    ok('F10 · import QIF : 2 mouvements lus')
+
+    // ========================================================
+    // F10b — Connecteurs : diagnostic, renvoi, imports de pièces
     // ========================================================
     await page.goto(BASE + '#/finance/connecteurs', { waitUntil: 'networkidle' })
     await page.waitForSelector('text=Diagnostic')
 
-    // -- import CAMT.053 + idempotence --
-    const fCamt = ecrire('releve.camt.xml', CAMT)
+    // la carte d'import bancaire reste en place — un écran qui perd une
+    // entrée sans la remplacer fait chercher longtemps — mais elle RENVOIE
     const carteBanque = page.locator('.card', { hasText: 'Import bancaire — CAMT.053' })
-    await carteBanque.locator('input[type=file]').setInputFiles(fCamt)
-    await page.waitForSelector('text=Format CAMT — 2 ligne(s)')
-    await page.getByRole('button', { name: /Intégrer 2 mouvement/ }).click()
-    await page.waitForSelector('text=CAMT : 2 importé(s), 0 déjà connu(s)')
-    ok('F10 · import CAMT.053 (ISO 20022) : 2 mouvements lus et intégrés')
-    await carteBanque.locator('input[type=file]').setInputFiles(fCamt)
-    await page.waitForSelector('text=Format CAMT — 2 ligne(s)')
-    await page.getByRole('button', { name: /Intégrer 2 mouvement/ }).click()
-    await page.waitForSelector('text=CAMT : 0 importé(s), 2 déjà connu(s)')
-    ok('F10 · réimport du même CAMT n’ajoute AUCUNE ligne (idempotent : date + montant + libellé)')
-
-    // -- import OFX --
-    const fOfx = ecrire('releve.ofx', OFX)
-    await carteBanque.locator('input[type=file]').setInputFiles(fOfx)
-    await page.waitForSelector('text=Format OFX — 2 ligne(s)')
-    await page.getByRole('button', { name: /Intégrer 2 mouvement/ }).click()
-    await page.waitForSelector('text=OFX : 2 importé(s)')
-    ok('F10 · import OFX/QFX : 2 mouvements lus')
-
-    // -- import QIF --
-    const fQif = ecrire('releve.qif', QIF)
-    await carteBanque.locator('input[type=file]').setInputFiles(fQif)
-    await page.waitForSelector('text=Format QIF — 2 ligne(s)')
-    await page.getByRole('button', { name: /Intégrer 2 mouvement/ }).click()
-    await page.waitForSelector('text=QIF : 2 importé(s)')
-    ok('F10 · import QIF : 2 mouvements lus')
+    if ((await carteBanque.locator('input[type=file]').count()) === 0)
+      ok('F10 · un seul point d’import : la carte Connecteurs n’a plus de champ fichier')
+    else ko('point d’import unique', 'Connecteurs porte encore un champ fichier de relevé')
+    await carteBanque.getByRole('button', { name: /Aller à l'import de relevé/ }).click()
+    await page.waitForSelector('text=Banque & trésorerie')
+    ok('F10 · … et son bouton mène à Banque & trésorerie, où le solde de fin se saisit')
+    await page.goto(BASE + '#/finance/connecteurs', { waitUntil: 'networkidle' })
+    await page.waitForSelector('text=Diagnostic')
 
     // -- lecture CII/UBL ligne par ligne (TVA par taux, XML conservé) --
     const fUbl = ecrire('achat.ubl.xml', UBL)

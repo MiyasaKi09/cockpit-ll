@@ -90,7 +90,17 @@ function CarteConsultation({ c }: { c: Consultation }) {
         {c.statut !== 'perdue' && c.statut !== 'gagnee' && (
           <Btn small kind="ghost" onClick={() => deplacer('perdue')} title="Marquer perdue / No-Go">✕ Perdue</Btn>
         )}
-        <a className="btn btn-small btn-ghost" href="#/ao/consultations" title="Ouvrir la fiche complète">fiche</a>
+        {/* T6 — la fiche EST le lieu du Go/No-Go, et ce bouton déposait devant
+            la LISTE : il fallait re-trouver à l'œil l'affaire qu'on venait de
+            cliquer, plusieurs fois par semaine. L'identifiant voyage désormais
+            dans l'adresse, comme partout ailleurs (`#/projets/<id>`). */}
+        <a
+          className="btn btn-small btn-ghost"
+          href={`#/ao/consultations/${c.id}`}
+          title="Ouvrir la fiche complète — Go/No-Go, résultat"
+        >
+          fiche
+        </a>
       </div>
       {c.statut === 'gagnee' && c.projetId && (
         <div className="small ok-text" style={{ marginTop: 4 }}>✓ projet {c.projetId} créé</div>
@@ -158,7 +168,12 @@ function ProspectsARelancer({ state }: { state: AppState }) {
         return (
           <div key={c.id} className="small" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '5px 0', borderBottom: '1px solid var(--line)' }}>
             <div>
-              <strong>{c.nom}</strong>
+              {/* T6 — le nom EST le lien : la fiche du contact porte son
+                  journal d'échanges et « Relancer », c'est-à-dire le geste
+                  qu'on vient chercher en lisant cette ligne. */}
+              <a href={`#/ressources/contacts/${c.id}`}>
+                <strong>{c.nom}</strong>
+              </a>
               {c.organisme ? <span className="muted"> · {c.organisme}</span> : null}
               {c.prochaineAction ? <div className="muted">{c.prochaineAction}</div> : null}
             </div>
@@ -179,7 +194,10 @@ function ProspectsARelancer({ state }: { state: AppState }) {
         )
       })}
       <div className="toolbar" style={{ marginTop: 10, marginBottom: 0 }}>
-        <Btn small onClick={() => navigate('/agenda')}>Ouvrir le CRM →</Btn>
+        {/* le CRM a déménagé dans l'Annuaire : ce bouton déposait sur
+            « Échéances agence », un écran qui ne contient plus ni les
+            contacts ni « Relancer » — le clic n'y trouvait rien (T6). */}
+        <Btn small onClick={() => navigate('/ressources/contacts')}>Ouvrir l'annuaire (CRM) →</Btn>
       </div>
     </Card>
   )

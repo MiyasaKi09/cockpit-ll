@@ -1303,6 +1303,7 @@ function Bilan({ consultations }: { consultations: Consultation[] }) {
 function ConsultationsContenu() {
   const { state } = useStore()
   const today = useToday()
+  const route = useRoute()
   const [q, setQ] = useState('')
   const [filtreStatut, setFiltreStatut] = useState('')
   const [filtreTypologie, setFiltreTypologie] = useState('')
@@ -1409,6 +1410,23 @@ function ConsultationsContenu() {
 
   const ouvrir = (c: Consultation) => setFiche({ c: { ...c }, nouveau: false })
 
+  /** F1 — la fiche consultation A UNE ADRESSE : `#/ao/consultations/<id>`.
+   *  Trois écrans l'écrivaient déjà (carte du pipeline, dossier de poursuite,
+   *  item du Cockpit) et personne ne la lisait : le clic déposait la personne
+   *  sur la liste complète, à elle de retrouver la ligne — les 3 gestes de
+   *  trop du geste le plus fréquent du domaine (T6). Même motif que
+   *  `#/ao/dossiers/<id>` (Dossiers.tsx) : l'adresse d'abord, l'état local
+   *  ensuite, jamais les deux à recopier l'un dans l'autre. */
+  const idRoute = route[0] === 'ao' && route[1] === 'consultations' ? route[2] || '' : ''
+  const parRoute = idRoute ? consultations.find((c) => c.id === idRoute) ?? null : null
+  const ouverte = fiche ?? (parRoute ? { c: parRoute, nouveau: false } : null)
+  const fermerFiche = () => {
+    setFiche(null)
+    // revenir à la liste nue : sans cela l'adresse garderait la consultation
+    // fermée, et un rechargement la rouvrirait
+    if (idRoute) navigate('/ao/consultations')
+  }
+
   return (
     <>
       <div className="toolbar" style={{ justifyContent: 'flex-end' }}>
@@ -1513,12 +1531,21 @@ function ConsultationsContenu() {
 
       <Bilan consultations={consultations} />
 
-      {fiche && (
+      {/* une adresse qui ne désigne plus rien le DIT : une consultation
+          supprimée depuis l'envoi du lien laisserait sinon croire à un clic
+          raté (l'écran affiche la liste entière, sans un mot) */}
+      {idRoute && !parRoute && !fiche && (
+        <div className="pill-note" style={{ marginTop: 10 }}>
+          Cette consultation n’existe plus dans le registre — la liste complète est ci-dessus.
+        </div>
+      )}
+
+      {ouverte && (
         <FicheModal
-          key={fiche.c.id}
-          initial={fiche.c}
-          nouveau={fiche.nouveau}
-          onClose={() => setFiche(null)}
+          key={ouverte.c.id}
+          initial={ouverte.c}
+          nouveau={ouverte.nouveau}
+          onClose={fermerFiche}
         />
       )}
     </>

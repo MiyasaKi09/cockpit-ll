@@ -26,7 +26,7 @@ import { MODELES_WHISPER, testerModele } from '../transcription'
 // « inconnu » n'est pas « ok » : un branchement jamais éprouvé ne mérite pas
 // une pastille verte — la confiance dans les pastilles est ce qui fait ouvrir
 // cette page. Vert = ça a réellement tourné ici, au moins une fois.
-type Etat = 'ok' | 'attention' | 'coupe' | 'inconnu'
+export type Etat = 'ok' | 'attention' | 'coupe' | 'inconnu'
 
 const COULEUR_ETAT: Record<Etat, string> = {
   ok: 'var(--ok)',
@@ -54,7 +54,14 @@ function Pastille({ etat }: { etat: Etat }) {
   )
 }
 
-function Branchement({
+/**
+ * Le gabarit d'UNE carte de branchement : pastille d'état, titre, geste de
+ * test en haut à droite, contenu dessous. Exporté parce que l'ingestion
+ * serveur, dont le réglage vit dans `Parametres.tsx`, est un branchement comme
+ * les autres : sans pastille, elle serait la seule carte de la page dont on ne
+ * pourrait pas dire d'un coup d'œil si elle marche.
+ */
+export function Branchement({
   etat,
   titre,
   children,
@@ -103,7 +110,7 @@ const fmtInstant = (iso: string) =>
 
 // ---------- Gmail & Agenda ----------
 
-function SanteGoogle() {
+function SanteGoogle({ reglages }: { reglages?: ReactNode }) {
   const { state, update } = useStore()
   const sv = state.settings.surveillance
   const connecte = estConnecte()
@@ -142,24 +149,32 @@ function SanteGoogle() {
     >
       {!sv?.clientId ? (
         <p className="small">
-          Pas encore configuré — le Client ID Google se crée en 10 minutes (guide dans le réglage{' '}
-          <a href="#/parametres/branchements">Surveillance</a> ci-dessus). Ensuite, chaque mail reçu
-          apparaît dans « À traiter », rattaché au bon projet.
+          Pas encore configuré — le Client ID Google se crée en 10 minutes, guide compris dans
+          « Détails & réglages » juste dessous. Ensuite, chaque mail reçu apparaît dans
+          « À traiter », rattaché au bon projet.
         </p>
       ) : (
+        <p className="small">
+          {connecte ? (
+            <Badge tone="ok">connecté — scan automatique toutes les 60 s tant qu'un onglet est ouvert</Badge>
+          ) : (
+            <Badge tone="warn">session coupée — « Connecter Google » ci-dessous (elle dure ~1 h)</Badge>
+          )}
+          {scan && <span className="muted"> · dernier scan : {fmtInstant(scan)}</span>}
+          {sv.email && <span className="muted"> · adresse surveillée : {sv.email}</span>}
+        </p>
+      )}
+
+      {/* Le réglage du branchement vit DANS la carte qui en dit l'état (F2).
+          Avant, l'écran disait deux fois chaque état : une carte de réglage
+          en haut, une carte de santé en bas, chacune renvoyant à l'autre
+          (« réglage ci-dessus », « se reconnecter »). Une seule carte, donc :
+          la pastille, le test et le journal ici, les champs dans son
+          <details>. */}
+      {reglages}
+
+      {sv?.clientId && (
         <>
-          <p className="small">
-            {connecte ? (
-              <Badge tone="ok">connecté — scan automatique toutes les 60 s tant qu'un onglet est ouvert</Badge>
-            ) : (
-              <>
-                <Badge tone="warn">session coupée</Badge>{' '}
-                <a href="#/parametres/branchements">se reconnecter</a> (réglage ci-dessus ; la session Google dure ~1 h)
-              </>
-            )}
-            {scan && <span className="muted"> · dernier scan : {fmtInstant(scan)}</span>}
-            {sv.email && <span className="muted"> · adresse surveillée : {sv.email}</span>}
-          </p>
           <Verdict v={verdict} />
           <CommentTester>
             envoyez-vous un mail avec « {state.projets[0]?.id || 'P01'} » dans l'objet, puis cliquez
@@ -546,7 +561,7 @@ function SanteDonnees() {
   )
 }
 
-function SanteSync() {
+function SanteSync({ reglages }: { reglages?: ReactNode }) {
   const { state } = useStore()
   const cfg = state.settings.sync
   const etat_ = syncEtat()
@@ -556,44 +571,71 @@ function SanteSync() {
     <Branchement etat={etat} titre="Synchronisation 2 postes — Supabase (temps réel + sauvegarde)">
       {!cfg?.url || !cfg.anonKey ? (
         <p className="small">
-          Pas encore configurée — optionnelle. Reliez un projet Supabase gratuit dans le réglage{' '}
-          <a href="#/parametres/branchements">Synchronisation</a> ci-dessus pour partager l’état entre Julien et
-          Zoé en temps réel (et l’avoir sauvegardé hors du navigateur). Sans elle, tout reste en local.
+          Pas encore configurée — optionnelle. Reliez un projet Supabase gratuit dans
+          « Détails & réglages » juste dessous pour que les deux postes voient les mêmes données en
+          temps réel (et les aient sauvegardées hors du navigateur). Sans elle, tout reste en local.
         </p>
       ) : (
         <p className="small">
           {etat_.connecte ? (
             <Badge tone="ok">connecté{etat_.email ? ` — ${etat_.email}` : ''} · les 2 postes convergent en ~1–2 s</Badge>
           ) : (
-            <>
-              <Badge tone="warn">session non connectée</Badge>{' '}
-              <a href="#/parametres/branchements">se connecter (lien magique, réglage ci-dessus)</a>
-            </>
+            <Badge tone="warn">session non connectée — lien magique ci-dessous</Badge>
           )}
           {etat_.derniereSync && <span className="muted"> · dernière synchro : {fmtInstant(etat_.derniereSync)}</span>}
           {etat_.erreur && <span className="danger-text"> · {etat_.erreur}</span>}
         </p>
       )}
+
+      {/* même fusion que pour Gmail : l'état et son réglage dans UNE carte */}
+      {reglages}
     </Branchement>
   )
 }
 
 // ---------- contenu (onglet Branchements de Paramètres) ----------
 
-export function SanteContenu() {
+/**
+ * UNE CARTE PAR BRANCHEMENT (audit d'usage, lot F2).
+ *
+ * L'onglet Branchements disait chaque état DEUX fois : une carte de réglage
+ * (champs, bouton « Connecter ») puis, plus bas, une carte de santé (pastille,
+ * test, journal) — chacune renvoyant à l'autre par un lien. Deux badges pour
+ * un même branchement, c'est deux occasions de se contredire, et la question
+ * « est-ce que ça marche ? » se posait deux fois par écran.
+ *
+ * Les réglages arrivent donc en PROP, montés dans la carte de santé qui dit
+ * l'état de la même chose. Ils restent écrits dans `Parametres.tsx`, où vit la
+ * connexion Google et la synchronisation : cet écran-ci n'écrit aucun réglage,
+ * il l'accueille. Sans prop, la page reste lisible — pastille, test, journal —
+ * simplement sans ses champs.
+ */
+export function SanteContenu({
+  reglagesGoogle,
+  reglagesSync,
+  carteIngestion,
+}: {
+  reglagesGoogle?: ReactNode
+  reglagesSync?: ReactNode
+  /** l'ingestion serveur n'a pas de jumelle ici : elle se range après les deux
+   *  branchements dont elle dépend (le compte Google, l'espace Supabase) */
+  carteIngestion?: ReactNode
+} = {}) {
   return (
     <>
       <p className="small muted" style={{ margin: '0 0 4px' }}>
-        Un bouton pour tester chaque branchement. Vert = ça a réellement tourné ici ; pastille
-        creuse = jamais testé depuis ce poste (ce n'est pas une panne, c'est une inconnue).
+        Une carte par branchement : son état, son test, son journal, et ses réglages dépliables.
+        Vert = ça a réellement tourné ici ; pastille creuse = jamais testé depuis ce poste (ce n'est
+        pas une panne, c'est une inconnue).
       </p>
-      <SanteGoogle />
+      <SanteGoogle reglages={reglagesGoogle} />
+      <SanteSync reglages={reglagesSync} />
+      {carteIngestion}
       <SanteBoamp />
       <SanteRelais />
       <SanteDrive />
       <SanteWhisper />
       <SanteRoutines />
-      <SanteSync />
       <SanteDonnees />
     </>
   )

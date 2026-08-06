@@ -7,7 +7,7 @@
 // ============================================================
 
 import { useMemo, useRef, useState } from 'react'
-import type { AppState, FactureAchat, NoteFrais, PhaseCode, VentilationAchat } from '../types'
+import type { AppState, DocumentRecord, FactureAchat, NoteFrais, PhaseCode, VentilationAchat } from '../types'
 import { useStore } from '../store'
 import {
   Badge,
@@ -27,7 +27,9 @@ import {
   Table,
   TextInput,
   confirmer,
+  navigate,
   toast,
+  useRoute,
   useToday,
 } from '../ui'
 import FinanceNav from './FinanceNav'
@@ -40,10 +42,13 @@ import {
   sommeVentilations,
 } from '../achats'
 import type { AttenduOuvert, BrouillonAchat } from '../achats'
+// la clôture est l'AUTORITÉ de la notion « pièce sans justificatif » : cet
+// écran lit sa liste, il ne la recalcule pas (lot D1, constat R3)
+import { achatsSansJustificatif, libellePieceAchat } from '../comptable'
 import { lireFactureXML } from '../facturx'
 import { LIBELLES_PHASES, PHASES_ORDRE } from '../miqcp'
 import { nomProjet } from '../derive'
-import { addDays, fmtDate, fmtMoney, uid } from '../util'
+import { addDays, fmtDate, fmtMoney, fold, uid } from '../util'
 
 const CATEGORIES_OPTIONS = CATEGORIES_ACHAT.map((c) => ({ value: c, label: c }))
 
@@ -68,6 +73,8 @@ interface ValeursAchat {
   montantHT: number | null
   montantTVA: number | null
   contratId: string
+  /** pièce du registre documentaire qui justifie la dépense (lot D1) */
+  documentId: string
   ventilations: VentilationAchat[]
 }
 
@@ -80,8 +87,15 @@ function depuisFacture(f: FactureAchat): ValeursAchat {
     montantHT: f.montantHT,
     montantTVA: f.montantTVA ?? null,
     contratId: f.contratId || '',
+    documentId: f.documentId || '',
     ventilations: f.ventilations.map((v) => ({ ...v })),
   }
+}
+
+/** ce qu'on lit d'une pièce du registre pour la reconnaître dans une liste */
+function libelleDocument(d: DocumentRecord): string {
+  const date = d.dateDocument || d.recuLe
+  return `${d.titre}${date ? ` · ${fmtDate(date)}` : ''}${d.categorie ? ` · ${d.categorie}` : ''}`
 }
 
 function AchatModal({
@@ -121,6 +135,39 @@ function AchatModal({
   const somme = sommeVentilations(v.ventilations)
   const contratsCandidats = state.contrats.filter((c) => c.type === 'agence' || c.type === 'fournisseur')
 
+  /** Justificatif (lot D1) — le contrôle BLOQUANT de la clôture vise ce champ ;
+   *  aucune saisie ne le posait, donc chaque mois finissait par « Exporter
+   *  malgré tout ». Les pièces du même fournisseur sont proposées en tête, et
+   *  une pièce déjà rattachée à une AUTRE facture ne l'est pas : deux dépenses
+   *  justifiées par le même papier passeraient la clôture sans être vues. */
+  const docChoisi = state.registreDocuments.find((d) => d.id === v.documentId)
+  const optionsJustificatif = useMemo(() => {
+    const prises = new Set(
+      state.facturesAchat.filter((f) => f.id !== idEnCours && f.documentId).map((f) => f.documentId as string),
+    )
+    const libres = state.registreDocuments.filter(
+      (d) => d.statut !== 'rejete' && (!prises.has(d.id) || d.id === v.documentId),
+    )
+    const cle = fold(v.fournisseur)
+    const memeFournisseur = (d: DocumentRecord) =>
+      cle.length > 2 && fold(`${d.titre} ${d.nomOriginal}`).includes(cle)
+    const tries = [...libres].sort(
+      (a, b) =>
+        Number(memeFournisseur(b)) - Number(memeFournisseur(a)) ||
+        (b.dateDocument || b.recuLe).localeCompare(a.dateDocument || a.recuLe),
+    )
+    const retenus = tries.slice(0, 40)
+    const actuel = libres.find((d) => d.id === v.documentId)
+    if (actuel && !retenus.some((d) => d.id === actuel.id)) retenus.unshift(actuel)
+    return [
+      { value: '', label: libres.length > 0 ? '— aucun justificatif rattaché —' : '— aucune pièce au registre —' },
+      ...retenus.map((d) => ({
+        value: d.id,
+        label: `${libelleDocument(d)}${memeFournisseur(d) ? ' — même fournisseur' : ''}`,
+      })),
+    ]
+  }, [state.registreDocuments, state.facturesAchat, idEnCours, v.documentId, v.fournisseur])
+
   return (
     <Modal titre={titre} onClose={onClose} large>
       <div className="form-row">
@@ -157,6 +204,25 @@ function AchatModal({
           <div className="input" style={{ display: 'flex', alignItems: 'center' }}>{fmtMoney(ttc, true)}</div>
         </Field>
       </div>
+
+      {/* ----- justificatif : le champ que la clôture exige (lot D1) ----- */}
+      <div className="form-row" style={{ marginTop: 10 }}>
+        <Field label="Justificatif (registre documentaire)" hint="exigé par la clôture du mois">
+          <Select value={v.documentId} onChange={(documentId) => set({ documentId })} options={optionsJustificatif} />
+        </Field>
+      </div>
+      <p className="muted small" style={{ margin: '4px 2px 0' }}>
+        {docChoisi ? (
+          <>
+            Pièce rattachée : {libelleDocument(docChoisi)} — <a href="#/documents/tous">voir au registre</a>.
+          </>
+        ) : (
+          <>
+            Sans justificatif, cette dépense bloquera la clôture du mois. La pièce se dépose dans{' '}
+            <a href="#/documents">Documents</a>, puis se choisit ici.
+          </>
+        )}
+      </p>
 
       {/* ----- répartition (ventilations) ----- */}
       <div style={{ marginTop: 14 }}>
@@ -428,6 +494,7 @@ function LigneAttendu({ a, onSaisir }: { a: AttenduOuvert; onSaisir: (a: Attendu
 export default function Achats() {
   const { state, update, replace } = useStore()
   const today = useToday()
+  const route = useRoute()
   const refXml = useRef<HTMLInputElement>(null)
   const [creation, setCreation] = useState<{ initial: ValeursAchat; source: FactureAchat['source']; contratId?: string } | null>(null)
   const [validation, setValidation] = useState<FactureAchat | null>(null)
@@ -455,6 +522,15 @@ export default function Achats() {
     if (etatDecaissement === 'payees') return reglees
     return [...attente, ...reglees]
   }, [aPayer, payees, etatDecaissement])
+  /** route profonde `#/finance/achats/justificatifs/AAAA-MM` — la checklist de
+   *  clôture nomme les pièces sans justificatif et amène ICI, où chacune porte
+   *  son geste : le contrôle commençait dans Comptable et finissait nulle part
+   *  (lot D1, constat T2). La liste vient de `comptable.ts`, seule autorité. */
+  const periodeJustificatifs = route[2] === 'justificatifs' ? route[3] || '' : ''
+  const sansJustificatif = useMemo(
+    () => (periodeJustificatifs ? achatsSansJustificatif(state, periodeJustificatifs) : []),
+    [state, periodeJustificatifs],
+  )
   const attendus = useMemo(() => attendusOuverts(state, today), [state, today])
   const balance = useMemo(() => balanceFournisseurs(state, today), [state, today])
   const frais = [...state.notesFrais].sort((a, b) => b.date.localeCompare(a.date))
@@ -468,6 +544,7 @@ export default function Achats() {
     montantHT: null,
     montantTVA: null,
     contratId: '',
+    documentId: '',
     ventilations: [{ id: uid('va'), montantHT: 0, categorie: CATEGORIES_ACHAT[0], projetId: null, phase: null }],
   }
 
@@ -486,6 +563,9 @@ export default function Achats() {
       statut: 'validee',
       source,
       contratId: v.contratId || null,
+      // le justificatif est SAISI (lot D1) : il ne se conserve plus « tel quel »
+      // à la modification, sinon le sélecteur ne servirait qu'à la création
+      documentId: v.documentId || null,
       evenements: [{ date: today, type: 'validation', detail: `Validée (${fmtMoney(ttc, true)} TTC).` }],
     }
     update((d) => {
@@ -493,7 +573,6 @@ export default function Achats() {
       if (existante) {
         Object.assign(existante, nouvelle, {
           source: existante.source,
-          documentId: existante.documentId,
           empreinte: existante.empreinte,
           raisons: existante.raisons,
           confiance: existante.confiance,
@@ -505,7 +584,14 @@ export default function Achats() {
     })
     setCreation(null)
     setValidation(null)
-    toast('Facture fournisseur validée — elle compte au FACTURÉ (le payé viendra de la banque).', { tone: 'ok' })
+    // dire le manque au moment où il se crée, pas un mois plus tard devant la
+    // checklist de clôture (lot D1)
+    toast(
+      v.documentId
+        ? 'Facture fournisseur validée — elle compte au FACTURÉ (le payé viendra de la banque).'
+        : `Facture validée SANS justificatif — elle bloquera la clôture de ${v.dateFacture!.slice(0, 7)} tant qu'aucune pièce n'y est rattachée.`,
+      { tone: v.documentId ? 'ok' : 'warn' },
+    )
   }
 
   const ecarter = async (f: FactureAchat) => {
@@ -571,6 +657,53 @@ export default function Achats() {
         <Stat label="Attendus ouverts" value={attendus.length} tone={attendus.length > 0 ? 'warn' : 'ok'} sub="récurrents absents · justificatifs · anomalies" />
         <Stat label="Notes de frais" value={fraisARembourser.length} sub={`à rembourser (${fmtMoney(fraisARembourser.reduce((s, n) => s + n.montantTTC, 0))})`} />
       </div>
+
+      {/* ----- pièces sans justificatif d'une période (venu de la clôture) ----- */}
+      {periodeJustificatifs && (
+        <Card
+          titre={`Justificatifs manquants — ${periodeJustificatifs} (${sansJustificatif.length})`}
+          actions={
+            <>
+              <Btn small onClick={() => navigate('/finance/comptable')}>Retour à la clôture</Btn>
+              <Btn small onClick={() => navigate('/finance/achats')}>Fermer cette liste</Btn>
+            </>
+          }
+        >
+          {sansJustificatif.length === 0 ? (
+            <EmptyState>
+              Toutes les dépenses validées de {periodeJustificatifs} portent leur justificatif — ce contrôle de
+              clôture est levé.
+            </EmptyState>
+          ) : (
+            <>
+              <Table compact head={['Date', 'Pièce', <span key="t" className="right">TTC</span>, '']}>
+                {sansJustificatif.map((f) => (
+                  <tr key={f.id}>
+                    <td>
+                      <DateF d={f.dateFacture} />
+                    </td>
+                    <td>{libellePieceAchat(f)}</td>
+                    <td className="right">
+                      <Money v={f.montantTTC} cents />
+                    </td>
+                    <td>
+                      <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                        <Btn small kind="primary" onClick={() => setValidation(f)}>
+                          Rattacher un justificatif…
+                        </Btn>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </Table>
+              <p className="muted small" style={{ margin: '10px 2px 0' }}>
+                La pièce se choisit dans le registre documentaire. Si elle n'y est pas encore, déposez-la dans{' '}
+                <a href="#/documents">Documents</a> — elle apparaîtra ensuite dans la liste du rattachement.
+              </p>
+            </>
+          )}
+        </Card>
+      )}
 
       {/* ----- boîte d'arrivée ----- */}
       <Card

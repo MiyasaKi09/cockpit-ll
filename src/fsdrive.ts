@@ -261,6 +261,50 @@ export async function listerFichiersProjet(
   return fichiers.sort((a, b) => a.name.localeCompare(b.name))
 }
 
+/** pourquoi une pièce du registre n'a pas pu être ouverte. Quatre causes,
+ *  quatre GESTES différents — les confondre en un « erreur » unique ferait
+ *  chercher le fichier alors que c'est le dossier qui n'est pas branché.
+ *  Le texte montré à la personne appartient à l'écran, pas à ce module. */
+export type CauseEchecOuverture =
+  /** l'API n'existe pas ici (Safari iOS, Firefox Android) — limite actée, §4.12 du plan d'usage */
+  | 'navigateur'
+  /** aucune racine Drive branchée sur ce poste (ou le handle a été perdu) */
+  | 'racine'
+  /** le navigateur a refusé l'accès au dossier */
+  | 'permission'
+  /** le chemin ne mène plus à rien : fichier déplacé, renommé ou supprimé */
+  | 'introuvable'
+
+export type Ouverture = { ok: true; fichier: File } | { ok: false; cause: CauseEchecOuverture }
+
+/** relit une pièce du Drive à partir du `cheminDrive` gardé par le registre
+ *  (`<projet>/<sousDossier>/<nom>`, tel que rendu par `rangerFichier`).
+ *
+ *  LECTURE SEULE et non créatrice : chaque segment est ouvert en
+ *  `create: false`, si bien qu'un chemin périmé ne fabrique jamais le
+ *  dossier manquant — il DIT que la pièce a bougé. C'est le pendant du
+ *  rangement qui n'écrase jamais.
+ *
+ *  Ne lève pas : rend la cause, l'appelant choisit son message et son geste. */
+export async function lireFichierDuDrive(racine: FSDirHandle | null, chemin: string): Promise<Ouverture> {
+  if (!supporteFS) return { ok: false, cause: 'navigateur' }
+  if (!racine) return { ok: false, cause: 'racine' }
+  const segments = chemin.split('/').map((s) => s.trim()).filter(Boolean)
+  if (segments.length === 0) return { ok: false, cause: 'introuvable' }
+  if (!(await verifierPermission(racine))) return { ok: false, cause: 'permission' }
+  let dossier = racine
+  for (const nom of segments.slice(0, -1)) {
+    const suivant = await dossier.getDirectoryHandle(nom, { create: false }).catch(() => null)
+    if (!suivant) return { ok: false, cause: 'introuvable' }
+    dossier = suivant
+  }
+  const fh = await dossier.getFileHandle(segments[segments.length - 1]).catch(() => null)
+  if (!fh) return { ok: false, cause: 'introuvable' }
+  const fichier = await fh.getFile().catch(() => null)
+  if (!fichier) return { ok: false, cause: 'introuvable' }
+  return { ok: true, fichier }
+}
+
 /** liste les fichiers de <racine>/<sousDossier> (dossier absent → liste vide) —
  *  ex. la boîte d'arrivée _A_CLASSER */
 export async function listerFichiersRacine(racine: FSDirHandle, sousDossier: string): Promise<FSFileHandle[]> {

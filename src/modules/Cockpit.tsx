@@ -22,12 +22,19 @@ import type { CSSProperties, ReactNode } from 'react'
 import type { Alerte, Courrier } from '../types'
 import { useStore } from '../store'
 import { Btn, Card, DateF, DateInput, EmptyState, Icon, LienGmail, Modal, Money, Page, ResumeMessage, RowMenu, Select, Stat, Table, confirmer, navigate, toast, useToday } from '../ui'
-import type { ContexteAlertes, MessageNotifiable, RelanceProposee } from '../alerts'
-import { alertesActives, relanceDeLAlerte } from '../alerts'
+import type { ContexteAlertes, MessageNotifiable, PropositionNotifiable, RelanceProposee } from '../alerts'
+import { alertesActives, estMarquableVu, relanceDeLAlerte } from '../alerts'
 import { dateDe, fusionnerBoite, urgenceDe } from '../boite'
 import { LIBELLES_STATUT_TACHE, creerTache, estOuverte, estPrioriteTache, graviteDePriorite } from '../taches'
 import type { Communication, FiltreCommunications } from '../communications'
-import { corrigerRattachement, mailsATraiterPourLaBoite, marquerTraite, useCommunications } from '../communications'
+import {
+  corrigerRattachement,
+  mailsATraiterPourLaBoite,
+  mailsEnAttenteDeReponse,
+  marquerTraite,
+  useCommunications,
+} from '../communications'
+import { usePropositions } from '../propositions'
 import { LIBELLES_IMPORTANCE, estImportance } from '../categorisation'
 import { projetsCorrigibles } from '../rattachement'
 import { lienGmail } from '../util'
@@ -71,6 +78,15 @@ const STYLE_GROUPE: CSSProperties = {
 // bas, avec un lien qui menait ailleurs et deux gestes de moins.
 // L'information portée par l'alerte — le niveau qualifié — ne se perd pas :
 // elle passe en badge sur la ligne de la boîte (voir `LigneCourrier`).
+//
+// `reponse_attendue` (A2) N'Y ENTRE PAS, et la nuance est le tout du geste :
+// le doublon de `mail_a_traiter` était gratuit parce que la boîte est déjà
+// TRIÉE sur l'urgence qualifiée — l'alerte redisait le tri. Le nombre de
+// jours d'attente, lui, n'est écrit nulle part dans la boîte : « ce fil
+// attend depuis 5 jours » est une information que la ligne de courrier ne
+// porte pas, et la faire disparaître au nom du doublon reviendrait à livrer
+// A2 sans rien montrer. Elle se marque « Vu » quand le jugement humain dit
+// que personne n'attend.
 const TYPES_DANS_INBOX = new Set<Alerte['type']>([
   'situation_a_verifier',
   'facture_a_emettre',
@@ -184,7 +200,10 @@ function itemsAFaire(
       gravite: 2,
       titre: `Étudier la consultation — ${c.intitule}`,
       detail: `${c.acheteur || 'acheteur ?'}${c.dateLimite ? ` · remise le ${fmtDate(c.dateLimite)}` : ''} · avis Go/No-Go à donner`,
-      lien: '#/ao',
+      // T6 / lot F — la fiche consultation est adressable : le lien porte
+      // l'identifiant au lieu de déposer devant le Kanban entier, où il
+      // fallait retrouver la carte qu'on vient de lire dans le titre.
+      lien: `#/ao/consultations/${c.id}`,
       dateLimite: c.dateLimite || undefined,
       pour: c.pour,
       marqueur: 'square',
@@ -377,6 +396,40 @@ function MenuReporter({ onReporter }: { onReporter: (jours: number | string) => 
 /** le filtre est une constante de module : il ne doit pas se reconstruire
  *  à chaque rendu, sans quoi la couche d'accès repagine en boucle */
 const FILTRE_BOITE: FiltreCommunications = { direction: 'entrant', nonTraite: true }
+
+/** A2 — la fenêtre des fils observés pour « quelqu'un attend une réponse ».
+ *  Trente jours : au-delà, un fil sans réponse n'est plus un oubli, c'est
+ *  un sujet clos ou repris ailleurs, et le fil d'urgences se remplirait
+ *  d'archéologie. */
+const JOURS_DE_FILS = 30
+
+/** assez pour un mois de courrier à deux ; au-delà, la page suivante ne
+ *  contiendrait que des messages PLUS ANCIENS (voir le commentaire d'A2) */
+const TAILLE_FILS = 200
+
+/** A1bis — la file de revue du §8.7, telle que l'écran des propositions la
+ *  définit : le même filtre, jamais une seconde définition */
+const FILTRE_PROPOSITIONS = { statut: 'proposee' as const }
+
+/** Ce que le fil d'urgences a besoin de savoir d'un message (A.11).
+ *
+ *  Écrit UNE fois : la boîte du jour et la lecture des fils d'A2 le
+ *  produisent toutes les deux, et deux traductions du même message
+ *  divergeraient au premier champ ajouté — sans que rien ne le signale,
+ *  puisque les deux alertes continueraient de s'afficher. */
+function notifiableDuMessage(c: Communication): MessageNotifiable {
+  return {
+    id: c.id,
+    objet: c.objet,
+    expediteur: c.expediteur || c.expediteurAdresse,
+    projetId: c.projetId,
+    importance: c.importance,
+    envoyeLe: c.envoyeLe,
+    urlGmail: c.urlGmail,
+    destinataires: c.destinataires,
+    copies: c.copies,
+  }
+}
 
 /** Une ligne de la boîte, quelle que soit la mémoire d'où elle vient.
  *  Les deux sources se rejoignent ici pour être TRIÉES ENSEMBLE : deux
@@ -671,17 +724,7 @@ function useBoiteATraiter(personne: string): Boite {
     projetId: c.projetId,
     source: c.gmailMessageId,
     brouillon: c.resume ? { texte: c.resume, le: c.resumeLe } : null,
-    notifiable: {
-      id: c.id,
-      objet: c.objet,
-      expediteur: c.expediteur || c.expediteurAdresse,
-      projetId: c.projetId,
-      importance: c.importance,
-      envoyeLe: c.envoyeLe,
-      urlGmail: c.urlGmail,
-      destinataires: c.destinataires,
-      copies: c.copies,
-    },
+    notifiable: notifiableDuMessage(c),
     versJournal: c.projetId ? () => void versJournalMessage(c, jumeau) : null,
     traiter: () => void traiterMessage(c, jumeau),
     rattacher: (projetId: string) => void rattacherMessage(c, projetId),
@@ -897,6 +940,33 @@ function CentreActions({ personne }: { personne: string }) {
     toast(libelle, { undo: () => replace(snap) })
   }
 
+  /**
+   * A3 — « Vu », le jumeau du report.
+   *
+   * `alertesActives` filtre déjà `settings.vus` ; personne ne l'écrivait,
+   * si bien que le champ était du code mort. Le manque devient criant dès
+   * que les propositions et les réponses attendues parlent : ces alertes-là
+   * n'ont pas d'autre issue que la lecture — il n'y a rien à « faire », et
+   * les reporter de sept jours ne fait que déplacer le bruit.
+   *
+   * `estMarquableVu` décide, pas l'écran : la liste des types vit dans
+   * `src/alerts.ts`, avec le filtre qui la consomme.
+   */
+  const marquerVu = (a: Alerte) => {
+    const snap = state
+    update((d) => {
+      d.settings.vus = { ...(d.settings.vus || {}), [a.id]: today }
+    })
+    toast('Marquée vue — elle ne reviendra plus.', { undo: () => replace(snap) })
+  }
+
+  const boutonVu = (a: Alerte) =>
+    estMarquableVu(a.type) ? (
+      <Btn small kind="ghost" onClick={() => marquerVu(a)} title="Lue et prise en compte : cette alerte ne reviendra plus">
+        Vu
+      </Btn>
+    ) : null
+
   const reporter = (id: string, quand: number | string) => {
     const snap = state
     const date = typeof quand === 'number' ? addDays(today, quand) : quand
@@ -1021,16 +1091,51 @@ function CentreActions({ personne }: { personne: string }) {
   // — un `Courrier` qualifié « urgent » au palier v19 alerte autant qu'une
   // `communication`, sans quoi la bascule ferait taire la moitié du fil.
   //
-  // `enAttenteDeReponse` n'est PAS alimenté ici, et c'est délibéré : ce
-  // producteur a besoin des fils COMPLETS pour savoir si on a répondu, or
-  // cette lecture-ci est paginée et filtrée sur l'entrant non traité. La
-  // nourrir avec une vue partielle produirait des relances fausses —
-  // « le client attend » alors qu'on lui a répondu la veille. Un fil
-  // d'urgences qui se trompe cesse d'être lu ; mieux vaut un producteur
-  // muet qu'un producteur menteur.
+  // A2 — « le client attend depuis 5 jours ».
+  //
+  // Ce producteur ne peut PAS se nourrir de la boîte : elle est filtrée sur
+  // l'entrant non traité, et un fil vu à travers ce filtre paraît toujours
+  // sans réponse — « le client attend » alors qu'on lui a répondu la veille.
+  // D'où cette lecture DÉDIÉE, dans les deux sens et sans filtre de
+  // traitement : `mailsEnAttenteDeReponse` élit le dernier message de chaque
+  // fil, et un fil dont le dernier message est sortant sort de lui-même.
+  //
+  // Sur la troncature, qui est le seul risque restant : la page est triée du
+  // plus RÉCENT au plus ancien, et une réponse est toujours postérieure au
+  // message qu'elle répond. Si l'entrant est dans la fenêtre, la réponse y
+  // est aussi. Tronquer ne peut donc que faire MANQUER une attente, jamais
+  // en inventer une — un producteur muet vaut mieux qu'un producteur menteur.
+  const depuis = useMemo(() => `${addDays(today, -JOURS_DE_FILS)}T00:00:00Z`, [today])
+  const filtreFils = useMemo<FiltreCommunications>(() => ({ depuis }), [depuis])
+  const { lignes: fils } = useCommunications(filtreFils, TAILLE_FILS)
+  const enAttenteDeReponse = useMemo(
+    () => (fils ? mailsEnAttenteDeReponse(fils).map(notifiableDuMessage) : undefined),
+    [fils],
+  )
+
+  // A1bis — l'alerte agrégée « N propositions à revoir » ne s'allumait
+  // jamais : personne ne passait `ctx.propositions`. La file de revue est
+  // celle de l'écran (`statut: 'proposee'`), pas une seconde définition.
+  // `null` (ni réseau ni cache) reste `undefined` ici : « on ne sait pas »
+  // n'est pas « il n'y en a pas », et aucune des deux ne doit faire crier
+  // le fil.
+  const { lignes: propositions } = usePropositions(FILTRE_PROPOSITIONS)
+  const propositionsNotifiables = useMemo<PropositionNotifiable[] | undefined>(
+    () =>
+      propositions
+        ? propositions.map((p) => ({ id: p.id, genre: p.genre, projetId: p.message.projetId }))
+        : undefined,
+    [propositions],
+  )
+
   const contexteAlertes = useMemo<ContexteAlertes>(
-    () => ({ moi: personne || moi.nom, aTraiter: boite.lignes.map((l) => l.notifiable) }),
-    [boite.lignes, personne, moi.nom],
+    () => ({
+      moi: personne || moi.nom,
+      aTraiter: boite.lignes.map((l) => l.notifiable),
+      enAttenteDeReponse,
+      propositions: propositionsNotifiables,
+    }),
+    [boite.lignes, personne, moi.nom, enAttenteDeReponse, propositionsNotifiables],
   )
 
   const alertes = alertesActives(state, today, contexteAlertes).filter((a) => !TYPES_DANS_INBOX.has(a.type))
@@ -1068,6 +1173,7 @@ function CentreActions({ personne }: { personne: string }) {
               {a.action.label}
             </Btn>
           )}
+          {boutonVu(a)}
           <MenuReporter onReporter={(quand) => reporter(a.id, quand)} />
         </>
       ),
@@ -1130,6 +1236,7 @@ function CentreActions({ personne }: { personne: string }) {
             {a.action.label}
           </Btn>
         )}
+        {boutonVu(a)}
         <MenuReporter onReporter={(quand) => reporter(a.id, quand)} />
       </div>
     </div>

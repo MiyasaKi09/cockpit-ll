@@ -64,6 +64,11 @@ const Agenda = lazy(() => import('./modules/Agenda'))
 const Parametres = lazy(() => import('./modules/Parametres'))
 const Planning = lazy(() => import('./modules/Planning'))
 const Documents = lazy(() => import('./modules/Documents'))
+// A1 — la revue des propositions : le moteur (`propositions.ts`,
+// `revuePropositions.ts`) existait sans porte. L'alerte agrégée de l'accueil
+// pointe `#/propositions` : sans ce `case`, le clic retombait sur l'accueil
+// sans un mot.
+const Propositions = lazy(() => import('./modules/Propositions'))
 const AssistantPage = lazy(() => import('./modules/Assistant').then((m) => ({ default: m.AssistantPage })))
 
 // Menu recomposé (audit simplification) : « une page = un objectif ».
@@ -75,6 +80,13 @@ const NAV: { groupe: string; repliable?: boolean; items: { path: string; label: 
     groupe: 'Travail',
     items: [
       { path: '', label: "Aujourd'hui" },
+      // A1 — la revue des détections. Elle a SA ligne et pas seulement
+      // l'alerte de l'accueil : cette alerte est en gravité 1 (une détection
+      // n'est jamais urgente), donc la première à être poussée hors de vue
+      // un jour chargé — et un moteur qu'on oublie d'ouvrir redevient un
+      // moteur sans porte. « IA » dit d'où vient la proposition, pour qu'on
+      // ne la confonde pas avec une proposition d'honoraires.
+      { path: 'propositions', label: 'Propositions IA' },
       { path: 'taches', label: 'Mes tâches' },
       { path: 'projets', label: 'Projets' },
       { path: 'documents', label: 'Documents' },
@@ -331,6 +343,9 @@ export default function App() {
     case 'documents':
       page = <Documents />
       break
+    case 'propositions':
+      page = <Propositions />
+      break
     default:
       page = <Cockpit />
   }
@@ -385,7 +400,16 @@ export default function App() {
                   <a
                     key={it.path}
                     href={`#/${it.path}`}
-                    className={`nav-item ${g.repliable ? 'nav-item-sec' : ''} ${section === it.path || (it.path === 'finance' && ['facturation', 'contrats'].includes(section)) ? 'active' : ''}`}
+                    className={`nav-item ${g.repliable ? 'nav-item-sec' : ''} ${
+                      section === it.path ||
+                      (it.path === 'finance' && ['facturation', 'contrats'].includes(section)) ||
+                      // §3.2 « en passant » : `#/prompts` et `#/routines` affichent
+                      // l'écran Automatisations — sans cette ligne, arriver par un de
+                      // ces liens n'allumait aucune entrée et on se croyait ailleurs
+                      (it.path === 'automatisations' && ['prompts', 'routines'].includes(section))
+                        ? 'active'
+                        : ''
+                    }`}
                   >
                     <span>{it.label}</span>
                     {it.path === '' && nbAlertes > 0 && <span className="nav-count">{nbAlertes}</span>}

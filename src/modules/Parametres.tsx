@@ -43,7 +43,7 @@ import {
   syncEtat,
 } from '../sync'
 import { deconnecterIngestion, lireStatutIngestion, majConfigIngestion, type StatutIngestion } from '../entrants'
-import { SanteContenu } from './Sante'
+import { Branchement, SanteContenu, type Etat } from './Sante'
 import { BienDemarrerContenu } from './BienDemarrer'
 
 const ONGLETS: { id: string; label: string }[] = [
@@ -331,8 +331,17 @@ function CarteEquipe() {
   )
 }
 
-/** Gmail & Agenda en direct — API Google gratuites, lecture seule */
-function CarteSurveillance() {
+/**
+ * Gmail & Agenda en direct — API Google gratuites, lecture seule.
+ *
+ * F2 — ce n'est plus une CARTE mais le RÉGLAGE monté dans la carte de santé
+ * du même branchement (`SanteGoogle`). La page disait chaque état deux fois :
+ * badge « connecté » ici, pastille verte trente lignes plus bas, chacune
+ * renvoyant à l'autre par un lien. Ce qui reste ici : le geste de connexion,
+ * visible, et les champs, repliés dans le `<details>` de la carte. L'état,
+ * lui, se lit une seule fois — sur la pastille.
+ */
+function ReglagesSurveillance() {
   const { state, update } = useStore()
   const sv = state.settings.surveillance || { email: '', clientId: '' }
   const [message, setMessage] = useState('')
@@ -378,16 +387,14 @@ function CarteSurveillance() {
   }
 
   return (
-    <Card titre="Surveillance en direct — Gmail & Agenda (onglet ouvert)">
-      <p className="small" style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', margin: '0 0 8px' }}>
-        {estConnecte() ? <Badge tone="ok">connecté</Badge> : <Badge tone="muted">non connecté</Badge>}
-        <span className="muted">Mails → « À traiter » et agenda sur Aujourd'hui, tant qu'un onglet est ouvert.</span>
-        <span className="spacer" />
+    <>
+      <p className="small" style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', margin: '8px 0' }}>
         {estConnecte() ? (
-          <Btn small onClick={() => { deconnecter(); forcer((x) => x + 1) }}>Déconnecter</Btn>
+          <Btn small onClick={() => { deconnecter(); forcer((x) => x + 1) }}>Déconnecter Google</Btn>
         ) : (
           <Btn small kind="primary" onClick={connecter}>Connecter Google</Btn>
         )}
+        {message && <span className="muted">{message}</span>}
       </p>
       <details open={!sv.clientId.trim()}>
       <summary className="small" style={{ cursor: 'pointer', color: 'var(--accent)' }}>Détails & réglages</summary>
@@ -403,7 +410,6 @@ function CarteSurveillance() {
           <TextInput value={sv.clientId} onChange={(v) => majSv('clientId', v)} placeholder="1234…apps.googleusercontent.com" />
         </Field>
       </div>
-      {message && <p className="small" style={{ marginTop: 8 }}>{message}</p>}
       <details style={{ marginTop: 10 }}>
         <summary className="small" style={{ cursor: 'pointer', color: 'var(--accent)' }}>
           Guide : créer le Client ID Google (une fois, gratuit)
@@ -417,7 +423,7 @@ function CarteSurveillance() {
         </ol>
       </details>
       </details>
-    </Card>
+    </>
   )
 }
 
@@ -488,8 +494,34 @@ function CarteIngestionServeur() {
     }
   }
 
+  // F2 — la pastille dit l'état de CE branchement, dans le même vocabulaire
+  // que ses voisines : vert = ça a réellement tourné (un scan serveur a eu
+  // lieu), creux = branché mais jamais vu tourner d'ici, orange = identifiants
+  // posés sans connexion Gmail, éteint = rien de configuré. Sans elle, elle
+  // était la seule carte de la page dont l'état ne se lisait pas d'un coup
+  // d'œil — et la page promet le contraire dès sa première ligne.
+  const etatIngestion: Etat = !syncActif()
+    ? 'coupe'
+    : statut === null
+      ? 'inconnu'
+      : statut.connecte
+        ? statut.dernierScan
+          ? 'ok'
+          : 'inconnu'
+        : statut.configure
+          ? 'attention'
+          : 'coupe'
+
   return (
-    <Card titre="Ingestion serveur — pièces jointes Gmail → boîte d'arrivée">
+    <Branchement
+      etat={etatIngestion}
+      titre="Ingestion serveur — pièces jointes Gmail → boîte d'arrivée"
+      actions={
+        <Btn small kind="primary" onClick={() => void charger()} disabled={!syncActif()}>
+          Actualiser
+        </Btn>
+      }
+    >
       <p className="small muted" style={{ marginBottom: 10 }}>
         Contrairement à la surveillance ci-dessus (onglet ouvert), l'ingestion tourne <strong>côté
         serveur toutes les 10 minutes</strong> : chaque pièce jointe reçue est proposée dans{' '}
@@ -560,7 +592,8 @@ function CarteIngestionServeur() {
             {statut.connecte && (
               <Btn small onClick={() => void deconnecterGmail()}>Déconnecter Gmail</Btn>
             )}
-            <Btn small kind="ghost" onClick={() => void charger()}>Actualiser</Btn>
+            {/* « Actualiser » est le TEST de ce branchement : il est passé en
+                haut de la carte, à la place où les huit autres portent le leur */}
           </div>
           <details style={{ marginTop: 10 }}>
             <summary className="small" style={{ cursor: 'pointer', color: 'var(--accent)' }}>
@@ -577,12 +610,20 @@ function CarteIngestionServeur() {
         </>
       )}
       {message && <p className="small" style={{ marginTop: 8 }}>{message}</p>}
-    </Card>
+    </Branchement>
   )
 }
 
-/** Synchronisation 2 postes via Supabase (offre gratuite) — opt-in, local-first préservé */
-function CarteSync() {
+/**
+ * Synchronisation 2 postes via Supabase (offre gratuite) — opt-in, local-first
+ * préservé.
+ *
+ * F2, même geste que pour Gmail : le RÉGLAGE se monte dans la carte de santé
+ * du branchement (`SanteSync`), qui porte déjà la pastille, la dernière
+ * synchro et l'erreur éventuelle. On ne garde ici que les gestes — synchroniser,
+ * lien magique, conflit — et les champs, repliés.
+ */
+function ReglagesSync() {
   const {
     state,
     replace,
@@ -703,12 +744,23 @@ function CarteSync() {
   }
 
   return (
-    <Card titre="Synchronisation 2 postes — Supabase">
-      <p className="small" style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', margin: '0 0 8px' }}>
-        {etat.connecte ? (
-          <Badge tone="ok">connecté{etat.email ? ` — ${etat.email}` : ''}</Badge>
-        ) : (
-          <Badge tone="muted">non connecté — données locales</Badge>
+    <>
+      <p className="small" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', margin: '8px 0' }}>
+        <Btn small kind="primary" onClick={connecterEtReconcilier} disabled={occupe}>
+          {etat.connecte ? 'Synchroniser maintenant' : 'Relier / synchroniser'}
+        </Btn>
+        {!etat.connecte && (
+          <Btn small onClick={envoyer} disabled={occupe || !cfg.email}>
+            Envoyer le lien magique
+          </Btn>
+        )}
+        {/* le conflit reste À L'AIR LIBRE : c'est le seul état de ce
+            branchement qui demande une décision, le replier dans un
+            « Détails » le rendrait invisible le jour où il compte */}
+        {etat.conflit && (
+          <Btn small kind="danger" onClick={recupererApresConflit} disabled={occupe}>
+            Récupérer la version partagée
+          </Btn>
         )}
         {etat.connecte &&
           (moi.source === 'session' ? (
@@ -718,13 +770,7 @@ function CarteSync() {
               aucune personne ne porte cette adresse — renseignez-la dans « Équipe & coûts réels »
             </Badge>
           ))}
-        <span className="muted">Les 2 postes voient les mêmes données, sauvegardées hors du navigateur.</span>
-        <span className="spacer" />
-        {etat.connecte ? (
-          <Btn small kind="primary" onClick={connecterEtReconcilier} disabled={occupe}>Synchroniser maintenant</Btn>
-        ) : (
-          <Btn small kind="primary" onClick={connecterEtReconcilier} disabled={occupe}>Relier / synchroniser</Btn>
-        )}
+        {message && <span className="muted">{message}</span>}
       </p>
       <details open={!etat.connecte && !cfg.url}>
       <summary className="small" style={{ cursor: 'pointer', color: 'var(--accent)' }}>Détails & réglages</summary>
@@ -755,29 +801,15 @@ function CarteSync() {
           />
         </Field>
       </div>
-      <div className="toolbar" style={{ marginTop: 8, marginBottom: 0, flexWrap: 'wrap' }}>
-        {etat.connecte ? (
-          <>
-            <Badge tone="ok">connecté{etat.email ? ` — ${etat.email}` : ''}</Badge>
-            <Btn small kind="primary" onClick={connecterEtReconcilier} disabled={occupe}>Synchroniser maintenant</Btn>
-            <Btn small onClick={pousserMaintenant} disabled={occupe} title="Refuse l’envoi si un autre poste a modifié l’espace">Pousser mes données</Btn>
-            {etat.conflit && (
-              <Btn small kind="danger" onClick={recupererApresConflit} disabled={occupe}>
-                Récupérer la version partagée
-              </Btn>
-            )}
-            <Btn small onClick={deconnecter}>Déconnecter</Btn>
-          </>
-        ) : (
-          <>
-            <Btn kind="primary" onClick={envoyer} disabled={occupe || !cfg.email}>Envoyer le lien magique</Btn>
-            <Btn small onClick={connecterEtReconcilier} disabled={occupe || !cfg.url || !cfg.anonKey}>Relier / synchroniser</Btn>
-          </>
-        )}
-        {etat.derniereSync && <span className="small muted">dernière synchro : {fmtDate(etat.derniereSync)}</span>}
-        {message && <span className="small">{message}</span>}
-      </div>
-      {etat.erreur && <p className="small danger-text" style={{ marginTop: 6 }}>Synchro : {etat.erreur}</p>}
+      {/* les gestes RARES seulement : les fréquents (synchroniser, lien
+          magique, conflit) sont au-dessus, à l'air libre. L'état — connecté,
+          dernière synchro, erreur — se lit sur la carte, une seule fois. */}
+      {etat.connecte && (
+        <div className="toolbar" style={{ marginTop: 8, marginBottom: 0, flexWrap: 'wrap' }}>
+          <Btn small onClick={pousserMaintenant} disabled={occupe} title="Refuse l’envoi si un autre poste a modifié l’espace">Pousser mes données</Btn>
+          <Btn small onClick={deconnecter}>Déconnecter</Btn>
+        </div>
+      )}
       <details style={{ marginTop: 10 }}>
         <summary className="small" style={{ cursor: 'pointer', color: 'var(--accent)' }}>
           Guide : créer le projet Supabase gratuit (une fois, ~5 min)
@@ -791,7 +823,7 @@ function CarteSync() {
         </ol>
       </details>
       </details>
-    </Card>
+    </>
   )
 }
 
@@ -1549,13 +1581,17 @@ export default function Parametres({ ongletInitial = 'agence' }: { ongletInitial
         </>
       )}
 
+      {/* F2 — UNE carte par branchement. L'onglet montrait la carte de réglage
+          ET la carte de santé du même branchement, chacune avec son badge et
+          un lien vers l'autre : l'état était dit deux fois, et « est-ce que ça
+          marche ? » se posait deux fois par écran. Les réglages sont désormais
+          montés DANS la carte qui porte la pastille, le test et le journal. */}
       {onglet === 'branchements' && (
-        <>
-      <CarteSurveillance />
-      <CarteSync />
-      <CarteIngestionServeur />
-      <SanteContenu />
-        </>
+        <SanteContenu
+          reglagesGoogle={<ReglagesSurveillance />}
+          reglagesSync={<ReglagesSync />}
+          carteIngestion={<CarteIngestionServeur />}
+        />
       )}
 
       {onglet === 'demarrer' && <BienDemarrerContenu />}

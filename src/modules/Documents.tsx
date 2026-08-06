@@ -12,6 +12,7 @@ import {
   Badge,
   Btn,
   Card,
+  CopyBtn,
   EmptyState,
   Field,
   LienGmail,
@@ -48,6 +49,7 @@ import {
   ARBORESCENCE,
   DOSSIER_ENTRANTS,
   choisirRacine,
+  lireFichierDuDrive,
   lireRacine,
   listerFichiersRacine,
   nomConforme,
@@ -55,6 +57,7 @@ import {
   rangerFichier,
   supprimerFichierRacine,
   supporteFS,
+  type CauseEchecOuverture,
   type FSDirHandle,
 } from '../fsdrive'
 import { LIBELLES_PHASES, PHASES_ORDRE } from '../miqcp'
@@ -132,6 +135,117 @@ function ChampPhase({
 
 /** la valeur du formulaire (chaîne) rangée telle que l'état l'attend */
 const phaseChoisie = (v: string): PhaseCode | null => (v ? (v as PhaseCode) : null)
+
+// ============================================================
+// RELIRE UNE PIÈCE (constat T7) — le geste le plus fréquent du
+// domaine documentaire finissait hors de l'outil : le registre
+// AFFICHAIT le chemin Drive, et rien ne l'ouvrait. On recopiait le
+// chemin de tête dans l'explorateur.
+//
+// La racine persistée sait déjà lire (`fsdrive.ts`) : le bouton n'ajoute
+// aucune notion, il branche la lecture sur le chemin déjà gardé par le
+// registre. Trois façons d'échouer, trois messages DIFFÉRENTS — le
+// dossier pas branché et le fichier déplacé n'appellent pas le même
+// geste, et un « erreur » unique ferait chercher au mauvais endroit.
+//
+// LIMITE NAVIGATEUR ACTÉE (§4.12 du plan d'usage) : `showDirectoryPicker`
+// n'existe ni sur Safari iOS ni sur Firefox Android. Là, on ne tente
+// rien : le bouton laisse la place à la copie du chemin, seul geste
+// honnête sur ces navigateurs.
+// ============================================================
+
+/** la racine du Drive lue une fois — le même branchement que la boîte
+ *  d'arrivée, partagé par la fiche et le registre */
+function useRacineDrive() {
+  const [racine, setRacine] = useState<FSDirHandle | null>(null)
+  useEffect(() => {
+    if (supporteFS) void lireRacine().then(setRacine)
+  }, [])
+  return [racine, setRacine] as const
+}
+
+/** ouvre la pièce dans un nouvel onglet. L'URL d'objet se révoque en
+ *  différé : la révoquer aussitôt couperait l'onglet en train de charger.
+ *  Rend `false` si le navigateur a bloqué l'ouverture (bloqueur de fenêtres). */
+function ouvrirDansOnglet(fichier: File): boolean {
+  const url = URL.createObjectURL(fichier)
+  const onglet = window.open(url, '_blank')
+  if (onglet) onglet.opener = null
+  setTimeout(() => URL.revokeObjectURL(url), 60_000)
+  return Boolean(onglet)
+}
+
+const MESSAGE_ECHEC: Record<CauseEchecOuverture, (chemin: string) => string> = {
+  navigateur: () =>
+    "Ce navigateur ne permet pas d'ouvrir un dossier local (il faut Chrome ou Edge). Le chemin se copie et la pièce s'ouvre depuis le Drive.",
+  racine: () =>
+    "Le dossier Drive n'est pas branché sur ce poste : sans lui, l'outil ne peut pas relire la pièce. Recliquez sur « Ouvrir » et désignez le dossier Google Drive du poste.",
+  permission: () =>
+    "Le navigateur a refusé l'accès au dossier Drive — recliquez sur « Ouvrir » et acceptez sa demande.",
+  introuvable: (chemin) =>
+    `Introuvable dans le Drive : « ${chemin} ». La pièce a été déplacée, renommée ou supprimée depuis son classement — le registre, lui, en garde la trace.`,
+}
+
+/** « Ouvrir » : chemin du registre → handle → `getFile()` → nouvel onglet.
+ *  Sans racine branchée, le clic PROPOSE de la brancher (le sélecteur natif
+ *  exige un geste humain : il est appelé directement dans le clic).
+ *
+ *  La racine vient de l'écran, jamais d'une lecture par bouton : le registre
+ *  affiche des dizaines de lignes, et autant d'ouvertures d'IndexedDB. */
+function BtnOuvrirPiece({
+  chemin,
+  racine,
+  onRacine,
+  small,
+  label = 'Ouvrir',
+}: {
+  chemin: string
+  racine: FSDirHandle | null
+  onRacine: (h: FSDirHandle) => void
+  small?: boolean
+  label?: string
+}) {
+  const [occupe, setOccupe] = useState(false)
+
+  if (!supporteFS) return null
+
+  const ouvrir = async () => {
+    setOccupe(true)
+    try {
+      let h = racine
+      if (!h) {
+        h = await choisirRacine()
+        if (!h) {
+          toast(MESSAGE_ECHEC.racine(chemin), { tone: 'danger' })
+          return
+        }
+        onRacine(h)
+      }
+      const r = await lireFichierDuDrive(h, chemin)
+      if (!r.ok) {
+        toast(MESSAGE_ECHEC[r.cause](chemin), { tone: r.cause === 'introuvable' ? 'warn' : 'danger' })
+        return
+      }
+      if (!ouvrirDansOnglet(r.fichier))
+        toast("Le navigateur a bloqué l'ouverture d'un onglet — autorisez les fenêtres pour ce site.", {
+          tone: 'warn',
+        })
+    } finally {
+      setOccupe(false)
+    }
+  }
+
+  return (
+    <Btn
+      small={small}
+      disabled={occupe}
+      onClick={() => void ouvrir()}
+      title={racine ? `Ouvrir ${chemin}` : `Désigner le dossier Drive, puis ouvrir ${chemin}`}
+    >
+      {occupe ? 'Ouverture…' : label}
+    </Btn>
+  )
+}
 
 // ============================================================
 // Libellés composés des deux Selects du classement (S4). Un code nu
@@ -949,6 +1063,7 @@ function CarteAVerifier() {
 
 function ModalDocument({ doc: docInitial, onClose }: { doc: DocumentRecord; onClose: () => void }) {
   const { state, update } = useStore()
+  const [racine, setRacine] = useRacineDrive()
   // relu dans l'état : la fiche doit montrer la correction faite ici même
   const doc = state.registreDocuments.find((d) => d.id === docInitial.id) || docInitial
   const projet = state.projets.find((p) => p.id === doc.projetId)
@@ -993,6 +1108,26 @@ function ModalDocument({ doc: docInitial, onClose }: { doc: DocumentRecord; onCl
           </tr>
         ))}
       </Table>
+      {/* relire la pièce SANS quitter l'outil (T7) — et, là où l'API n'existe
+          pas, le seul geste honnête : emporter le chemin */}
+      {doc.cheminDrive && (
+        <p className="small" style={{ margin: '10px 0 0', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          {supporteFS ? (
+            <>
+              <BtnOuvrirPiece chemin={doc.cheminDrive} racine={racine} onRacine={setRacine} label="Ouvrir le fichier" />
+              {!racine && <span className="muted">— le dossier Drive sera demandé au premier clic.</span>}
+            </>
+          ) : (
+            <>
+              <CopyBtn text={doc.cheminDrive} label="Copier le chemin" small kind="default" />
+              <span className="muted">
+                — ce navigateur ne permet pas d'ouvrir un dossier local (il faut Chrome ou Edge) :
+                collez le chemin dans le Drive.
+              </span>
+            </>
+          )}
+        </p>
+      )}
       <div className="form-row" style={{ marginTop: 8 }}>
         <ChampPhase
           value={doc.phase || ''}
@@ -1045,6 +1180,9 @@ function ModalDocument({ doc: docInitial, onClose }: { doc: DocumentRecord; onCl
 
 function CarteTous({ docId }: { docId?: string }) {
   const { state } = useStore()
+  // une seule lecture de la racine pour tout le registre — le bouton
+  // « Ouvrir » de chaque ligne s'en sert, aucun ne la relit
+  const [racine, setRacine] = useRacineDrive()
   const [recherche, setRecherche] = useState('')
   const [filtreProjet, setFiltreProjet] = useState('')
   const [filtreCategorie, setFiltreCategorie] = useState('')
@@ -1137,7 +1275,16 @@ function CarteTous({ docId }: { docId?: string }) {
                   >
                     {d.titre}
                   </a>
-                  {d.cheminDrive && <div className="small muted mono">{d.cheminDrive}</div>}
+                  {d.cheminDrive && (
+                    <div className="small muted" style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                      <span className="mono">{d.cheminDrive}</span>
+                      {/* le geste manquant du registre : relire la pièce sans
+                          recopier son chemin dans l'explorateur (T7) */}
+                      <span onClick={(ev) => ev.stopPropagation()}>
+                        <BtnOuvrirPiece chemin={d.cheminDrive} racine={racine} onRacine={setRacine} small />
+                      </span>
+                    </div>
+                  )}
                   {d.source === 'gmail' && (
                     <div className="small">
                       {/* `muet` : dans un tableau de tout le registre, dire

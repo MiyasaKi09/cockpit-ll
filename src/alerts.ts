@@ -151,11 +151,12 @@ function alertesDesMessages(ctx: ContexteAlertes, today: string): Alerte[] {
       gravite: 1,
       titre: `${enAttente} proposition${enAttente > 1 ? 's' : ''} à revoir`,
       detail: 'Détections issues des messages : à accepter, modifier ou ignorer.',
-      // même correction que ci-dessus : `#/messages/propositions` n'existe
-      // pas. L'écran de revue est un livrable à part (lot A) ; d'ici là on
-      // dépose sur le registre documentaire, seul écran qui montre ce qui
-      // est arrivé et n'a pas encore été rangé.
-      lien: '#/documents',
+      // L'écran de revue EXISTE désormais (lot A, `src/modules/Propositions.tsx`)
+      // et l'alerte y mène directement. Elle a pointé `#/messages/propositions`
+      // — une route qui n'a jamais existé — puis, faute d'écran, le registre
+      // documentaire : deux destinations qui ne contenaient pas ce dont
+      // l'alerte parlait.
+      lien: '#/propositions',
       pour: ctx.moi || undefined,
     })
   }
@@ -220,7 +221,13 @@ export function computeAlertes(state: AppState, today: string, contexte?: Contex
         gravite: retard > 15 ? 3 : 2,
         titre: `Impayé : facture ${f.numero || f.id} en retard de ${retard} j`,
         detail: `${nomProjet(state, f.projetId)} · ${f.libelle} · ${fmtMoney(f.montantHT)} HT · échéance ${fmtDate(encaissementPrevu(f))}`,
-        lien: '#/facturation',
+        // T6 — l'alerte portait sur UNE facture et déposait devant la liste
+        // entière : il fallait la retrouver à la main, tous les jours, sur
+        // l'alerte la plus fréquente du fil. La route profonde de recherche
+        // existe déjà et se dépose dans le champ de la liste
+        // (`Facturation.tsx`, route `#/facturation/chercher/<terme>`) : le
+        // numéro voyage dans le lien, la ligne visée est la seule affichée.
+        lien: `#/facturation/chercher/${encodeURIComponent(f.numero || f.id)}`,
         date: encaissementPrevu(f),
       })
     }
@@ -238,7 +245,15 @@ export function computeAlertes(state: AppState, today: string, contexte?: Contex
       gravite: dj <= 3 ? 3 : 2,
       titre: `Situation à vérifier — ${sit.entreprise} (${fmtMois(sit.mois)})`,
       detail: `${nomProjet(state, sit.projetId)} · ${sit.montantMoisHT !== null ? fmtMoney(sit.montantMoisHT) + ' HT · ' : ''}limite de vérification ${fmtDate(limite)}${sit.confiance != null ? ` · confiance routine ${Math.round(sit.confiance * 100)} %` : ''}`,
-      lien: '#/situations',
+      // T6 — l'identifiant de la situation voyage dans le lien. L'onglet
+      // « À vérifier » est déjà la bonne destination ; ce qui manquait,
+      // c'est DE QUELLE situation on parle quand il y en a huit. Forme
+      // retenue : `#/situations/<onglet>/<id>` — l'onglet en premier, comme
+      // la navigation par onglets l'écrit déjà, l'élément ensuite. Elle ne
+      // peut pas se confondre avec la route de recherche
+      // (`#/situations/<onglet>/chercher/<terme>`) : aucun identifiant ne
+      // vaut « chercher ».
+      lien: `#/situations/verifier/${sit.id}`,
       date: limite,
       action: { kind: 'valider_situation', refId: sit.id, label: '✓ Valider' },
     })
@@ -360,7 +375,10 @@ export function computeAlertes(state: AppState, today: string, contexte?: Contex
       gravite: 2,
       titre: `Retenue de garantie à libérer — ${m.entreprise} (${m.lot})`,
       detail: `${nomProjet(state, m.projetId)} · ${fmtMoney(rg.retenueHT)} retenus · réception le ${fmtDate(rg.dateReception)}${rg.caution ? ' · caution de substitution' : ''}`,
-      lien: '#/situations',
+      // l'onglet des retenues de garantie existe depuis le câblage des
+      // sous-routes : déposer devant la liste des situations reçues, c'est
+      // déposer devant tout sauf la question posée
+      lien: '#/situations/rg',
       date: rg.dateLevee || undefined,
     })
   }
@@ -492,7 +510,11 @@ export function computeAlertes(state: AppState, today: string, contexte?: Contex
         dj < 0
           ? `Décennale expirée — ${a.nom}`
           : `Décennale de ${a.nom} expire le ${fmtDate(a.decennaleFin)}`,
-      lien: '#/ressources',
+      // T6 — la fiche artisan est adressable (`Ressources.tsx`, route
+      // `#/ressources/artisan/<id>`) : l'alerte y mène directement, au lieu
+      // de déposer devant l'annuaire entier où il faut retrouver le nom
+      // qu'on vient de lire dans le titre.
+      lien: `#/ressources/artisan/${a.id}`,
       date: a.decennaleFin,
     })
   }
@@ -539,6 +561,20 @@ export function alertesActives(state: AppState, today: string, contexte?: Contex
  *  que la lecture, contrairement à une facture qu'on émet ou une situation
  *  qu'on vérifie */
 const TYPES_MARQUABLES_VUS = new Set(['mail_a_traiter', 'reponse_attendue', 'proposition_ia'])
+
+/**
+ * L'écran peut-il proposer « Vu » sur cette alerte ?
+ *
+ * `alertesActives` FILTRE déjà `settings.vus` ; personne ne l'écrivait, si
+ * bien que le geste n'existait pas et que le champ était du code mort. Un
+ * écran qui devinerait la liste des types marquables la ferait diverger de
+ * celle qui filtre, et le bouton s'afficherait sur des alertes qu'il ne
+ * ferait pas taire — le pire des deux mondes. Elle se demande donc, elle ne
+ * se recopie pas.
+ */
+export function estMarquableVu(type: Alerte['type']): boolean {
+  return TYPES_MARQUABLES_VUS.has(type)
+}
 
 // ------------------------------------------------------------
 // Les relances proposées depuis le fil — un BROUILLON, jamais un envoi

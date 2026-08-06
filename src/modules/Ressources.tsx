@@ -1,12 +1,25 @@
-// Matériauthèque & annuaire d'artisans — fiches en dur.
-// Artisans : lots, zone, décennale surveillée. Matériaux :
+// Matériauthèque & annuaire des entreprises — fiches en dur.
+// Entreprises : lots, zone, décennale surveillée. Matériaux :
 // coût, lien FDES (INIES) — l'argument carbone dès l'esquisse.
 // Le tagging stylistique se fait par lots via un pré-prompt ;
 // le retour JSON s'importe ici.
+//
+// UNE IDENTITÉ, PAS DEUX (constat R2). Cet écran éditait `state.artisans`
+// pendant que le rattachement, la fiche transverse et les factures
+// fournisseurs lisaient `state.entreprises` — resynchronisées à la seule
+// amorce du chargement (`store.tsx`). Deux vérités possibles pour la même
+// entreprise, et personne pour dire laquelle regarder.
+// Depuis, cette fiche est l'ÉDITEUR de l'entreprise canonique : le
+// rapprochement passe par `entrepriseDe` (l'autorité de `entreprise.ts` —
+// identifiant d'abord, nom plié en repli), l'enregistrement écrit les DEUX
+// (contact, e-mail, téléphone, décennale, lots, zone), et l'affichage lit
+// la canonique. Le mot « artisan » ne reste que dans les identifiants et la
+// route historique `#/ressources/artisan/<id>`, que les alertes pointent.
 
 import { useMemo, useState } from 'react'
-import type { Artisan, Materiau } from '../types'
+import type { Artisan, Entreprise, Materiau } from '../types'
 import { useStore } from '../store'
+import { entrepriseDe } from '../entreprise'
 import { assemble } from '../prompts'
 import { ligneActivable,
   Badge,
@@ -40,6 +53,66 @@ function projetsArtisan(state: ReturnType<typeof useStore>['state'], id: string,
   return [...new Set([...parRattachement, ...parMarche])].sort()
 }
 
+// ------------------------------------------------------------------
+// L'entreprise canonique derrière la fiche d'annuaire (constat R2)
+// ------------------------------------------------------------------
+
+/** la fiche d'annuaire VUE à travers l'entreprise canonique : contact,
+ *  e-mail, téléphone, décennale, lots et zone s'y lisent, parce que c'est
+ *  là qu'ils s'écrivent depuis cet écran.
+ *
+ *  Le repli sur la valeur de l'artisan ne sert qu'aux états anciens dont
+ *  l'amorce n'aurait rien recopié : il ne crée pas de seconde vérité, il
+ *  évite d'effacer à l'écran une donnée saisie avant le registre. */
+function vueCanonique(state: ReturnType<typeof useStore>['state'], a: Artisan): Artisan {
+  const e = entrepriseDe(state, a.entrepriseId || a.nom)
+  if (!e) return a
+  return {
+    ...a,
+    entrepriseId: e.id,
+    lots: e.lots.length > 0 ? e.lots : a.lots,
+    zone: e.zone || a.zone,
+    contactNom: e.contactNom || a.contactNom,
+    contactEmail: e.contactEmail || a.contactEmail,
+    tel: e.tel || a.tel,
+    decennaleFin: e.decennaleFin ?? a.decennaleFin ?? null,
+  }
+}
+
+/** enregistre la fiche : l'entreprise canonique D'ABORD (c'est elle que
+ *  lisent le rattachement, la fiche transverse et les factures
+ *  fournisseurs), la fiche d'annuaire ensuite, du même geste et avec le
+ *  même contenu. Une entreprise inconnue du registre y entre ici — avec
+ *  son identifiant posé sur la fiche, de sorte que le rapprochement ne
+ *  dépende plus jamais de l'orthographe du nom. */
+function enregistrerArtisan({ state, update, replace }: Magasin, a: Artisan): void {
+  const snap = state
+  update((d) => {
+    const existante = entrepriseDe(d, a.entrepriseId || a.nom)
+    const e: Entreprise = existante || { id: uid('ent'), raisonSociale: a.nom, domaines: [], lots: [] }
+    if (!existante) d.entreprises.push(e)
+    e.raisonSociale = a.nom
+    e.lots = [...a.lots]
+    e.zone = a.zone
+    e.contactNom = a.contactNom
+    e.contactEmail = a.contactEmail
+    e.tel = a.tel
+    e.decennaleFin = a.decennaleFin ?? null
+    // domaine e-mail : c'est par lui que la cascade rattache un mail à
+    // l'entreprise — il s'ajoute, il ne remplace pas les domaines connus
+    const domaine = a.contactEmail?.split('@')[1]
+    if (domaine && !e.domaines.includes(domaine)) e.domaines.push(domaine)
+    const fiche: Artisan = { ...a, entrepriseId: e.id }
+    const i = d.artisans.findIndex((x) => x.id === a.id)
+    if (i >= 0) d.artisans[i] = fiche
+    else d.artisans.push(fiche)
+  })
+  toast(`${a.nom} enregistrée — contact, décennale et lots à jour partout (marchés, rattachement, factures).`, {
+    tone: 'ok',
+    undo: () => replace(snap),
+  })
+}
+
 /** liens inverses : projets où le matériau est employé */
 function projetsMateriau(state: ReturnType<typeof useStore>['state'], id: string): string[] {
   return state.projets.filter((p) => p.materiauxIds.includes(id)).map((p) => p.id).sort()
@@ -62,19 +135,22 @@ async function supprimerArtisan({ state, update, replace }: Magasin, a: Artisan)
   const snap = state
   const ok = await confirmer({
     message:
-      `Supprimer ${a.nom} de l'annuaire ?` +
+      `Retirer ${a.nom} de l'annuaire ?` +
       (projets.length > 0
-        ? `\n\nIl est rattaché à ${projets.length} projet(s) : ${projets.join(', ')} — le rattachement sera retiré. Les marchés et les notes de chantier déjà signés, eux, restent.`
+        ? `\n\nElle est rattachée à ${projets.length} projet(s) : ${projets.join(', ')} — le rattachement sera retiré. Les marchés et les notes de chantier déjà signés, eux, restent.`
         : ''),
     danger: true,
-    confirmerLabel: 'Supprimer',
+    confirmerLabel: 'Retirer',
   })
   if (!ok) return false
   update((d) => {
     d.artisans = d.artisans.filter((x) => x.id !== a.id)
     for (const pr of d.projets) pr.artisanIds = pr.artisanIds.filter((x) => x !== a.id)
   })
-  toast('Artisan supprimé.', { undo: () => replace(snap) })
+  // l'entreprise canonique, elle, RESTE : des marchés, des factures et des
+  // documents la référencent par identifiant — la retirer d'ici les rendrait
+  // orphelins pour une décision qui ne portait que sur l'annuaire
+  toast("Entreprise retirée de l'annuaire.", { undo: () => replace(snap) })
   return true
 }
 
@@ -169,7 +245,7 @@ function FicheMateriauPage({ id }: { id: string }) {
   if (!m)
     return (
       <Page titre="Matériau introuvable">
-        <Card><EmptyState>Fiche inconnue. <a href="#/ressources">← Matériaux & artisans</a></EmptyState></Card>
+        <Card><EmptyState>Fiche inconnue. <a href="#/ressources/materiaux">← Tous les matériaux</a></EmptyState></Card>
       </Page>
     )
 
@@ -241,15 +317,19 @@ function FicheMateriauPage({ id }: { id: string }) {
 
 function FicheArtisanPage({ id }: { id: string }) {
   const magasin = useStore()
-  const { state, update } = magasin
+  const { state } = magasin
   const today = useToday()
   const [edition, setEdition] = useState(false)
-  const a = state.artisans.find((x) => x.id === id)
+  const fiche = state.artisans.find((x) => x.id === id)
+  // ce que la fiche montre est ce que lisent les autres écrans : l'entreprise
+  // canonique. Sans cela, la décennale affichée ici et celle de l'alerte
+  // pourraient différer sans que rien ne le dise.
+  const a = fiche ? vueCanonique(state, fiche) : undefined
 
   if (!a)
     return (
-      <Page titre="Artisan introuvable">
-        <Card><EmptyState>Fiche inconnue. <a href="#/ressources">← Matériaux & artisans</a></EmptyState></Card>
+      <Page titre="Entreprise introuvable">
+        <Card><EmptyState>Fiche inconnue. <a href="#/ressources">← Annuaire</a></EmptyState></Card>
       </Page>
     )
 
@@ -275,7 +355,7 @@ function FicheArtisanPage({ id }: { id: string }) {
       }
     >
       <p className="small" style={{ marginTop: -10, marginBottom: 14 }}>
-        <a href="#/ressources">← Tous les artisans</a>
+        <a href="#/ressources">← Toutes les entreprises</a>
       </p>
       <div className="grid2">
         <Card titre="Fiche">
@@ -287,7 +367,7 @@ function FicheArtisanPage({ id }: { id: string }) {
             <dt>Notes de chantier</dt><dd style={{ whiteSpace: 'pre-wrap' }}>{a.notes || '—'}</dd>
           </dl>
         </Card>
-        <Card titre={`Présent sur ${projets.length} projet${projets.length > 1 ? 's' : ''}`}>
+        <Card titre={`Présente sur ${projets.length} projet${projets.length > 1 ? 's' : ''}`}>
           {projets.length === 0 ? (
             <EmptyState>Aucun projet ni marché rattaché pour l'instant.</EmptyState>
           ) : (
@@ -317,10 +397,7 @@ function FicheArtisanPage({ id }: { id: string }) {
           creation={false}
           onClose={() => setEdition(false)}
           onSave={(maj) => {
-            update((d) => {
-              const i = d.artisans.findIndex((x) => x.id === maj.id)
-              if (i >= 0) d.artisans[i] = maj
-            })
+            enregistrerArtisan(magasin, maj)
             setEdition(false)
           }}
         />
@@ -396,35 +473,35 @@ function artisanVide(): Artisan {
 
 function OngletArtisans() {
   const magasin = useStore()
-  const { state, update } = magasin
+  const { state } = magasin
   const today = useToday()
   const [recherche, setRecherche] = useState('')
   const [filtreLot, setFiltreLot] = useState('')
   const [edition, setEdition] = useState<Artisan | null>(null)
   const [creation, setCreation] = useState(false)
 
+  // la liste montre les valeurs canoniques : les lots d'un marché signé
+  // apparaissent donc ici sans avoir été retapés
+  const fiches = useMemo(() => state.artisans.map((a) => vueCanonique(state, a)), [state])
+
   const lots = useMemo(
-    () => [...new Set(state.artisans.flatMap((a) => a.lots))].sort((a, b) => a.localeCompare(b)),
-    [state.artisans],
+    () => [...new Set(fiches.flatMap((a) => a.lots))].sort((a, b) => a.localeCompare(b)),
+    [fiches],
   )
 
   const artisans = useMemo(() => {
     const q = fold(recherche)
-    return state.artisans
+    return fiches
       .filter((a) => {
         if (filtreLot && !a.lots.includes(filtreLot)) return false
         if (!q) return true
         return fold([a.nom, a.zone, a.notes, ...(a.lots || [])].filter(Boolean).join(' ')).includes(q)
       })
       .sort((a, b) => a.nom.localeCompare(b.nom))
-  }, [state.artisans, recherche, filtreLot])
+  }, [fiches, recherche, filtreLot])
 
   const enregistrer = (a: Artisan) => {
-    update((d) => {
-      const i = d.artisans.findIndex((x) => x.id === a.id)
-      if (i >= 0) d.artisans[i] = a
-      else d.artisans.push(a)
-    })
+    enregistrerArtisan(magasin, a)
     setEdition(null)
     setCreation(false)
   }
@@ -440,13 +517,13 @@ function OngletArtisans() {
         />
         <span className="spacer" />
         <Btn kind="primary" onClick={() => setCreation(true)}>
-          Nouvel artisan
+          Nouvelle entreprise
         </Btn>
       </div>
 
       <Card>
         {artisans.length === 0 ? (
-          <EmptyState>Aucun artisan — l'annuaire se remplit chantier après chantier.</EmptyState>
+          <EmptyState>Aucune entreprise — l'annuaire se remplit chantier après chantier.</EmptyState>
         ) : (
           <Table head={['Entreprise', 'Lots', 'Projets', 'Zone', 'Fourchette', 'Décennale', 'Contact', 'Notes', '']}>
             {artisans.map((a) => (
@@ -475,7 +552,7 @@ function OngletArtisans() {
                   <RowMenu
                     items={[
                       {
-                        label: "Supprimer l'artisan",
+                        label: "Retirer de l'annuaire",
                         danger: true,
                         onClick: () => void supprimerArtisan(magasin, a),
                       },
@@ -518,12 +595,16 @@ function FicheArtisan({
   const [lots, setLots] = useState(initiale.lots.join(', '))
 
   return (
-    <Modal titre={creation ? 'Nouvel artisan' : a.nom} onClose={onClose} large>
+    <Modal titre={creation ? 'Nouvelle entreprise' : a.nom} onClose={onClose} large>
+      <p className="small muted" style={{ marginTop: 0 }}>
+        Ces champs sont ceux de l'entreprise elle-même : ce qui est écrit ici se lit sur ses marchés,
+        sur sa fiche transverse et au rattachement des mails — une seule saisie, partout.
+      </p>
       <div className="form-row">
-        <Field label="Entreprise">
+        <Field label="Raison sociale">
           <TextInput value={a.nom} onChange={(v) => setA({ ...a, nom: v })} />
         </Field>
-        <Field label="Lots (virgules)">
+        <Field label="Lots (virgules)" hint="les lots des marchés signés s'y ajoutent d'eux-mêmes">
           <TextInput value={lots} onChange={setLots} placeholder="Gros œuvre, Maçonnerie" />
         </Field>
       </div>

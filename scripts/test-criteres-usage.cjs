@@ -198,10 +198,16 @@ function boitesNatives(chemin) {
 // (gabarit `#/…/${id}`) ou une URL externe (le fil Gmail).
 
 const DEPOSENT_EN_HAUT_DUNE_LISTE = new Set([
-  // A4 du plan : la facture en retard mène à la liste, pas à la facture.
-  // La liste est désormais triée par émission décroissante (action 21), donc
-  // la ligne est en tête — mais ce n'est pas la même chose que la viser.
-  'facture_retard',
+  // ─── RETIRÉE le 06/08/2026 : `facture_retard` ────────────────────────
+  // C'est la bonne nouvelle que le commentaire ci-dessus annonçait, et
+  // l'inventaire est tombé dessus comme prévu. L'alerte d'impayé — la plus
+  // fréquente du fil — déposait devant la liste entière : il fallait
+  // retrouver la facture à la main, tous les jours. Le lot A lui a donné
+  // `#/facturation/chercher/${numero}` (alerts.ts), qui se dépose dans le
+  // champ de recherche de la liste : la ligne visée est la seule affichée.
+  // La destination existait depuis la semaine passée ; c'est le lien qui
+  // manquait. Un seul chemin, aucune route nouvelle.
+  //
   // « contrat à revoir » : `#/agenda/contrats/${id}` EXISTE depuis le
   // câblage des routes ; l'alerte ne porte pas encore l'identifiant.
   'contrat_renouvellement',
@@ -292,7 +298,10 @@ function alertesDeclarees() {
     atterrissent.length >= 7,
     'la majorité des alertes rouges portent déjà leur geste ou leur identifiant — c’est l’acquis que l’inventaire protège',
   )
-  for (const type of ['echeance_rendu', 'situation_a_verifier', 'visa_a_rendre', 'cr_en_attente', 'note_honoraires_manquante']) {
+  // `facture_retard` vient de rejoindre cette liste : elle sortait de
+  // l'inventaire ci-dessus, elle entre ici. Un acquis qui n'est pas nommé se
+  // reperd sans bruit — et celui-ci est le plus fréquent du fil.
+  for (const type of ['echeance_rendu', 'situation_a_verifier', 'visa_a_rendre', 'cr_en_attente', 'note_honoraires_manquante', 'facture_retard']) {
     assert.ok(
       atterrissent.includes(type),
       `l’alerte « ${type} » atterrissait sur son élément : elle ne doit pas redevenir un dépôt en haut de liste`,

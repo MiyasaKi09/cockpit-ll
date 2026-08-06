@@ -78,6 +78,9 @@ jobs:
       - name: Payment certificate matches the real document, frozen once issued
         run: npm run test:certificat
 
+      - name: Situation statement admits it is recomputed; the certificate never drifts
+        run: npm run test:decompte
+
       - name: Contract advance payment is enterable and reaches the certificate
         run: npm run test:avance-forfaitaire
 
@@ -201,6 +204,9 @@ jobs:
       - name: Proposal review creates and signs, never transforms
         run: npm run test:revue-propositions
 
+      - name: Proposal review screen never accepts without a click, aggregated alert lights up
+        run: npm run test:ecran-propositions
+
       - name: Member departure transfers instead of orphaning
         run: npm run test:depart
 
@@ -233,6 +239,9 @@ jobs:
 
       - name: No dead internal links, no native browser dialogs in screens
         run: npm run test:criteres-usage
+
+      - name: One authority per notion — canonical contractor, single bank import keeping the balance
+        run: npm run test:autorite-unique
 
       - name: Finance entry screen reuses existing selectors, nine destinations kept
         run: npm run test:finance-essentiel

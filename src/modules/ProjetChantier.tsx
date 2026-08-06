@@ -2,7 +2,7 @@
 // réunions de chantier avec l'assistant CR (audio → transcription
 // sans API → CR au style de l'agence → relecture → diffusion).
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type {
   DesordreGPA,
   EvenementMarche,
@@ -20,16 +20,28 @@ import type {
 import { useStore } from '../store'
 import { useMoi } from '../moi'
 import { LIBELLE_GARANTIE, garantieDuMarche } from '../derive'
+// C1/C2 — l'avancement d'un lot et le prédicat « entreprise à confirmer »
+// ont DÉJÀ leur autorité (src/chantier.ts) : le bloc de préparation de
+// réunion les importe. Les recopier ici donnerait deux chiffres possibles
+// pour la même question — le défaut n° 1 de l'audit (constat R3).
+import { avancementLot, tacheAConfirmer } from '../chantier'
 // R2 — le rapprochement nom → entreprise canonique a DÉJÀ son autorité
 // (src/entreprise.ts) : la datalist du marché la réutilise au lieu d'en
 // écrire une seconde, sinon « Martin BTP » et « SARL Martin BTP »
 // continueraient de scinder la fiche transverse en silence.
 import { entrepriseDe, marchesDe } from '../entreprise'
+// C1 — le gabarit du dossier de séance vit dans src/pdf.ts, avec les autres
+// impressions (facture, certificat, revue, décompte). Import STATIQUE : c'est
+// le compilateur qui vérifie alors que l'écran et le gabarit parlent de la
+// même fonction — l'import dynamique typé par `unknown` qui tenait la place
+// en attendant sa livraison ne vérifiait rien.
+import { ouvrirPreparationReunionPDF } from '../pdf'
 import { serieEnRetard } from '../indicesInsee'
 import {
   DELAI_VISA_DEFAUT,
   LIBELLE_STATUT_VISA,
   echeanceVisa,
+  visasEnAttente,
   visasEnRetard,
   visasSousHuitaine,
 } from '../visas'
@@ -2143,6 +2155,260 @@ function participantsParDefaut(state: ReturnType<typeof useStore>['state'], p: P
   return lignes.filter(Boolean).join('\n')
 }
 
+/** C1 — le gabarit d'impression (`ouvrirPreparationReunionPDF`, src/pdf.ts)
+ *  est LIVRÉ et importé en tête de ce fichier.
+ *
+ *  Aucun chiffre ne voyage d'ici vers l'impression : le gabarit RE-DÉRIVE les
+ *  siens des mêmes sélecteurs que ce bloc (`avancementLot`,
+ *  `penaliteEncourue` + `prolongationDelai`, `visasEnAttente` /
+ *  `visasEnRetard`, `desordresOuverts`, `tacheAConfirmer`). Deux lectures de
+ *  la même autorité ne peuvent pas diverger ; deux calculs, si. Le filtre
+ *  « hors phase » ci-dessous est le même des deux côtés : s'il bouge ici, il
+ *  bouge là-bas (le commentaire jumeau est dans src/pdf.ts). */
+
+/** C1 — « Préparer la réunion » : le symétrique AMONT de l'assistant de CR,
+ *  qui n'existait qu'en aval.
+ *
+ *  Préparer une réunion de chantier coûtait douze gestes sur quatre écrans et
+ *  une synthèse faite de tête (parcours 6 de l'audit d'usage) alors que
+ *  CHAQUE brique était déjà calculée et testée ailleurs. Ce bloc n'en
+ *  recalcule aucune : il ASSEMBLE les sélecteurs qui font autorité, lot par
+ *  lot — l'ordre du jour d'une réunion de chantier se tient lot par lot.
+ *
+ *  Il n'écrit rien et ne décide rien : les gestes (viser, appliquer une
+ *  pénalité, confirmer une entreprise, lever un désordre) restent chacun
+ *  dans sa carte. C'est une page à lire avant d'entrer en séance. */
+function PreparationReunion({
+  projet: p,
+  prochaine,
+}: {
+  projet: Projet
+  prochaine: ReunionChantier | null
+}) {
+  const { state } = useStore()
+  const today = todayISO()
+
+  const marches = state.marches.filter((m) => m.projetId === p.id)
+  const visasDuProjet = state.visas.filter((v) => v.projetId === p.id)
+  const aViser = visasEnAttente(visasDuProjet)
+  const enRetard = visasEnRetard(visasDuProjet, today)
+  const ouverts = desordresOuverts(state.desordresGPA.filter((d) => d.projetId === p.id))
+  // les pénalités ENCOURUES non encore décidées : une pénalité appliquée est
+  // une décision signifiée, elle n'a plus sa place dans un ordre du jour
+  const encourus = state.evenementsMarche.filter((e) => e.projetId === p.id && !e.penaliteAppliquee)
+  const marcheDeTache = (marcheId: string | null | undefined) =>
+    marcheId ? marches.find((m) => m.id === marcheId) ?? null : null
+  // « entreprise à confirmer » : le prédicat de l'alerte de l'accueil, pas un
+  // second seuil écrit ici (src/chantier.ts, un mois à l'avance)
+  const aConfirmer = state.tachesChantier.filter(
+    (t) => t.projetId === p.id && tacheAConfirmer(t, marcheDeTache(t.marcheId), today),
+  )
+
+  const lignes = marches
+    .map((m) => {
+      const visasLot = aViser.filter((v) => v.marcheId === m.id)
+      const retardLot = enRetard.filter((v) => v.marcheId === m.id)
+      const evLot = encourus.filter((e) => e.marcheId === m.id)
+      // même déduction d'intempéries que le journal des pénalités : une
+      // seule source (`prolongationDelai`), sinon la préparation annoncerait
+      // un montant que l'écran de décision ne confirmerait pas
+      const deduction = prolongationDelai(m, state.intemperies)
+      const chiffres = evLot.map((e) => penaliteEncourue(e, m.penalites, deduction))
+      const chiffrables = chiffres.filter((c) => c !== null)
+      return {
+        m,
+        avancement: avancementLot(state.tachesChantier, m.id),
+        visasLot,
+        retardLot,
+        evLot,
+        chiffrables: chiffrables.length,
+        // null ≠ 0 : rien de chiffrable ⇒ pas de total, un badge qui le dit
+        totalEncouruHT: chiffrables.reduce((t, c) => t + c!.montantHT, 0),
+        tauxManquant: chiffres.some((c) => c === null),
+        desordresLot: ouverts.filter((d) => d.marcheId === m.id),
+        confirmerLot: aConfirmer.filter((t) => t.marcheId === m.id),
+      }
+    })
+    // hors phase : un marché soldé qui n'a plus rien à dire ne prend pas une
+    // ligne de l'ordre du jour — il reste entier dans la carte Marchés
+    .filter(
+      (l) =>
+        l.m.actif ||
+        l.visasLot.length > 0 ||
+        l.evLot.length > 0 ||
+        l.desordresLot.length > 0 ||
+        l.confirmerLot.length > 0,
+    )
+
+  const sansLot = (id: string | null | undefined) => !id || !marches.some((m) => m.id === id)
+  const visasSansLot = aViser.filter((v) => sansLot(v.marcheId))
+  const desordresSansLot = ouverts.filter((d) => sansLot(d.marcheId))
+  const restes = [
+    visasSansLot.length > 0 ? `${visasSansLot.length} visa(s) à rendre` : null,
+    desordresSansLot.length > 0 ? `${desordresSansLot.length} désordre(s) GPA ouvert(s)` : null,
+  ].filter(Boolean) as string[]
+
+  const rienASignaler = lignes.length === 0 && restes.length === 0
+  // aucun marché ET rien à dire : l'onglet n'a pas encore de chantier à
+  // préparer — le bloc se tait plutôt que d'afficher un cadre vide
+  if (marches.length === 0 && rienASignaler) return null
+
+  const imprimer = () => ouvrirPreparationReunionPDF(state, p, today, prochaine)
+
+  return (
+    <div
+      style={{
+        border: '1.5px solid var(--border)',
+        borderRadius: 'var(--radius)',
+        background: 'var(--bg-soft)',
+        padding: '12px 14px',
+        marginBottom: 14,
+      }}
+    >
+      <div className="toolbar" style={{ marginBottom: rienASignaler ? 0 : 10 }}>
+        <strong>Préparer la réunion</strong>
+        <span className="small muted">
+          {prochaine
+            ? `prochaine séance le ${fmtDate(prochaine.date)}${prochaine.heure ? ` à ${prochaine.heure}` : ''}`
+            : 'aucune séance programmée — « Nouvelle réunion » ci-dessus'}
+        </span>
+        <span style={{ marginLeft: 'auto' }}>
+          <Btn
+            small
+            onClick={imprimer}
+            title="Ouvre le dossier de séance imprimable (Ctrl+P pour le PDF) — mêmes chiffres que ci-dessous"
+          >
+            Imprimer le dossier de séance
+          </Btn>
+        </span>
+      </div>
+
+      {rienASignaler ? (
+        <p className="small muted" style={{ margin: 0 }}>
+          Rien à signaler avant la séance : aucun visa en attente, aucune pénalité encourue non
+          décidée, aucun désordre ouvert, aucune intervention à confirmer.
+        </p>
+      ) : (
+        <>
+          <Table
+            compact
+            head={[
+              'Lot / entreprise',
+              'Avancement',
+              'Visas à rendre',
+              <span key="p" className="right">Pénalités encourues</span>,
+              'Intervention à confirmer',
+              'GPA',
+            ]}
+          >
+            {lignes.map((l) => {
+              const prochaineConfirmation = l.confirmerLot
+                .map((t) => t.debut)
+                .filter((d): d is string => Boolean(d))
+                .sort()[0]
+              return (
+                <tr key={l.m.id}>
+                  <td>
+                    <strong>{l.m.lot}</strong>
+                    <div className="muted small">{l.m.entreprise}</div>
+                  </td>
+                  <td className="num">
+                    {l.avancement === null ? (
+                      // « on ne sait pas » n'est pas « rien n'est fait » :
+                      // sans tâche de planning rattachée, avancementLot rend
+                      // null et l'écran le dit (src/chantier.ts)
+                      <span title="Aucune tâche de planning rattachée à ce lot — l’avancement se constate en séance, il ne se devine pas">
+                        ?
+                      </span>
+                    ) : (
+                      `${l.avancement} %`
+                    )}
+                  </td>
+                  <td className="small">
+                    {l.visasLot.length === 0 ? (
+                      <span className="muted">—</span>
+                    ) : (
+                      <>
+                        {l.visasLot.length} à viser
+                        {l.retardLot.length > 0 && (
+                          <>
+                            {' '}
+                            <Badge tone="danger">{l.retardLot.length} en retard</Badge>
+                          </>
+                        )}
+                      </>
+                    )}
+                  </td>
+                  <td className="right">
+                    {l.evLot.length === 0 ? (
+                      <span className="muted">—</span>
+                    ) : l.chiffrables === 0 ? (
+                      <span title="Encouru non calculable : saisissez les taux du CCAP sur le marché (carte Marchés → « Modifier »).">
+                        <Badge tone="warn">taux CCAP ?</Badge>
+                      </span>
+                    ) : (
+                      <>
+                        <Money v={l.totalEncouruHT} cents />
+                        <div className="muted small">
+                          {l.evLot.length} événement(s) non décidé(s)
+                          {l.tauxManquant && ', dont taux CCAP manquant'}
+                        </div>
+                      </>
+                    )}
+                  </td>
+                  <td className="small">
+                    {l.confirmerLot.length === 0 ? (
+                      <span className="muted">—</span>
+                    ) : (
+                      <>
+                        <span
+                          title={`${l.m.entreprise} n’a pas confirmé sa venue — « Entreprise confirmée » ou « Relancer » dans l’onglet Planning`}
+                        >
+                          <Badge tone="warn">{l.confirmerLot.length} à confirmer</Badge>
+                        </span>
+                        {prochaineConfirmation && (
+                          <div className="muted">
+                            <a href={`#/projets/${p.id}/planning`}>
+                              la plus proche le {fmtDate(prochaineConfirmation)} →
+                            </a>
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </td>
+                  <td className="small">
+                    {l.desordresLot.length > 0 ? (
+                      <Badge tone="warn">{l.desordresLot.length} ouvert(s)</Badge>
+                    ) : l.m.dateReception ? (
+                      <span
+                        className="muted"
+                        title={`Réception le ${fmtDate(l.m.dateReception)} — parfait achèvement jusqu’au ${fmtDate(finGPA(l.m.dateReception))}`}
+                      >
+                        aucun désordre
+                      </span>
+                    ) : (
+                      <span className="muted">—</span>
+                    )}
+                  </td>
+                </tr>
+              )
+            })}
+          </Table>
+          {restes.length > 0 && (
+            <p className="small" style={{ margin: '8px 0 0' }}>
+              Sans lot rattaché : {restes.join(' · ')}.
+            </p>
+          )}
+          <p className="muted small" style={{ margin: '8px 0 0' }}>
+            Rassemblé depuis les registres de cet onglet — rien ne se décide ici : viser, appliquer
+            une pénalité, confirmer une entreprise ou lever un désordre reste un geste, dans sa carte.
+          </p>
+        </>
+      )}
+    </div>
+  )
+}
+
 export function CarteReunions({ projet: p }: { projet: Projet }) {
   const { state, update, replace } = useStore()
   const today = todayISO()
@@ -2154,6 +2420,14 @@ export function CarteReunions({ projet: p }: { projet: Projet }) {
   const reunions = state.reunions
     .filter((r) => r.projetId === p.id)
     .sort((a, b) => b.date.localeCompare(a.date))
+
+  // C1 — la séance que le bloc de préparation vise : la plus PROCHE à venir
+  // (aujourd'hui compris). Aucune à venir ⇒ null : le bloc prépare quand même,
+  // il dit simplement qu'aucune date n'est posée.
+  const prochaine =
+    reunions
+      .filter((r) => r.date >= today)
+      .sort((a, b) => a.date.localeCompare(b.date))[0] ?? null
 
   const titreParDefaut = `Réunion de chantier n°${reunions.length + 1}`
 
@@ -2242,6 +2516,10 @@ export function CarteReunions({ projet: p }: { projet: Projet }) {
         </>
       }
     >
+      {/* C1 — en TÊTE de la carte : ce qu'il y a à dire en séance se lit avant
+          la liste des CR passés, qui est de l'archive */}
+      <PreparationReunion projet={p} prochaine={prochaine} />
+
       {reunions.length === 0 ? (
         <EmptyState>
           Après chaque réunion, un seul geste : « 🎙 Déposer l'enregistrement » — la réunion se crée, la
@@ -2769,24 +3047,205 @@ function AssistantCR({
   )
 }
 
+/** C2 — une carte qui n'a rien à dire ne prend plus une page d'écran : elle
+ *  devient une LIGNE de titre avec son compteur, qu'un clic déplie. Le badge
+ *  (« 2 en retard ») reste visible replié — c'est lui qui donne envie de
+ *  déplier, et c'est le seul contenu qu'un registre replié doit encore crier.
+ *
+ *  ZÉRO SUPPRESSION : rien ne disparaît, tout se rouvre d'un clic. Le tri
+ *  définitif entre utile et inutile passe par l'inventaire coché à deux
+ *  (méthode 5.17 du plan d'usage), jamais par une décision d'écran. */
+function SectionRepliable({
+  titre,
+  resume,
+  badges,
+  ouverteParDefaut,
+  children,
+}: {
+  titre: string
+  /** ce que la ligne repliée dit de la carte, en quelques mots */
+  resume: string
+  badges?: ReactNode
+  /** ouverte quand la carte appelle un geste ; repliée quand elle est de
+   *  l'histoire ou hors phase — chaque section porte SA raison, en commentaire */
+  ouverteParDefaut: boolean
+  children: ReactNode
+}) {
+  // l'état initial ne vaut qu'à l'ouverture de l'onglet : une section dépliée
+  // ne se referme pas sous les doigts parce qu'on vient de viser le dernier
+  // document. Le `key={projet.id}` du montage garantit qu'on repart du bon
+  // état en changeant de projet.
+  const [ouverte, setOuverte] = useState(ouverteParDefaut)
+  return (
+    <details
+      open={ouverte}
+      onToggle={(e) => setOuverte(e.currentTarget.open)}
+      style={{ marginBottom: ouverte ? 0 : 12 }}
+    >
+      <summary
+        style={{
+          cursor: 'pointer',
+          padding: ouverte ? '0 0 8px' : '11px 16px',
+          border: ouverte ? undefined : '1.5px solid var(--border)',
+          borderRadius: ouverte ? undefined : 'var(--radius)',
+          background: ouverte ? undefined : 'var(--bg-soft)',
+        }}
+      >
+        {ouverte ? (
+          <span className="small muted">Replier « {titre} »</span>
+        ) : (
+          <>
+            <strong>{titre}</strong> <span className="muted small">— {resume}</span>
+            {badges ? <> {badges}</> : null}
+          </>
+        )}
+      </summary>
+      {children}
+    </details>
+  )
+}
+
 export default function ProjetChantier({ projet }: { projet: Projet }) {
+  const { state } = useStore()
+  const today = todayISO()
+
+  // C2 — les compteurs des lignes repliées lisent EXACTEMENT ce que leur
+  // carte affiche : mêmes filtres, mêmes sélecteurs d'autorité. Un compteur
+  // qui compterait autre chose que sa carte serait un badge qui ment — et un
+  // badge qui ment se paie sur tous les autres (constat S2).
+  const marches = state.marches.filter((m) => m.projetId === projet.id)
+
+  const visas = state.visas.filter((v) => v.projetId === projet.id)
+  const visasAViser = visasEnAttente(visas)
+  const visasRetard = visasEnRetard(visas, today)
+  const visasHuitaine = visasSousHuitaine(visas, today)
+
+  const evenements = state.evenementsMarche.filter((e) => e.projetId === projet.id)
+  const penalitesADecider = evenements.filter((e) => !e.penaliteAppliquee)
+
+  const intemperies = state.intemperies.filter((i) => i.projetId === projet.id)
+  const chantierOuvert = marches.some((m) => m.actif)
+
+  const desordres = state.desordresGPA.filter((d) => d.projetId === projet.id)
+  const desordresGPAOuverts = desordresOuverts(desordres)
+  // la GPA la plus avancée du projet : c'est elle qui expire la première, et
+  // c'est avant SON terme qu'une mise en demeure doit partir
+  const premiereReception =
+    marches
+      .map((m) => m.dateReception)
+      .filter((d): d is string => Boolean(d))
+      .sort()[0] ?? null
+  const finGPAProche = finGPA(premiereReception)
+  const joursFinGPA = joursAvantFinGPA(premiereReception, today)
+
   return (
     <>
       <CarteReunions projet={projet} />
       <CarteMarches projet={projet} />
+
       {/* 5.8 — le registre des visas vit sous les marchés : les documents
           d'exécution arrivent des entreprises titulaires, et le délai du
-          CCAP court dès leur réception */}
-      <CarteVisas projet={projet} />
+          CCAP court dès leur réception.
+          Ouvert tant qu'un document attend un visa : c'est le seul état où
+          la responsabilité de la MOE court. */}
+      <SectionRepliable
+        key={projet.id}
+        titre="Visas des documents d'exécution"
+        resume={
+          visas.length === 0
+            ? 'aucun document consigné'
+            : visasAViser.length === 0
+              ? `${visas.length} document(s) — tous rendus`
+              : `${visasAViser.length} à viser sur ${visas.length}`
+        }
+        badges={
+          visasRetard.length > 0 || visasHuitaine.length > 0 ? (
+            <>
+              {visasRetard.length > 0 && <Badge tone="danger">{visasRetard.length} en retard</Badge>}
+              {visasRetard.length > 0 && visasHuitaine.length > 0 ? ' ' : null}
+              {visasHuitaine.length > 0 && (
+                <Badge tone="warn">{visasHuitaine.length} sous huitaine</Badge>
+              )}
+            </>
+          ) : null
+        }
+        ouverteParDefaut={visasAViser.length > 0}
+      >
+        <CarteVisas projet={projet} />
+      </SectionRepliable>
+
       {/* 5.2 — le journal des pénalités vit sous les marchés : les taux du
-          CCAP se saisissent sur le marché, les événements se constatent ici */}
-      <CartePenalites projet={projet} />
+          CCAP se saisissent sur le marché, les événements se constatent ici.
+          Ouvert tant qu'un constat attend une décision ; une fois tout
+          décidé, c'est un journal — il se relit, il n'appelle rien. */}
+      <SectionRepliable
+        key={projet.id}
+        titre="Pénalités de marché"
+        resume={
+          marches.length === 0
+            ? 'aucun marché — les taux du CCAP se saisissent sur le marché'
+            : evenements.length === 0
+              ? 'aucun événement constaté'
+              : penalitesADecider.length === 0
+                ? `${evenements.length} événement(s) — tous décidés`
+                : `${penalitesADecider.length} à décider sur ${evenements.length}`
+        }
+        badges={
+          penalitesADecider.length > 0 ? (
+            <Badge tone="warn">{penalitesADecider.length} à décider</Badge>
+          ) : null
+        }
+        ouverteParDefaut={penalitesADecider.length > 0}
+      >
+        <CartePenalites projet={projet} />
+      </SectionRepliable>
+
       {/* 5.3 — le registre des intempéries se lit AVEC le journal des
-          pénalités : il prolonge les délais et neutralise les retards */}
-      <CarteIntemperies projet={projet} />
+          pénalités : il prolonge les délais et neutralise les retards.
+          Ouvert tant qu'un marché est en cours ET qu'il y a des jours
+          consignés : la pluie ne se constate que sur un chantier ouvert. */}
+      <SectionRepliable
+        key={projet.id}
+        titre="Intempéries"
+        resume={
+          intemperies.length === 0
+            ? 'aucun jour consigné'
+            : `${intemperies.length} jour(s) consigné(s)${chantierOuvert ? '' : ' — plus aucun marché en cours'}`
+        }
+        ouverteParDefaut={intemperies.length > 0 && chantierOuvert}
+      >
+        <CarteIntemperies projet={projet} />
+      </SectionRepliable>
+
       {/* 5.9 — la GPA ferme la vie du chantier : réception, désordres,
-          relances tracées, mise en demeure avant la fin de l'année */}
-      <CarteGPA projet={projet} />
+          relances tracées, mise en demeure avant la fin de l'année.
+          Repliée tant qu'aucune réception n'est prononcée — la GPA n'a
+          alors pas commencé, et une carte hors phase est du bruit. */}
+      <SectionRepliable
+        key={projet.id}
+        titre="GPA — année de parfait achèvement"
+        resume={
+          premiereReception === null
+            ? 'réception non prononcée — la GPA n’a pas commencé'
+            : `${desordresGPAOuverts.length === 0 ? `${desordres.length} désordre(s), aucun ouvert` : `${desordresGPAOuverts.length} désordre(s) ouvert(s)`}${finGPAProche ? ` — fin de GPA le ${fmtDate(finGPAProche)}` : ''}`
+        }
+        badges={
+          desordresGPAOuverts.length > 0 ? (
+            <>
+              <Badge tone="warn">{desordresGPAOuverts.length} ouvert(s)</Badge>
+              {joursFinGPA !== null && joursFinGPA >= 0 && joursFinGPA <= 60 ? (
+                <>
+                  {' '}
+                  <Badge tone="danger">fin de GPA dans {joursFinGPA} j</Badge>
+                </>
+              ) : null}
+            </>
+          ) : null
+        }
+        ouverteParDefaut={desordresGPAOuverts.length > 0}
+      >
+        <CarteGPA projet={projet} />
+      </SectionRepliable>
     </>
   )
 }

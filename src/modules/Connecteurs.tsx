@@ -13,10 +13,10 @@
 import { useMemo, useRef, useState } from 'react'
 import type { Connecteur, FactureAchat, TypeConnecteur } from '../types'
 import { useStore } from '../store'
-import { Badge, Btn, Card, EmptyState, Field, Money, Page, Select, Stat, Table, TextInput, toast, useToday } from '../ui'
+import { Badge, Btn, Card, Field, Page, Select, Stat, Table, TextInput, navigate, toast, useToday } from '../ui'
 import FinanceNav from './FinanceNav'
-import { devinerMapping, lireReleve, preparerImport, soldeBancaire } from '../banque'
-import { detecterFormatBancaire, lireCAMT053, lireCycleVieCSV, lireOFX, lireQIF, type FormatBancaire } from '../imports'
+import { soldeBancaire } from '../banque'
+import { lireCycleVieCSV } from '../imports'
 import { lireFactureXMLDetail } from '../facturx'
 import { fmtDate, fmtMoney, fold, uid } from '../util'
 
@@ -51,64 +51,41 @@ function diagnostics(state: ReturnType<typeof useStore>['state']): Diagnostic[] 
   ]
 }
 
-// ---------- import bancaire multi-format ----------
+// ---------- import bancaire : RENVOI vers le point unique (lot D2) ----------
+//
+// Cette carte importait elle aussi les relevés, mais elle enregistrait
+// `soldeFinal: null` : un OFX déposé ici entrait bien en mouvements et ne
+// mettait JAMAIS à jour la trésorerie — sans un mot à l'écran (constat R3,
+// « la même notion codée deux fois, avec deux résultats possibles »). L'import
+// vit maintenant dans Banque & trésorerie, avec son champ « solde de fin ».
+// La carte reste : c'est ici qu'on vient chercher les imports, et un écran qui
+// perd une entrée sans la remplacer fait chercher longtemps.
 
 function CarteImportBancaire() {
-  const { state, update } = useStore()
-  const today = useToday()
-  const ref = useRef<HTMLInputElement>(null)
-  const [apercu, setApercu] = useState<{ format: FormatBancaire; lignes: { date: string; montant: number; libelle: string }[]; nom: string } | null>(null)
-
-  const charger = (file: File) => {
-    const lecteur = new FileReader()
-    lecteur.onload = () => {
-      const texte = String(lecteur.result || '')
-      const format = detecterFormatBancaire(texte, file.name)
-      const lignes =
-        format === 'camt' ? lireCAMT053(texte) : format === 'ofx' ? lireOFX(texte) : format === 'qif' ? lireQIF(texte) : lireReleve(texte, state.settings.banqueMapping || devinerMapping(texte)).lignes
-      if (lignes.length === 0) return toast(`Aucune ligne lisible (${format.toUpperCase()}).`, { tone: 'danger' })
-      setApercu({ format, lignes, nom: file.name })
-    }
-    lecteur.readAsText(file, 'utf-8')
-  }
-
-  const integrer = () => {
-    if (!apercu) return
-    const importId = uid('imp')
-    const { nouvelles, doublons } = preparerImport(state, apercu.lignes, importId)
-    const meta = { id: importId, date: today, nomFichier: apercu.nom, nbLignes: apercu.lignes.length, nbNouvelles: nouvelles.length, soldeFinal: null, dateSolde: null }
-    update((s) => {
-      s.transactionsBancaires.push(...nouvelles)
-      s.importsBancaires.push(meta)
-    })
-    toast(`${apercu.format.toUpperCase()} : ${nouvelles.length} importé(s), ${doublons} déjà connu(s) (idempotent).`, { tone: 'ok' })
-    setApercu(null)
-  }
-
+  const { state } = useStore()
+  const dernier = [...state.importsBancaires].sort((a, b) => a.date.localeCompare(b.date)).pop()
+  const solde = soldeBancaire(state)
   return (
     <Card
       titre="Import bancaire — CAMT.053 · OFX/QFX · QIF · CSV"
       actions={
-        <>
-          <Btn small kind="primary" onClick={() => ref.current?.click()}>Importer un fichier</Btn>
-          <input ref={ref} type="file" accept=".csv,.txt,.tsv,.xml,.ofx,.qfx,.qif" style={{ display: 'none' }} onChange={(e) => { const f = e.target.files?.[0]; if (f) charger(f); e.target.value = '' }} />
-        </>
+        <Btn small kind="primary" onClick={() => navigate('/finance/banque')}>
+          Aller à l'import de relevé
+        </Btn>
       }
     >
-      {apercu ? (
-        <>
-          <p className="small" style={{ margin: '0 0 8px' }}>Format <strong>{apercu.format.toUpperCase()}</strong> — {apercu.lignes.length} ligne(s). Réimporter le même fichier n'ajoute rien (idempotence date + montant + libellé).</p>
-          {apercu.lignes.slice(0, 5).map((l, i) => (
-            <div key={i} className="small muted">{l.date} · {fmtMoney(l.montant, true)} · {l.libelle.slice(0, 60)}</div>
-          ))}
-          <div className="toolbar" style={{ marginTop: 8 }}>
-            <Btn small onClick={() => setApercu(null)}>Annuler</Btn>
-            <Btn small kind="primary" onClick={integrer}>Intégrer {apercu.lignes.length} mouvement(s)</Btn>
-          </div>
-        </>
-      ) : (
-        <p className="muted small" style={{ margin: 0 }}>Le rapprochement se fait ensuite dans <a href="#/finance/banque">Banque & trésorerie</a> — proposé, jamais appliqué sans validation.</p>
-      )}
+      <p className="small" style={{ margin: '0 0 8px' }}>
+        Les quatre formats s'importent en UN SEUL endroit :{' '}
+        <a href="#/finance/banque">Banque &amp; trésorerie</a>. C'est le seul point qui porte le{' '}
+        <strong>solde de fin de relevé</strong> — celui qui cale la trésorerie affichée. Le rapprochement suit,
+        proposé, jamais appliqué sans validation.
+      </p>
+      <p className="muted small" style={{ margin: 0 }}>
+        {dernier
+          ? `Dernier relevé : ${dernier.nomFichier} du ${fmtDate(dernier.date)} — ${dernier.nbNouvelles} mouvement(s) nouveaux.`
+          : 'Aucun relevé importé pour l’instant.'}
+        {solde ? ` Solde bancaire connu : ${fmtMoney(solde.solde)} au ${fmtDate(solde.date)}.` : ' Aucun solde de fin saisi : le solde bancaire reste inconnu.'}
+      </p>
     </Card>
   )
 }

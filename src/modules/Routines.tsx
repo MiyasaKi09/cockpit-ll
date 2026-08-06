@@ -6,7 +6,7 @@
 
 import { useState } from 'react'
 import { useStore } from '../store'
-import { ROUTINES } from '../routines'
+import { ROUTINES, gabaritRoutine, idPromptRoutine, routineEffective, type RoutineSpec } from '../routines'
 import {
   parseRetourRoutine,
   importerSituations,
@@ -15,7 +15,8 @@ import {
   type RetourRoutine,
   type ResultatImport,
 } from '../importRoutines'
-import { Badge, Btn, Card, CopyBtn, TextArea } from '../ui'
+import { Badge, Btn, Card, CopyBtn, Field, Modal, TextArea, confirmer, toast } from '../ui'
+import { fmtDate, todayISO } from '../util'
 
 export function RoutinesContenu() {
   return (
@@ -23,26 +24,7 @@ export function RoutinesContenu() {
       <ImportUniversel />
 
       {ROUTINES.map((r) => (
-        <Card
-          key={r.id}
-          titre={
-            <>
-              {r.titre} <Badge tone="info">{r.frequence}</Badge>
-              {r.importCible && <Badge tone="muted">import : {r.importCible}</Badge>}
-            </>
-          }
-          actions={<CopyBtn text={r.promptRoutine} label="Copier le prompt de routine" />}
-        >
-          <p className="small" style={{ maxWidth: '75ch' }}>
-            {r.description}
-          </p>
-          <details style={{ marginTop: 10 }}>
-            <summary className="small" style={{ cursor: 'pointer', color: 'var(--accent)' }}>
-              Voir le prompt complet
-            </summary>
-            <pre style={{ marginTop: 8 }}>{r.promptRoutine}</pre>
-          </details>
-        </Card>
+        <CarteRoutine key={r.id} spec={r} />
       ))}
 
       <Card titre="Première mise en place">
@@ -53,6 +35,124 @@ export function RoutinesContenu() {
         </p>
       </Card>
     </>
+  )
+}
+
+// ============================================================
+// Une routine se lit, se copie — et se MODIFIE (§3.2, lot E3).
+// Zone d'intervention, fourchette de budget, adresse dédiée, prénoms :
+// ces critères changent au rythme de l'agence, pas des livraisons de
+// code. L'adaptation vit dans `state.prompts` sous un identifiant
+// stable ; l'écran ne connaît que « le corps effectif », et le modèle
+// livré reste toujours à un clic.
+// ============================================================
+
+function CarteRoutine({ spec }: { spec: RoutineSpec }) {
+  const { state } = useStore()
+  const [edition, setEdition] = useState(false)
+  const eff = routineEffective(spec, state.prompts)
+
+  return (
+    <Card
+      titre={
+        <>
+          {spec.titre} <Badge tone="info">{spec.frequence}</Badge>
+          {spec.importCible && <Badge tone="muted">import : {spec.importCible}</Badge>}
+          {eff.adaptee && (
+            <Badge tone="ok">
+              adaptée par l'agence — v{eff.version}
+              {eff.majLe ? `, ${fmtDate(eff.majLe)}` : ''}
+            </Badge>
+          )}
+        </>
+      }
+      actions={
+        <>
+          <Btn small onClick={() => setEdition(true)}>
+            Modifier les critères
+          </Btn>{' '}
+          <CopyBtn text={eff.corps} label="Copier le prompt de routine" />
+        </>
+      }
+    >
+      <p className="small" style={{ maxWidth: '75ch' }}>
+        {spec.description}
+      </p>
+      <details style={{ marginTop: 10 }}>
+        <summary className="small" style={{ cursor: 'pointer', color: 'var(--accent)' }}>
+          Voir le prompt complet
+        </summary>
+        <pre style={{ marginTop: 8 }}>{eff.corps}</pre>
+      </details>
+      {edition && <ModaleRoutine spec={spec} onClose={() => setEdition(false)} />}
+    </Card>
+  )
+}
+
+function ModaleRoutine({ spec, onClose }: { spec: RoutineSpec; onClose: () => void }) {
+  const { state, update, replace } = useStore()
+  const eff = routineEffective(spec, state.prompts)
+  const [corps, setCorps] = useState(eff.corps)
+
+  const enregistrer = () => {
+    const snap = state
+    update((d) => {
+      const i = d.prompts.findIndex((t) => t.id === idPromptRoutine(spec.id))
+      const maj = gabaritRoutine(spec, corps, todayISO(), i >= 0 ? d.prompts[i] : null)
+      if (i >= 0) d.prompts[i] = maj
+      else d.prompts.push(maj)
+    })
+    toast(`Routine « ${spec.titre} » enregistrée (v${eff.version + 1}) — à recopier dans la tâche Claude.`, {
+      tone: 'ok',
+      undo: () => replace(snap),
+    })
+    onClose()
+  }
+
+  const retablir = async () => {
+    const ok = await confirmer({
+      message: `Rétablir le modèle d'origine de « ${spec.titre} » ?\n\nLes critères saisis par l'agence (v${eff.version}) seront perdus.`,
+      danger: true,
+      confirmerLabel: 'Rétablir le modèle',
+    })
+    if (!ok) return
+    const snap = state
+    update((d) => {
+      d.prompts = d.prompts.filter((t) => t.id !== idPromptRoutine(spec.id))
+    })
+    toast("Modèle d'origine rétabli.", { undo: () => replace(snap) })
+    onClose()
+  }
+
+  return (
+    <Modal titre={`Modifier — ${spec.titre}`} onClose={onClose} large>
+      <p className="small" style={{ maxWidth: '75ch', marginTop: 0 }}>
+        Les critères qui vivent — zone d'intervention, typologies, fourchette de budget, adresse dédiée,
+        prénoms — sont dans ce texte : ils se modifient ici, sans développeur.
+      </p>
+      <div className="pill-note">
+        L'outil ne touche jamais à votre tâche programmée : après enregistrement, recopiez le prompt
+        (bouton « Copier ») dans la routine Claude pour qu'elle en tienne compte.
+      </div>
+      <Field label="Prompt de la routine">
+        <TextArea value={corps} onChange={setCorps} rows={18} mono />
+      </Field>
+      <div className="form-foot">
+        {eff.adaptee && (
+          <Btn kind="ghost" onClick={() => void retablir()}>
+            Rétablir le modèle
+          </Btn>
+        )}
+        <Btn onClick={onClose}>Annuler</Btn>
+        <Btn
+          kind="primary"
+          disabled={!corps.trim() || corps === eff.corps}
+          onClick={enregistrer}
+        >
+          Enregistrer (v{eff.version + 1})
+        </Btn>
+      </div>
+    </Modal>
   )
 }
 

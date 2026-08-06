@@ -8,6 +8,8 @@
 // fait l'aller-retour.
 // ============================================================
 
+import type { PromptTemplate } from './types'
+
 export interface RoutineSpec {
   id: string
   titre: string
@@ -18,6 +20,73 @@ export interface RoutineSpec {
   /** contrat de sortie JSON attendu par l'import du Cockpit */
   formatJSON?: string
   importCible?: 'situations' | 'consultations' | 'courriers' | null
+}
+
+// ============================================================
+// LES CRITÈRES MÉTIER SONT VIVANTS, LE CODE NE L'EST PAS.
+//
+// Zone d'intervention, typologies, fourchette de budget des appels
+// d'offres, adresse dédiée aux situations, prénoms de l'agence : tout
+// cela change — et tout cela était figé dans les constantes ci-dessous,
+// donc modifiable par un développeur seulement.
+//
+// Aucune mécanique nouvelle : celle des gabarits de prompts fait déjà ce
+// travail et a fait ses preuves (corps modifiable, version, date de mise
+// à jour, retour au modèle). Une routine adaptée par l'agence est donc un
+// `PromptTemplate` de `state.prompts` à identifiant STABLE — persisté et
+// synchronisé comme le reste, sans champ d'état nouveau. Tant qu'il
+// n'existe pas, c'est le modèle ci-dessous qui s'applique : supprimer
+// l'entrée SUFFIT à rétablir le modèle, et c'est exactement ce que fait
+// « Rétablir le modèle ».
+// ============================================================
+
+/** domaine sous lequel les routines adaptées apparaissent dans la
+ *  bibliothèque de prompts — elles y sont modifiables comme les autres */
+export const DOMAINE_ROUTINES = 'Routines Claude'
+
+/** identifiant stable du gabarit qui porte la version de l'agence */
+export function idPromptRoutine(routineId: string): string {
+  return `tpl-routine-${routineId}`
+}
+
+export interface RoutineEffective {
+  /** le prompt à coller : celui de l'agence s'il existe, le modèle sinon */
+  corps: string
+  /** l'agence a adapté ce modèle */
+  adaptee: boolean
+  /** 1 = modèle d'origine ; 2 et au-delà = versions de l'agence */
+  version: number
+  /** date de la dernière adaptation — null tant que le modèle s'applique */
+  majLe: string | null
+}
+
+/** ce que l'écran doit afficher et copier pour une routine, `state.prompts`
+ *  faisant foi dès qu'il porte une adaptation */
+export function routineEffective(spec: RoutineSpec, prompts: PromptTemplate[]): RoutineEffective {
+  const t = (Array.isArray(prompts) ? prompts : []).find((x) => x && x.id === idPromptRoutine(spec.id))
+  if (!t || !t.corps.trim()) return { corps: spec.promptRoutine, adaptee: false, version: 1, majLe: null }
+  return { corps: t.corps, adaptee: true, version: t.version, majLe: t.majLe }
+}
+
+/** le gabarit à ranger dans `state.prompts` après une modification —
+ *  `precedent` porte la version en place (absent = première adaptation,
+ *  qui devient la v2 : la v1 est le modèle livré avec l'outil) */
+export function gabaritRoutine(
+  spec: RoutineSpec,
+  corps: string,
+  today: string,
+  precedent?: PromptTemplate | null,
+): PromptTemplate {
+  return {
+    id: idPromptRoutine(spec.id),
+    titre: `Routine — ${spec.titre}`,
+    domaine: DOMAINE_ROUTINES,
+    projetClaude: 'Routine programmée',
+    contexte: 'libre',
+    corps,
+    version: (precedent?.version ?? 1) + 1,
+    majLe: today,
+  }
 }
 
 export const CONTRAT_SITUATIONS = `{

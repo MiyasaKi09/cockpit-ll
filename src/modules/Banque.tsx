@@ -1,6 +1,10 @@
 // ============================================================
 // Banque & trésorerie — audit finance F3.
-// - import de relevés CSV avec mapping mémorisé, IDEMPOTENT ;
+// - POINT D'IMPORT UNIQUE des relevés (CAMT.053, OFX/QFX, QIF, CSV),
+//   mapping mémorisé pour le CSV, idempotent, avec le SOLDE DE FIN :
+//   une seconde carte d'import vivait dans Connecteurs et enregistrait
+//   `soldeFinal: null` — un relevé importé par là ne mettait jamais à
+//   jour la trésorerie, sans un mot (lot D2, constat R3) ;
 // - rapprochement PROPOSÉ (montant, référence, tiers), validé à la
 //   main — jamais appliqué silencieusement ;
 // - le solde manuel devient « solde d'ouverture manuel » dès qu'un
@@ -40,6 +44,13 @@ import {
   soldeBancaire,
   suggestionsPourCredit,
 } from '../banque'
+import {
+  detecterFormatBancaire,
+  lireCAMT053,
+  lireOFX,
+  lireQIF,
+  type FormatBancaire,
+} from '../imports'
 import {
   contratsPourDebit,
   erreurRapprochementAchat,
@@ -81,25 +92,45 @@ export function CourbeTresorerie({ prevision, seuil }: { prevision: Prevision13;
 }
 
 // ------------------------------------------------------------------
-// Import de relevé (mapping ajustable, aperçu, idempotence)
+// Import de relevé — POINT UNIQUE, quatre formats (D2)
 // ------------------------------------------------------------------
+
+const LIBELLES_FORMAT: Record<FormatBancaire, string> = {
+  camt: 'CAMT.053 (ISO 20022)',
+  ofx: 'OFX / QFX',
+  qif: 'QIF',
+  csv: 'CSV',
+}
 
 function ImportModal({ texte, nomFichier, onClose }: { texte: string; nomFichier: string; onClose: () => void }) {
   const { state, update } = useStore()
+  const format = useMemo(() => detecterFormatBancaire(texte, nomFichier), [texte, nomFichier])
+  // le mapping de colonnes ne sert QU'au CSV — les trois formats structurés se
+  // lisent seuls et n'y touchent pas (ni en lecture, ni en mémorisation)
   const [mapping, setMapping] = useState<MappingBancaire>(() => state.settings.banqueMapping || devinerMapping(texte))
   const [soldeFinal, setSoldeFinal] = useState<number | null>(null)
   const [dateSolde, setDateSolde] = useState<string | null>(null)
   const set = (patch: Partial<MappingBancaire>) => setMapping((m) => ({ ...m, ...patch }))
 
-  const lecture = useMemo(() => lireReleve(texte, mapping), [texte, mapping])
+  // les trois formats structurés se lisent seuls ; seul le CSV a besoin d'un
+  // mapping de colonnes, et lui seul le mémorise
+  const lecture = useMemo(() => {
+    if (format === 'camt') return { lignes: lireCAMT053(texte), ignorées: 0 }
+    if (format === 'ofx') return { lignes: lireOFX(texte), ignorées: 0 }
+    if (format === 'qif') return { lignes: lireQIF(texte), ignorées: 0 }
+    return lireReleve(texte, mapping)
+  }, [format, texte, mapping])
   const colonnes = useMemo(() => {
+    if (format !== 'csv') return []
     const premiere = texte.split(/\r?\n/).find((l) => l.trim()) || ''
     return decouperLigneCSV(premiere, mapping.separateur)
-  }, [texte, mapping.separateur])
+  }, [format, texte, mapping.separateur])
   const optionsColonnes = colonnes.map((c, i) => ({ value: String(i), label: `${i + 1} — ${c.slice(0, 24) || '(vide)'}` }))
+  const derniereDate = useMemo(() => [...lecture.lignes].map((l) => l.date).sort().pop() || null, [lecture.lignes])
 
   const importer = () => {
-    if (lecture.lignes.length === 0) return toast('Aucune ligne lisible avec ce mapping.', { tone: 'danger' })
+    if (lecture.lignes.length === 0)
+      return toast(format === 'csv' ? 'Aucune ligne lisible avec ce mapping.' : `Aucune ligne lisible (${format.toUpperCase()}).`, { tone: 'danger' })
     // tout est calculé AVANT la mutation (producteur rejouable)
     const importId = uid('imp')
     const { nouvelles, doublons } = preparerImport(state, lecture.lignes, importId)
@@ -110,15 +141,15 @@ function ImportModal({ texte, nomFichier, onClose }: { texte: string; nomFichier
       nbLignes: lecture.lignes.length,
       nbNouvelles: nouvelles.length,
       soldeFinal,
-      dateSolde: soldeFinal != null ? dateSolde || lecture.lignes.map((l) => l.date).sort().pop() || null : null,
+      dateSolde: soldeFinal != null ? dateSolde || derniereDate : null,
     }
     update((d) => {
       d.transactionsBancaires.push(...nouvelles)
       d.importsBancaires.push(meta)
-      d.settings.banqueMapping = mapping
+      if (format === 'csv') d.settings.banqueMapping = mapping
     })
     toast(
-      `${nouvelles.length} mouvement(s) importé(s), ${doublons} déjà connu(s)${lecture.ignorées ? `, ${lecture.ignorées} ligne(s) illisible(s)` : ''}.`,
+      `${format.toUpperCase()} : ${nouvelles.length} mouvement(s) importé(s), ${doublons} déjà connu(s)${lecture.ignorées ? `, ${lecture.ignorées} ligne(s) illisible(s)` : ''}${soldeFinal == null ? ' — sans solde de fin, la trésorerie affichée ne bouge pas' : ''}.`,
       { tone: 'ok' },
     )
     onClose()
@@ -127,65 +158,78 @@ function ImportModal({ texte, nomFichier, onClose }: { texte: string; nomFichier
   return (
     <Modal titre={`Importer le relevé — ${nomFichier}`} onClose={onClose} large>
       <p className="muted small" style={{ margin: '0 0 10px' }}>
-        Le mapping est mémorisé pour les prochains imports. Réimporter le même relevé n'ajoutera aucune
-        ligne (identifiant date + montant + libellé).
+        Format reconnu : <strong>{LIBELLES_FORMAT[format]}</strong>. Réimporter le même relevé n'ajoutera aucune
+        ligne (identifiant date + montant + libellé)
+        {format === 'csv' ? ' — et le mapping des colonnes est mémorisé pour les prochains imports.' : '.'}
       </p>
-      <div className="form-row">
-        <Field label="Séparateur">
-          <Select
-            value={mapping.separateur === '\t' ? 'tab' : mapping.separateur}
-            onChange={(v) => set({ separateur: v === 'tab' ? '\t' : v })}
-            options={[{ value: ';', label: '; (point-virgule)' }, { value: ',', label: ', (virgule)' }, { value: 'tab', label: 'tabulation' }]}
-          />
-        </Field>
-        <Field label="Format de date">
-          <Select
-            value={mapping.formatDate}
-            onChange={(v) => set({ formatDate: v as MappingBancaire['formatDate'] })}
-            options={[{ value: 'JJ/MM/AAAA', label: 'JJ/MM/AAAA' }, { value: 'AAAA-MM-JJ', label: 'AAAA-MM-JJ' }]}
-          />
-        </Field>
-        <Field label="Première ligne">
-          <Select
-            value={mapping.entete ? 'oui' : 'non'}
-            onChange={(v) => set({ entete: v === 'oui' })}
-            options={[{ value: 'oui', label: 'en-têtes (ignorée)' }, { value: 'non', label: 'données' }]}
-          />
-        </Field>
-      </div>
-      <div className="form-row" style={{ marginTop: 10 }}>
-        <Field label="Colonne date">
-          <Select value={String(mapping.colDate)} onChange={(v) => set({ colDate: Number(v) })} options={optionsColonnes} />
-        </Field>
-        <Field label="Colonne libellé">
-          <Select value={String(mapping.colLibelle)} onChange={(v) => set({ colLibelle: Number(v) })} options={optionsColonnes} />
-        </Field>
-        <Field label="Montant (signé)" hint="ou débit/crédit séparés ci-dessous">
-          <Select
-            value={mapping.colMontant == null ? '' : String(mapping.colMontant)}
-            onChange={(v) => set({ colMontant: v === '' ? null : Number(v) })}
-            options={[{ value: '', label: '— débit/crédit séparés —' }, ...optionsColonnes]}
-          />
-        </Field>
-      </div>
-      {mapping.colMontant == null && (
-        <div className="form-row" style={{ marginTop: 10 }}>
-          <Field label="Colonne débit">
-            <Select value={String(mapping.colDebit ?? '')} onChange={(v) => set({ colDebit: v === '' ? null : Number(v) })} options={[{ value: '', label: '—' }, ...optionsColonnes]} />
-          </Field>
-          <Field label="Colonne crédit">
-            <Select value={String(mapping.colCredit ?? '')} onChange={(v) => set({ colCredit: v === '' ? null : Number(v) })} options={[{ value: '', label: '—' }, ...optionsColonnes]} />
-          </Field>
-        </div>
+      {format === 'csv' && (
+        <>
+          <div className="form-row">
+            <Field label="Séparateur">
+              <Select
+                value={mapping.separateur === '\t' ? 'tab' : mapping.separateur}
+                onChange={(v) => set({ separateur: v === 'tab' ? '\t' : v })}
+                options={[{ value: ';', label: '; (point-virgule)' }, { value: ',', label: ', (virgule)' }, { value: 'tab', label: 'tabulation' }]}
+              />
+            </Field>
+            <Field label="Format de date">
+              <Select
+                value={mapping.formatDate}
+                onChange={(v) => set({ formatDate: v as MappingBancaire['formatDate'] })}
+                options={[{ value: 'JJ/MM/AAAA', label: 'JJ/MM/AAAA' }, { value: 'AAAA-MM-JJ', label: 'AAAA-MM-JJ' }]}
+              />
+            </Field>
+            <Field label="Première ligne">
+              <Select
+                value={mapping.entete ? 'oui' : 'non'}
+                onChange={(v) => set({ entete: v === 'oui' })}
+                options={[{ value: 'oui', label: 'en-têtes (ignorée)' }, { value: 'non', label: 'données' }]}
+              />
+            </Field>
+          </div>
+          <div className="form-row" style={{ marginTop: 10 }}>
+            <Field label="Colonne date">
+              <Select value={String(mapping.colDate)} onChange={(v) => set({ colDate: Number(v) })} options={optionsColonnes} />
+            </Field>
+            <Field label="Colonne libellé">
+              <Select value={String(mapping.colLibelle)} onChange={(v) => set({ colLibelle: Number(v) })} options={optionsColonnes} />
+            </Field>
+            <Field label="Montant (signé)" hint="ou débit/crédit séparés ci-dessous">
+              <Select
+                value={mapping.colMontant == null ? '' : String(mapping.colMontant)}
+                onChange={(v) => set({ colMontant: v === '' ? null : Number(v) })}
+                options={[{ value: '', label: '— débit/crédit séparés —' }, ...optionsColonnes]}
+              />
+            </Field>
+          </div>
+          {mapping.colMontant == null && (
+            <div className="form-row" style={{ marginTop: 10 }}>
+              <Field label="Colonne débit">
+                <Select value={String(mapping.colDebit ?? '')} onChange={(v) => set({ colDebit: v === '' ? null : Number(v) })} options={[{ value: '', label: '—' }, ...optionsColonnes]} />
+              </Field>
+              <Field label="Colonne crédit">
+                <Select value={String(mapping.colCredit ?? '')} onChange={(v) => set({ colCredit: v === '' ? null : Number(v) })} options={[{ value: '', label: '—' }, ...optionsColonnes]} />
+              </Field>
+            </div>
+          )}
+        </>
       )}
       <div className="form-row" style={{ marginTop: 10 }}>
-        <Field label="Solde de fin de relevé (€)" hint="optionnel — cale le solde bancaire affiché">
+        <Field label="Solde de fin de relevé (€)" hint="c'est LUI qui cale la trésorerie affichée — le relevé le porte en dernière page">
           <NumInput value={soldeFinal} onChange={setSoldeFinal} />
         </Field>
-        <Field label="Date du solde">
+        <Field label="Date du solde" hint={derniereDate ? `à défaut, la dernière ligne du relevé (${fmtDate(derniereDate)})` : undefined}>
           <DateInput value={dateSolde} onChange={setDateSolde} />
         </Field>
       </div>
+      {/* « null n'est pas 0 » : sans solde de fin on importe des mouvements,
+          pas un solde — et on le DIT plutôt que d'afficher une trésorerie fausse */}
+      {soldeFinal == null && (
+        <p className="pill-note" style={{ marginTop: 10 }}>
+          Sans le solde de fin, les mouvements entrent mais le solde bancaire affiché ne bouge pas : la trésorerie
+          restera celle du dernier relevé soldé.
+        </p>
+      )}
       <div style={{ marginTop: 12 }}>
         <div className="small" style={{ fontWeight: 650, marginBottom: 4 }}>
           Aperçu : {lecture.lignes.length} ligne(s) lisible(s){lecture.ignorées ? ` · ${lecture.ignorées} ignorée(s)` : ''}
@@ -596,7 +640,12 @@ export default function Banque() {
           sub={
             banque
               ? `relevé + mouvements depuis le ${fmtDate(banque.date)}`
-              : 'saisi dans Paramètres — importez un relevé pour le solde réel'
+              : state.importsBancaires.length > 0
+                ? // D2 : c'est le silence qui coûtait cher — des relevés importés
+                  // sans solde de fin laissaient la trésorerie sur une valeur
+                  // manuelle sans que rien ne le dise
+                  `${state.importsBancaires.length} relevé(s) importé(s) mais AUCUN ne porte de solde de fin : le solde réel reste inconnu`
+                : 'saisi dans Paramètres — importez un relevé pour le solde réel'
           }
         />
         <Stat
@@ -636,13 +685,18 @@ export default function Banque() {
         actions={
           <>
             <Btn small onClick={() => setVoirTout((v) => !v)}>{voirTout ? 'À rapprocher seulement' : 'Tout afficher'}</Btn>
-            <Btn small kind="primary" onClick={() => refFichier.current?.click()}>
-              Importer un relevé (CSV)
+            <Btn
+              small
+              kind="primary"
+              onClick={() => refFichier.current?.click()}
+              title="CAMT.053, OFX/QFX, QIF ou CSV — le format est reconnu tout seul"
+            >
+              Importer un relevé
             </Btn>
             <input
               ref={refFichier}
               type="file"
-              accept=".csv,.txt,.tsv"
+              accept=".csv,.txt,.tsv,.xml,.ofx,.qfx,.qif"
               style={{ display: 'none' }}
               onChange={(e) => {
                 const f = e.target.files?.[0]
@@ -655,8 +709,9 @@ export default function Banque() {
       >
         {state.transactionsBancaires.length === 0 ? (
           <EmptyState>
-            Aucun mouvement — exportez un relevé CSV depuis votre banque et importez-le ici. Le mapping des
-            colonnes est mémorisé, l'import est idempotent (OFX/CAMT et connexion directe : plus tard).
+            Aucun mouvement — exportez un relevé depuis votre banque et importez-le ici : CAMT.053, OFX/QFX, QIF
+            ou CSV, le format est reconnu tout seul (le mapping des colonnes du CSV est mémorisé) et réimporter
+            le même fichier n'ajoute aucune ligne. Seule la connexion bancaire directe reste à venir.
           </EmptyState>
         ) : mouvements.length === 0 ? (
           <EmptyState>Tout est rapproché ✓</EmptyState>

@@ -1018,11 +1018,14 @@ function CarteAVerifier() {
                             items={[
                               {
                                 label: 'Décompte (PDF)',
-                                onClick: () => ouvrirDecompteSituationPDF(state, s),
+                                // S6 — la date d'ÉDITION est celle du jour, pas celle de
+                                // réception de la situation : le document le dit désormais
+                                onClick: () => ouvrirDecompteSituationPDF(state, s, today),
                                 // S6 — ce document est le DÉCOMPTE DE VÉRIFICATION remis à
                                 // l'entreprise ; le certificat de paiement est un autre
                                 // document, contractuel, adressé au maître d'ouvrage
-                                title: 'Décompte de vérification (interne, remis à l’entreprise) — net à payer',
+                                title:
+                                  'Décompte de vérification (interne, remis à l’entreprise) — net à payer. Recalculé à chaque impression : l’impression le dit, seul le certificat de paiement est figé.',
                               },
                               { label: 'Éditer', onClick: () => setEditionId(s.id) },
                               { label: 'Rejeter…', onClick: () => { setRejetId(s.id); setMotifRejet('') }, danger: true },
@@ -1374,7 +1377,14 @@ function CarteHistorique({ entrepriseInitiale = '' }: { entrepriseInitiale?: str
                     </td>
                     <td>
                       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                        <Btn small kind="ghost" onClick={() => ouvrirDecompteSituationPDF(state, s)} title="Décompte de vérification (interne, vers l'entreprise)">
+                        <Btn
+                          small
+                          kind="ghost"
+                          // S6 — recalculé à chaque impression, et l'impression le DIT :
+                          // « reconstitué depuis l'état courant », édité au jour du clic
+                          onClick={() => ouvrirDecompteSituationPDF(state, s, today)}
+                          title="Décompte de vérification (interne, vers l'entreprise) — reconstitué depuis l'état courant à chaque impression, contrairement au certificat qui est figé"
+                        >
                           Décompte
                         </Btn>
                         {(() => {

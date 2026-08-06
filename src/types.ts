@@ -1294,6 +1294,66 @@ export interface ImportBancaire {
   dateSolde?: string | null
 }
 
+// --- Connexion bancaire directe (GoCardless Bank Account Data, lecture seule) ---
+//
+// CE QUI VIT ICI, ET CE QUI N'Y VIT PAS
+// --------------------------------------
+// L'AUTORITÉ est la table `banque_connexions` (Supabase, `service_role`
+// seul) : c'est elle qui tient la demande, l'accord et les identifiants de
+// compte GoCardless. Ce qui suit en est un MIROIR daté, rapatrié par la
+// fonction Edge `banque-sync` — de quoi afficher un état et produire une
+// alerte SANS réseau, puisque le fil d'urgences (`src/alerts.ts`) est pur et
+// que le Cockpit doit rester lisible hors ligne.
+//
+// Aucun identifiant d'API tiers n'entre ici : ni secret GoCardless, ni jeton,
+// ni identifiant de compte GoCardless. Un compte se désigne par
+// l'identifiant de NOTRE ligne, et se reconnaît à quatre chiffres d'IBAN.
+export interface CompteBancaireConnecte {
+  /** identifiant de la ligne `banque_comptes` — jamais l'identifiant GoCardless */
+  id: string
+  libelle: string | null
+  /** quatre derniers caractères de l'IBAN, précédés d'une ellipse */
+  ibanMasque: string | null
+  devise: string | null
+  /** DISCOVERED · PROCESSING · READY · ERROR · EXPIRED · SUSPENDED */
+  statut: string | null
+  /** dernier solde relevé — `null` quand la banque n'en publie aucun
+   *  d'exploitable. `null` n'est pas 0, et l'écran le dit. */
+  dernierSolde: number | null
+  /** `closingBooked`, `interimAvailable`… — le type FAIT partie du solde :
+   *  un disponible et un comptable ne se comparent pas */
+  dernierSoldeType: string | null
+  dernierSoldeDate: string | null
+  /** les types de solde que CETTE banque publie réellement, relevés au fil
+   *  des synchronisations : ils ne se devinent pas d'un établissement à l'autre */
+  typesSoldeVus: string[]
+}
+
+export interface ConnexionBancaire {
+  /** identifiant de la ligne `banque_connexions` */
+  id: string
+  /** nom lisible de l'établissement */
+  banque: string
+  /** en_attente (parcours banque non terminé) · liee · expiree · erreur */
+  statut: 'en_attente' | 'liee' | 'expiree' | 'erreur'
+  /** statut brut de GoCardless (CR ID GC UA RJ SA GA LN SU ER EX), conservé
+   *  tel quel pour le diagnostic — on ne le traduit pas de force */
+  statutGocardless: string | null
+  /** durée d'accès accordée, en jours (90 en pratique — DSP2) */
+  accesJours: number | null
+  consentementAccepteLe: string | null
+  /** ISO — fin de l'accès continu. `null` = inconnue, jamais « lointaine ». */
+  consentementExpireLe: string | null
+  /** dernière synchronisation RÉELLEMENT INTÉGRÉE au Cockpit ('AAAA-MM-JJ').
+   *  `null` veut dire « jamais » : une synchronisation morte depuis trois
+   *  semaines doit se voir, pas se deviner. */
+  derniereSyncLe: string | null
+  derniereSyncResultat: string | null
+  /** date à laquelle ce miroir a été rafraîchi depuis le serveur */
+  vuLe: string
+  comptes: CompteBancaireConnecte[]
+}
+
 /** mapping CSV bancaire mémorisé (audit §5.5 — phase initiale) */
 export interface MappingBancaire {
   separateur: string
@@ -1364,6 +1424,50 @@ export interface EvenementTransmission {
   statut: 'deposee' | 'rejetee' | 'mise_a_disposition' | 'approuvee' | 'payee'
   reference?: string
   motif?: string
+  /**
+   * Le code du portail, TEL QU'IL L'A ÉCRIT (`REJETEE`, `SUSPENDUE`,
+   * `MISE_EN_PAIEMENT`…). Optionnel : une saisie manuelle et l'import CSV n'en
+   * portent pas, et rien ne dépend de sa présence.
+   *
+   * POURQUOI CE CHAMP EXISTE. Chorus Pro déclare une quinzaine de statuts
+   * quand `statut` ci-dessus en compte cinq — liste FERMÉE qui pilote le badge
+   * rouge, l'action « à traiter » et l'alerte du fil d'urgences. Quatre codes
+   * non nominaux (`REJETEE`, `SUSPENDUE`, `A_RECYCLER`, `A_COMPLETER`) se
+   * projettent donc sur « rejetée » : pour l'agence, ils ont la même
+   * conséquence — la facture est revenue et ne sera pas payée. Ce qui serait
+   * malhonnête, c'est d'AFFICHER « rejetée » quand le portail a dit
+   * « suspendue » : le code exact voyage ici, et c'est LUI que l'écran et
+   * l'alerte prononcent. La liste fermée décide du comportement, le mot du
+   * portail décide des mots (`src/chorusApi.ts`).
+   */
+  statutPortail?: string
+}
+
+/**
+ * Une facture VUE SUR CHORUS PRO dont le numéro ne correspond à aucune facture
+ * du Cockpit (§ le rattachement se fait par numéro, comme l'import CSV).
+ *
+ * Elle est SIGNALÉE, jamais rattachée « au plus proche ». Un rapprochement
+ * approximatif écrirait un rejet sur la facture du voisin, se propagerait à
+ * toute la pièce et ne se verrait jamais ; un rattachement absent coûte un
+ * clic. Les causes légitimes sont nombreuses : facture déposée hors Cockpit,
+ * numéro saisi autrement sur le portail, pièce d'un cotraitant, ou lecture de
+ * l'environnement de QUALIFICATION (jeu de données de l'AIFE).
+ */
+export interface FactureChorusInconnue {
+  /** le numéro tel que le portail l'écrit — la clé qui n'a rien trouvé */
+  numero: string
+  /** identifiant interne Chorus, pour retrouver la pièce sur le portail */
+  idFacture?: string | null
+  /** code de statut du portail, tel quel */
+  statutPortail: string
+  dateStatut?: string | null
+  destinataire?: string | null
+  montantTTC?: number | null
+  /** `null` veut dire « le portail n'a pas rendu de motif », jamais « aucun » */
+  motif?: string | null
+  /** date à laquelle la synchronisation l'a vue pour la dernière fois */
+  vueLe: string
 }
 
 // ============================================================
@@ -1818,6 +1922,21 @@ export type TypeAlerte =
   | 'mail_a_traiter'
   | 'reponse_attendue'
   | 'proposition_ia'
+  // Connexion bancaire directe — les deux façons dont une trésorerie se fige
+  // en silence, et qui doivent donc se voir AVANT :
+  //   · le consentement DSP2 arrive à échéance (90 jours) et il faut
+  //     retourner s'authentifier chez sa banque ;
+  //   · plus aucune synchronisation n'aboutit depuis des jours, sans erreur
+  //     visible — le cas le plus traître, parce qu'un écran muet ressemble à
+  //     un écran calme.
+  | 'banque_consentement'
+  | 'banque_sync_muette'
+  // 5.16 — facture rejetée par le portail (Chorus Pro, plateforme agréée).
+  // Ce n'est pas un retard qui finira par se résorber : une facture rejetée
+  // ne sera JAMAIS payée tant que personne ne la corrige et ne la redépose.
+  // Le motif voyage avec l'alerte — sans lui, il faut rouvrir le portail
+  // pour savoir quoi corriger, et le geste se remet à demain.
+  | 'facture_rejetee_portail'
 
 /** Alerte du fil d'urgences — calculée, jamais stockée (hors snooze) */
 /** action rapide attachée à une alerte, réalisable depuis le fil */
@@ -1909,6 +2028,12 @@ export interface Settings {
   profilComptable?: ProfilComptable
   /** mapping du CSV bancaire, mémorisé après le premier import (F3) */
   banqueMapping?: MappingBancaire
+  /** dernière synchronisation Chorus Pro INTÉGRÉE au Cockpit — la trace vit
+   *  ici (donc dans l'état partagé, donc lisible hors ligne et sur les deux
+   *  postes) et non seulement dans le journal serveur. `environnement` en fait
+   *  partie : lire la qualification en croyant lire la structure est le
+   *  contresens que ce mot rend impossible à commettre en silence. */
+  chorusSync?: { le: string; environnement: string; resultat: string } | null
   /** seuil d'alerte de point bas de trésorerie (€) */
   seuilTresorerie?: number | null
   /** décaissement mensuel prévisionnel de TVA/impôts (paramétré avec le cabinet) */
@@ -2205,6 +2330,14 @@ export interface AppState {
   /** lignes de relevés bancaires importées (F3) */
   transactionsBancaires: TransactionBancaire[]
   importsBancaires: ImportBancaire[]
+  /** miroir daté des connexions bancaires directes — l'autorité reste la
+   *  table `banque_connexions` côté Supabase. Il est ici pour que le fil
+   *  d'urgences puisse annoncer la reconnexion des 90 jours sans réseau. */
+  connexionsBancaires: ConnexionBancaire[]
+  /** 5.16 — factures vues sur Chorus Pro dont le numéro ne correspond à
+   *  AUCUNE facture du Cockpit. Elles sont signalées ici, jamais rattachées
+   *  au plus proche : c'est une liste à relire, pas une donnée métier. */
+  chorusInconnues: FactureChorusInconnue[]
   /** lots d'export comptable versionnés (F4) */
   lotsComptables: LotComptable[]
   /** mois de TVA marqués « déclarée » — un geste humain fige le solde et

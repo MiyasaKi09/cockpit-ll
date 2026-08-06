@@ -1224,6 +1224,15 @@ export function seedState(): AppState {
     attendusFinanciers: [],
     transactionsBancaires: [],
     importsBancaires: [],
+    // Connexion bancaire directe — vide, et pas d'exemple : une connexion
+    // fictive afficherait une date d'expiration de consentement, donc une
+    // alerte de reconnexion, sur une banque qui n'existe pas.
+    connexionsBancaires: [],
+    // Cycle de vie Chorus Pro — vide, et pas d'exemple : une facture
+    // « inconnue » fictive ferait chercher sur le portail une pièce qui
+    // n'existe pas, et une alerte de rejet d'exemple serait une urgence
+    // rouge sans objet.
+    chorusInconnues: [],
     lotsComptables: [],
     // Position TVA — vide : un mois « déclaré » d'exemple sortirait un mois
     // RÉEL du « dû à l'État » sans qu'aucun humain n'ait fait le geste.

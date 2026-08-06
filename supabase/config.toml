@@ -24,3 +24,20 @@ verify_jwt = false
 # Configuration pilotée depuis le Cockpit : JWT utilisateur obligatoire.
 [functions.ingestion-config]
 verify_jwt = true
+
+# Connecteurs bancaire et Chorus : appelés DEPUIS le Cockpit par une personne
+# connectée, jamais par un cron ni par un retour anonyme — le JWT utilisateur
+# est donc exigé, comme pour ingestion-config.
+#
+# `verify_jwt = true` est déjà le défaut de la plateforme : ces deux entrées ne
+# changent rien au comportement. Elles sont écrites parce que
+# `.github/workflows/deployer-fonctions.yml` lit ce fichier pour savoir comment
+# déployer chaque fonction, et parce qu'une fonction absente de cet inventaire
+# est une fonction dont personne ne relit la politique d'authentification. Le
+# jour où quelqu'un aura besoin d'un accès sans JWT, il devra l'écrire ICI,
+# donc l'expliquer — c'est tout l'intérêt.
+[functions.banque-sync]
+verify_jwt = true
+
+[functions.chorus-sync]
+verify_jwt = true

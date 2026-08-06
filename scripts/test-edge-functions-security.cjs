@@ -12,6 +12,38 @@ const configurationFonction = (nom) => {
   return motif.exec(config)?.[1] || ''
 }
 
+// Les règles générales ci-dessous se DÉRIVENT du dossier des fonctions : une
+// fonction nouvelle entre dans le périmètre toute seule. Une liste recopiée à
+// la main, elle, laisserait le neuvième branchement sans aucune vérification
+// — ce qui est arrivé, et qui ne se voit jamais puisque le test reste vert.
+const TOUTES_LES_FONCTIONS = fs
+  .readdirSync(path.join(racine, 'supabase/functions'), { withFileTypes: true })
+  .filter((e) => e.isDirectory() && !e.name.startsWith('_'))
+  .map((e) => e.name)
+  .sort()
+
+/** `gmail-oauth` est le seul point d'entrée que Google appelle en GET (le
+ *  retour `?code=`) : la règle « POST uniquement » ne peut pas s'y appliquer,
+ *  et il porte à la place son jeton d'initiation signé, vérifié plus bas. */
+const RETOUR_OAUTH = 'gmail-oauth'
+const FONCTIONS_AUTHENTIFIEES = TOUTES_LES_FONCTIONS.filter((nom) => nom !== RETOUR_OAUTH)
+
+/** Les méthodes qu'une fonction ANNONCE au navigateur. On s'en sert pour
+ *  dériver la règle au lieu de la recopier : celle qui n'annonce que POST
+ *  doit refuser tout le reste, celle qui en annonce plus (ingestion-config
+ *  sert aussi GET et DELETE) est traitée pour ce qu'elle est. */
+const methodesDeclarees = (nom) =>
+  (/'Access-Control-Allow-Methods':\s*'([^']+)'/.exec(lire(`supabase/functions/${nom}/index.ts`)) || [, ''])[1]
+    .split(',')
+    .map((m) => m.trim().toUpperCase())
+    .filter(Boolean)
+
+const FONCTIONS_POST = TOUTES_LES_FONCTIONS.filter((nom) => {
+  const m = methodesDeclarees(nom)
+  return m.length === 2 && m.includes('POST') && m.includes('OPTIONS')
+})
+assert.ok(FONCTIONS_POST.length >= 6, 'la dérivation des fonctions « POST seulement » paraît vide')
+
 for (const nom of [
   'gmail-oauth',
   'gmail-ingestion',
@@ -23,11 +55,16 @@ for (const nom of [
   assert.match(configurationFonction(nom), /verify_jwt\s*=\s*false/, `${nom} doit accepter son auth applicative`)
 }
 assert.match(configurationFonction('ingestion-config'), /verify_jwt\s*=\s*true/, 'ingestion-config doit exiger un JWT')
-for (const nom of ['gmail-ingestion', 'veille-collecte', 'veille-mails', 'veille-enrichir', 'resume-messages']) {
+for (const nom of FONCTIONS_POST) {
   assert.match(
     lire(`supabase/functions/${nom}/index.ts`),
     /req\.method !== 'POST'/,
     `${nom} doit refuser les méthodes autres que POST`,
+  )
+  assert.match(
+    lire(`supabase/functions/${nom}/index.ts`),
+    /req\.method === 'OPTIONS'/,
+    `${nom} doit répondre au préflet : sans cela le navigateur n’émet jamais la requête`,
   )
 }
 
@@ -97,14 +134,7 @@ assert.equal(
 // Le contrôle d'accès passe par le registre des membres (livrable 0.2) et non
 // plus par une liste d'adresses recopiée dans chaque fonction. Le détail est
 // vérifié par scripts/test-registre-membres.cjs ; ici on garde le principe.
-for (const nom of [
-  'gmail-ingestion',
-  'ingestion-config',
-  'veille-collecte',
-  'veille-enrichir',
-  'veille-mails',
-  'resume-messages',
-]) {
+for (const nom of FONCTIONS_AUTHENTIFIEES) {
   assert.match(
     lire(`supabase/functions/${nom}/index.ts`),
     /from '\.\.\/_shared\/membres\.ts'/,
@@ -144,17 +174,17 @@ assert.match(oauth, /https:\/\/oauth2\.googleapis\.com\/token/, 'échange Google
 assert.match(oauth, /https:\/\/openidconnect\.googleapis\.com\/v1\/userinfo/, 'identité Google vérifiée')
 assert.match(oauth, /\.select\('id'\)\s*\.maybeSingle\(\)/, 'la mise à jour du refresh token doit être vérifiée')
 
-for (const fichier of [
-  'supabase/functions/_shared/oauth-init.ts',
-  'supabase/functions/_shared/membres.ts',
-  'supabase/functions/gmail-oauth/index.ts',
-  'supabase/functions/gmail-ingestion/index.ts',
-  'supabase/functions/ingestion-config/index.ts',
-  'supabase/functions/veille-collecte/index.ts',
-  'supabase/functions/veille-enrichir/index.ts',
-  'supabase/functions/veille-mails/index.ts',
-  'supabase/functions/resume-messages/index.ts',
-]) {
+const fichiersEdge = []
+;(function balayer(dossier) {
+  for (const e of fs.readdirSync(dossier, { withFileTypes: true })) {
+    const complet = path.join(dossier, e.name)
+    if (e.isDirectory()) balayer(complet)
+    else if (e.name.endsWith('.ts')) fichiersEdge.push(path.relative(racine, complet))
+  }
+})(path.join(racine, 'supabase/functions'))
+assert.ok(fichiersEdge.length >= 10, 'le balayage des sources Edge paraît vide')
+
+for (const fichier of fichiersEdge) {
   const resultat = ts.transpileModule(lire(fichier), {
     compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
     fileName: fichier,
@@ -168,19 +198,11 @@ for (const fichier of [
   )
 }
 
-for (const fichier of [
-  'supabase/functions/gmail-oauth/index.ts',
-  'supabase/functions/gmail-ingestion/index.ts',
-  'supabase/functions/ingestion-config/index.ts',
-  'supabase/functions/veille-collecte/index.ts',
-  'supabase/functions/veille-enrichir/index.ts',
-  'supabase/functions/veille-mails/index.ts',
-  'supabase/functions/resume-messages/index.ts',
-]) {
+for (const nom of TOUTES_LES_FONCTIONS) {
   assert.match(
-    lire(fichier),
+    lire(`supabase/functions/${nom}/index.ts`),
     /jsr:@supabase\/supabase-js@2\.110\.0/,
-    `${fichier}: la dépendance Supabase doit être figée`,
+    `${nom}: la dépendance Supabase doit être figée — une fonction Edge se redéploie avec ce qu’elle trouve`,
   )
 }
 

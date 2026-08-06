@@ -184,7 +184,17 @@ Dans cet ordre :
    npx supabase functions deploy veille-mails
    npx supabase functions deploy veille-enrichir
    npx supabase functions deploy resume-messages
+   npx supabase functions deploy banque-sync
+   npx supabase functions deploy chorus-sync
    ```
+
+   `banque-sync` et `chorus-sync` ne dépendent d'aucune autre : leur place dans
+   la liste n'a pas d'importance. Toutes deux sont appelées **depuis le
+   navigateur** avec la session de la personne, donc en `verify_jwt` par défaut
+   (true), et revérifient le registre des membres. Tant que leurs secrets (§6
+   et §7 ci-dessous) ne sont pas posés, elles répondent « non configuré » et
+   les écrans concernés continuent de fonctionner sans elles — l'import de
+   relevé pour la banque, l'import CSV du cycle de vie pour Chorus Pro.
 
    `supabase/config.toml` fixe le `verify_jwt` de chacune. Les six fonctions
    appelées sans session utilisateur — callback OAuth et tâches planifiées —
@@ -209,6 +219,57 @@ Dans cet ordre :
    lit par usage. Tant qu'elle n'est pas posée, la tâche tourne, ne dépense
    rien, et l'écrit dans `ingestion_config.resume_dernier_resultat`. Rien
    d'autre dans le Cockpit n'en dépend.
+
+6. **Adresse de contact de la veille**, facultative mais recommandée :
+
+   ```bash
+   npx supabase secrets set VEILLE_CONTACT_EMAIL=contact@lagence.fr
+   ```
+
+   `veille-enrichir` la joint à son `User-Agent` pour se présenter honnêtement
+   aux sites consultés. Absente, le `User-Agent` reste identifiable mais
+   n'expose personne — c'est pourquoi elle ne se met pas en dur dans le code.
+   Le worker de repli (`scraper-worker/`) lit la même variable dans son propre
+   environnement.
+
+7. **Secrets de la connexion bancaire** (`banque-sync`), si l'agence branche
+   GoCardless Bank Account Data — **lecture seule, aucun ordre possible** :
+
+   ```bash
+   npx supabase secrets set GOCARDLESS_SECRET_ID=...
+   npx supabase secrets set GOCARDLESS_SECRET_KEY=...
+   npx supabase secrets set BANQUE_REDIRECT_URL=https://<app>.vercel.app/#/finance/banque
+   ```
+
+   Les deux premiers viennent du portail Bank Account Data (rubrique *user
+   secrets*) et ne servent qu'à obtenir un jeton d'API : **ils ne quittent
+   jamais la fonction**. Le troisième est l'adresse HTTPS où la banque renvoie
+   la personne ; il ne porte aucun secret, et la fonction refuse toute adresse
+   non HTTPS. Sans ces trois secrets, l'écran Banque le dit et seul l'import de
+   relevé fonctionne.
+
+8. **Secrets du cycle de vie Chorus Pro** (`chorus-sync`), si l'agence
+   raccorde la passerelle PISTE — **lecture seule également** :
+
+   ```bash
+   npx supabase secrets set CHORUS_CLIENT_ID=...
+   npx supabase secrets set CHORUS_CLIENT_SECRET=...
+   npx supabase secrets set CHORUS_TECHNIQUE_LOGIN=...
+   npx supabase secrets set CHORUS_TECHNIQUE_MOTDEPASSE=...
+   # défaut : qualification. À ne basculer qu'une fois le raccordement déclaré.
+   # npx supabase secrets set CHORUS_ENVIRONNEMENT=production
+   # seulement si Chorus les réclame :
+   # npx supabase secrets set CHORUS_ID_UTILISATEUR=...
+   # npx supabase secrets set CHORUS_ID_ESPACE=...
+   ```
+
+   Les deux premiers identifient l'**application** PISTE, les deux suivants la
+   **structure** (compte technique Chorus Pro, actif seulement 30 minutes après
+   sa création). Le compte technique hérite des droits du gestionnaire
+   principal sur **toutes** ses structures : c'est le secret le plus sensible du
+   Cockpit après la clé `service_role`, et comme elle il ne sort pas de la
+   fonction. Tant qu'ils ne sont pas posés, l'écran Ventes nomme ceux qui
+   manquent et l'import CSV du cycle de vie reste le chemin.
 
 La migration `20260730180000` crée le **registre des membres**
 (`public.membres`) et fait appeler `est_membre_actif()` / `role_courant()` par

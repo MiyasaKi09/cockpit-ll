@@ -152,6 +152,25 @@ function migrate(parsed: AppState): AppState {
   etat.attendusFinanciers = Array.isArray(parsed.attendusFinanciers) ? parsed.attendusFinanciers : []
   etat.transactionsBancaires = Array.isArray(parsed.transactionsBancaires) ? parsed.transactionsBancaires : []
   etat.importsBancaires = Array.isArray(parsed.importsBancaires) ? parsed.importsBancaires : []
+  // Connexion bancaire directe — miroir daté, sans secret. Champ ajouté sans
+  // palier : un état antérieur n'a simplement aucune connexion, ce qui est la
+  // vérité. Les comptes sont normalisés à leur tour parce qu'ils viennent
+  // d'un serveur : un `comptes` absent rendrait `.map` sur `undefined` au
+  // premier affichage, et l'écran de trésorerie tomberait en entier.
+  etat.connexionsBancaires = (Array.isArray(parsed.connexionsBancaires) ? parsed.connexionsBancaires : []).map(
+    (c) => ({
+      ...c,
+      comptes: (Array.isArray(c?.comptes) ? c.comptes : []).map((x) => ({
+        ...x,
+        typesSoldeVus: Array.isArray(x?.typesSoldeVus) ? x.typesSoldeVus : [],
+      })),
+    }),
+  )
+  // 5.16 — factures vues sur Chorus Pro sans correspondance au Cockpit.
+  // Champ ajouté sans palier : un état antérieur n'a simplement jamais
+  // synchronisé le portail, ce qui est la vérité — la collection naît vide,
+  // et l'import CSV du cycle de vie continue de fonctionner à l'identique.
+  etat.chorusInconnues = Array.isArray(parsed.chorusInconnues) ? parsed.chorusInconnues : []
   etat.lotsComptables = Array.isArray(parsed.lotsComptables) ? parsed.lotsComptables : []
   // Position TVA — déclarations marquées à la main. Champ ajouté sans
   // palier : un état antérieur n'a simplement rien déclaré DEPUIS le

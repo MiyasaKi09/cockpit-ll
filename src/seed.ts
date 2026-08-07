@@ -572,9 +572,22 @@ export function seedState(): AppState {
         contactNom: 'M. Martin',
         contactEmail: 'contact@martin-btp.example',
         actif: true,
+        // 5.23 — L'ENVELOPPE, dérivée des périodes ci-dessous (premier début,
+        // dernière fin). Elle est ce que lisent les écrans non migrés : la
+        // fiche projet, l'impression, la prolongation par intempéries.
         dateDebut: '2026-02-15',
         dateFin: '2026-06-30',
-        notes: 'EXEMPLE — fin contractuelle dépassée, réception non prononcée (retard visible au planning chantier).',
+        // EXEMPLE — le cas que ce champ existe pour, et le plus banal des
+        // chantiers : le gros œuvre REVIENT après le clos-couvert. Avec un
+        // seul couple de dates, il fallait choisir entre n'afficher que le
+        // premier passage et tirer une barre de février à juin par-dessus
+        // deux mois où l'entreprise n'est pas là — le planning mentait dans
+        // les deux cas.
+        interventions: [
+          { id: 'per-P03-L01-1', debut: '2026-02-15', fin: '2026-04-30', libelle: 'terrassement & élévations', confirmeLe: '2026-01-20' },
+          { id: 'per-P03-L01-2', debut: '2026-06-01', fin: '2026-06-30', libelle: 'reprises après clos-couvert' },
+        ],
+        notes: 'EXEMPLE — deux passages ; fin contractuelle dépassée, réception non prononcée (retard visible au planning chantier).',
       },
       {
         id: 'M-P03-L02',

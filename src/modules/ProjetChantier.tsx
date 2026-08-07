@@ -12,6 +12,7 @@ import type {
   Intemperie,
   MarcheTravaux,
   NatureIntemperie,
+  PeriodeIntervention,
   PhaseCode,
   PointSeance,
   Projet,
@@ -112,6 +113,14 @@ import {
   totalAppliqueMarche,
   totalEncouruMarche,
 } from '../penalites'
+// 5.23 — LES INTERVENTIONS D'UN LOT ONT UNE AUTORITÉ, et c'est
+// `interventionsDe` (src/planningTravaux.ts) : elle rend les périodes quand
+// il y en a, sinon elle replie `dateDebut`/`dateFin`. Lire les deux champs
+// directement ici afficherait « 15/02 → 30/06 » pour un lot qui n'est sur
+// place que deux mois et demi — la barre qui recouvre ses propres trous.
+// `interventionDe` (l'enveloppe) sert à l'inverse : dire l'étendue que le
+// marché va enregistrer.
+import { interventionDe, interventionsDe } from '../planningTravaux'
 import { assemble, contexteMarche, contexteProjet } from '../prompts'
 import {
   Badge,
@@ -311,11 +320,26 @@ export function CarteMarches({ projet: p }: { projet: Projet }) {
                   )}
                 </td>
                 <td className="small">
-                  {m.dateDebut || m.dateFin ? (
-                    <>{m.dateDebut ? fmtDate(m.dateDebut) : '?'} → {m.dateFin ? fmtDate(m.dateFin) : '?'}</>
-                  ) : (
-                    <a href="#/planning" className="muted">à planifier</a>
-                  )}
+                  {/* 5.23 — UNE LIGNE PAR PÉRIODE, par `interventionsDe`
+                      (l'autorité, src/planningTravaux.ts). Afficher la seule
+                      enveloppe ici redonnerait « 15/02 → 30/06 » pour un lot
+                      qui n'est sur place que deux mois et demi, et c'est
+                      précisément le mensonge que 5.23 corrige. */}
+                  {(() => {
+                    const periodes = interventionsDe(m)
+                    if (periodes.length === 0) {
+                      return <a href="#/planning" className="muted">à planifier</a>
+                    }
+                    return periodes.map((p, i) => (
+                      <div key={p.id ?? 'enveloppe'}>
+                        {fmtDate(p.debut)} → {fmtDate(p.fin)}
+                        {p.libelle && <span className="muted"> · {p.libelle}</span>}
+                        {periodes.length > 1 && !p.libelle && (
+                          <span className="muted"> · passage {i + 1}</span>
+                        )}
+                      </div>
+                    ))
+                  })()}
                 </td>
                 <td>{m.actif ? <Badge tone="ok">en cours</Badge> : <span className="muted">—</span>}</td>
                 <td className="small">
@@ -434,8 +458,26 @@ function ModalMarche({
   const [contactNom, setContactNom] = useState(marche?.contactNom || '')
   const [contactEmail, setContactEmail] = useState(marche?.contactEmail || '')
   const [actif, setActif] = useState(marche?.actif ? 'oui' : 'non')
-  const [dateDebut, setDateDebut] = useState<string | null>(marche?.dateDebut ?? null)
-  const [dateFin, setDateFin] = useState<string | null>(marche?.dateFin ?? null)
+  // 5.23 — LES PÉRIODES D'INTERVENTION. « Sur le planning chantier, il faut
+  // qu'une entreprise puisse intervenir PLUSIEURS FOIS » : c'est ici qu'on
+  // les ajoute, les modifie et les retire.
+  //
+  // À l'ouverture d'un marché ANCIEN, le couple `dateDebut`/`dateFin` est
+  // REPLIÉ en une période — le même repli que celui de la lecture
+  // (`interventionsDe`), pour que le formulaire montre ce que le planning
+  // montre. Il n'est ENREGISTRÉ comme périodes que si la personne y touche :
+  // `dejaMigre` et `signatureInitiale` gardent cette porte fermée. Sans quoi
+  // corriger un montant sur un marché de 2025 lui écrirait au passage une
+  // collection qu'aucun humain n'a demandée — la réécriture silencieuse que
+  // ce lot s'interdit.
+  const dejaMigre = Array.isArray(marche?.interventions)
+  const periodesInitiales: PeriodeIntervention[] = dejaMigre
+    ? marche!.interventions!.map((p) => ({ ...p }))
+    : marche?.dateDebut || marche?.dateFin
+      ? [{ id: uid('per'), debut: marche?.dateDebut ?? null, fin: marche?.dateFin ?? null }]
+      : []
+  const [periodes, setPeriodes] = useState<PeriodeIntervention[]>(periodesInitiales)
+  const [signatureInitiale] = useState(() => JSON.stringify(periodesInitiales))
   // 5.19 — avance forfaitaire du CCAG (art. 13). Le champ existait au type et
   // le certificat de paiement le LIT (avance versée + résorption proposée) ;
   // personne ne l'écrivait : chaque état mensuel proposait donc 0 d'avance et
@@ -496,6 +538,78 @@ function ModalMarche({
 
   const valide = lot.trim() !== '' && entreprise.trim() !== ''
 
+  // --- les gestes sur les périodes, chacun avec son « Annuler » ------------
+  //
+  // Rien n'est écrit dans l'état tant que « Enregistrer » n'est pas cliqué :
+  // l'annulation joue donc sur l'état LOCAL du formulaire. C'est le même
+  // geste pour la personne — « je me suis trompée, remets ça » — et c'est le
+  // seul qui ait un sens ici : un « Annuler » qui rouvrirait la modale sur un
+  // marché déjà enregistré serait une écriture qu'elle n'a pas demandée.
+
+  const ajouterPeriode = () => {
+    const snap = periodes
+    setPeriodes([...periodes, { id: uid('per'), debut: null, fin: null }])
+    toast(
+      periodes.length === 0
+        ? 'Période ajoutée — un marché sans période reste licite (lot attribué, dates inconnues).'
+        : 'Période ajoutée.',
+      { undo: () => setPeriodes(snap) },
+    )
+  }
+
+  const majPeriode = (id: string, champs: Partial<PeriodeIntervention>) => {
+    setPeriodes(periodes.map((p) => (p.id === id ? { ...p, ...champs } : p)))
+  }
+
+  const retirerPeriode = (id: string) => {
+    const snap = periodes
+    const p = periodes.find((x) => x.id === id)
+    setPeriodes(periodes.filter((x) => x.id !== id))
+    toast(
+      `Période retirée${p?.libelle ? ` — ${p.libelle}` : p?.debut ? ` — ${fmtDate(p.debut)}` : ''}.`,
+      { tone: 'warn', undo: () => setPeriodes(snap) },
+    )
+  }
+
+  /** les périodes telles qu'elles s'enregistreront : texte rogné, période
+   *  entièrement vide écartée (elle n'aurait rien à dire au planning) */
+  const periodesNettes = (): PeriodeIntervention[] =>
+    periodes
+      .filter((p) => p.debut || p.fin || (p.libelle || '').trim())
+      .map((p) => ({
+        id: p.id,
+        debut: p.debut ?? null,
+        fin: p.fin ?? null,
+        libelle: (p.libelle || '').trim() || undefined,
+        confirmeLe: p.confirmeLe ?? null,
+      }))
+
+  // l'enveloppe PROPOSÉE par la saisie en cours — affichée sous le tableau,
+  // parce que c'est elle que verront les écrans non migrés et l'impression
+  const apercuEnveloppe = interventionDe({ dateDebut: null, dateFin: null, interventions: periodesNettes() })
+
+  /** ce qui s'écrit vraiment des dates d'intervention.
+   *
+   *  Deux cas, et la frontière est le geste humain :
+   *  · la liste des périodes n'a pas bougé ET le marché n'en portait pas —
+   *    on n'écrit QUE l'enveloppe, comme avant 5.23. Le marché reste tel
+   *    qu'il a été saisi ; c'est la garantie « aucune réécriture » ;
+   *  · sinon (marché déjà périodique, ou périodes touchées) — on écrit les
+   *    périodes ET l'enveloppe qui en découle. */
+  const enveloppeAEcrire = (): Pick<MarcheTravaux, 'dateDebut' | 'dateFin' | 'interventions'> => {
+    const nettes = periodesNettes()
+    const env = interventionDe({ dateDebut: null, dateFin: null, interventions: nettes })
+    const touche = dejaMigre || JSON.stringify(periodes) !== signatureInitiale
+    if (!touche) {
+      return { dateDebut: marche?.dateDebut ?? null, dateFin: marche?.dateFin ?? null }
+    }
+    return {
+      interventions: nettes,
+      dateDebut: env ? env.debut : null,
+      dateFin: env ? env.fin : null,
+    }
+  }
+
   const enregistrer = () => {
     if (!valide) return
     if (moisZero.trim() && !/^\d{4}-\d{2}$/.test(moisZero.trim())) {
@@ -540,8 +654,11 @@ function ModalMarche({
         contactNom: contactNom.trim() || undefined,
         contactEmail: contactEmail.trim() || undefined,
         actif: actif === 'oui',
-        dateDebut,
-        dateFin,
+        // 5.23 — L'ENVELOPPE. Ces deux champs restent, et deviennent le
+        // premier début / la dernière fin des périodes. Ils ne se saisissent
+        // plus : les recopier à la main d'un côté et les dériver de l'autre
+        // ferait diverger l'étendue affichée de ses propres barres.
+        ...enveloppeAEcrire(),
         // 5.19 — null (et non 0) quand il n'y a pas d'avance : le certificat
         // n'a alors rien à résorber ; 0 affirmerait une avance nulle décidée
         avanceForfaitaireHT: avanceRetenue !== null && avanceRetenue > 0 ? avanceRetenue : null,
@@ -743,13 +860,74 @@ function ModalMarche({
           />
         </Field>
       </div>
-      <div className="form-row">
-        <Field label="Intervention chantier — début" hint="alimente le planning travaux">
-          <DateInput value={dateDebut} onChange={setDateDebut} />
-        </Field>
-        <Field label="Intervention chantier — fin">
-          <DateInput value={dateFin} onChange={setDateFin} />
-        </Field>
+      {/* 5.23 — LES PÉRIODES D'INTERVENTION.
+          Une entreprise intervient plusieurs fois : le gros œuvre revient
+          après le clos-couvert, le plaquiste passe avant puis après
+          l'électricien. Chaque période porte ses dates et un libellé court,
+          et c'est ce libellé qui rend le Gantt lisible quand un lot a trois
+          barres. */}
+      <div style={{ marginTop: 4 }}>
+        <div
+          className="toolbar"
+          style={{ justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: 8 }}
+        >
+          <span className="field-label">Périodes d'intervention sur le chantier</span>
+          <Btn small onClick={ajouterPeriode}>Ajouter une période</Btn>
+        </div>
+        {periodes.length === 0 ? (
+          <p className="muted small" style={{ margin: '4px 0 0' }}>
+            Aucune période — le lot n'apparaît pas au planning. C'est licite : un lot attribué dont
+            les dates ne sont pas connues, c'est le cas au moment de la signature.
+          </p>
+        ) : (
+          <Table compact head={['Libellé', 'Début', 'Fin', 'Venue confirmée le', '']}>
+            {periodes.map((p, i) => (
+              <tr key={p.id}>
+                <td>
+                  <TextInput
+                    value={p.libelle ?? ''}
+                    onChange={(v) => majPeriode(p.id, { libelle: v })}
+                    placeholder={periodes.length > 1 ? `passage ${i + 1}` : 'facultatif'}
+                    ariaLabel={`Libellé de la période ${i + 1}`}
+                  />
+                </td>
+                <td>
+                  <DateInput value={p.debut ?? null} onChange={(v) => majPeriode(p.id, { debut: v })} />
+                </td>
+                <td>
+                  <DateInput value={p.fin ?? null} onChange={(v) => majPeriode(p.id, { fin: v })} />
+                </td>
+                <td>
+                  {/* 5.7 — la confirmation porte sur CETTE période : une
+                      entreprise confirmée en janvier pour février n'a rien
+                      confirmé pour son retour de juin */}
+                  <DateInput
+                    value={p.confirmeLe ?? null}
+                    onChange={(v) => majPeriode(p.id, { confirmeLe: v })}
+                  />
+                </td>
+                <td className="right">
+                  <Btn small kind="ghost" onClick={() => retirerPeriode(p.id)} title="Retirer cette période">
+                    Retirer
+                  </Btn>
+                </td>
+              </tr>
+            ))}
+          </Table>
+        )}
+        <p className="muted small" style={{ margin: '6px 0 0' }}>
+          {apercuEnveloppe ? (
+            <>
+              Étendue du lot : <strong>{fmtDate(apercuEnveloppe.debut)} → {fmtDate(apercuEnveloppe.fin)}</strong>{' '}
+              — c'est elle qui s'enregistre sur le marché et que lisent la fiche projet, l'impression
+              et le calcul d'intempéries. Le Gantt, lui, dessine une barre par période.
+            </>
+          ) : (
+            'Aucune date : le lot ne porte encore aucune étendue.'
+          )}{' '}
+          Ajouter ou retirer une période laisse un « Annuler » ; « Annuler » en pied de fenêtre
+          abandonne toutes les modifications.
+        </p>
       </div>
       <div className="form-row">
         <Field label="Notes">
@@ -1549,7 +1727,11 @@ export function CarteIntemperies({ projet: p }: { projet: Projet }) {
     .sort((a, b) => b.date.localeCompare(a.date) || a.id.localeCompare(b.id))
 
   // l'effet « prolongation » se lit sur les marchés dont la fenêtre
-  // d'intervention est posée — les autres n'ont pas de période à confronter
+  // d'intervention est posée — les autres n'ont pas de période à confronter.
+  // L'ENVELOPPE est ici la bonne lecture, et c'est voulu : les jours
+  // d'intempéries reconnus repoussent le TERME du marché (`prolongationDelai`,
+  // src/penalites.ts, qui lit ces deux mêmes champs), pas chacun de ses
+  // passages — un lot qui revient n'obtient pas deux fois les mêmes jours.
   const marchesAvecFenetre = state.marches.filter(
     (m) => m.projetId === p.id && (m.dateDebut || m.dateFin),
   )

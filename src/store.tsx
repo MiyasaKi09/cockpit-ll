@@ -3,8 +3,9 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { AppState, DocumentCorpus, Entreprise, Personne } from './types'
+import type { AppState, DocumentCorpus, Entreprise, MarcheTravaux, PeriodeIntervention, Personne } from './types'
 import { fold, todayISO, uid } from './util'
+import { synchroniserEnveloppe } from './planningTravaux'
 import { seedState, STATE_VERSION } from './seed'
 import { PHASES_ORDRE } from './miqcp'
 import { baselineApresMigration } from './derive'
@@ -49,6 +50,38 @@ let erreurPersistanceInitiale: string | null = null
 function texteNormalise(v: string | undefined): string | undefined {
   const t = (v || '').trim()
   return t || undefined
+}
+
+/** 5.23 — les PÉRIODES d'intervention d'un marché (`MarcheTravaux.
+ *  interventions`), normalisées.
+ *
+ *  RIEN N'EST RÉÉCRIT sur un marché qui n'en porte pas : le champ absent est
+ *  l'état d'origine de tous les marchés saisis avant 5.23, et `interventionsDe`
+ *  (src/planningTravaux.ts) sait replier `dateDebut`/`dateFin` à la LECTURE.
+ *  Fabriquer ici une période pour chacun d'eux serait une migration de
+ *  données déguisée en normalisation — et elle rejouerait à chaque chargement
+ *  ET sur tout état distant reçu, puisque `migrate()` tourne à chaque fois.
+ *
+ *  Sur un marché qui EN PORTE, deux choses seulement :
+ *  · le patron `Array.isArray` — une valeur non-tableau (import JSON bricolé,
+ *    futur producteur) ferait tomber le Gantt entier au premier `.map` ;
+ *  · l'identifiant manquant est comblé, parce que c'est LUI qui désigne la
+ *    barre qu'un geste déplace : sans identifiant, un glissement écrirait sur
+ *    une période prise au hasard ;
+ *  · l'ENVELOPPE est remise d'aplomb sur les périodes. C'est idempotent (la
+ *    même entrée donne la même sortie), donc rejouable sans dérive — à la
+ *    différence d'une reprise, qui doit se faire au franchissement du palier.
+ *    Sans cela, un état importé à la main pourrait afficher une étendue qui
+ *    contredit ses propres barres, et c'est cette étendue que lisent la fiche
+ *    projet, l'impression et le calcul d'intempéries. */
+function normaliserMarche(m: MarcheTravaux): MarcheTravaux {
+  if (!m || !Array.isArray(m.interventions)) return m
+  const interventions: PeriodeIntervention[] = m.interventions
+    .filter((p): p is PeriodeIntervention => Boolean(p) && typeof p === 'object')
+    .map((p, i) => (typeof p.id === 'string' && p.id ? p : { ...p, id: `${m.id}-per-${i + 1}` }))
+  const normalise: MarcheTravaux = { ...m, interventions }
+  synchroniserEnveloppe(normalise)
+  return normalise
 }
 
 /** migration sans perte : complète les champs apparus depuis la v1 */
@@ -305,6 +338,11 @@ function migrate(parsed: AppState): AppState {
     // du contrat. Aucune donnée n'est remplacée, aucun calcul ne change.
     baselineHeures: baselineApresMigration(p, reprendreBaselines, aujourdhui),
   }))
+  // 5.23 — les périodes d'intervention des marchés. Champ ajouté sans palier
+  // et sans reprise : un marché antérieur n'a qu'un couple de dates, ce qui
+  // est la vérité de ce qui a été saisi, et l'autorité de lecture le replie
+  // en une période unique. Voir `normaliserMarche`.
+  etat.marches = (Array.isArray(etat.marches) ? etat.marches : []).map(normaliserMarche)
   // v6 → v7 : facturation & situations pro (révision/RG sur les situations,
   // lien situation↔facture DET, suivi des relances). Uniquement des champs
   // optionnels : les situations et factures existantes sont conservées telles

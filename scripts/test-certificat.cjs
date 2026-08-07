@@ -371,6 +371,50 @@ const SURCHARGE_RG_CHAMANT = { retenueGarantieTTC: 144.44 }
   assert.match(ecran, /avanceRembourseeApresEmission/, 'la résorption émise avance le compteur du marché')
 }
 
+// --- UN SEUL CHEMIN POUR ÉMETTRE, MAINTENANT QU'IL Y A TROIS PORTES -------
+//
+// 5.21 a ouvert le cycle mensuel depuis TROIS écrans : l'onglet Situations,
+// la fiche entreprise et l'onglet Chantier du projet. C'était la demande de
+// l'agence — « faut pouvoir gérer aussi sur chaque chantier dans la fiche
+// projet » — et c'est aussi le moment précis où un dépôt se met à produire
+// deux documents contractuels différents pour la même situation.
+//
+// La règle n'est pas « un seul écran » : c'est UN SEUL AUTEUR. Les trois
+// portes doivent mener au même composant, celui qui numérote, fige et signe.
+// Un second `ModalCertificat` écrit ailleurs, même fidèlement copié, dériverait
+// au premier correctif appliqué d'un seul côté — et rien ne dirait lequel des
+// deux papiers fait foi.
+
+{
+  const definitions = []
+  for (const fichier of ['src/modules/Situations.tsx', 'src/modules/FicheEntreprise.tsx', 'src/modules/ProjetChantier.tsx']) {
+    const src = lire(fichier)
+    if (/function ModalCertificat|const ModalCertificat\s*[:=]/.test(src)) definitions.push(fichier)
+  }
+  assert.deepEqual(
+    definitions,
+    ['src/modules/Situations.tsx'],
+    'UN SEUL écran DÉFINIT le geste d’émission ; les autres l’IMPORTENT.\n' +
+      `  constaté : [${definitions.join(', ')}]\n` +
+      '  Deux définitions = deux certificats possibles pour la même situation, et aucun moyen de\n' +
+      '  savoir lequel a été remis à l’entreprise.',
+  )
+
+  for (const fichier of ['src/modules/FicheEntreprise.tsx', 'src/modules/ProjetChantier.tsx']) {
+    assert.match(
+      lire(fichier),
+      /import \{[^}]*ModalCertificat[^}]*\} from '\.\/Situations'/,
+      `${fichier} ouvre le cycle mensuel : il doit IMPORTER ModalCertificat, pas en écrire un.`,
+    )
+  }
+
+  // et le figeage lui-même n'a qu'un auteur, où qu'on l'appelle
+  const auteurs = ['src/certificat.ts', 'src/modules/Situations.tsx', 'src/modules/FicheEntreprise.tsx', 'src/modules/ProjetChantier.tsx'].filter(
+    (f) => /function figerCertificat|const figerCertificat\s*=/.test(lire(f)),
+  )
+  assert.deepEqual(auteurs, ['src/certificat.ts'], 'le figeage s’écrit dans src/certificat.ts et nulle part ailleurs')
+}
+
 console.log(
   'Certificat de paiement : l’état n° 4 de la MAM de Chamant reproduit au centime (net 4 789,16 avec la ' +
     'surcharge contractuelle de RG), résorption CCAG 65 → 80 % proposée jamais imposée, certificat émis ' +

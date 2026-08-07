@@ -334,15 +334,56 @@ const S = etat({
   )
 
   const ecran = lire('src/modules/FicheEntreprise.tsx')
-  assert.doesNotMatch(
-    ecran,
-    /\bupdate\(|\breplace\(/,
-    'la fiche est en LECTURE : aucun appel d’écriture du store — un doublon d’écriture ferait deux vérités',
-  )
+
+  // ─── RÈGLE RÉÉCRITE le 07/08/2026, et voici pourquoi ──────────────────
+  //
+  // Cette assertion exigeait que la fiche n'appelle NI `update(` NI
+  // `replace(` : « la fiche est en LECTURE ». L'agence a demandé l'inverse —
+  // « il faut vraiment améliorer la gestion des entreprises à tout niveau,
+  // situation, certificats de paiements » — puis, en voyant le résultat :
+  // « je ne vois pas la gestion ». Une fiche qui montre tout et ne permet
+  // rien oblige à aller agir ailleurs : c'est le parcours éclaté que l'audit
+  // d'usage reproche, pas une garantie.
+  //
+  // La règle est donc réécrite, PAS supprimée — sa raison d'origine tient
+  // toujours, mais elle portait sur la mauvaise chose. Ce qu'il fallait
+  // interdire n'a jamais été le GESTE : c'est le doublon de VÉRITÉ. Un écran
+  // de synthèse qui recalculerait un montant, ou qui composerait un document
+  // contractuel à sa façon, ferait exister deux réponses à la même question
+  // — et sur un certificat de paiement, deux réponses valent une fausse.
+  //
+  // Ce qui suit dit exactement cela : écrire est permis, recalculer ne l'est
+  // pas. Une assertion qui change sans que personne écrive pourquoi est une
+  // règle perdue ; celle-ci change en gardant sa raison.
+
   assert.match(
     ecran,
-    /const \{ state \} = useStore\(\)/,
-    'l’écran ne destructure QUE state — même pas la fonction d’écriture sous la main',
+    /\bupdate\(/,
+    'la fiche PORTE désormais les gestes du suivi (relancer, saisir, émettre) : sans écriture,\n' +
+      'elle redeviendrait la vitrine que l’agence a refusée — « je ne vois pas la gestion ».',
+  )
+
+  for (const [autorite, raison] of [
+    ['syntheseEntreprise', 'l’agrégat de la fiche (marchés, RG, pénalités, visas, situations)'],
+    ['decompteSituation', 'le net à payer d’une situation'],
+    ['construireCertificat', 'les lignes proposées du certificat'],
+  ]) {
+    assert.ok(
+      ecran.includes(autorite),
+      `la fiche doit IMPORTER « ${autorite} » — ${raison} — et non le recalculer.\n` +
+        'C’est ce que l’ancienne règle « lecture seule » protégeait réellement : pas l’absence de\n' +
+        'geste, l’absence de SECOND CALCUL. Un montant recalculé ici différerait de celui de\n' +
+        'l’écran qui fait autorité, sans que personne sache lequel est juste.',
+    )
+  }
+
+  // le figeage d'un document contractuel n'a qu'un seul auteur : on peut
+  // l'appeler depuis la fiche, on ne peut pas le réécrire ici
+  assert.doesNotMatch(
+    ecran,
+    /function\s+figerCertificat|const\s+figerCertificat\s*=/,
+    'la fiche APPELLE le figeage du certificat (src/certificat.ts) ; elle n’en écrit pas une\n' +
+      'seconde version. Un document contractuel émis par deux chemins, ce sont deux vérités.',
   )
   assert.match(ecran, /ouvrirGmail\(/, 'le seul geste préparé est un BROUILLON (gmailComposeUrl, §15)')
   assert.match(ecran, /corpsRelanceSituation/, '… et c’est le même texte que l’onglet Attendues')

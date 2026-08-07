@@ -9,10 +9,17 @@
 // visasEnAttente…). Un agrégat qui recalculerait ferait deux vérités pour le
 // même marché — exactement la complexification que l'agence refuse.
 //
-// La fiche est une LECTURE : rien ici ne produit d'écriture, et l'écran qui
-// la montre (src/modules/FicheEntreprise.tsx) renvoie vers les écrans où
-// l'on AGIT. Le seul « geste » préparé ici est le TEXTE du brouillon de
-// relance — via gmailComposeUrl côté écran, jamais un envoi (§15).
+// CE MODULE reste une LECTURE — c'est la règle qui n'a pas bougé. Ce qui a
+// bougé (5.21), c'est l'écran : `src/modules/FicheEntreprise.tsx` PORTE
+// désormais des gestes, parce que l'agence a demandé de « gérer », pas de
+// contempler. La distinction tient en une phrase :
+//   · un CALCUL n'a qu'une autorité — ici, ou dans derive/penalites/visas/gpa
+//     qu'on appelle. Rien ne se recalcule à l'écran ;
+//   · un GESTE (relancer, lever une RG, viser, décider) peut se déclencher
+//     depuis plusieurs écrans sans créer de seconde vérité, tant qu'il écrit
+//     le même champ à partir du même calcul.
+// Le seul « geste » préparé ici est le TEXTE du brouillon de relance — via
+// gmailComposeUrl côté écran, jamais un envoi (§15).
 //
 // Rapprochement : entrepriseId d'abord (le registre canonique amorcé par le
 // store), le NOM en repli — plié par `fold`, casse et espaces tolérés, la
@@ -33,7 +40,7 @@ import type {
 } from './types'
 import { projetById, retenueGarantieMarche, type RGMarche } from './derive'
 import { prolongationDelai, totalAppliqueMarche, totalEncouruMarche } from './penalites'
-import { visasEnAttente } from './visas'
+import { visasEnAttente, visasEnRetard } from './visas'
 import { desordresOuverts } from './gpa'
 import { fmtMois, fold, monthKey } from './util'
 
@@ -304,4 +311,223 @@ export function syntheseEntreprise(
     visasEnAttente: visas,
     situationsAttendues,
   }
+}
+
+// ------------------------------------------------------------
+// 5.21 — LA LISTE : l'entreprise a enfin une adresse
+// ------------------------------------------------------------
+//
+// `syntheseEntreprise` savait déjà tout d'UNE entreprise, mais il fallait
+// déjà être dans un projet pour l'ouvrir : l'agence n'avait aucun endroit
+// où poser la question « qui me doit quoi, aujourd'hui, tous chantiers
+// confondus ? ». Ce sélecteur est cet endroit — et il n'ajoute AUCUN
+// calcul : il APPELLE `syntheseEntreprise` par entreprise et se contente de
+// compter ce qu'elle rend. Un compteur qui relirait les collections lui-même
+// (« les visas à viser de ses marchés ») serait une seconde définition de
+// chaque notion, libre de diverger de la fiche qu'elle prétend résumer.
+//
+// Le seul motif lu ailleurs qu'à travers la synthèse est le RETARD d'un
+// visa — `visasEnRetard` (src/visas.ts, 5.8), appliqué à la liste que la
+// synthèse a déjà filtrée. C'est l'autorité, pas une comparaison de dates
+// réécrite ici.
+
+/** ce qui CRIE aujourd'hui chez une entreprise — des COMPTES, pris sur la
+ *  synthèse, jamais recalculés depuis les collections */
+export interface UrgencesEntreprise {
+  /** marchés actifs dont la situation du mois manque (critère partagé) */
+  situationsAttendues: number
+  /** la pire gravité de ces attentes — 0 quand il n'y en a aucune */
+  graviteSituation: 0 | 2 | 3
+  /** marchés portant une exposition de pénalité qu'aucune décision n'a figée */
+  penalitesADecider: number
+  /** … et le montant HT correspondant : encouru total − déjà appliqué */
+  penalitesADeciderHT: number
+  /** documents d'exécution encore à viser */
+  visasEnAttente: number
+  /** … dont l'échéance du CCAP est DÉPASSÉE : c'est NOTRE retard, pas le sien */
+  visasEnRetard: number
+  /** désordres GPA ouverts à la charge de ce titulaire */
+  desordresGPA: number
+  /** retenue de garantie dont la GPA est échue : de l'argent à rendre */
+  rgALibererHT: number
+  /** nombre de MOTIFS distincts qui crient — ce que la ligne affiche en tête */
+  motifs: number
+}
+
+/** un lot du portefeuille de l'entreprise, avec son chantier — « ses lots et
+ *  sur quels chantiers » tient dans une ligne */
+export interface LotEntreprise {
+  marcheId: string
+  lot: string
+  projetId: string
+  /** null si le projet a disparu — la ligne se montre quand même */
+  projetNom: string | null
+  actif: boolean
+}
+
+export interface LigneEntreprise {
+  /** ADRESSE de la fiche : l'id du registre quand il existe, sinon le nom
+   *  plié. C'est la clé que `#/entreprises/<id>` transporte, et elle se
+   *  redonne telle quelle à `syntheseEntreprise` — `fold` est idempotent,
+   *  un nom plié re-plié reste le même nom. */
+  cle: string
+  nom: string
+  entreprise: Entreprise | null
+  /** la synthèse COMPLÈTE — l'écran de liste n'a rien à recalculer, et la
+   *  fiche qu'on ouvre ensuite dira exactement la même chose */
+  synthese: SyntheseEntreprise
+  lots: LotEntreprise[]
+  /** nombre de chantiers distincts où elle intervient */
+  nbProjets: number
+  /** Σ montants de marché HT, avenants inclus (recopié de la synthèse) */
+  montantMarchesHT: number
+  urgences: UrgencesEntreprise
+  /** score de tri décroissant — voir POIDS_MOTIF */
+  poids: number
+}
+
+/** Le tri met en tête CE QUI DEMANDE UNE ACTION. L'ordre des poids est un
+ *  choix de conduite, écrit ici pour qu'il se discute :
+ *
+ *   · un visa en retard passe devant tout : le délai du CCAP est dépassé,
+ *     c'est la responsabilité de la MOE qui court — notre retard, pas le sien ;
+ *   · une situation attendue passé le 20 décale la vérification ET le
+ *     paiement : elle vaut plus qu'une situation attendue depuis le 10 ;
+ *   · une RG échue est de l'argent de l'entreprise qu'on garde sans droit ;
+ *   · une pénalité encourue non décidée est une décision qu'on n'a pas prise
+ *     — ni appliquée, ni renoncée ;
+ *   · un désordre GPA ouvert et un visa encore dans les délais ferment la
+ *     marche : ils ont du temps devant eux.
+ *
+ *  Le montant de marché n'entre PAS dans ce score : il départage seulement
+ *  deux entreprises qui crient pareil. Trier par l'argent mettrait le gros
+ *  lot silencieux devant le petit lot qui bloque le chantier. */
+export const POIDS_MOTIF = {
+  visaEnRetard: 100,
+  situationUrgente: 80,
+  rgALiberer: 70,
+  penaliteADecider: 50,
+  situationAttendue: 40,
+  desordreGPA: 30,
+  visaEnAttente: 20,
+} as const
+
+/** les entreprises que l'agence SUIT réellement : celles qui portent un
+ *  marché (même saisi avant l'amorce du registre, donc rattaché par le nom)
+ *  PLUS celles du registre — une entreprise consultée sans marché encore
+ *  signé a sa place dans la liste, avec une ligne vide qui le dit.
+ *
+ *  Dédoublonnage par la clé canonique : un marché portant `entrepriseId` et
+ *  un marché ne portant que le nom tombent sur la MÊME ligne dès que
+ *  `entrepriseDe` les rapproche — sinon la liste montrerait deux fois
+ *  HORIZONS BTP, ce que la fiche, elle, ne fait pas.
+ *
+ *  Logique PURE : `today` est un argument. */
+export function entreprisesSuivies(state: AppState, today: string): LigneEntreprise[] {
+  const cles: string[] = []
+  const vues = new Set<string>()
+  const retenir = (cle: string) => {
+    if (!cle || vues.has(cle)) return
+    vues.add(cle)
+    cles.push(cle)
+  }
+
+  // les porteuses de marché d'abord — ce sont elles qui font le suivi
+  for (const m of Array.isArray(state.marches) ? state.marches : []) {
+    if (!m) continue
+    const brut = m.entrepriseId || m.entreprise || ''
+    if (!brut) continue
+    const ent = entrepriseDe(state, brut)
+    retenir(ent ? ent.id : fold(m.entreprise || ''))
+  }
+  // puis le registre : une entreprise sans marché existe quand même
+  for (const e of Array.isArray(state.entreprises) ? state.entreprises : []) {
+    if (e && e.id) retenir(e.id)
+  }
+
+  const lignes = cles.map((cle) => {
+    const synthese = syntheseEntreprise(state, cle, today)
+
+    const lots: LotEntreprise[] = synthese.marches.map((l) => ({
+      marcheId: l.marche.id,
+      lot: l.marche.lot,
+      projetId: l.marche.projetId,
+      projetNom: l.projet?.nom ?? null,
+      actif: l.marche.actif,
+    }))
+
+    // gravité : la PIRE des attentes — une entreprise qui doit deux
+    // situations dont une depuis le 20 se traite comme la plus urgente
+    let graviteSituation: 0 | 2 | 3 = 0
+    let situationsUrgentes = 0
+    for (const a of synthese.situationsAttendues) {
+      if (a.gravite > graviteSituation) graviteSituation = a.gravite
+      if (a.gravite === 3) situationsUrgentes += 1
+    }
+
+    // « à décider » = l'exposition qu'aucune décision humaine n'a figée :
+    // l'encouru TOTAL moins ce qui est déjà appliqué (les deux chiffres
+    // viennent de src/penalites.ts via la synthèse — rien n'est refait)
+    let penalitesADecider = 0
+    let penalitesADeciderHT = 0
+    for (const p of synthese.penalitesEncourues) {
+      const reste = p.encouruHT - p.appliqueHT
+      if (reste > 0) {
+        penalitesADecider += 1
+        penalitesADeciderHT += reste
+      }
+    }
+
+    // le RETARD passe par l'autorité 5.8, appliquée à la liste que la
+    // synthèse a déjà restreinte aux marchés de CETTE entreprise
+    const enRetard = visasEnRetard(synthese.visasEnAttente, today).length
+
+    const urgences: UrgencesEntreprise = {
+      situationsAttendues: synthese.situationsAttendues.length,
+      graviteSituation,
+      penalitesADecider,
+      penalitesADeciderHT: arrondiCentimes(penalitesADeciderHT),
+      visasEnAttente: synthese.visasEnAttente.length,
+      visasEnRetard: enRetard,
+      desordresGPA: synthese.desordresGPAOuverts.length,
+      rgALibererHT: synthese.totaux.aLibererHT,
+      motifs: 0,
+    }
+    urgences.motifs =
+      (urgences.situationsAttendues > 0 ? 1 : 0) +
+      (urgences.penalitesADecider > 0 ? 1 : 0) +
+      (urgences.visasEnAttente > 0 ? 1 : 0) +
+      (urgences.desordresGPA > 0 ? 1 : 0) +
+      (urgences.rgALibererHT > 0 ? 1 : 0)
+
+    const poids =
+      enRetard * POIDS_MOTIF.visaEnRetard +
+      situationsUrgentes * POIDS_MOTIF.situationUrgente +
+      (urgences.situationsAttendues - situationsUrgentes) * POIDS_MOTIF.situationAttendue +
+      (urgences.rgALibererHT > 0 ? POIDS_MOTIF.rgALiberer : 0) +
+      penalitesADecider * POIDS_MOTIF.penaliteADecider +
+      urgences.desordresGPA * POIDS_MOTIF.desordreGPA +
+      (urgences.visasEnAttente - enRetard) * POIDS_MOTIF.visaEnAttente
+
+    return {
+      cle,
+      nom: synthese.nom,
+      entreprise: synthese.entreprise,
+      synthese,
+      lots,
+      nbProjets: new Set(lots.map((l) => l.projetId)).size,
+      montantMarchesHT: synthese.totaux.montantMarchesHT,
+      urgences,
+      poids,
+    }
+  })
+
+  // ce qui crie d'abord ; à égalité de cri, le plus gros engagement ; puis
+  // le nom, pour que deux lignes muettes ne dansent pas d'un rendu à l'autre
+  return lignes.sort(
+    (a, b) =>
+      b.poids - a.poids ||
+      b.montantMarchesHT - a.montantMarchesHT ||
+      a.nom.localeCompare(b.nom, 'fr'),
+  )
 }

@@ -6,7 +6,7 @@
 // paysage propre à envoyer à tout le monde.
 // ============================================================
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { AppState, MarcheTravaux, PhaseCode, Projet } from '../types'
 import { useStore } from '../store'
 import { Badge, Btn, Card, confirmer, DateInput, EmptyState, Field, Icon, NumInput, navigate, Page, Select, Table, Tabs, TextInput, toast, useRoute, useToday } from '../ui'
@@ -18,6 +18,39 @@ import { EPSILON_HEURES, conflitsConges, propositionsReport, type ConflitConge }
 import { simulerProjet, type VerdictPersonne } from '../chargeProspective'
 import { personnesActives } from '../depart'
 import { EcheancesContenu } from './Calendrier'
+// LE GANTT CHANTIER : toute la géométrie et toutes les règles sont ICI,
+// pures et vérifiables (src/planningTravaux.ts). Cet écran ne fait que
+// rendre et capter les gestes — pas une date n'est calculée dans du JSX.
+import {
+  PAS_JOUR,
+  PAS_SEMAINE,
+  PIXELS_PAR_JOUR_MINIMUM,
+  appliquerGeste,
+  barreLot,
+  chantiersDuPlanning,
+  chevauchementsEntreprise,
+  decalerFenetre,
+  echelleSuggeree,
+  etatLot,
+  fenetrePlanning,
+  fenetreSurLots,
+  graduations,
+  interventionDe,
+  jalonsChantier,
+  joursDepuisPixels,
+  libelleFenetre,
+  marchesEnConflit,
+  pixelsParJour,
+  pourcent,
+  reportsDuGeste,
+  type Echelle,
+  type EtatLot,
+  type FenetrePlanning,
+  type GesteApplique,
+  type Intervention,
+  type Jalon,
+  type Prise,
+} from '../planningTravaux'
 
 const COULEURS_PHASES = [
   '#0e7490', '#2563eb', '#7c3aed', '#0891b2', '#059669', '#ca8a04',
@@ -317,118 +350,504 @@ function ouvrirPlanningPDF(state: AppState, projets: Projet[], f: Fenetre, today
 }
 
 // ============================================================
-// Planning CHANTIER — une barre par lot / entreprise sur sa
-// période d'intervention. Le vrai planning travaux, à envoyer
-// aux entreprises et à faire glisser au fil du chantier.
+// Planning CHANTIER — LE GANTT. « Par chantier mais il faut une
+// gestion plus fine de ce qu'on peut faire, UN VRAI GANTT ».
+//
+// Ce qui sépare un Gantt d'une frise : on AGIT dessus. On attrape
+// la barre d'un lot, on la pousse, et la date du marché suit —
+// avec « Annuler ». C'est le geste de la réunion de chantier :
+// constater un retard et le reporter au planning sans aller le
+// retaper ailleurs.
+//
+// Le groupement par chantier est CONSERVÉ (l'agence l'a demandé).
+// Ce qui change, c'est qu'on peut s'en servir.
+//
+// AUCUNE géométrie ici : position, échelle, conversion d'un
+// glissement en jours, retard, décrochage, chevauchement,
+// prolongation par intempéries — tout vient de
+// src/planningTravaux.ts, où c'est vérifiable.
 // ============================================================
 
-interface LigneChantier {
-  marche: MarcheTravaux
-  projet: Projet
-  couleur: string
-}
-
-/** lots datés des projets retenus, triés par projet puis début d'intervention */
-function lignesChantier(state: AppState, projets: Projet[]): LigneChantier[] {
-  const lignes: LigneChantier[] = []
-  for (const p of projets) {
-    const lots = state.marches
-      .filter((m) => m.projetId === p.id && (m.dateDebut || m.dateFin))
-      .sort((a, b) => (a.dateDebut || a.dateFin || '').localeCompare(b.dateDebut || b.dateFin || ''))
-    lots.forEach((m, i) => lignes.push({ marche: m, projet: p, couleur: couleurLot(i) }))
-  }
-  return lignes
-}
-
-/** projets actifs ayant au moins un lot daté */
+/** projets actifs ayant au moins un lot daté, dans l'ordre d'entrée en
+ *  chantier (`chantiersDuPlanning`) */
 function projetsAvecChantier(state: AppState): Projet[] {
-  return state.projets.filter(
-    (p) => STATUTS_ACTIFS.includes(p.statut) && state.marches.some((m) => m.projetId === p.id && (m.dateDebut || m.dateFin)),
+  return chantiersDuPlanning(
+    state.projets.filter((p) => STATUTS_ACTIFS.includes(p.statut)),
+    state.marches,
   )
 }
 
-function BarreChantier({ ligne, fenetre: f, today }: { ligne: LigneChantier; fenetre: Fenetre; today: string }) {
-  const { marche: m } = ligne
-  const debut = m.dateDebut || m.dateFin!
-  const fin = m.dateFin || m.dateDebut!
-  if (fin < f.debut || debut >= f.fin) return <div style={{ height: 26 }} />
-  const gauche = pos(f, debut)
-  const largeur = Math.max(1.4, pos(f, addDays(fin, 1)) - gauche)
-  // pilotage : fin contractuelle dépassée sans réception prononcée = lot en retard
-  const retard = Boolean(m.actif && m.dateFin && m.dateFin < today && !m.dateReception)
+/** lots datés d'un chantier, dans l'ordre d'intervention — la couleur suit
+ *  ce rang, et elle est la même à l'écran et sur le papier */
+function lotsDuChantier(state: AppState, projetId: string): { marche: MarcheTravaux; couleur: string }[] {
+  return state.marches
+    .filter((m) => m.projetId === projetId)
+    .map((m) => ({ marche: m, debut: interventionDe(m)?.debut }))
+    .filter((x): x is { marche: MarcheTravaux; debut: string } => x.debut !== undefined)
+    .sort((a, b) => a.debut.localeCompare(b.debut))
+    .map((x, i) => ({ marche: x.marche, couleur: couleurLot(i) }))
+}
+
+// ---------- la barre : ce qu'on attrape ----------
+
+/** Une barre de lot, avec ses trois prises : le corps (déplacer), la poignée
+ *  gauche (début), la poignée droite (fin).
+ *
+ *  L'aperçu pendant le glissement est LOCAL : rien n'est écrit tant que le
+ *  doigt n'est pas relâché. Écrire à chaque `pointermove` empilerait cent
+ *  états dans l'historique et rendrait « Annuler » inutilisable — or c'est
+ *  précisément le geste sur lequel on doit pouvoir revenir. */
+function BarreGantt({
+  marche: m,
+  etat,
+  couleur,
+  fenetre: f,
+  enConflit,
+  onGeste,
+  onOuvrir,
+}: {
+  marche: MarcheTravaux
+  etat: EtatLot
+  couleur: string
+  fenetre: FenetrePlanning
+  enConflit: boolean
+  onGeste: (prise: Prise, geste: GesteApplique) => void
+  onOuvrir: () => void
+}) {
+  const [glisse, setGlisse] = useState<{ prise: Prise; jours: number } | null>(null)
+  const depart = useRef({ x: 0, largeur: 0 })
+
+  const base = etat.intervention
+  if (!base) {
+    return (
+      <div className="muted small" style={{ padding: '4px 0' }}>
+        lot non daté
+      </div>
+    )
+  }
+
+  // pendant le glissement, on dessine la position VISÉE, pas la position
+  // enregistrée : sans cet aperçu on lâche à l'aveugle
+  const apercu: Intervention = glisse ? appliquerGeste(base, glisse.prise, glisse.jours) : base
+  const b = barreLot(f, apercu)
+
+  const commencer = (prise: Prise) => (e: React.PointerEvent<HTMLElement>) => {
+    e.preventDefault()
+    e.stopPropagation()
+    const piste = (e.currentTarget as HTMLElement).closest('[data-piste]') as HTMLElement | null
+    if (!piste) return
+    depart.current = { x: e.clientX, largeur: piste.getBoundingClientRect().width }
+    ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+    setGlisse({ prise, jours: 0 })
+  }
+
+  // stopPropagation sur les DEUX : avec `setPointerCapture` posé sur une
+  // poignée, l'évènement remonte quand même l'arbre React jusqu'au corps de
+  // la barre, dont les mêmes handlers sont montés. Sans cette coupure, un
+  // relâchement sur une poignée exécute le geste DEUX fois — les dates
+  // écrites sont absolues, donc identiques, mais l'écran affiche deux toasts
+  // et deux « Annuler » pour un seul geste.
+  const bouger = (e: React.PointerEvent<HTMLElement>) => {
+    if (!glisse) return
+    e.stopPropagation()
+    const jours = joursDepuisPixels(f, e.clientX - depart.current.x, depart.current.largeur)
+    if (jours !== glisse.jours) setGlisse({ ...glisse, jours })
+  }
+
+  const relacher = (e: React.PointerEvent<HTMLElement>) => {
+    if (!glisse) return
+    e.stopPropagation()
+    const encours = glisse
+    setGlisse(null)
+    try {
+      ;(e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId)
+    } catch {
+      // le pointeur a pu être perdu (fenêtre défocalisée) : le geste se
+      // termine quand même, on ne laisse pas la barre collée au doigt
+    }
+    // un clic net (aucun jour parcouru) OUVRE le lot au lieu de ne rien
+    // faire : au doigt, viser une barre puis ne rien obtenir se lit comme
+    // une panne
+    if (encours.jours === 0) {
+      onOuvrir()
+      return
+    }
+    onGeste(encours.prise, appliquerGeste(base, encours.prise, encours.jours))
+  }
+
+  if (!b.visible) {
+    return (
+      <div className="muted small" style={{ padding: '4px 0', fontSize: 10 }}>
+        hors fenêtre — {fmtDate(base.debut)} → {fmtDate(base.fin)}
+      </div>
+    )
+  }
+
+  // La barre reste PLEINE et son libellé blanc : c'est ce qui garde le nom de
+  // l'entreprise lisible, y compris imprimé en noir et blanc. L'avancement se
+  // lit sur un bandeau intérieur (convention des logiciels de planning), pas
+  // en repeignant le fond — un fond clair rendrait le texte illisible dès que
+  // le remplissage passe dessous.
+  //
+  // Avancement JAMAIS constaté = rayures blanches sur la barre. « null n'est
+  // pas 0 » : sans marque distincte, une barre sans bandeau se lirait « rien
+  // n'est fait », alors que la vérité est « personne n'a encore regardé ».
+  const raye = etat.avancementPct === null
+
+  const bordure = etat.enRetard
+    ? '2px solid var(--danger)'
+    : etat.decroche
+      ? '2px solid var(--warn)'
+      : enConflit
+        ? '2px dashed var(--warn)'
+        : `1px solid ${couleur}`
+
+  const infobulle = [
+    `${m.lot} — ${m.entreprise}`,
+    `${fmtDate(apercu.debut)} → ${fmtDate(apercu.fin)}`,
+    etat.avancementPct === null
+      ? 'Avancement non constaté'
+      : `Avancement ${etat.avancementPct} %${etat.tempsEcoulePct !== null ? ` · délai écoulé ${etat.tempsEcoulePct} %` : ''}`,
+    ...etat.raisons,
+    glisse ? '— relâcher pour enregistrer, Échap pour annuler —' : 'Glisser pour déplacer · bords pour allonger · clic pour ouvrir',
+  ].join('\n')
+
   return (
-    <div style={{ position: 'relative', height: 26, background: 'var(--bg-soft, #f6f7fa)', borderRadius: 5 }}>
+    <>
       <div
-        title={`${m.lot} — ${m.entreprise}\n${fmtDate(debut)} → ${fmtDate(fin)}${m.dateReception ? `\nRéception : ${fmtDate(m.dateReception)}` : retard ? '\nEN RETARD — réception non prononcée' : ''}`}
+        role="button"
+        tabIndex={0}
+        title={infobulle}
+        onPointerDown={commencer('deplacer')}
+        onPointerMove={bouger}
+        onPointerUp={relacher}
+        onPointerCancel={relacher}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            onOuvrir()
+          }
+        }}
         style={{
           position: 'absolute',
-          left: `${gauche}%`,
-          width: `${largeur}%`,
+          left: `${b.gauche}%`,
+          width: `${b.largeur}%`,
           top: 3,
           bottom: 3,
-          background: ligne.couleur,
-          border: retard ? '2px solid var(--danger)' : 'none',
+          background: couleur,
+          backgroundImage: raye
+            ? 'repeating-linear-gradient(45deg, rgba(255,255,255,.24) 0 4px, transparent 4px 8px)'
+            : undefined,
+          border: bordure,
           borderRadius: 4,
-          color: '#fff',
-          fontSize: 10,
-          fontWeight: 700,
-          lineHeight: '20px',
-          paddingLeft: 5,
+          borderTopLeftRadius: b.coupeGauche ? 0 : 4,
+          borderBottomLeftRadius: b.coupeGauche ? 0 : 4,
+          borderTopRightRadius: b.coupeDroite ? 0 : 4,
+          borderBottomRightRadius: b.coupeDroite ? 0 : 4,
           overflow: 'hidden',
-          whiteSpace: 'nowrap',
+          cursor: glisse ? 'grabbing' : 'grab',
+          touchAction: 'none',
+          boxShadow: glisse ? '0 0 0 2px var(--accent, #2563eb)' : undefined,
         }}
       >
-        {m.entreprise}
-      </div>
-      {m.dateReception && m.dateReception >= f.debut && m.dateReception < f.fin && (
-        <div
-          title={`Réception le ${fmtDate(m.dateReception)}`}
+        <span
           style={{
-            position: 'absolute',
-            left: `calc(${pos(f, m.dateReception)}% - 5px)`,
-            top: 1,
-            width: 0,
-            height: 0,
-            borderLeft: '6px solid transparent',
-            borderRight: '6px solid transparent',
-            borderTop: '11px solid var(--ok)',
+            position: 'relative',
+            display: 'block',
+            fontSize: 10,
+            fontWeight: 700,
+            lineHeight: '16px',
+            paddingLeft: 5,
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            color: '#fff',
           }}
+        >
+          {m.entreprise}
+          {etat.avancementPct !== null ? ` · ${etat.avancementPct} %` : ''}
+        </span>
+        {/* bandeau d'avancement = avancementLot (src/chantier.ts), le chiffre
+            constaté en réunion — jamais recalculé ici */}
+        {etat.avancementPct !== null && (
+          <span
+            style={{
+              position: 'absolute',
+              left: 2,
+              right: 2,
+              bottom: 2,
+              height: 4,
+              borderRadius: 2,
+              background: 'rgba(255,255,255,.3)',
+            }}
+          >
+            <span
+              style={{
+                position: 'absolute',
+                left: 0,
+                top: 0,
+                bottom: 0,
+                width: `${etat.avancementPct}%`,
+                borderRadius: 2,
+                background: '#fff',
+              }}
+            />
+          </span>
+        )}
+        {/* les deux poignées de bord — allonger / raccourcir */}
+        <span
+          onPointerDown={commencer('debut')}
+          onPointerMove={bouger}
+          onPointerUp={relacher}
+          onPointerCancel={relacher}
+          title="Tirer pour changer la date de début"
+          style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 8, cursor: 'ew-resize', touchAction: 'none' }}
         />
+        <span
+          onPointerDown={commencer('fin')}
+          onPointerMove={bouger}
+          onPointerUp={relacher}
+          onPointerCancel={relacher}
+          title="Tirer pour changer la date de fin"
+          style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: 8, cursor: 'ew-resize', touchAction: 'none' }}
+        />
+      </div>
+
+      {/* prolongation acquise par intempéries : hachures au-delà de la fin
+          contractuelle — ce n'est pas du travail planifié, c'est du délai dû */}
+      {etat.prolongationJours > 0 && etat.finDefendable && !glisse && (() => {
+        const ext = barreLot(f, { debut: addDays(base.fin, 1), fin: etat.finDefendable })
+        if (!ext.visible) return null
+        return (
+          <div
+            title={`+${etat.prolongationJours} j d'intempéries reconnues — fin défendable le ${fmtDate(etat.finDefendable)}`}
+            style={{
+              position: 'absolute',
+              left: `${ext.gauche}%`,
+              width: `${ext.largeur}%`,
+              top: 6,
+              bottom: 6,
+              background: 'repeating-linear-gradient(45deg, var(--warn) 0 3px, transparent 3px 7px)',
+              opacity: 0.55,
+              borderRadius: 3,
+            }}
+          />
+        )
+      })()}
+    </>
+  )
+}
+
+// ---------- les jalons : ce qui structure le chantier ----------
+
+const FORME_JALON: Record<Jalon['genre'], { symbole: string; couleur: string }> = {
+  reunion: { symbole: '◆', couleur: 'var(--accent, #2563eb)' },
+  debut: { symbole: '▸', couleur: 'var(--ink-3)' },
+  fin: { symbole: '▪', couleur: 'var(--ink-2)' },
+  fin_defendable: { symbole: '▫', couleur: 'var(--warn)' },
+  reception: { symbole: '▲', couleur: 'var(--ok)' },
+}
+
+/** `interactif` : sur la rangée du chantier, les jalons portent leur infobulle
+ *  (rien d'autre ne s'y trouve). Sur une ligne de lot ils sont posés PAR-DESSUS
+ *  la barre : les laisser capter le pointeur créerait des trous où le
+ *  glissement ne démarre pas — un geste qui échoue une fois sur dix se lit
+ *  comme une panne, et on cesse de s'en servir. Leur contenu reste accessible
+ *  dans l'infobulle de la barre et dans le panneau du lot. */
+function RangeeJalons({ jalons, interactif = true }: { jalons: Jalon[]; interactif?: boolean }) {
+  return (
+    <>
+      {jalons
+        .filter((j) => j.visible)
+        .map((j) => (
+          <span
+            key={j.id}
+            title={interactif ? `${fmtDate(j.date)} — ${j.libelle}` : undefined}
+            style={{
+              position: 'absolute',
+              left: `${j.gauche}%`,
+              top: 0,
+              transform: 'translateX(-50%)',
+              fontSize: 11,
+              lineHeight: '16px',
+              color: FORME_JALON[j.genre].couleur,
+              pointerEvents: interactif ? 'auto' : 'none',
+            }}
+          >
+            {FORME_JALON[j.genre].symbole}
+          </span>
+        ))}
+    </>
+  )
+}
+
+// ---------- la conduite d'un lot : le clavier, et le détail ----------
+
+/** Le panneau qui s'ouvre sous un lot. Il porte la SAISIE AU CLAVIER des
+ *  deux dates — « au doigt sur un téléphone, le glissement est imprécis, et
+ *  l'outil sert SUR le chantier » — et il dit en clair ce que la barre ne
+ *  peut que suggérer. */
+function ConduiteLot({
+  marche: m,
+  etat,
+  propager,
+  onFermer,
+}: {
+  marche: MarcheTravaux
+  etat: EtatLot
+  propager: boolean
+  onFermer: () => void
+}) {
+  const { state, update, replace } = useStore()
+
+  const ecrire = (reports: ReturnType<typeof reportsDuGeste>, message: string) => {
+    if (reports.length === 0) return
+    const snap = state
+    update((d) => {
+      for (const r of reports) {
+        const cible = d.marches.find((x) => x.id === r.marcheId)
+        if (!cible) continue
+        cible.dateDebut = r.debut
+        cible.dateFin = r.fin
+      }
+    })
+    toast(message, { undo: () => replace(snap) })
+  }
+
+  const decaler = (jours: number) => {
+    if (!etat.intervention) return
+    const geste = appliquerGeste(etat.intervention, 'deplacer', jours)
+    const reports = reportsDuGeste(state.marches, m.id, 'deplacer', geste, propager)
+    const suivants = reports.length - 1
+    ecrire(
+      reports,
+      `${m.lot} : ${fmtDate(geste.debut)} → ${fmtDate(geste.fin)}` +
+        (suivants > 0 ? ` · ${suivants} lot${suivants > 1 ? 's' : ''} suivant${suivants > 1 ? 's' : ''} décalé${suivants > 1 ? 's' : ''}` : ''),
+    )
+  }
+
+  // la saisie directe d'une date ne propage jamais : on a tapé UNE date, on
+  // n'a pas demandé à bouger le reste du chantier
+  const saisir = (champ: 'dateDebut' | 'dateFin', v: string | null) => {
+    const snap = state
+    update((d) => {
+      const cible = d.marches.find((x) => x.id === m.id)
+      if (cible) cible[champ] = v
+    })
+    toast(`${m.lot} — ${champ === 'dateDebut' ? 'début' : 'fin'} au ${fmtDate(v)}.`, {
+      undo: () => replace(snap),
+    })
+  }
+
+  return (
+    <div
+      className="pill-note"
+      style={{ margin: '4px 0 10px', display: 'grid', gap: 8 }}
+    >
+      <div className="toolbar" style={{ flexWrap: 'wrap', gap: 8 }}>
+        <Field label="Début">
+          <DateInput value={m.dateDebut ?? null} onChange={(v) => saisir('dateDebut', v)} />
+        </Field>
+        <Field label="Fin">
+          <DateInput value={m.dateFin ?? null} onChange={(v) => saisir('dateFin', v)} />
+        </Field>
+        <Field label="Décaler l'intervention">
+          <span style={{ display: 'inline-flex', gap: 4 }}>
+            <Btn small onClick={() => decaler(-PAS_SEMAINE)} disabled={!etat.intervention} title="Avancer d'une semaine">◀ 1 sem</Btn>
+            <Btn small onClick={() => decaler(-PAS_JOUR)} disabled={!etat.intervention} title="Avancer d'un jour">◀ 1 j</Btn>
+            <Btn small onClick={() => decaler(PAS_JOUR)} disabled={!etat.intervention} title="Repousser d'un jour">1 j ▶</Btn>
+            <Btn small onClick={() => decaler(PAS_SEMAINE)} disabled={!etat.intervention} title="Repousser d'une semaine">1 sem ▶</Btn>
+          </span>
+        </Field>
+        <span className="spacer" />
+        <a className="small" href={`#/projets/${m.projetId}/chantier`}>fiche du lot →</a>
+        <Btn small kind="ghost" onClick={onFermer}>fermer</Btn>
+      </div>
+
+      <div className="small" style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}>
+        <span>
+          <span className="muted">Avancement constaté </span>
+          {etat.avancementPct === null ? (
+            <span className="muted">non constaté</span>
+          ) : (
+            <strong>{etat.avancementPct} %</strong>
+          )}
+        </span>
+        <span>
+          <span className="muted">Délai écoulé </span>
+          {etat.tempsEcoulePct === null ? <span className="muted">—</span> : <strong>{etat.tempsEcoulePct} %</strong>}
+        </span>
+        {etat.ecartPoints !== null && (
+          <span className={etat.ecartPoints < 0 ? 'danger-text' : 'ok-text'}>
+            {etat.ecartPoints > 0 ? '+' : ''}
+            {etat.ecartPoints} points
+          </span>
+        )}
+        {etat.prolongationJours > 0 && (
+          <Badge tone="warn">+{etat.prolongationJours} j d'intempéries</Badge>
+        )}
+      </div>
+
+      {etat.raisons.length > 0 && (
+        <ul className="small muted" style={{ margin: 0, paddingLeft: 18 }}>
+          {etat.raisons.map((r) => (
+            <li key={r}>{r}</li>
+          ))}
+        </ul>
       )}
+      <p className="muted small" style={{ margin: 0 }}>
+        L'avancement se constate en réunion de chantier, tâche par tâche (fiche projet → Planning) :
+        c'est le même chiffre qui sert à vérifier les situations. Le planning ne l'invente pas.
+      </p>
     </div>
   )
 }
 
 /** édition rapide des dates de chantier — un lot glisse, les suivants suivent.
  *  Exporté pour la même raison qu'`EditionDates` : l'onglet Planning de la
- *  fiche projet le monte, au lieu d'obliger à repasser par le Planning global. */
+ *  fiche projet le monte, au lieu d'obliger à repasser par le Planning global.
+ *
+ *  La règle de propagation est celle du Gantt (`reportsDuGeste`), pas une
+ *  seconde version : deux règles de décalage divergeraient au premier lot
+ *  sans date de début, et personne ne saurait laquelle a écrit le planning. */
 export function EditionChantier({ projet: p }: { projet: Projet }) {
-  const { state, update } = useStore()
+  const { state, update, replace } = useStore()
   const [propager, setPropager] = useState(true)
   const lots = state.marches
     .filter((m) => m.projetId === p.id)
     .sort((a, b) => (a.dateDebut || '9999').localeCompare(b.dateDebut || '9999'))
 
-  const majDate = (id: string, champ: 'dateDebut' | 'dateFin', v: string | null) =>
+  const majDate = (id: string, champ: 'dateDebut' | 'dateFin', v: string | null) => {
+    const snap = state
     update((d) => {
       const m = d.marches.find((x) => x.id === id)
       if (m) m[champ] = v
     })
+    toast(`Date ${champ === 'dateDebut' ? 'de début' : 'de fin'} au ${fmtDate(v)}.`, { undo: () => replace(snap) })
+  }
 
-  const decaler = (id: string, jours: number) =>
+  const decaler = (id: string, jours: number) => {
+    const m = state.marches.find((x) => x.id === id)
+    const inter = m ? interventionDe(m) : null
+    if (!m || !inter) return
+    const geste = appliquerGeste(inter, 'deplacer', jours)
+    const reports = reportsDuGeste(state.marches, id, 'deplacer', geste, propager)
+    if (reports.length === 0) return
+    const snap = state
     update((d) => {
-      const ref = d.marches.find((x) => x.id === id)
-      if (!ref) return
-      const seuil = ref.dateDebut || ref.dateFin || ''
-      for (const m of d.marches) {
-        if (m.projetId !== p.id) continue
-        const aDate = m.dateDebut || m.dateFin || ''
-        if (m.id === id || (propager && aDate >= seuil)) {
-          if (m.dateDebut) m.dateDebut = addDays(m.dateDebut, jours)
-          if (m.dateFin) m.dateFin = addDays(m.dateFin, jours)
-        }
+      for (const r of reports) {
+        const cible = d.marches.find((x) => x.id === r.marcheId)
+        if (!cible) continue
+        cible.dateDebut = r.debut
+        cible.dateFin = r.fin
       }
     })
+    const suivants = reports.length - 1
+    toast(
+      `${m.lot} : ${fmtDate(geste.debut)} → ${fmtDate(geste.fin)}` +
+        (suivants > 0 ? ` · ${suivants} lot${suivants > 1 ? 's' : ''} suivant${suivants > 1 ? 's' : ''} décalé${suivants > 1 ? 's' : ''}` : ''),
+      { undo: () => replace(snap) },
+    )
+  }
 
   return (
     <Card
@@ -449,8 +868,7 @@ export function EditionChantier({ projet: p }: { projet: Projet }) {
         <>
           <p className="muted small" style={{ marginBottom: 8 }}>
             Un lot prend du retard ? ◀ ▶ décale son intervention d'une semaine — avec la case cochée,
-            tous les lots qui démarrent après glissent aussi. Les dates se saisissent aussi dans la
-            fiche marché (onglet Chantier).
+            tous les lots qui démarrent après glissent aussi. Chaque geste laisse un « Annuler ».
           </p>
           <Table compact head={['Lot · entreprise', 'Début', 'Fin', 'Décaler']}>
             {lots.map((m, i) => (
@@ -467,8 +885,8 @@ export function EditionChantier({ projet: p }: { projet: Projet }) {
                 </td>
                 <td>
                   <span style={{ display: 'inline-flex', gap: 4 }}>
-                    <Btn small onClick={() => decaler(m.id, -7)}>◀ 1 sem</Btn>
-                    <Btn small onClick={() => decaler(m.id, 7)}>1 sem ▶</Btn>
+                    <Btn small onClick={() => decaler(m.id, -PAS_SEMAINE)}>◀ 1 sem</Btn>
+                    <Btn small onClick={() => decaler(m.id, PAS_SEMAINE)}>1 sem ▶</Btn>
                   </span>
                 </td>
               </tr>
@@ -480,39 +898,113 @@ export function EditionChantier({ projet: p }: { projet: Projet }) {
   )
 }
 
-function ouvrirChantierPDF(state: AppState, lignes: LigneChantier[], f: Fenetre, today: string): void {
-  const mois: string[] = []
-  for (let m = f.debut; m < f.fin; m = addMonths(m, 1)) mois.push(m)
+// ---------- l'impression : la MÊME chose, sur papier ----------
 
-  const rangs = lignes
-    .map((l) => {
-      const m = l.marche
-      const debut = m.dateDebut || m.dateFin!
-      const fin = m.dateFin || m.dateDebut!
-      const visible = fin >= f.debut && debut < f.fin
-      const gauche = pos(f, debut)
-      const largeur = Math.max(1.2, pos(f, addDays(fin, 1)) - gauche)
-      const barre = visible
-        ? `<div style="position:absolute;left:${gauche}%;width:${largeur}%;top:3px;bottom:3px;background:${l.couleur};border-radius:3px;color:#fff;font-size:9px;font-weight:700;line-height:20px;padding-left:4px;overflow:hidden;white-space:nowrap">${echapper(m.entreprise)}</div>`
-        : ''
-      const contact = m.contactNom || m.contactEmail ? `<div style="font-size:9px;color:#5a6478">${echapper([m.contactNom, m.contactEmail].filter(Boolean).join(' · '))}</div>` : ''
-      return `<tr>
-        <td style="width:240px;padding:4px 8px;border-bottom:1px solid #e3e6ec;font-size:11px"><strong>${echapper(m.lot)}</strong> — ${echapper(m.entreprise)}${contact}</td>
-        <td style="padding:0;border-bottom:1px solid #e3e6ec"><div style="position:relative;height:26px;background:#f6f7fa">${barre}
-          ${today >= f.debut && today < f.fin ? `<div style="position:absolute;left:${pos(f, today)}%;top:0;bottom:0;width:1.5px;background:#bb2233"></div>` : ''}
-        </div></td>
-      </tr>`
-    })
-    .join('')
+/** « Ce qu'on voit se regarde aussi sur papier. » Le gabarit lit exactement
+ *  les mêmes fonctions pures que l'écran — même fenêtre, mêmes graduations,
+ *  même avancement, mêmes jalons. Un PDF recalculé à sa façon sortirait
+ *  « à l'heure » là où l'écran sort rouge, et c'est le PDF qu'on emporte
+ *  en réunion. */
+function ouvrirChantierPDF(
+  state: AppState,
+  projets: Projet[],
+  f: FenetrePlanning,
+  today: string,
+): void {
+  const grads = graduations(f)
+  const traitJour =
+    today >= f.debut && today < f.fin
+      ? `<div style="position:absolute;left:${pourcent(f, today)}%;top:0;bottom:0;width:1.5px;background:#bb2233"></div>`
+      : ''
 
-  const enTetesMois = mois
+  const enTetes = grads
     .map(
-      (m) =>
-        `<div style="position:absolute;left:${pos(f, m)}%;top:0;bottom:0;border-left:1px solid #e3e6ec;padding-left:4px;font-size:10px;color:#5a6478">${NOMS_MOIS_COURTS[Number(m.slice(5, 7)) - 1]} ${m.slice(2, 4)}</div>`,
+      (g) =>
+        `<div style="position:absolute;left:${g.gauche}%;top:0;bottom:0;border-left:1px solid ${g.majeure ? '#b9c0cd' : '#e3e6ec'};padding-left:3px;font-size:9px;color:#5a6478;white-space:nowrap">${echapper(g.label)}</div>`,
     )
     .join('')
 
-  const projets = [...new Set(lignes.map((l) => `${l.projet.id} — ${l.projet.nom}`))].join(' · ')
+  const rangs = projets
+    .map((p) => {
+      const lots = lotsDuChantier(state, p.id)
+      if (lots.length === 0) return ''
+      const jalons = jalonsChantier(f, p.id, state.marches, state.reunions, state.intemperies)
+      const marquesReunion = jalons
+        .filter((j) => j.visible && j.genre === 'reunion')
+        .map(
+          (j) =>
+            `<div style="position:absolute;left:${j.gauche}%;top:0;transform:translateX(-50%);font-size:9px;color:#2563eb">&#9670;</div>`,
+        )
+        .join('')
+
+      const enTeteChantier = `<tr>
+        <td colspan="2" style="padding:8px 8px 2px;border-bottom:1px solid #b9c0cd;font-size:11px;background:#f0f2f7">
+          <strong>${echapper(p.id)}</strong> — ${echapper(p.nom)}
+        </td></tr>
+      <tr><td style="width:230px;padding:1px 8px;font-size:9px;color:#5a6478">réunions de chantier</td>
+        <td style="padding:0"><div style="position:relative;height:12px">${marquesReunion}${traitJour}</div></td></tr>`
+
+      const lignes = lots
+        .map(({ marche: m, couleur }) => {
+          const e = etatLot(m, state.tachesChantier, state.intemperies, today)
+          const b = e.intervention ? barreLot(f, e.intervention) : null
+          const bordure = e.enRetard ? '2px solid #bb2233' : e.decroche ? '2px solid #b7791f' : `1px solid ${couleur}`
+          // même encodage qu'à l'écran, trait pour trait : barre pleine,
+          // libellé blanc, bandeau d'avancement au pied, rayures quand
+          // l'avancement n'a jamais été constaté
+          const bandeau =
+            e.avancementPct !== null
+              ? `<span style="position:absolute;left:2px;right:2px;bottom:2px;height:4px;border-radius:2px;background:rgba(255,255,255,.3)"><span style="position:absolute;left:0;top:0;bottom:0;width:${e.avancementPct}%;border-radius:2px;background:#fff"></span></span>`
+              : ''
+          const rayures =
+            e.avancementPct === null
+              ? ';background-image:repeating-linear-gradient(45deg,rgba(255,255,255,.24) 0 4px,transparent 4px 8px)'
+              : ''
+          const barre =
+            b && b.visible
+              ? `<div style="position:absolute;left:${b.gauche}%;width:${b.largeur}%;top:3px;bottom:3px;background:${couleur}${rayures};border:${bordure};border-radius:3px;overflow:hidden"><span style="position:relative;display:block;font-size:9px;font-weight:700;line-height:16px;padding-left:4px;white-space:nowrap;color:#fff">${echapper(m.entreprise)}${e.avancementPct !== null ? ` &middot; ${e.avancementPct} %` : ''}</span>${bandeau}</div>`
+              : ''
+          const prolongation =
+            e.prolongationJours > 0 && e.finDefendable && e.intervention
+              ? (() => {
+                  const x = barreLot(f, { debut: addDays(e.intervention!.fin, 1), fin: e.finDefendable! })
+                  return x.visible
+                    ? `<div style="position:absolute;left:${x.gauche}%;width:${x.largeur}%;top:6px;bottom:6px;background:repeating-linear-gradient(45deg,#b7791f 0 3px,transparent 3px 7px);opacity:.55;border-radius:2px"></div>`
+                    : ''
+                })()
+              : ''
+          const reception =
+            m.dateReception && m.dateReception >= f.debut && m.dateReception < f.fin
+              ? `<div style="position:absolute;left:${pourcent(f, m.dateReception)}%;top:0;transform:translateX(-50%);font-size:9px;color:#1a7f4b">&#9650;</div>`
+              : ''
+          const etatTexte = e.enRetard
+            ? ` <span style="color:#bb2233">retard ${e.joursDeRetard} j</span>`
+            : e.decroche
+              ? ' <span style="color:#b7791f">décroche</span>'
+              : e.receptionne
+                ? ' <span style="color:#1a7f4b">réceptionné</span>'
+                : ''
+          return `<tr>
+        <td style="width:230px;padding:3px 8px;border-bottom:1px solid #e3e6ec;font-size:10px"><strong>${echapper(m.lot)}</strong> — ${echapper(m.entreprise)}${etatTexte}</td>
+        <td style="padding:0;border-bottom:1px solid #e3e6ec"><div style="position:relative;height:24px;background:#f6f7fa">${barre}${prolongation}${reception}${traitJour}</div></td>
+      </tr>`
+        })
+        .join('')
+
+      return enTeteChantier + lignes
+    })
+    .join('')
+
+  const conflits = chevauchementsEntreprise(
+    state.marches.filter((m) => projets.some((p) => p.id === m.projetId)),
+  )
+  const blocConflits = conflits.length
+    ? `<div class="muted" style="margin-top:10px"><strong>Entreprises attendues à deux endroits à la fois :</strong> ${echapper(
+        conflits
+          .map((c) => `${c.entreprise} (${fmtDate(c.debut)} → ${fmtDate(c.fin)}, ${c.jours} j)`)
+          .join(' · '),
+      )}</div>`
+    : ''
 
   const html = `<!doctype html>
 <html lang="fr"><head><meta charset="utf-8"><title>Planning chantier — ${echapper(state.settings.nomAgence)}</title>
@@ -527,9 +1019,15 @@ function ouvrirChantierPDF(state: AppState, lignes: LigneChantier[], f: Fenetre,
 </style></head><body>
 <button class="impression" onclick="window.print()">Imprimer / PDF</button>
 <h1>${echapper(state.settings.nomAgence)} — Planning chantier</h1>
-<div class="muted">${echapper(projets)}<br>Édité le ${fmtDate(today)} · fenêtre ${fmtDate(f.debut)} → ${fmtDate(addDays(f.fin, -1))} · trait rouge = aujourd'hui · document indicatif, ajusté au fil du chantier</div>
+<div class="muted">${echapper(projets.map((p) => `${p.id} — ${p.nom}`).join(' · '))}<br>
+Édité le ${fmtDate(today)} · fenêtre ${echapper(libelleFenetre(f))} · échelle ${f.echelle === 'semaine' ? 'semaines' : 'mois'} ·
+trait rouge = aujourd'hui · &#9670; réunion de chantier · &#9650; réception ·
+bandeau blanc au pied de la barre = avancement constaté en réunion · barre rayée = avancement jamais constaté ·
+hachures orange après la barre = jours d'intempéries reconnus ·
+document indicatif, ajusté au fil du chantier</div>
+${blocConflits}
 <table>
-  <tr><td style="width:240px"></td><td style="padding:0"><div style="position:relative;height:18px">${enTetesMois}</div></td></tr>
+  <tr><td style="width:230px"></td><td style="padding:0"><div style="position:relative;height:16px">${enTetes}</div></td></tr>
   ${rangs}
 </table>
 </body></html>`
@@ -538,6 +1036,382 @@ function ouvrirChantierPDF(state: AppState, lignes: LigneChantier[], f: Fenetre,
   if (!w) return
   w.document.write(html)
   w.document.close()
+}
+
+// ---------- l'écran ----------
+
+const PAS_PAR_ECHELLE: Record<Echelle, { value: string; label: string }[]> = {
+  semaine: [
+    { value: '4', label: '4 semaines' },
+    { value: '8', label: '8 semaines' },
+    { value: '13', label: '13 semaines' },
+    { value: '26', label: '26 semaines' },
+  ],
+  mois: [
+    { value: '6', label: '6 mois' },
+    { value: '12', label: '12 mois' },
+    { value: '24', label: '24 mois' },
+  ],
+}
+
+const PAS_DEFAUT: Record<Echelle, number> = { semaine: 13, mois: 12 }
+
+function GanttChantier() {
+  const { state, update, replace } = useStore()
+  const today = useToday()
+  const route = useRoute()
+
+  const cibleRoute = route[0] === 'planning' && route[1] === 'chantier' ? route[2] : undefined
+  const [filtre, setFiltre] = useState(cibleRoute || '')
+  const [echelle, setEchelle] = useState<Echelle>(() => echelleSuggeree(state.marches))
+  const [pas, setPas] = useState<number>(() => PAS_DEFAUT[echelleSuggeree(state.marches)])
+  const [ancre, setAncre] = useState(todayISO())
+  const [propager, setPropager] = useState(true)
+  const [lotOuvert, setLotOuvert] = useState<string | null>(null)
+  const [largeurPiste, setLargeurPiste] = useState(0)
+  const pisteMesure = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    if (cibleRoute) setFiltre(cibleRoute)
+  }, [cibleRoute])
+
+  const tous = projetsAvecChantier(state)
+  const projets = filtre ? tous.filter((p) => p.id === filtre) : tous
+  const f = fenetrePlanning(ancre, echelle, pas)
+  const grads = graduations(f)
+  const jourVisible = today >= f.debut && today < f.fin
+
+  const marchesAffiches = state.marches.filter(
+    (m) => projets.some((p) => p.id === m.projetId) && interventionDe(m) !== null,
+  )
+  // les conflits se cherchent sur TOUS les marchés, pas sur les seuls
+  // affichés : l'entreprise doublement attendue l'est presque toujours sur
+  // un chantier que ce filtre vient de masquer — c'est exactement pour ça
+  // qu'on ne le voyait pas
+  const conflits = chevauchementsEntreprise(state.marches)
+  const idsEnConflit = marchesEnConflit(conflits)
+
+  const etats = new Map<string, EtatLot>()
+  for (const m of marchesAffiches) etats.set(m.id, etatLot(m, state.tachesChantier, state.intemperies, today))
+
+  const aSurveiller = marchesAffiches
+    .map((m) => ({ marche: m, etat: etats.get(m.id)! }))
+    .filter((x) => x.etat.gravite > 0)
+    .sort((a, b) => b.etat.gravite - a.etat.gravite || b.etat.joursDeRetard - a.etat.joursDeRetard)
+
+  // la largeur réelle d'une piste décide si le glissement est praticable —
+  // elle se mesure, elle ne se suppose pas. Les dépendances couvrent tout ce
+  // qui change la mise en page ; le redimensionnement de la fenêtre est
+  // écouté, et l'écouteur n'est reposé qu'à ces changements-là.
+  const nbLignes = marchesAffiches.length
+  useEffect(() => {
+    const mesurer = () => setLargeurPiste(pisteMesure.current?.getBoundingClientRect().width ?? 0)
+    mesurer()
+    window.addEventListener('resize', mesurer)
+    return () => window.removeEventListener('resize', mesurer)
+  }, [echelle, pas, filtre, nbLignes])
+
+  const changerEchelle = (e: Echelle) => {
+    setEchelle(e)
+    setPas(PAS_DEFAUT[e])
+  }
+
+  const calerSurChantier = () => {
+    const cadre = fenetreSurLots(marchesAffiches, echelle)
+    if (!cadre) return
+    setAncre(cadre.debut)
+    setPas(cadre.pas)
+  }
+
+  const naviguer = (sens: number) => setAncre(decalerFenetre(f, sens).debut)
+
+  const appliquerLeGeste = (m: MarcheTravaux, prise: Prise, geste: GesteApplique) => {
+    const reports = reportsDuGeste(state.marches, m.id, prise, geste, propager)
+    if (reports.length === 0) return
+    const snap = state
+    update((d) => {
+      for (const r of reports) {
+        const cible = d.marches.find((x) => x.id === r.marcheId)
+        if (!cible) continue
+        cible.dateDebut = r.debut
+        cible.dateFin = r.fin
+      }
+    })
+    const suivants = reports.length - 1
+    const verbe = prise === 'deplacer' ? 'déplacé' : prise === 'debut' ? 'début ajusté' : 'fin ajustée'
+    toast(
+      `${m.lot} ${verbe} : ${fmtDate(geste.debut)} → ${fmtDate(geste.fin)}` +
+        (suivants > 0 ? ` · ${suivants} lot${suivants > 1 ? 's' : ''} suivant${suivants > 1 ? 's' : ''} décalé${suivants > 1 ? 's' : ''}` : '') +
+        (geste.bute ? ' (butée : un lot ne peut pas finir avant de commencer)' : ''),
+      { undo: () => replace(snap) },
+    )
+  }
+
+  const pxJour = pixelsParJour(f, largeurPiste)
+  const glissementPraticable = pxJour >= PIXELS_PAR_JOUR_MINIMUM
+
+  const vide = marchesAffiches.length === 0
+
+  return (
+    <>
+      <div className="toolbar" style={{ flexWrap: 'wrap' }}>
+        <Btn onClick={() => naviguer(-1)} title="Fenêtre précédente">‹</Btn>
+        <Btn onClick={() => naviguer(1)} title="Fenêtre suivante">›</Btn>
+        <Btn onClick={() => setAncre(todayISO())}>Aujourd'hui</Btn>
+        <Btn kind="ghost" onClick={calerSurChantier} disabled={vide}>Caler sur le chantier</Btn>
+        <Select
+          value={echelle}
+          onChange={(v) => changerEchelle(v as Echelle)}
+          options={[
+            { value: 'semaine', label: 'Zoom : semaines' },
+            { value: 'mois', label: 'Zoom : mois' },
+          ]}
+          style={{ maxWidth: 160 }}
+        />
+        <Select
+          value={String(pas)}
+          onChange={(v) => setPas(Number(v))}
+          options={PAS_PAR_ECHELLE[echelle]}
+          style={{ maxWidth: 150 }}
+        />
+        <Select
+          value={filtre}
+          onChange={setFiltre}
+          options={[{ value: '', label: 'Tous les chantiers' }, ...tous.map((p) => ({ value: p.id, label: `${p.id} — ${p.nom}` }))]}
+          style={{ maxWidth: 280 }}
+        />
+        <span className="muted small">{libelleFenetre(f)}</span>
+        <span className="spacer" />
+        <label className="small" style={{ display: 'flex', gap: 6, alignItems: 'center', cursor: 'pointer' }}>
+          <input type="checkbox" checked={propager} onChange={(e) => setPropager(e.target.checked)} />
+          déplacer un lot repousse les suivants
+        </label>
+        <Btn kind="primary" onClick={() => ouvrirChantierPDF(state, projets, f, today)} disabled={vide}>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <Icon name="printer" size={14} /> Imprimer / PDF
+          </span>
+        </Btn>
+      </div>
+
+      {aSurveiller.length > 0 && (
+        <Card titre="Ce qui ne va pas">
+          <Table
+            compact
+            head={['Lot · entreprise', 'Chantier', 'État', 'Avancement / délai', 'Constat']}
+          >
+            {aSurveiller.map(({ marche: m, etat: e }) => (
+              <tr key={m.id} className="clickable" onClick={() => setLotOuvert(m.id)}>
+                <td>
+                  <strong>{m.lot}</strong> <span className="muted small">{m.entreprise}</span>
+                </td>
+                <td>
+                  <a href={`#/projets/${m.projetId}/chantier`}>{m.projetId}</a>
+                </td>
+                <td>
+                  {e.enRetard ? (
+                    <Badge tone="danger">retard {e.joursDeRetard} j</Badge>
+                  ) : (
+                    <Badge tone="warn">décroche</Badge>
+                  )}
+                </td>
+                <td className="num">
+                  {e.avancementPct === null ? <span className="muted">—</span> : `${e.avancementPct} %`}
+                  <span className="muted"> / {e.tempsEcoulePct === null ? '—' : `${e.tempsEcoulePct} %`}</span>
+                </td>
+                <td className="small">{e.raisons[0] || '—'}</td>
+              </tr>
+            ))}
+          </Table>
+        </Card>
+      )}
+
+      {conflits.length > 0 && (
+        <Card titre="Une entreprise, deux chantiers à la fois">
+          <p className="muted small" style={{ marginTop: 0 }}>
+            Une entreprise ne se dédouble pas. Ces interventions se chevauchent pour la même
+            entreprise — c'est la promesse de délai qu'on donne en réunion qui est en jeu.
+          </p>
+          <Table compact head={['Entreprise', 'Période commune', 'Durée', 'Lots concernés']}>
+            {conflits.map((c) => {
+              const a = state.marches.find((m) => m.id === c.aId)
+              const b = state.marches.find((m) => m.id === c.bId)
+              return (
+                <tr key={`${c.aId}-${c.bId}`}>
+                  <td>
+                    <strong>{c.entreprise}</strong>{' '}
+                    {c.memeChantier ? (
+                      <Badge tone="info">même chantier</Badge>
+                    ) : (
+                      <Badge tone="warn">deux chantiers</Badge>
+                    )}
+                  </td>
+                  <td>
+                    {fmtDate(c.debut)} → {fmtDate(c.fin)}
+                  </td>
+                  <td className="num">{c.jours} j</td>
+                  <td className="small">
+                    <a href={`#/projets/${a?.projetId}/chantier`}>
+                      {a?.projetId} · {a?.lot}
+                    </a>
+                    {' — '}
+                    <a href={`#/projets/${b?.projetId}/chantier`}>
+                      {b?.projetId} · {b?.lot}
+                    </a>
+                  </td>
+                </tr>
+              )
+            })}
+          </Table>
+        </Card>
+      )}
+
+      <Card>
+        {vide ? (
+          <EmptyState>
+            Aucun lot de chantier daté — renseignez les dates d'intervention des marchés dans l'onglet
+            Chantier d'un projet. Le Gantt se construit tout seul à partir de ces deux dates.
+          </EmptyState>
+        ) : (
+          <>
+            <p className="muted small" style={{ marginTop: 0 }}>
+              {glissementPraticable
+                ? 'Glissez une barre pour déplacer l’intervention, ses bords pour l’allonger ou la raccourcir. Un clic ouvre le lot : les deux dates s’y saisissent au clavier. Chaque geste laisse un « Annuler ».'
+                : 'À cette échelle un jour tient dans moins de trois pixels : le glissement viserait au hasard. Cliquez le lot et saisissez les dates au clavier — ou zoomez sur les semaines.'}
+            </p>
+            <div style={{ overflowX: 'auto' }}>
+              <div className="plan-frise plan-frise-chantier" style={{ rowGap: 4 }}>
+                {/* graduations */}
+                <div />
+                <div ref={pisteMesure} style={{ position: 'relative', height: 20 }}>
+                  {grads.map((g) => (
+                    <div
+                      key={g.date}
+                      className="muted small"
+                      style={{
+                        position: 'absolute',
+                        left: `${g.gauche}%`,
+                        top: 0,
+                        bottom: 0,
+                        borderLeft: `1px solid ${g.majeure ? 'var(--ink-3)' : 'var(--line)'}`,
+                        paddingLeft: 3,
+                        fontSize: 10,
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {g.label}
+                    </div>
+                  ))}
+                  {jourVisible && (
+                    <div
+                      style={{ position: 'absolute', left: `${pourcent(f, today)}%`, top: 0, bottom: -2, width: 2, background: 'var(--danger)' }}
+                      title={`aujourd'hui — ${fmtDate(today)}`}
+                    />
+                  )}
+                </div>
+
+                {projets.map((p) => {
+                  const lots = lotsDuChantier(state, p.id)
+                  const jalons = jalonsChantier(f, p.id, state.marches, state.reunions, state.intemperies)
+                  const reunions = jalons.filter((j) => j.genre === 'reunion')
+                  return (
+                    <div key={p.id} style={{ display: 'contents' }}>
+                      {/* en-tête du chantier — le groupement est conservé */}
+                      <div className="small" style={{ paddingTop: 8 }}>
+                        <a href={`#/projets/${p.id}/chantier`}>
+                          <strong>{p.id}</strong>
+                        </a>{' '}
+                        <span className="muted" title={p.nom}>
+                          {p.nom.length > 18 ? p.nom.slice(0, 18) + '…' : p.nom}
+                        </span>
+                      </div>
+                      <div style={{ position: 'relative', height: 18, borderTop: '1px solid var(--line)', marginTop: 8 }}>
+                        <RangeeJalons jalons={reunions} />
+                        {jourVisible && (
+                          <div style={{ position: 'absolute', left: `${pourcent(f, today)}%`, top: 0, bottom: 0, width: 2, background: 'var(--danger)', opacity: 0.5 }} />
+                        )}
+                      </div>
+
+                      {lots.map(({ marche: m, couleur }) => {
+                        const e = etats.get(m.id)!
+                        const jalonsLot = jalons.filter((j) => j.marcheId === m.id && j.genre !== 'fin')
+                        return (
+                          <div key={m.id} style={{ display: 'contents' }}>
+                            <div className="small" style={{ paddingRight: 8, overflow: 'hidden' }}>
+                              <button
+                                className="btn btn-small btn-ghost"
+                                style={{ maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', display: 'block', textAlign: 'left' }}
+                                onClick={() => setLotOuvert(lotOuvert === m.id ? null : m.id)}
+                                title={`${m.lot} — ${m.entreprise}`}
+                              >
+                                <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 2, background: couleur, marginRight: 5 }} />
+                                <strong>{m.lot}</strong>
+                              </button>
+                              <span className="muted" style={{ fontSize: 10 }}>
+                                {m.entreprise.length > 20 ? m.entreprise.slice(0, 20) + '…' : m.entreprise}
+                              </span>
+                              {e.gravite === 2 && <Badge tone="danger">retard</Badge>}
+                              {e.gravite === 1 && <Badge tone="warn">décroche</Badge>}
+                            </div>
+                            <div
+                              data-piste
+                              style={{ position: 'relative', height: 26, background: 'var(--bg-soft, #f6f7fa)', borderRadius: 5 }}
+                            >
+                              <BarreGantt
+                                marche={m}
+                                etat={e}
+                                couleur={couleur}
+                                fenetre={f}
+                                enConflit={idsEnConflit.has(m.id)}
+                                onGeste={(prise, geste) => appliquerLeGeste(m, prise, geste)}
+                                onOuvrir={() => setLotOuvert(lotOuvert === m.id ? null : m.id)}
+                              />
+                              <RangeeJalons jalons={jalonsLot} interactif={false} />
+                              {jourVisible && (
+                                <div
+                                  style={{ position: 'absolute', left: `${pourcent(f, today)}%`, top: -2, bottom: -2, width: 2, background: 'var(--danger)', pointerEvents: 'none' }}
+                                  title={`aujourd'hui — ${fmtDate(today)}`}
+                                />
+                              )}
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+
+            <p className="muted small" style={{ marginTop: 12, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+              <span style={{ color: 'var(--accent, #2563eb)' }}>◆ réunion de chantier</span>
+              <span style={{ color: 'var(--ok)' }}>▲ réception</span>
+              <span style={{ color: 'var(--warn)' }}>▫ fin + intempéries</span>
+              <span>bandeau au pied de la barre = avancement constaté en réunion</span>
+              <span>barre rayée = avancement jamais constaté</span>
+              <Badge tone="danger">bord rouge : fin dépassée</Badge>
+              <Badge tone="warn">bord orange : avancement en retard sur le délai</Badge>
+            </p>
+          </>
+        )}
+      </Card>
+
+      {lotOuvert && (() => {
+        const m = state.marches.find((x) => x.id === lotOuvert)
+        const e = m ? etats.get(m.id) : undefined
+        if (!m || !e) return null
+        return (
+          <Card titre={`${m.lot} — ${m.entreprise}`}>
+            <ConduiteLot marche={m} etat={e} propager={propager} onFermer={() => setLotOuvert(null)} />
+          </Card>
+        )
+      })()}
+
+      {filtre && (() => {
+        const p = state.projets.find((x) => x.id === filtre)
+        return p ? <EditionChantier projet={p} /> : null
+      })()}
+    </>
+  )
 }
 
 // ============================================================
@@ -1086,14 +1960,19 @@ function ouvrirChargePDF(state: AppState, debutLundi: string, nbSemaines: number
 
 // ---------- page ----------
 
-type Mode = 'phases' | 'chantier' | 'charge'
+// Le chantier a quitté cet aiguillage : il a son propre écran
+// (`GanttChantier`), avec sa fenêtre à deux échelles, ses gestes sur les
+// barres et ses règles pures. Le garder ici l'aurait condamné à la fenêtre
+// en mois des phases d'études, dans laquelle une semaine de gel est
+// invisible — et c'est exactement ce qu'on répare.
+type Mode = 'phases' | 'charge'
 
-function GanttEtCharge({ vue }: { vue: 'etudes' | 'chantier' | 'charge' }) {
+function GanttEtCharge({ vue }: { vue: 'etudes' | 'charge' }) {
   const { state } = useStore()
   const today = useToday()
   const route = useRoute()
   /** une vue = un onglet — plus de bascule cachée à l'intérieur */
-  const mode: Mode = vue === 'etudes' ? 'phases' : vue
+  const mode: Mode = vue === 'etudes' ? 'phases' : 'charge'
   const enCharge = mode === 'charge'
   // parcours 10 : « ajuster » depuis une piste de report dépose sur LE projet
   // à décaler — `#/planning/etudes/P03` ouvre sa fenêtre d'édition des dates
@@ -1112,12 +1991,9 @@ function GanttEtCharge({ vue }: { vue: 'etudes' | 'chantier' | 'charge' }) {
   }, [cibleRoute])
 
   const tousPhases = projetsPlanifies(state)
-  const tousChantier = projetsAvecChantier(state)
-  const tous = mode === 'phases' ? tousPhases : tousChantier
+  const tous = tousPhases
   const projets = filtre ? tous.filter((p) => p.id === filtre) : tous
   const f = fenetreDe(debutF, nbMois)
-
-  const lignesCh = mode === 'chantier' ? lignesChantier(state, projets) : []
 
   // fenêtre du plan de charge : en semaines, la sienne ; les frises gardent
   // la fenêtre en mois (lundis la couvrant)
@@ -1128,10 +2004,7 @@ function GanttEtCharge({ vue }: { vue: 'etudes' | 'chantier' | 'charge' }) {
   for (let m = f.debut; m < f.fin; m = addMonths(m, 1)) mois.push(m)
 
   const calerSurProjets = () => {
-    const debuts =
-      mode === 'phases' || mode === 'charge'
-        ? tousPhases.flatMap((p) => p.phases.filter((ph) => ph.debut).map((ph) => ph.debut!))
-        : state.marches.filter((m) => tousChantier.some((p) => p.id === m.projetId) && m.dateDebut).map((m) => m.dateDebut!)
+    const debuts = tousPhases.flatMap((p) => p.phases.filter((ph) => ph.debut).map((ph) => ph.debut!))
     if (debuts.length === 0) return
     const premier = debuts.sort()[0]
     setDebutF(debutMois(premier))
@@ -1142,16 +2015,10 @@ function GanttEtCharge({ vue }: { vue: 'etudes' | 'chantier' | 'charge' }) {
 
   const exporterPDF = () => {
     if (mode === 'phases') ouvrirPlanningPDF(state, projets, f, today)
-    else if (mode === 'chantier') ouvrirChantierPDF(state, lignesCh, f, today)
     else ouvrirChargePDF(state, debutLundi, nbSemaines, today)
   }
 
-  const vide =
-    mode === 'phases'
-      ? projets.length === 0
-      : mode === 'chantier'
-        ? lignesCh.length === 0
-        : state.settings.equipe.length === 0
+  const vide = mode === 'phases' ? projets.length === 0 : state.settings.equipe.length === 0
 
   const boutonPDF = (
     <Btn kind="primary" onClick={exporterPDF} disabled={vide}>
@@ -1160,11 +2027,6 @@ function GanttEtCharge({ vue }: { vue: 'etudes' | 'chantier' | 'charge' }) {
       </span>
     </Btn>
   )
-
-  const lotsEnRetard =
-    mode === 'chantier'
-      ? lignesCh.filter((l) => l.marche.actif && l.marche.dateFin && l.marche.dateFin < today && !l.marche.dateReception)
-      : []
 
   return (
     <>
@@ -1204,7 +2066,7 @@ function GanttEtCharge({ vue }: { vue: 'etudes' | 'chantier' | 'charge' }) {
           <Select
             value={filtre}
             onChange={setFiltre}
-            options={[{ value: '', label: mode === 'phases' ? 'Tous les projets actifs' : 'Tous les chantiers' }, ...tous.map((p) => ({ value: p.id, label: `${p.id} — ${p.nom}` }))]}
+            options={[{ value: '', label: 'Tous les projets actifs' }, ...tous.map((p) => ({ value: p.id, label: `${p.id} — ${p.nom}` }))]}
             style={{ maxWidth: 280 }}
           />
         )}
@@ -1217,21 +2079,10 @@ function GanttEtCharge({ vue }: { vue: 'etudes' | 'chantier' | 'charge' }) {
         {boutonPDF}
       </div>
 
-      {lotsEnRetard.length > 0 && (
-        <div className="pill-note" style={{ marginBottom: 10, borderColor: 'var(--danger)' }}>
-          <strong>En retard</strong> — {lotsEnRetard.length} lot{lotsEnRetard.length > 1 ? 's' : ''} au-delà de la fin
-          contractuelle sans réception :{' '}
-          {lotsEnRetard
-            .map((l) => `${l.marche.lot} (${l.marche.entreprise}, fin ${fmtDate(l.marche.dateFin)})`)
-            .join(' · ')}
-          . Prononcer la réception (fiche projet → Chantier) ou recaler les dates.
-        </div>
-      )}
-
       <Card>
         {mode === 'charge' ? (
           <PlanDeCharge debutLundi={debutLundi} nbSemaines={nbSemaines} />
-        ) : mode === 'phases' ? (
+        ) : (
           projets.length === 0 ? (
             <EmptyState>
               Aucun projet actif avec des phases datées — utilisez « Dater les phases automatiquement »
@@ -1272,45 +2123,6 @@ function GanttEtCharge({ vue }: { vue: 'etudes' | 'chantier' | 'charge' }) {
             </div>
             </div>
           )
-        ) : lignesCh.length === 0 ? (
-          <EmptyState>
-            Aucun lot de chantier daté — renseignez les dates d'intervention des marchés dans l'onglet
-            Chantier d'un projet, ou via « Ajuster le planning chantier » après avoir choisi un projet.
-          </EmptyState>
-        ) : (
-          <div style={{ overflowX: 'auto' }}>
-          <div className="plan-frise plan-frise-chantier">
-            <div />
-            <div style={{ position: 'relative', height: 20 }}>
-              {mois.map((m) => (
-                <div key={m} className="muted small" style={{ position: 'absolute', left: `${pos(f, m)}%`, top: 0, bottom: 0, borderLeft: '1px solid var(--line)', paddingLeft: 4 }}>
-                  {NOMS_MOIS_COURTS[Number(m.slice(5, 7)) - 1]} {m.slice(2, 4)}
-                </div>
-              ))}
-            </div>
-            {lignesCh.map((l) => (
-              <div key={l.marche.id} style={{ display: 'contents' }}>
-                <div className="small" style={{ paddingRight: 8 }}>
-                  {!filtre && <span className="muted">{l.projet.id} · </span>}
-                  <strong>{l.marche.lot}</strong>
-                  <div className="muted" title={l.marche.entreprise}>
-                    {l.marche.entreprise.length > 24 ? l.marche.entreprise.slice(0, 24) + '…' : l.marche.entreprise}
-                    {' '}
-                    <button className="btn btn-small btn-ghost" onClick={() => setFiltre(filtre === l.projet.id ? '' : l.projet.id)} title="Ajuster le planning de ce chantier">
-                      {filtre === l.projet.id ? 'fermer' : 'ajuster'}
-                    </button>
-                  </div>
-                </div>
-                <div style={{ position: 'relative' }}>
-                  <BarreChantier ligne={l} fenetre={f} today={today} />
-                  {today >= f.debut && today < f.fin && (
-                    <div style={{ position: 'absolute', left: `${pos(f, today)}%`, top: -3, bottom: -3, width: 2, background: 'var(--danger)' }} title={`aujourd'hui — ${fmtDate(today)}`} />
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-          </div>
         )}
         {mode === 'phases' && (
           <p className="muted small" style={{ marginTop: 12, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
@@ -1328,7 +2140,6 @@ function GanttEtCharge({ vue }: { vue: 'etudes' | 'chantier' | 'charge' }) {
       {mode === 'charge' && <SimulateurEtSi />}
       {mode === 'charge' && <GestionAbsences />}
       {projetSelectionne && mode === 'phases' && <EditionDates projet={projetSelectionne} />}
-      {projetSelectionne && mode === 'chantier' && <EditionChantier projet={projetSelectionne} />}
     </>
   )
 }
@@ -1352,13 +2163,13 @@ export default function Planning({ ongletInitial = 'etudes' }: { ongletInitial?:
   return (
     <Page
       titre="Planning"
-      sousTitre="Une vue par usage : échéances datées, phases d'études, pilotage du chantier lot par lot, charge de l'équipe. La ligne rouge = aujourd'hui."
+      sousTitre="Une vue par usage : échéances datées, phases d'études, conduite du chantier lot par lot (Gantt : les barres se déplacent), charge de l'équipe. La ligne rouge = aujourd'hui."
     >
       <Tabs tabs={ONGLETS_PLANNING} actif={onglet} onSelect={(id) => navigate(`/planning/${id}`)} />
 
       {onglet === 'echeances' && <EcheancesContenu />}
       {onglet === 'etudes' && <GanttEtCharge vue="etudes" />}
-      {onglet === 'chantier' && <GanttEtCharge vue="chantier" />}
+      {onglet === 'chantier' && <GanttChantier />}
       {onglet === 'charge' && <GanttEtCharge vue="charge" />}
     </Page>
   )

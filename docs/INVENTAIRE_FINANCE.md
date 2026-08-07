@@ -5,6 +5,16 @@
 > ce que l'une des deux utilisatrices utilise en silence — ce document mesure
 > AVANT de décider. **C'est le support de la décision, pas la décision** :
 > aucun masquage n'est fait dans ce livrable.
+>
+> **Remis à jour le 07/08/2026** contre le code du commit `cc7d4cb`, écran par
+> écran. La version du 04/08 listait des cartes qui n'existent plus là où elle
+> les plaçait (l'import bancaire), et ignorait sept éléments apparus depuis
+> (connexion bancaire directe, Chorus Pro, TVA, régime de TVA, filtres…). Un
+> inventaire faux est pire qu'un inventaire absent : celui-ci a été refait
+> ligne à ligne, en lecture du code.
+
+> ⏱ **La séance dure environ 35 minutes.** 55 lignes à cocher, à deux, d'une
+> traite. Ce n'est pas une réunion : c'est un café avec l'outil ouvert à côté.
 
 ## Méthode — à lire avant de cocher
 
@@ -20,18 +30,21 @@
    masquage sera une décision documentée, carte par carte, dans un livrable
    ultérieur — pas ici.
 4. **Les garde-fous ne se cochent pas.** Les alertes d'intégrité (trous de
-   numérotation, factures rejetées, pièces à contrôler…) n'apparaissent que
-   quand le problème existe : elles ne comptent pas comme des cartes à
-   évaluer et ne figurent pas dans les tableaux.
+   numérotation, factures rejetées, pièces à contrôler, pièces déjà exportées,
+   projets sans contrat, contrat provisoire…) n'apparaissent que quand le
+   problème existe : elles ne comptent pas comme des cartes à évaluer et ne
+   figurent pas dans les listes ci-dessous.
 
-**Périmètre.** Le plan citait sept fichiers ; la sous-navigation réelle de la
-sphère (`src/modules/FinanceNav.tsx:17-27`) compte **neuf onglets** —
-« Contrats & budgets » et « Ventes » en font partie et sont inventoriés
-aussi : un inventaire partiel ferait décider à l'aveugle sur ce qui n'y
-figure pas. Les fenêtres de saisie (émission, paiement, avoir…) ne sont pas
-des lignes à cocher : elles s'ouvrent depuis leur carte et suivent son sort.
+**Périmètre.** La sous-navigation réelle de la sphère
+(`src/modules/FinanceNav.tsx:22-34`) compte **neuf onglets** — quatre au rang
+principal (L'essentiel · Ventes · Achats & frais · Banque), cinq au rang
+secondaire (Contrats · Comptable · Revue · Prévisions · Connecteurs). Les neuf
+sont inventoriés : un inventaire partiel ferait décider à l'aveugle sur ce qui
+n'y figure pas. Les fenêtres de saisie (émission, paiement, avoir, facture
+fournisseur, note de frais…) ne sont pas des lignes à cocher : elles s'ouvrent
+depuis leur carte et suivent son sort.
 
-Les numéros de ligne sont ceux du commit qui introduit ce document ; ils
+Les numéros de ligne sont ceux du commit `cc7d4cb` (07/08/2026) ; ils
 vieilliront — le nom affiché, lui, se retrouve avec la recherche du code.
 
 ---
@@ -47,11 +60,11 @@ dans ce que ça montre ». Deux gestes, AUCUNE suppression :
    l'année — et rien d'autre. Chaque tuile lit le sélecteur que l'onglet de
    détail applique déjà (`financeActions`, `derive`, `tva`, `banque`,
    `tresorerie`) et la tuile entière ouvre cet onglet. Les blocs qui
-   occupaient l'ancienne « Vue d'ensemble » (section 1 ci-dessous) ne sont
-   pas perdus : la courbe 13 semaines vit dans Banque, les actions « à
-   traiter » restent comptées par le badge Finance et visibles dans leurs
-   vues (Ventes, Achats, Banque, Comptable), la santé des projets dans
-   Pilotage et les fiches projet, l'état de clôture dans Comptable.
+   occupaient l'ancienne « Vue d'ensemble » ne sont pas perdus : la courbe
+   13 semaines vit dans Banque, les actions « à traiter » restent comptées
+   par le badge Finance et visibles dans leurs vues (Ventes, Achats, Banque,
+   Comptable), la santé des projets dans Pilotage et les fiches projet,
+   l'état de clôture dans Comptable.
 2. **La sous-navigation se hiérarchise** (`src/modules/FinanceNav.tsx`) :
    rang principal « L'essentiel · Ventes · Achats & frais · Banque », rang
    secondaire discret « Contrats · Comptable · Revue · Prévisions ·
@@ -63,102 +76,106 @@ tout repli « Voir plus » d'une carte cochée « jamais ouvert » sera un
 livrable à part, décidé ligne à ligne. `scripts/test-finance-essentiel.cjs`
 verrouille les deux gestes (sélecteurs réutilisés, neuf destinations).
 
-## 1. Vue d'ensemble (`#/finance` — `src/modules/Finance.tsx`)
+---
 
-> **04/08 :** cet écran est devenu « L'essentiel » (décision ci-dessus). Les
-> lignes ci-dessous décrivent l'ancien contenu, conservé pour le cochage :
-> chaque bloc existe encore dans l'onglet indiqué par la décision.
+## 1. L'essentiel (`#/finance` — `src/modules/Finance.tsx`) — 6 lignes
 
-| Élément affiché | Où | Ce que ça fait | Usage |
-|---|---|---|---|
-| Indicateurs « Banque disponible · Point bas à 13 semaines · À encaisser · À décaisser » | `Finance.tsx:70-98` | Les quatre chiffres de sécurité financière, en tête de sphère | `[ ] utilisé · [ ] jamais ouvert` |
-| À traiter maintenant (N) | `Finance.tsx:101` | Les décisions humaines en attente sur toute la chaîne (émettre, valider, rapprocher, rejets portail, clôture), chacune avec son bouton « Traiter » | `[ ] utilisé · [ ] jamais ouvert` |
-| Trésorerie — 13 semaines (probable) | `Finance.tsx:130-131` | La courbe de trésorerie du scénario probable, renvoie vers Banque pour le détail | `[ ] utilisé · [ ] jamais ouvert` |
-| Santé économique des projets actifs | `Finance.tsx:141` | Par projet actif : facturé HT, marge sur coûts directs (temps valorisé + achats), budget externe et facturé fournisseurs | `[ ] utilisé · [ ] jamais ouvert` |
-| Clôture AAAA-MM | `Finance.tsx:186` | L'état de la clôture du mois précédent (« exportée » ou « N % prêt »), renvoie vers Comptable | `[ ] utilisé · [ ] jamais ouvert` |
+Six tuiles, un chiffre chacune ; la tuile entière est un lien. Aucun calcul
+local : chaque chiffre vient du sélecteur que l'onglet de détail lit déjà.
 
-## 2. Contrats & budgets (`#/contrats` — `src/modules/Contrats.tsx`)
+- **Trésorerie disponible** — solde bancaire (sinon manuel) + point bas prévu ; ouvre Banque · `Finance.tsx:89-103` → `[ ] utilisé` `[ ] jamais ouvert`
+- **À encaisser** — factures émises non soldées, dont le retard ; ouvre Ventes · `Finance.tsx:104-114` → `[ ] utilisé` `[ ] jamais ouvert`
+- **À facturer** — échéances dues (HT) à émettre ; ouvre Ventes · `Finance.tsx:115-125` → `[ ] utilisé` `[ ] jamais ouvert`
+- **Achats à payer** — fournisseurs validés non payés (+ ce qui reste à valider) ; ouvre Achats · `Finance.tsx:126-138` → `[ ] utilisé` `[ ] jamais ouvert`
+- **TVA due à l'État** — mois échus non déclarés ; ouvre Comptable · `Finance.tsx:139-149` → `[ ] utilisé` `[ ] jamais ouvert`
+- **Marge AAAA** — CA facturé − temps pointé valorisé ; ouvre Pilotage · `Finance.tsx:150-156` → `[ ] utilisé` `[ ] jamais ouvert`
 
-| Élément affiché | Où | Ce que ça fait | Usage |
-|---|---|---|---|
-| Indicateurs « Signé HT (contrats clients) · Facturé HT · Provisoires à contrôler · Contrats d'agence » | `Contrats.tsx:475-485` | Le total signé, ce qui en est facturé, les contrats à valider et les abonnements de l'agence | `[ ] utilisé · [ ] jamais ouvert` |
-| Contrats clients (N) | `Contrats.tsx:499` | La liste des contrats clients — le contrat signé est la racine du chiffre | `[ ] utilisé · [ ] jamais ouvert` |
-| Contrats de l'agence (N) | `Contrats.tsx:534` | Les contrats fournisseurs/agence récurrents (loyer, logiciels, assurances) | `[ ] utilisé · [ ] jamais ouvert` |
-| Fiche d'un contrat : indicateurs, « Lignes du contrat (N) », « Historique » | `Contrats.tsx:276-306, 406` | Le détail d'un contrat : lignes actives/options, avenants tracés avec motif et date | `[ ] utilisé · [ ] jamais ouvert` |
+## 2. Contrats & budgets (`#/contrats` — `src/modules/Contrats.tsx`) — 4 lignes
 
-## 3. Ventes (`#/facturation` — `src/modules/Facturation.tsx`)
+- **Indicateurs « Signé HT (contrats clients) · Facturé HT · Provisoires à contrôler · Contrats d'agence »** — le signé, ce qui en est facturé, ce qui reste à valider · `Contrats.tsx:475-489` → `[ ] utilisé` `[ ] jamais ouvert`
+- **Contrats clients (N)** — la liste des contrats clients, racine du chiffre · `Contrats.tsx:503` → `[ ] utilisé` `[ ] jamais ouvert`
+- **Contrats de l'agence (N)** — loyer, logiciels, assurances (récurrents) · `Contrats.tsx:538` → `[ ] utilisé` `[ ] jamais ouvert`
+- **Fiche d'un contrat** — indicateurs « Total signé HT · Facturé HT · Budget heures · Budget externe (saisi) », « Lignes du contrat (N) », « Historique » · `Contrats.tsx:284-294, 304, 406` → `[ ] utilisé` `[ ] jamais ouvert`
 
-| Élément affiché | Où | Ce que ça fait | Usage |
-|---|---|---|---|
-| Indicateurs « Solde en retard (TTC) · Factures en retard · Facturé HT net (cumul) · Encaissé TTC (cumul) · Délai moyen de paiement » | `Facturation.tsx:1538-1567` | L'état du poste clients en cinq chiffres | `[ ] utilisé · [ ] jamais ouvert` |
-| Relances à faire | `Facturation.tsx:1055` | Les factures en retard avec trois niveaux de relance en brouillon (courtoise / ferme / mise en demeure) — l'envoi reste un geste humain | `[ ] utilisé · [ ] jamais ouvert` |
-| À facturer — échéances (N) | `Facturation.tsx:1603-1604` | Les prévisions de facturation (sans numéro légal) et le parcours « Émettre… » qui numérote et fige la pièce | `[ ] utilisé · [ ] jamais ouvert` |
-| Factures émises | `Facturation.tsx:1678` | Les pièces émises (figées) : paiements, avoirs, PDF, Factur-X, statut portail Chorus/PDP et rappel « à déposer » (5.16) | `[ ] utilisé · [ ] jamais ouvert` |
+## 3. Ventes (`#/facturation` — `src/modules/Facturation.tsx`) — 6 lignes
 
-## 4. Achats & frais (`#/finance/achats` — `src/modules/Achats.tsx`)
+- **Indicateurs « Solde en retard (TTC) · Factures en retard · Facturé HT net AAAA · Encaissé TTC AAAA · Délai moyen de paiement »** — le poste clients en cinq chiffres · `Facturation.tsx:1949-1969` → `[ ] utilisé` `[ ] jamais ouvert`
+- **Chorus Pro — cycle de vie des factures publiques** — synchronisation des statuts du portail (déposée / rejetée / payée) par l'espace partagé, et les factures que le portail annonce sans qu'on les reconnaisse · `Facturation.tsx:288` (rendue `:2004`) → `[ ] utilisé` `[ ] jamais ouvert`
+- **Relances à faire** — les impayés, avec « Relancer par e-mail… » (brouillon Gmail déjà rempli, envoi humain) et les niveaux plus fermes en brouillon à relire · `Facturation.tsx:1421` (rendue `:2007`) → `[ ] utilisé` `[ ] jamais ouvert`
+- **À facturer — échéances (N)** — les prévisions (sans numéro légal) et le parcours « Émettre… » qui numérote et fige · `Facturation.tsx:2010` → `[ ] utilisé` `[ ] jamais ouvert`
+- **Factures émises** — les pièces figées : paiements, avoirs, PDF, Factur-X, statut portail, badge « à déposer » · `Facturation.tsx:2085` → `[ ] utilisé` `[ ] jamais ouvert`
+- **Filtres et recherche des factures émises** — projet, état (à encaisser / en retard / payées / avoirs / à contrôler), recherche n° ou libellé ; tri par émission décroissante · `Facturation.tsx:2086-2112` (tri `:1612`) → `[ ] utilisé` `[ ] jamais ouvert`
 
-| Élément affiché | Où | Ce que ça fait | Usage |
-|---|---|---|---|
-| Indicateurs « À valider · À payer (TTC) · Attendus ouverts · Notes de frais » | `Achats.tsx:524-529` | L'état du poste fournisseurs en quatre chiffres | `[ ] utilisé · [ ] jamais ouvert` |
-| Boîte d'arrivée (N) | `Achats.tsx:533` | Les factures fournisseurs reçues (Gmail/Drive, XML, saisie) en attente d'une validation humaine avec ventilation projet/phase | `[ ] utilisé · [ ] jamais ouvert` |
-| Ce qui manque (N) | `Achats.tsx:596` | Les attendus : facture récurrente absente, débit bancaire sans pièce, montant anormal | `[ ] utilisé · [ ] jamais ouvert` |
-| À payer — échéancier de décaissement (N) | `Achats.tsx:625` | Les factures validées non payées, triées par échéance | `[ ] utilisé · [ ] jamais ouvert` |
-| Balance fournisseurs (dettes) | `Achats.tsx:671` | Le dû par fournisseur, avec le retard et la prochaine échéance (ne s'affiche que s'il y a des dettes) | `[ ] utilisé · [ ] jamais ouvert` |
-| Notes de frais (N) | `Achats.tsx:688` | Les notes de frais (qui a payé, remboursement, kilométrage), parcours volontairement court | `[ ] utilisé · [ ] jamais ouvert` |
+## 4. Achats & frais (`#/finance/achats` — `src/modules/Achats.tsx`) — 8 lignes
 
-## 5. Banque & trésorerie (`#/finance/banque` — `src/modules/Banque.tsx`)
+- **Indicateurs « À valider · À payer (TTC) · Attendus ouverts · Notes de frais »** — le poste fournisseurs en quatre chiffres · `Achats.tsx:654-659` → `[ ] utilisé` `[ ] jamais ouvert`
+- **Boîte d'arrivée (N)** — factures fournisseurs reçues (Gmail/Drive, XML, saisie) en attente de validation humaine, avec ventilation projet/phase · `Achats.tsx:709` → `[ ] utilisé` `[ ] jamais ouvert`
+- **Justificatifs manquants — AAAA-MM (N)** — la liste des dépenses validées sans pièce, ouverte depuis la checklist de clôture (« corriger → ») ; chacune porte son geste de rattachement · `Achats.tsx:662-664` → `[ ] utilisé` `[ ] jamais ouvert`
+- **Ce qui manque (N)** — facture récurrente absente, débit bancaire sans pièce, montant anormal · `Achats.tsx:773` → `[ ] utilisé` `[ ] jamais ouvert`
+- **Échéancier de décaissement — N à payer** — les factures validées, triées par échéance · `Achats.tsx:802` → `[ ] utilisé` `[ ] jamais ouvert`
+- **Filtre d'état de l'échéancier (À payer / Payées / Toutes)** — une facture réglée ne disparaît plus de l'écran : elle se relit et se corrige · `Achats.tsx:804-814` → `[ ] utilisé` `[ ] jamais ouvert`
+- **Balance fournisseurs (dettes)** — le dû par fournisseur, retard et prochaine échéance (visible seulement s'il y a des dettes) · `Achats.tsx:888` → `[ ] utilisé` `[ ] jamais ouvert`
+- **Notes de frais (N)** — qui a payé, remboursement, kilométrage ; parcours volontairement court · `Achats.tsx:905` → `[ ] utilisé` `[ ] jamais ouvert`
 
-| Élément affiché | Où | Ce que ça fait | Usage |
-|---|---|---|---|
-| Indicateurs « Solde bancaire (importé) · Écart avec le solde manuel · À rapprocher · Relevés importés » | `Banque.tsx:526-549` | L'état du compte et du rapprochement en quatre chiffres | `[ ] utilisé · [ ] jamais ouvert` |
-| Mouvements (N) | `Banque.tsx:552` | Les mouvements bancaires importés (CSV idempotent) et leur rapprochement PROPOSÉ, jamais forcé (encaissement, fournisseur, note de frais, interne, justifié) | `[ ] utilisé · [ ] jamais ouvert` |
-| Prévision de trésorerie — 13 semaines | `Banque.tsx:427-432` (rendue `:589`) | La courbe en trois scénarios (prudent / probable / favorable) avec le détail des flux semaine par semaine et le point bas | `[ ] utilisé · [ ] jamais ouvert` |
+> Le **sélecteur de justificatif** (« Justificatif (registre documentaire) »,
+> `Achats.tsx:210-211`) vit dans la fenêtre de saisie d'une facture
+> fournisseur : il suit le sort de la carte qui l'ouvre et ne se coche pas à
+> part. À signaler quand même pendant la séance : c'est lui qui débloque la
+> clôture du mois.
 
-## 6. Comptable (`#/finance/comptable` — `src/modules/Comptable.tsx`)
+## 5. Banque & trésorerie (`#/finance/banque` — `src/modules/Banque.tsx`) — 5 lignes
 
-| Élément affiché | Où | Ce que ça fait | Usage |
-|---|---|---|---|
-| Barre de clôture (période, % prêt, « Prévisualiser l'export », « Exporter et verrouiller ») | `Comptable.tsx:328-343` | Le pilotage de la clôture mensuelle et l'export du lot pour le cabinet | `[ ] utilisé · [ ] jamais ouvert` |
-| Indicateurs « Ventes · Achats · Notes de frais · Paiements » | `Comptable.tsx:345-350` | Le contenu de la période sélectionnée, en pièces et en montants | `[ ] utilisé · [ ] jamais ouvert` |
-| Checklist de clôture | `Comptable.tsx:359` | Les contrôles bloquants / à vérifier avant export, chacun avec son lien « corriger → » | `[ ] utilisé · [ ] jamais ouvert` |
-| Aperçu des écritures (N) | `Comptable.tsx:377` | Les écritures comptables générées (équilibrées débit/crédit), visibles avant export | `[ ] utilisé · [ ] jamais ouvert` |
-| Profil comptable — à caler UNE fois avec le cabinet | `Comptable.tsx:46-66` (rendue `:406`) | Journaux, comptes, format CSV, analytique, régime de TVA — la configuration de l'échange avec le cabinet | `[ ] utilisé · [ ] jamais ouvert` |
-| Lots exportés (N) | `Comptable.tsx:408` | L'historique des lots (version, empreinte, diff V1/V2) et l'import du retour du cabinet (acceptée/rejetée par pièce) | `[ ] utilisé · [ ] jamais ouvert` |
+- **Indicateurs « Solde bancaire (importé) · Écart avec le solde manuel · À rapprocher · Relevés importés »** — l'état du compte et du rapprochement · `Banque.tsx:1240-1285` → `[ ] utilisé` `[ ] jamais ouvert`
+- **« Reprendre le solde importé »** — le bouton qui aligne le solde manuel (météo financière, Pilotage) sur le relevé, au lieu de le recopier à la main ; annulable · `Banque.tsx:1267-1274` → `[ ] utilisé` `[ ] jamais ouvert`
+- **Connexion bancaire directe — lecture seule** — connecter un compte (GoCardless via l'espace partagé), synchroniser, reconnecter tous les 90 jours (DSP2) ; aucun ordre possible · `Banque.tsx:766` (rendue `:1287`) → `[ ] utilisé` `[ ] jamais ouvert`
+- **Mouvements (N à rapprocher)** — les mouvements et leur rapprochement PROPOSÉ, jamais forcé ; c'est ici, et nulle part ailleurs, qu'on importe un relevé (CAMT.053 · OFX/QFX · QIF · CSV) avec son solde de fin · `Banque.tsx:1289` (import `:1294-1301`) → `[ ] utilisé` `[ ] jamais ouvert`
+- **Prévision de trésorerie — 13 semaines** — trois scénarios (prudent / probable / favorable), flux semaine par semaine, point bas · `Banque.tsx:1121` (rendue `:1335`) → `[ ] utilisé` `[ ] jamais ouvert`
 
-## 7. Revue de direction (`#/finance/revue` — `src/modules/FinanceRevue.tsx`)
+## 6. Comptable (`#/finance/comptable` — `src/modules/Comptable.tsx`) — 9 lignes
 
-Les huit sections s'affichent dans un ordre imposé (`FinanceRevue.tsx:297-308`) ;
-les titres 1-3 et 6-7 sont produits par `src/revue.ts`.
+- **TVA — ce qu'on doit à l'État** — collectée, déductible, solde des trois derniers mois, et « Marquer déclarée » qui fige un mois échu · `src/modules/CarteTVA.tsx:68` (rendue `Comptable.tsx:489`) → `[ ] utilisé` `[ ] jamais ouvert`
+- **Barre de clôture** — période, « N % prêt », bloquants, « Prévisualiser l'export », « Exporter et verrouiller » · `Comptable.tsx:491-506` → `[ ] utilisé` `[ ] jamais ouvert`
+- **Indicateurs « Ventes · Achats · Notes de frais · Paiements »** — le contenu de la période, en pièces et en montants · `Comptable.tsx:508-513` → `[ ] utilisé` `[ ] jamais ouvert`
+- **Checklist de clôture** — les contrôles bloquants / à vérifier, chacun avec son lien « corriger → » · `Comptable.tsx:522` → `[ ] utilisé` `[ ] jamais ouvert`
+- **Chorus Pro — ce que le portail dit de nos factures publiques** — rejets à corriger et factures annoncées en paiement mais non rapprochées, vus depuis la clôture · `Comptable.tsx:305` (rendue `:539`) → `[ ] utilisé` `[ ] jamais ouvert`
+- **Aperçu des écritures (N)** — les écritures générées (débit/crédit équilibrés), visibles avant export · `Comptable.tsx:542` → `[ ] utilisé` `[ ] jamais ouvert`
+- **Profil comptable — à caler UNE fois avec le cabinet** — logiciel, journaux, comptes, format CSV, analytique · `Comptable.tsx:98` (rendue `:571`) → `[ ] utilisé` `[ ] jamais ouvert`
+- **Régime de TVA (réponse du cabinet)** — encaissements ou débits ; c'est CE réglage qui pilote le calcul de la position TVA, et le changer se dit et s'annule · `Comptable.tsx:171-182` → `[ ] utilisé` `[ ] jamais ouvert`
+- **Lots exportés (N)** — historique (version, empreinte, diff V1/V2) et import du retour du cabinet, accepté/rejeté par pièce · `Comptable.tsx:573` → `[ ] utilisé` `[ ] jamais ouvert`
 
-| Élément affiché | Où | Ce que ça fait | Usage |
-|---|---|---|---|
-| 1 · Points bas de trésorerie (13 semaines) | `src/revue.ts:151` | Les semaines sous le seuil d'alerte | `[ ] utilisé · [ ] jamais ouvert` |
-| 2 · Retards clients (N) | `src/revue.ts:164` | Les factures en retard, vues direction | `[ ] utilisé · [ ] jamais ouvert` |
-| 3 · Clôture AAAA-MM | `src/revue.ts:176` | L'état de la clôture, vue direction | `[ ] utilisé · [ ] jamais ouvert` |
-| 4 · Hors périmètre & avenants potentiels | `FinanceRevue.tsx:97` | Les demandes hors contrat détectées dans les courriers/CR/journaux → pipeline → chiffrage → avenant SIGNÉ (seule étape qui modifie le contrat) | `[ ] utilisé · [ ] jamais ouvert` |
-| 5 · Jalons facturables (N) | `FinanceRevue.tsx:180` | Les jalons atteints qui peuvent devenir des échéances de facturation | `[ ] utilisé · [ ] jamais ouvert` |
-| 6 · Marges finales qui dérivent (N) | `src/revue.ts:215` | Les projets dont la marge finale projetée dérive | `[ ] utilisé · [ ] jamais ouvert` |
-| 7 · Consultations par valeur attendue (N) | `src/revue.ts:225` | Les consultations en cours classées par valeur pondérée | `[ ] utilisé · [ ] jamais ouvert` |
-| 8 · Décisions (N ouverte(s)) | `FinanceRevue.tsx:233` | Le relevé de décisions de direction : qui, quoi, pour quand, statut | `[ ] utilisé · [ ] jamais ouvert` |
+## 7. Revue de direction (`#/finance/revue` — `src/modules/FinanceRevue.tsx`) — 8 lignes
 
-## 8. Prévisions (`#/finance/previsions` — `src/modules/Previsions.tsx`)
+Les huit sections s'affichent dans un ordre imposé
+(`FinanceRevue.tsx:296-307`) ; les titres 1-3 et 6-7 sont produits par
+`src/revue.ts`.
 
-| Élément affiché | Où | Ce que ça fait | Usage |
-|---|---|---|---|
-| Budget de trésorerie — 12 mois glissants (TTC) | `Previsions.tsx:32` | La projection mensuelle : encaissements probabilisés, récurrents, salaires, frais généraux, TVA paramétrée, point bas | `[ ] utilisé · [ ] jamais ouvert` |
-| Simulateur de projet (aide à la décision) | `Previsions.tsx:126` | « Si on signe ce projet » : honoraires pondérés, coût estimé, marge attendue — une simulation, rien n'est écrit | `[ ] utilisé · [ ] jamais ouvert` |
-| Rentabilité finale par client (HT) | `Previsions.tsx:193` | Honoraires signés, coût final et marge, agrégés par client | `[ ] utilisé · [ ] jamais ouvert` |
-| Coût & ROI des appels d'offres / concours | `Previsions.tsx:211` | Le temps de prospection valorisé face à la valeur attendue des consultations en cours | `[ ] utilisé · [ ] jamais ouvert` |
+- **1 · Points bas de trésorerie (13 semaines)** — les semaines sous le seuil d'alerte · `src/revue.ts:151` → `[ ] utilisé` `[ ] jamais ouvert`
+- **2 · Retards clients (N)** — les factures en retard, vues direction · `src/revue.ts:164` → `[ ] utilisé` `[ ] jamais ouvert`
+- **3 · Clôture AAAA-MM** — l'état de la clôture, vue direction · `src/revue.ts:176` → `[ ] utilisé` `[ ] jamais ouvert`
+- **4 · Hors périmètre & avenants potentiels** — les demandes hors contrat détectées → pipeline → chiffrage → avenant SIGNÉ (seule étape qui modifie le contrat) · `FinanceRevue.tsx:97` → `[ ] utilisé` `[ ] jamais ouvert`
+- **5 · Jalons facturables (N)** — les jalons atteints qui peuvent devenir des échéances · `FinanceRevue.tsx:180` → `[ ] utilisé` `[ ] jamais ouvert`
+- **6 · Marges finales qui dérivent (N)** — les projets dont la marge projetée dérive · `src/revue.ts:215` → `[ ] utilisé` `[ ] jamais ouvert`
+- **7 · Consultations par valeur attendue (N)** — les consultations en cours, classées par valeur pondérée · `src/revue.ts:225` → `[ ] utilisé` `[ ] jamais ouvert`
+- **8 · Décisions (N ouverte(s))** — le relevé de décisions : qui, quoi, pour quand, statut · `FinanceRevue.tsx:233` → `[ ] utilisé` `[ ] jamais ouvert`
 
-## 9. Connecteurs (`#/finance/connecteurs` — `src/modules/Connecteurs.tsx`)
+## 8. Prévisions (`#/finance/previsions` — `src/modules/Previsions.tsx`) — 4 lignes
 
-| Élément affiché | Où | Ce que ça fait | Usage |
-|---|---|---|---|
-| Diagnostic | `Connecteurs.tsx:355` | L'état des six branchements (banque, mail, Drive, cabinet, Chorus, PDP) en un coup d'œil | `[ ] utilisé · [ ] jamais ouvert` |
-| Import bancaire — CAMT.053 · OFX/QFX · QIF · CSV | `Connecteurs.tsx:89-90` (rendue `:368`) | L'import multi-format des relevés, idempotent | `[ ] utilisé · [ ] jamais ouvert` |
-| Import achat électronique — CII / UBL (ligne par ligne) | `Connecteurs.tsx:160-161` (rendue `:369`) | La lecture d'une facture fournisseur XML (Factur-X/UBL), TVA par taux, vers la boîte d'arrivée des Achats | `[ ] utilisé · [ ] jamais ouvert` |
-| Cycle de vie Chorus / PDP — import CSV | `Connecteurs.tsx:234-235` (rendue `:370`) | L'import des statuts portail (déposée / rejetée / … / payée) rattachés par numéro de facture — alimente les badges de Ventes (5.16) | `[ ] utilisé · [ ] jamais ouvert` |
-| Connecteurs directs — passerelles serveur HTTPS | `Connecteurs.tsx:308` (rendue `:371`) | L'enregistrement d'URL de passerelles et leur healthcheck — aucun secret dans le navigateur | `[ ] utilisé · [ ] jamais ouvert` |
+- **Budget de trésorerie — 12 mois glissants (TTC)** — encaissements probabilisés, récurrents, salaires, frais généraux, TVA paramétrée, point bas · `Previsions.tsx:32` → `[ ] utilisé` `[ ] jamais ouvert`
+- **Simulateur de projet (aide à la décision)** — « si on signe ce projet » : honoraires pondérés, coût, marge attendue ; rien n'est écrit · `Previsions.tsx:126` → `[ ] utilisé` `[ ] jamais ouvert`
+- **Rentabilité finale par client (HT)** — honoraires signés, coût final et marge, agrégés par client · `Previsions.tsx:193` → `[ ] utilisé` `[ ] jamais ouvert`
+- **Coût & ROI des appels d'offres / concours** — le temps de prospection valorisé face à la valeur attendue des consultations · `Previsions.tsx:211` → `[ ] utilisé` `[ ] jamais ouvert`
+
+## 9. Connecteurs (`#/finance/connecteurs` — `src/modules/Connecteurs.tsx`) — 5 lignes
+
+- **Diagnostic** — l'état des six branchements (banque, mail, Drive, cabinet, Chorus, PDP), consentements bancaires compris · `Connecteurs.tsx:385` → `[ ] utilisé` `[ ] jamais ouvert`
+- **Import bancaire — CAMT.053 · OFX/QFX · QIF · CSV (et connexion directe)** — ce n'est plus un import : c'est un RENVOI vers Banque & trésorerie, qui est le seul endroit à porter le solde de fin ; la carte rappelle le dernier relevé, le solde connu et les connexions à reconnecter · `Connecteurs.tsx:118` (rendue `:398`) → `[ ] utilisé` `[ ] jamais ouvert`
+- **Import achat électronique — CII / UBL (ligne par ligne)** — lecture d'une facture fournisseur XML, TVA par taux, vers la boîte d'arrivée des Achats · `Connecteurs.tsx:189` (rendue `:399`) → `[ ] utilisé` `[ ] jamais ouvert`
+- **Cycle de vie Chorus / PDP — import CSV** — le chemin hors ligne des statuts portail, rattachés par numéro de facture (la synchronisation automatique, elle, est dans Ventes) · `Connecteurs.tsx:263` (rendue `:400`) → `[ ] utilisé` `[ ] jamais ouvert`
+- **Connecteurs directs — passerelles serveur HTTPS** — enregistrement d'URL de passerelles et healthcheck ; aucun secret dans le navigateur · `Connecteurs.tsx:337` (rendue `:401`) → `[ ] utilisé` `[ ] jamais ouvert`
+
+---
+
+**Total : 55 lignes à cocher.** 6 · 4 · 6 · 8 · 5 · 9 · 8 · 4 · 5.
 
 ---
 

@@ -20,6 +20,10 @@ import {
 import { addDays, diffDays, fmtDate, fmtMoney, fmtMois, monthKey } from './util'
 import { LIBELLES_IMPORTANCE, type NiveauImportance, estImportance, graviteDe } from './categorisation'
 import { tacheAConfirmer } from './chantier'
+// 5.23 — la confirmation d'entreprise par PÉRIODE d'intervention. Le prédicat
+// et le seuil vivent chez leurs autorités (`planningTravaux`, qui importe
+// lui-même le seuil de `chantier`) : ce fil ne fait que les consommer.
+import { periodesAConfirmer } from './planningTravaux'
 import {
   corpsRelanceSituation,
   entrepriseDe,
@@ -354,9 +358,14 @@ export function computeAlertes(state: AppState, today: string, contexte?: Contex
   // planning) sans que l'entreprise ait confirmé sa venue, marché actif.
   // Une entreprise qui découvre sa date deux semaines avant ne vient pas :
   // c'est le mode de retard le plus courant, et le plus prévisible.
+  // ce que la boucle par TÂCHE a déjà couvert : (marché, jour d'intervention).
+  // La boucle par PÉRIODE qui suit s'en sert pour ne pas crier deux fois sur
+  // le même retour d'entreprise — voir son commentaire.
+  const confirmationsDejaDites: { marcheId: string; debut: string }[] = []
   for (const t of state.tachesChantier) {
     const marche = t.marcheId ? state.marches.find((m) => m.id === t.marcheId) : null
     if (!marche || !tacheAConfirmer(t, marche, today)) continue
+    confirmationsDejaDites.push({ marcheId: marche.id, debut: t.debut! })
     const dj = diffDays(today, t.debut!)
     alertes.push({
       id: `confirme:${t.id}`,
@@ -373,6 +382,59 @@ export function computeAlertes(state: AppState, today: string, contexte?: Contex
       // d'envoi automatique (§15)
       action: { kind: 'confirmer_tache', refId: t.id, label: '✓ Confirmé' },
     })
+  }
+
+  // --- 5.23 : la confirmation se REDEMANDE À CHAQUE RETOUR ----------------
+  //
+  // Un marché porte désormais des PÉRIODES (« terrassement & élévations » en
+  // février, « reprises après clos-couvert » en juin). La boucle ci-dessus ne
+  // voit que les TÂCHES datées : un lot suivi au niveau du marché, sans
+  // planning de tâches, ne déclenchait donc aucune confirmation — et c'est
+  // précisément quand une entreprise REVIENT qu'on oublie de la confirmer.
+  // Le passage de février est dans toutes les têtes, celui de juin dans
+  // aucune.
+  //
+  // `periodesAConfirmer` (src/planningTravaux.ts) est le producteur : il porte
+  // le prédicat (marché actif, non réceptionné, période commençant dans le
+  // délai, `confirmeLe` absent SUR CETTE PÉRIODE) et lit le seuil chez son
+  // autorité, `src/chantier.ts`. Rien n'est recalculé ici.
+  //
+  // DÉDOUBLONNAGE — un arbitrage d'alerting, donc il se décide ici, chez le
+  // producteur d'alertes, et pas dans le module pur. Un lot qui porte À LA
+  // FOIS des tâches datées et des périodes lèverait sinon deux alertes pour
+  // le même retour d'entreprise. La tâche est plus fine (elle nomme la
+  // besogne) : elle gagne, et la période se tait quand une tâche du même
+  // marché alerte déjà à l'intérieur de ses bornes.
+  for (const m of state.marches) {
+    for (const x of periodesAConfirmer(m, today)) {
+      const dejaDit = confirmationsDejaDites.some(
+        (d) => d.marcheId === m.id && d.debut >= x.periode.debut && d.debut <= x.periode.fin,
+      )
+      if (dejaDit) continue
+      alertes.push({
+        // l'identifiant porte la période : deux passages du même marché sont
+        // deux alertes distinctes, et confirmer l'un n'éteint pas l'autre
+        id: `confirme-periode:${m.id}:${x.periode.id ?? 'enveloppe'}`,
+        type: 'entreprise_a_confirmer',
+        // même palier que 5.7 : sous 14 jours on est DANS le mode de
+        // défaillance connu
+        gravite: x.jours <= 14 ? 3 : 2,
+        titre: `Entreprise à confirmer — ${x.entreprise} (${x.lot})`,
+        detail:
+          `${nomProjet(state, x.projetId)}` +
+          `${x.periode.libelle ? ` · ${x.periode.libelle}` : ''}` +
+          ` · intervention le ${fmtDate(x.periode.debut)} (J−${x.jours})`,
+        lien: `#/projets/${x.projetId}/chantier`,
+        date: x.periode.debut,
+        projetId: x.projetId,
+        // un marché non migré n'a pas de période où inscrire la date : on
+        // montre l'alerte (l'oubli est réel) sans proposer un geste qui
+        // n'aurait nulle part où écrire
+        action: x.periode.id
+          ? { kind: 'confirmer_periode', refId: m.id, periodeId: x.periode.id, label: '✓ Confirmé' }
+          : undefined,
+      })
+    }
   }
 
   // --- 5.8 : visa non traité à J−SEUIL_ALERTE_VISA_JOURS de l'échéance du

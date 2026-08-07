@@ -389,6 +389,42 @@ export interface PointSeance {
  *  sa garantie deux fois — c'était le défaut 5.1. */
 export type TypeGarantie = 'retenue' | 'caution' | 'gpd'
 
+/** 5.23 — une PÉRIODE d'intervention d'un lot sur le chantier.
+ *
+ *  L'agence : « sur le planning chantier, il faut qu'une entreprise puisse
+ *  intervenir PLUSIEURS FOIS ». C'est le cas NORMAL d'un chantier, et le
+ *  modèle d'avant l'interdisait : un seul couple `dateDebut`/`dateFin` par
+ *  marché, donc un lot = une intervention continue. Or le gros œuvre revient
+ *  après le clos-couvert, le plaquiste passe avant puis après l'électricien.
+ *  On ne pouvait représenter que la première période, ou une seule barre qui
+ *  recouvre les trous — et le planning mentait dans les deux cas.
+ *
+ *  L'AUTORITÉ DE LECTURE EST `interventionsDe` (src/planningTravaux.ts), pas
+ *  ce champ : elle rend les périodes si elles existent, sinon replie
+ *  `dateDebut`/`dateFin` en une période unique. Rien ici ne réécrit les
+ *  marchés déjà saisis — le repli se fait à la LECTURE. */
+export interface PeriodeIntervention {
+  id: string
+  /** bornes INCLUSES, comme partout dans le planning travaux. Une seule des
+   *  deux suffit — « ça commence là, sans durée connue » — et la période
+   *  reste alors visible et déplaçable, donc corrigeable d'un geste. Aucune
+   *  des deux : la période existe (elle a été ajoutée) mais ne se dessine
+   *  pas ; « null n'est pas 0 », une date inventée ferait entrer le lot dans
+   *  les calculs de retard avec des jours que personne n'a décidés. */
+  debut?: string | null
+  fin?: string | null
+  /** libellé court facultatif — « reprises », « seconde phase ». C'est LUI
+   *  qui rend le planning lisible quand un lot porte trois barres : sans
+   *  lui, trois rectangles de la même couleur sur la même ligne ne se
+   *  distinguent que par leur position. */
+  libelle?: string
+  /** 5.7 — l'entreprise a confirmé sa venue POUR CETTE PÉRIODE. La
+   *  confirmation ne s'hérite jamais d'une période à la suivante : c'est
+   *  précisément quand une entreprise revient qu'on oublie de la confirmer,
+   *  et une confirmation obtenue en février ne dit rien du retour de juin. */
+  confirmeLe?: string | null
+}
+
 /** Marché de travaux (une entreprise, un lot) — support des situations */
 export interface MarcheTravaux {
   id: string
@@ -419,9 +455,33 @@ export interface MarcheTravaux {
   contactEmail?: string
   /** chantier en cours → une situation mensuelle est attendue */
   actif: boolean
-  /** intervention du lot sur le chantier — alimente le planning travaux */
+  /** intervention du lot sur le chantier — alimente le planning travaux.
+   *
+   *  5.23 — CES DEUX CHAMPS RESTENT, et deviennent L'ENVELOPPE du lot :
+   *  premier début et dernière fin de `interventions`, maintenus
+   *  automatiquement à chaque écriture des périodes
+   *  (`synchroniserEnveloppe`, src/planningTravaux.ts). C'est ce qui fait
+   *  qu'aucun des dix endroits qui les lisent aujourd'hui ne casse — le
+   *  Gantt de la fiche projet, les filtres, l'impression, la prolongation
+   *  par intempéries (src/penalites.ts), la date de fin prolongée du relevé
+   *  de séance (src/seanceChantier.ts) — et qu'un écran non encore migré
+   *  affiche l'ÉTENDUE du lot au lieu d'un trou.
+   *
+   *  Sur un marché sans `interventions` (tout marché saisi avant 5.23), ils
+   *  restent la seule source, et `interventionsDe` les replie en une période
+   *  unique. Ce qui DESSINE ou COMPARE passe par `interventionsDe` — jamais
+   *  par ces deux champs directement, sinon un lot en trois passages
+   *  redevient une barre qui recouvre ses propres trous. */
   dateDebut?: string | null
   dateFin?: string | null
+  /** 5.23 — les périodes d'intervention du lot, quand il en a plusieurs (ou
+   *  quand l'une d'elles porte un libellé). ABSENT sur tout marché antérieur
+   *  et sur tout marché à période unique jamais rouvert : l'absence n'est
+   *  pas un manque, c'est l'état d'origine, et `interventionsDe` sait le
+   *  lire. Un tableau VIDE, lui, est un choix humain — un lot attribué dont
+   *  les dates ne sont pas connues, ce qui est le cas au moment de la
+   *  signature : il ne se replie alors sur rien. */
+  interventions?: PeriodeIntervention[]
   /** date de réception des travaux — point de départ de la garantie de parfait achèvement */
   dateReception?: string | null
   /** type de garantie — absent sur les documents d'avant le Lot 5 : c'est
@@ -1947,6 +2007,17 @@ export type ActionAlerte =
   // 5.7 — pose `confirmeLe` sur la tâche de chantier : l'humain confirme,
   // l'alerte s'éteint d'elle-même au recalcul
   | { kind: 'confirmer_tache'; refId: string; label: string }
+  // 5.23 — pose `confirmeLe` sur UNE PÉRIODE d'intervention du marché
+  // (`refId` = le marché, `periodeId` = la période, comme `mois` accompagne
+  // `relancer_cotraitant` : la confirmation vise UN passage, pas le lot).
+  //
+  // Elle existe parce que la question se repose à chaque retour de
+  // l'entreprise : celle de février est confirmée et tout le monde l'a en
+  // tête ; celle de juin, personne n'y pense avant de la voir manquer. Le
+  // producteur de l'alerte est `periodesAConfirmer` (src/planningTravaux.ts)
+  // — même seuil (`SEUIL_CONFIRMATION_JOURS`, src/chantier.ts) que la
+  // confirmation des tâches, importé et non recopié.
+  | { kind: 'confirmer_periode'; refId: string; periodeId: string; label: string }
   // 5.10 — ouvre un BROUILLON Gmail de relance (gmailComposeUrl) pour la
   // note d'honoraires du mois manquant : n'écrit rien dans l'état, n'envoie
   // rien (§15) — `mois` accompagne refId parce que la relance vise UN mois,

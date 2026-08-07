@@ -9,7 +9,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { AppState, MarcheTravaux, PhaseCode, Projet } from '../types'
 import { useStore } from '../store'
-import { Badge, Btn, Card, confirmer, DateInput, EmptyState, Field, Icon, NumInput, navigate, Page, Select, Table, Tabs, TextInput, toast, useRoute, useToday } from '../ui'
+import { Badge, Btn, BtnLien, Card, confirmer, DateInput, EmptyState, Field, Icon, NumInput, navigate, Page, Select, Table, Tabs, TextInput, toast, useRoute, useToday } from '../ui'
 import { addDays, diffDays, fmtDate, fmtHeures, mondayOf, todayISO, uid } from '../util'
 import { LIBELLES_PHASES, PHASES_ORDRE } from '../miqcp'
 import { daterPhases, echeancesParDefaut } from '../echeancier'
@@ -26,9 +26,11 @@ import {
   PAS_SEMAINE,
   PIXELS_PAR_JOUR_MINIMUM,
   appliquerGeste,
+  appliquerReport,
   barreLot,
   chantiersDuPlanning,
   chevauchementsEntreprise,
+  clePeriode,
   decalerFenetre,
   echelleSuggeree,
   etatLot,
@@ -36,10 +38,12 @@ import {
   fenetreSurLots,
   graduations,
   interventionDe,
+  interventionsDe,
   jalonsChantier,
   joursDepuisPixels,
   libelleFenetre,
   marchesEnConflit,
+  periodesEnConflit,
   pixelsParJour,
   pourcent,
   reportsDuGeste,
@@ -48,8 +52,10 @@ import {
   type FenetrePlanning,
   type GesteApplique,
   type Intervention,
+  type InterventionDatee,
   type Jalon,
   type Prise,
+  type ReportLot,
 } from '../planningTravaux'
 
 const COULEURS_PHASES = [
@@ -390,16 +396,23 @@ function lotsDuChantier(state: AppState, projetId: string): { marche: MarcheTrav
 
 // ---------- la barre : ce qu'on attrape ----------
 
-/** Une barre de lot, avec ses trois prises : le corps (déplacer), la poignée
- *  gauche (début), la poignée droite (fin).
+/** Une barre = UNE PÉRIODE d'intervention, avec ses trois prises : le corps
+ *  (déplacer), la poignée gauche (début), la poignée droite (fin).
+ *
+ *  5.23 — chaque période se déplace et se redimensionne INDÉPENDAMMENT : on
+ *  pousse les reprises de juin sans toucher au terrassement de février. Les
+ *  barres d'un même lot restent sur la MÊME LIGNE (c'est un lot, pas trois)
+ *  et se distinguent par leur libellé.
  *
  *  L'aperçu pendant le glissement est LOCAL : rien n'est écrit tant que le
  *  doigt n'est pas relâché. Écrire à chaque `pointermove` empilerait cent
  *  états dans l'historique et rendrait « Annuler » inutilisable — or c'est
  *  précisément le geste sur lequel on doit pouvoir revenir. */
-function BarreGantt({
+function BarrePeriode({
   marche: m,
   etat,
+  periode,
+  plusieurs,
   couleur,
   fenetre: f,
   enConflit,
@@ -408,23 +421,20 @@ function BarreGantt({
 }: {
   marche: MarcheTravaux
   etat: EtatLot
+  periode: InterventionDatee
+  /** le lot porte plusieurs périodes : le libellé prend alors la place du
+   *  nom de l'entreprise, répété trois fois il ne dirait plus rien */
+  plusieurs: boolean
   couleur: string
   fenetre: FenetrePlanning
   enConflit: boolean
-  onGeste: (prise: Prise, geste: GesteApplique) => void
+  onGeste: (periodeId: string | null, prise: Prise, geste: GesteApplique) => void
   onOuvrir: () => void
 }) {
   const [glisse, setGlisse] = useState<{ prise: Prise; jours: number } | null>(null)
   const depart = useRef({ x: 0, largeur: 0 })
 
-  const base = etat.intervention
-  if (!base) {
-    return (
-      <div className="muted small" style={{ padding: '4px 0' }}>
-        lot non daté
-      </div>
-    )
-  }
+  const base: Intervention = { debut: periode.debut, fin: periode.fin }
 
   // pendant le glissement, on dessine la position VISÉE, pas la position
   // enregistrée : sans cet aperçu on lâche à l'aveugle
@@ -472,16 +482,10 @@ function BarreGantt({
       onOuvrir()
       return
     }
-    onGeste(encours.prise, appliquerGeste(base, encours.prise, encours.jours))
+    onGeste(periode.id, encours.prise, appliquerGeste(base, encours.prise, encours.jours))
   }
 
-  if (!b.visible) {
-    return (
-      <div className="muted small" style={{ padding: '4px 0', fontSize: 10 }}>
-        hors fenêtre — {fmtDate(base.debut)} → {fmtDate(base.fin)}
-      </div>
-    )
-  }
+  if (!b.visible) return null
 
   // La barre reste PLEINE et son libellé blanc : c'est ce qui garde le nom de
   // l'entreprise lisible, y compris imprimé en noir et blanc. L'avancement se
@@ -502,12 +506,22 @@ function BarreGantt({
         ? '2px dashed var(--warn)'
         : `1px solid ${couleur}`
 
+  // ce qui s'écrit DANS la barre : le libellé de la période quand le lot en
+  // a plusieurs (« reprises »), le nom de l'entreprise sinon. Trois barres
+  // portant trois fois le même nom d'entreprise ne se distingueraient que
+  // par leur position — c'est exactement ce que le libellé existe pour
+  // éviter.
+  const texteBarre = plusieurs ? periode.libelle?.trim() || m.entreprise : m.entreprise
+
   const infobulle = [
     `${m.lot} — ${m.entreprise}`,
-    `${fmtDate(apercu.debut)} → ${fmtDate(apercu.fin)}`,
+    `${periode.libelle ? `${periode.libelle} · ` : ''}${fmtDate(apercu.debut)} → ${fmtDate(apercu.fin)}`,
+    periode.confirmeLe
+      ? `Venue confirmée par l'entreprise le ${fmtDate(periode.confirmeLe)}`
+      : 'Venue non confirmée par l’entreprise',
     etat.avancementPct === null
-      ? 'Avancement non constaté'
-      : `Avancement ${etat.avancementPct} %${etat.tempsEcoulePct !== null ? ` · délai écoulé ${etat.tempsEcoulePct} %` : ''}`,
+      ? 'Avancement du lot non constaté'
+      : `Avancement du lot ${etat.avancementPct} %${etat.tempsEcoulePct !== null ? ` · délai écoulé ${etat.tempsEcoulePct} %` : ''}`,
     ...etat.raisons,
     glisse ? '— relâcher pour enregistrer, Échap pour annuler —' : 'Glisser pour déplacer · bords pour allonger · clic pour ouvrir',
   ].join('\n')
@@ -563,7 +577,7 @@ function BarreGantt({
             color: '#fff',
           }}
         >
-          {m.entreprise}
+          {texteBarre}
           {etat.avancementPct !== null ? ` · ${etat.avancementPct} %` : ''}
         </span>
         {/* bandeau d'avancement = avancementLot (src/chantier.ts), le chiffre
@@ -611,11 +625,83 @@ function BarreGantt({
           style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: 8, cursor: 'ew-resize', touchAction: 'none' }}
         />
       </div>
+    </>
+  )
+}
+
+/** LA LIGNE D'UN LOT : toutes ses barres, sur la même ligne.
+ *
+ *  « Les barres d'un même lot restent sur la même ligne — c'est un lot, pas
+ *  trois. » Un lot qui prendrait trois lignes se lirait comme trois marchés,
+ *  et le total des lignes du Gantt ne serait plus le nombre de lots du
+ *  chantier : on ne saurait plus, d'un coup d'œil, combien d'entreprises
+ *  interviennent.
+ *
+ *  La prolongation par intempéries se dessine ICI, une seule fois, après la
+ *  DERNIÈRE période : c'est du délai dû sur le terme du marché, pas sur
+ *  chacun de ses passages. */
+function BarresLot({
+  marche: m,
+  etat,
+  couleur,
+  fenetre: f,
+  conflits,
+  onGeste,
+  onOuvrir,
+}: {
+  marche: MarcheTravaux
+  etat: EtatLot
+  couleur: string
+  fenetre: FenetrePlanning
+  /** clés `marcheId|periodeId` en conflit — marquer la ligne entière
+   *  accuserait des interventions parfaitement en règle */
+  conflits: Set<string>
+  onGeste: (periodeId: string | null, prise: Prise, geste: GesteApplique) => void
+  onOuvrir: () => void
+}) {
+  const periodes = etat.interventions
+  if (periodes.length === 0) {
+    return (
+      <div className="muted small" style={{ padding: '4px 0' }}>
+        lot non daté
+      </div>
+    )
+  }
+
+  // l'ÉTENDUE du lot (`etat.intervention`), et non la dernière période de la
+  // liste : celle-ci est triée sur le DÉBUT, et un long passage ouvert en
+  // février peut finir après un court passage ouvert en mars
+  const etendue = etat.intervention!
+  const aucuneVisible = periodes.every((p) => !barreLot(f, p).visible)
+
+  return (
+    <>
+      {periodes.map((p) => (
+        <BarrePeriode
+          key={p.id ?? 'enveloppe'}
+          marche={m}
+          etat={etat}
+          periode={p}
+          plusieurs={periodes.length > 1}
+          couleur={couleur}
+          fenetre={f}
+          enConflit={conflits.has(clePeriode(m.id, p.id))}
+          onGeste={onGeste}
+          onOuvrir={onOuvrir}
+        />
+      ))}
+
+      {aucuneVisible && (
+        <div className="muted small" style={{ padding: '4px 0', fontSize: 10 }}>
+          hors fenêtre — {fmtDate(etendue.debut)} → {fmtDate(etendue.fin)}
+          {periodes.length > 1 ? ` · ${periodes.length} interventions` : ''}
+        </div>
+      )}
 
       {/* prolongation acquise par intempéries : hachures au-delà de la fin
           contractuelle — ce n'est pas du travail planifié, c'est du délai dû */}
-      {etat.prolongationJours > 0 && etat.finDefendable && !glisse && (() => {
-        const ext = barreLot(f, { debut: addDays(base.fin, 1), fin: etat.finDefendable })
+      {etat.prolongationJours > 0 && etat.finDefendable && (() => {
+        const ext = barreLot(f, { debut: addDays(etendue.fin, 1), fin: etat.finDefendable })
         if (!ext.visible) return null
         return (
           <div
@@ -629,6 +715,7 @@ function BarreGantt({
               background: 'repeating-linear-gradient(45deg, var(--warn) 0 3px, transparent 3px 7px)',
               opacity: 0.55,
               borderRadius: 3,
+              pointerEvents: 'none',
             }}
           />
         )
@@ -682,10 +769,42 @@ function RangeeJalons({ jalons, interactif = true }: { jalons: Jalon[]; interact
 
 // ---------- la conduite d'un lot : le clavier, et le détail ----------
 
+/** ÉCRIRE des reports de planning — le seul chemin d'écriture des dates
+ *  d'intervention de l'écran, et il passe par `appliquerReport`
+ *  (src/planningTravaux.ts), qui remet l'ENVELOPPE d'aplomb dans la foulée.
+ *  Poser `dateDebut`/`dateFin` à la main ici désynchroniserait l'enveloppe de
+ *  ses périodes sans la moindre erreur — et c'est l'enveloppe que lisent la
+ *  fiche projet, l'impression, les intempéries et les filtres. */
+function useEcritureReports() {
+  const { state, update, replace } = useStore()
+  return (reports: ReportLot[], message: string) => {
+    if (reports.length === 0) return
+    const snap = state
+    update((d) => {
+      for (const r of reports) {
+        const cible = d.marches.find((x) => x.id === r.marcheId)
+        if (cible) appliquerReport(cible, r)
+      }
+    })
+    toast(message, { undo: () => replace(snap) })
+  }
+}
+
+/** « N lots suivants décalés », ou rien — la phrase du toast, écrite une
+ *  fois : trois formulations pour le même fait finiraient par se contredire */
+function mentionSuivants(reports: ReportLot[], marcheId: string): string {
+  const n = new Set(reports.filter((r) => r.marcheId !== marcheId).map((r) => r.marcheId)).size
+  return n > 0 ? ` · ${n} lot${n > 1 ? 's' : ''} suivant${n > 1 ? 's' : ''} décalé${n > 1 ? 's' : ''}` : ''
+}
+
 /** Le panneau qui s'ouvre sous un lot. Il porte la SAISIE AU CLAVIER des
- *  deux dates — « au doigt sur un téléphone, le glissement est imprécis, et
- *  l'outil sert SUR le chantier » — et il dit en clair ce que la barre ne
- *  peut que suggérer. */
+ *  dates de CHAQUE PÉRIODE — « au doigt sur un téléphone, le glissement est
+ *  imprécis, et l'outil sert SUR le chantier » — et il dit en clair ce que
+ *  la barre ne peut que suggérer.
+ *
+ *  5.23 — une ligne par période. Les périodes s'ajoutent et se retirent à la
+ *  saisie du marché (fiche projet → Chantier) : ici on conduit ce qui
+ *  existe, on ne redessine pas le marché depuis le planning. */
 function ConduiteLot({
   marche: m,
   etat,
@@ -698,44 +817,48 @@ function ConduiteLot({
   onFermer: () => void
 }) {
   const { state, update, replace } = useStore()
+  const ecrire = useEcritureReports()
 
-  const ecrire = (reports: ReturnType<typeof reportsDuGeste>, message: string) => {
-    if (reports.length === 0) return
-    const snap = state
-    update((d) => {
-      for (const r of reports) {
-        const cible = d.marches.find((x) => x.id === r.marcheId)
-        if (!cible) continue
-        cible.dateDebut = r.debut
-        cible.dateFin = r.fin
-      }
-    })
-    toast(message, { undo: () => replace(snap) })
-  }
-
-  const decaler = (jours: number) => {
-    if (!etat.intervention) return
-    const geste = appliquerGeste(etat.intervention, 'deplacer', jours)
-    const reports = reportsDuGeste(state.marches, m.id, 'deplacer', geste, propager)
-    const suivants = reports.length - 1
+  const decaler = (periode: InterventionDatee, jours: number) => {
+    const geste = appliquerGeste({ debut: periode.debut, fin: periode.fin }, 'deplacer', jours)
+    const reports = reportsDuGeste(state.marches, m.id, periode.id, 'deplacer', geste, propager)
     ecrire(
       reports,
-      `${m.lot} : ${fmtDate(geste.debut)} → ${fmtDate(geste.fin)}` +
-        (suivants > 0 ? ` · ${suivants} lot${suivants > 1 ? 's' : ''} suivant${suivants > 1 ? 's' : ''} décalé${suivants > 1 ? 's' : ''}` : ''),
+      `${m.lot}${periode.libelle ? ` · ${periode.libelle}` : ''} : ${fmtDate(geste.debut)} → ${fmtDate(geste.fin)}` +
+        mentionSuivants(reports, m.id),
     )
   }
 
   // la saisie directe d'une date ne propage jamais : on a tapé UNE date, on
-  // n'a pas demandé à bouger le reste du chantier
-  const saisir = (champ: 'dateDebut' | 'dateFin', v: string | null) => {
+  // n'a pas demandé à bouger le reste du chantier. Elle passe quand même par
+  // `appliquerReport` — c'est lui qui tient l'enveloppe à jour.
+  const saisir = (periode: InterventionDatee, champ: 'debut' | 'fin', v: string | null) => {
+    const actuel = { debut: periode.debut, fin: periode.fin }
+    ecrire(
+      [{ marcheId: m.id, periodeId: periode.id, ...actuel, [champ]: v }],
+      `${m.lot}${periode.libelle ? ` · ${periode.libelle}` : ''} — ${champ === 'debut' ? 'début' : 'fin'} au ${fmtDate(v)}.`,
+    )
+  }
+
+  /** 5.7/5.23 — « l'entreprise a confirmé qu'elle venait », POUR CETTE
+   *  période. Le geste pose une DATE et non une case : quand l'entreprise a
+   *  dit oui compte, si elle se dédit. Il n'existe que sur une période
+   *  stockée : un marché non migré n'a nulle part où l'inscrire. */
+  const confirmer = (periode: InterventionDatee) => {
+    if (periode.id === null) return
     const snap = state
+    const efface = Boolean(periode.confirmeLe)
     update((d) => {
       const cible = d.marches.find((x) => x.id === m.id)
-      if (cible) cible[champ] = v
+      const p = cible?.interventions?.find((x) => x.id === periode.id)
+      if (p) p.confirmeLe = efface ? null : todayISO()
     })
-    toast(`${m.lot} — ${champ === 'dateDebut' ? 'début' : 'fin'} au ${fmtDate(v)}.`, {
-      undo: () => replace(snap),
-    })
+    toast(
+      efface
+        ? `${m.lot} — confirmation retirée sur ${periode.libelle || fmtDate(periode.debut)}.`
+        : `${m.lot} — venue confirmée pour ${periode.libelle || fmtDate(periode.debut)}.`,
+      { tone: efface ? 'warn' : 'ok', undo: () => replace(snap) },
+    )
   }
 
   return (
@@ -743,23 +866,59 @@ function ConduiteLot({
       className="pill-note"
       style={{ margin: '4px 0 10px', display: 'grid', gap: 8 }}
     >
+      {etat.interventions.length === 0 ? (
+        <p className="muted small" style={{ margin: 0 }}>
+          Lot non daté — ses périodes d'intervention se saisissent sur le marché :{' '}
+          <a href={`#/projets/${m.projetId}/chantier`}>fiche projet → Chantier</a>.
+        </p>
+      ) : (
+        <Table
+          compact
+          head={['Intervention', 'Début', 'Fin', 'Venue confirmée', 'Décaler']}
+        >
+          {etat.interventions.map((p, i) => (
+            <tr key={p.id ?? 'enveloppe'}>
+              <td>
+                <strong>{p.libelle || (etat.interventions.length > 1 ? `passage ${i + 1}` : 'intervention')}</strong>
+              </td>
+              <td>
+                <DateInput value={p.debut} onChange={(v) => saisir(p, 'debut', v)} />
+              </td>
+              <td>
+                <DateInput value={p.fin} onChange={(v) => saisir(p, 'fin', v)} />
+              </td>
+              <td className="small">
+                {p.id === null ? (
+                  <span className="muted" title="Ce marché n’a pas encore de périodes : la confirmation s’inscrit sur une période, pas sur le lot entier.">
+                    —
+                  </span>
+                ) : p.confirmeLe ? (
+                  <BtnLien onClick={() => confirmer(p)} title="Retirer la confirmation">
+                    <Badge tone="ok">confirmée le {fmtDate(p.confirmeLe)}</Badge>
+                  </BtnLien>
+                ) : (
+                  <Btn small onClick={() => confirmer(p)} title="L’entreprise a confirmé sa venue pour cette période">
+                    ✓ Confirmée
+                  </Btn>
+                )}
+              </td>
+              <td>
+                <span style={{ display: 'inline-flex', gap: 4 }}>
+                  <Btn small onClick={() => decaler(p, -PAS_SEMAINE)} title="Avancer d'une semaine">◀ 1 sem</Btn>
+                  <Btn small onClick={() => decaler(p, -PAS_JOUR)} title="Avancer d'un jour">◀ 1 j</Btn>
+                  <Btn small onClick={() => decaler(p, PAS_JOUR)} title="Repousser d'un jour">1 j ▶</Btn>
+                  <Btn small onClick={() => decaler(p, PAS_SEMAINE)} title="Repousser d'une semaine">1 sem ▶</Btn>
+                </span>
+              </td>
+            </tr>
+          ))}
+        </Table>
+      )}
       <div className="toolbar" style={{ flexWrap: 'wrap', gap: 8 }}>
-        <Field label="Début">
-          <DateInput value={m.dateDebut ?? null} onChange={(v) => saisir('dateDebut', v)} />
-        </Field>
-        <Field label="Fin">
-          <DateInput value={m.dateFin ?? null} onChange={(v) => saisir('dateFin', v)} />
-        </Field>
-        <Field label="Décaler l'intervention">
-          <span style={{ display: 'inline-flex', gap: 4 }}>
-            <Btn small onClick={() => decaler(-PAS_SEMAINE)} disabled={!etat.intervention} title="Avancer d'une semaine">◀ 1 sem</Btn>
-            <Btn small onClick={() => decaler(-PAS_JOUR)} disabled={!etat.intervention} title="Avancer d'un jour">◀ 1 j</Btn>
-            <Btn small onClick={() => decaler(PAS_JOUR)} disabled={!etat.intervention} title="Repousser d'un jour">1 j ▶</Btn>
-            <Btn small onClick={() => decaler(PAS_SEMAINE)} disabled={!etat.intervention} title="Repousser d'une semaine">1 sem ▶</Btn>
-          </span>
-        </Field>
         <span className="spacer" />
-        <a className="small" href={`#/projets/${m.projetId}/chantier`}>fiche du lot →</a>
+        <a className="small" href={`#/projets/${m.projetId}/chantier`}>
+          fiche du lot — ajouter ou retirer une période →
+        </a>
         <Btn small kind="ghost" onClick={onFermer}>fermer</Btn>
       </div>
 
@@ -810,42 +969,33 @@ function ConduiteLot({
  *  seconde version : deux règles de décalage divergeraient au premier lot
  *  sans date de début, et personne ne saurait laquelle a écrit le planning. */
 export function EditionChantier({ projet: p }: { projet: Projet }) {
-  const { state, update, replace } = useStore()
+  const { state } = useStore()
   const [propager, setPropager] = useState(true)
-  const lots = state.marches
+  const ecrire = useEcritureReports()
+  // 5.23 — une ligne par PÉRIODE, et non par lot : un lot qui revient a deux
+  // couples de dates à corriger, et n'en montrer qu'un ferait ressaisir
+  // l'enveloppe — c'est-à-dire écraser le second passage.
+  const lignes = state.marches
     .filter((m) => m.projetId === p.id)
-    .sort((a, b) => (a.dateDebut || '9999').localeCompare(b.dateDebut || '9999'))
+    .sort((a, b) => (interventionDe(a)?.debut || '9999').localeCompare(interventionDe(b)?.debut || '9999'))
+    .flatMap((m, rang) =>
+      interventionsDe(m).map((periode, i, toutes) => ({ marche: m, periode, rang, i, total: toutes.length })),
+    )
 
-  const majDate = (id: string, champ: 'dateDebut' | 'dateFin', v: string | null) => {
-    const snap = state
-    update((d) => {
-      const m = d.marches.find((x) => x.id === id)
-      if (m) m[champ] = v
-    })
-    toast(`Date ${champ === 'dateDebut' ? 'de début' : 'de fin'} au ${fmtDate(v)}.`, { undo: () => replace(snap) })
+  const saisir = (m: MarcheTravaux, periode: InterventionDatee, champ: 'debut' | 'fin', v: string | null) => {
+    ecrire(
+      [{ marcheId: m.id, periodeId: periode.id, debut: periode.debut, fin: periode.fin, [champ]: v }],
+      `${m.lot}${periode.libelle ? ` · ${periode.libelle}` : ''} — ${champ === 'debut' ? 'début' : 'fin'} au ${fmtDate(v)}.`,
+    )
   }
 
-  const decaler = (id: string, jours: number) => {
-    const m = state.marches.find((x) => x.id === id)
-    const inter = m ? interventionDe(m) : null
-    if (!m || !inter) return
-    const geste = appliquerGeste(inter, 'deplacer', jours)
-    const reports = reportsDuGeste(state.marches, id, 'deplacer', geste, propager)
-    if (reports.length === 0) return
-    const snap = state
-    update((d) => {
-      for (const r of reports) {
-        const cible = d.marches.find((x) => x.id === r.marcheId)
-        if (!cible) continue
-        cible.dateDebut = r.debut
-        cible.dateFin = r.fin
-      }
-    })
-    const suivants = reports.length - 1
-    toast(
-      `${m.lot} : ${fmtDate(geste.debut)} → ${fmtDate(geste.fin)}` +
-        (suivants > 0 ? ` · ${suivants} lot${suivants > 1 ? 's' : ''} suivant${suivants > 1 ? 's' : ''} décalé${suivants > 1 ? 's' : ''}` : ''),
-      { undo: () => replace(snap) },
+  const decaler = (m: MarcheTravaux, periode: InterventionDatee, jours: number) => {
+    const geste = appliquerGeste({ debut: periode.debut, fin: periode.fin }, 'deplacer', jours)
+    const reports = reportsDuGeste(state.marches, m.id, periode.id, 'deplacer', geste, propager)
+    ecrire(
+      reports,
+      `${m.lot}${periode.libelle ? ` · ${periode.libelle}` : ''} : ${fmtDate(geste.debut)} → ${fmtDate(geste.fin)}` +
+        mentionSuivants(reports, m.id),
     )
   }
 
@@ -859,34 +1009,39 @@ export function EditionChantier({ projet: p }: { projet: Projet }) {
         </label>
       }
     >
-      {lots.length === 0 ? (
+      {lignes.length === 0 ? (
         <EmptyState>
-          Aucun marché sur ce projet — ajoutez les lots dans l'onglet Chantier de la fiche projet,
-          avec leurs dates d'intervention.
+          Aucun lot daté sur ce projet — ajoutez les marchés dans l'onglet Chantier de la fiche
+          projet, avec leurs périodes d'intervention.
         </EmptyState>
       ) : (
         <>
           <p className="muted small" style={{ marginBottom: 8 }}>
-            Un lot prend du retard ? ◀ ▶ décale son intervention d'une semaine — avec la case cochée,
-            tous les lots qui démarrent après glissent aussi. Chaque geste laisse un « Annuler ».
+            Un lot prend du retard ? ◀ ▶ décale l'intervention d'une semaine — avec la case cochée,
+            tous les lots qui démarrent après glissent aussi. Une entreprise qui revient a une ligne
+            par passage : décaler ses reprises ne touche pas à son premier passage. Chaque geste
+            laisse un « Annuler ».
           </p>
-          <Table compact head={['Lot · entreprise', 'Début', 'Fin', 'Décaler']}>
-            {lots.map((m, i) => (
-              <tr key={m.id}>
+          <Table compact head={['Lot · entreprise', 'Intervention', 'Début', 'Fin', 'Décaler']}>
+            {lignes.map(({ marche: m, periode, rang, i, total }) => (
+              <tr key={`${m.id}-${periode.id ?? 'enveloppe'}`}>
                 <td>
-                  <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 3, background: couleurLot(i), marginRight: 6 }} />
+                  <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 3, background: couleurLot(rang), marginRight: 6 }} />
                   <strong>{m.lot}</strong> <span className="muted small">{m.entreprise}</span>
                 </td>
-                <td>
-                  <DateInput value={m.dateDebut ?? null} onChange={(v) => majDate(m.id, 'dateDebut', v)} />
+                <td className="small">
+                  {total > 1 ? periode.libelle || `passage ${i + 1}` : <span className="muted">—</span>}
                 </td>
                 <td>
-                  <DateInput value={m.dateFin ?? null} onChange={(v) => majDate(m.id, 'dateFin', v)} />
+                  <DateInput value={periode.debut} onChange={(v) => saisir(m, periode, 'debut', v)} />
+                </td>
+                <td>
+                  <DateInput value={periode.fin} onChange={(v) => saisir(m, periode, 'fin', v)} />
                 </td>
                 <td>
                   <span style={{ display: 'inline-flex', gap: 4 }}>
-                    <Btn small onClick={() => decaler(m.id, -PAS_SEMAINE)}>◀ 1 sem</Btn>
-                    <Btn small onClick={() => decaler(m.id, PAS_SEMAINE)}>1 sem ▶</Btn>
+                    <Btn small onClick={() => decaler(m, periode, -PAS_SEMAINE)}>◀ 1 sem</Btn>
+                    <Btn small onClick={() => decaler(m, periode, PAS_SEMAINE)}>1 sem ▶</Btn>
                   </span>
                 </td>
               </tr>
@@ -947,7 +1102,6 @@ function ouvrirChantierPDF(
       const lignes = lots
         .map(({ marche: m, couleur }) => {
           const e = etatLot(m, state.tachesChantier, state.intemperies, today)
-          const b = e.intervention ? barreLot(f, e.intervention) : null
           const bordure = e.enRetard ? '2px solid #bb2233' : e.decroche ? '2px solid #b7791f' : `1px solid ${couleur}`
           // même encodage qu'à l'écran, trait pour trait : barre pleine,
           // libellé blanc, bandeau d'avancement au pied, rayures quand
@@ -960,10 +1114,18 @@ function ouvrirChantierPDF(
             e.avancementPct === null
               ? ';background-image:repeating-linear-gradient(45deg,rgba(255,255,255,.24) 0 4px,transparent 4px 8px)'
               : ''
-          const barre =
-            b && b.visible
-              ? `<div style="position:absolute;left:${b.gauche}%;width:${b.largeur}%;top:3px;bottom:3px;background:${couleur}${rayures};border:${bordure};border-radius:3px;overflow:hidden"><span style="position:relative;display:block;font-size:9px;font-weight:700;line-height:16px;padding-left:4px;white-space:nowrap;color:#fff">${echapper(m.entreprise)}${e.avancementPct !== null ? ` &middot; ${e.avancementPct} %` : ''}</span>${bandeau}</div>`
-              : ''
+          // 5.23 — UNE BARRE PAR PÉRIODE, comme à l'écran. Le papier est ce
+          // qu'on emporte en réunion : s'il montrait une seule barre couvrant
+          // les trous, il promettrait à la MOA une présence continue que le
+          // planning ne dit pas.
+          const barre = e.interventions
+            .map((p) => {
+              const bp = barreLot(f, p)
+              if (!bp.visible) return ''
+              const texte = e.interventions.length > 1 ? p.libelle || m.entreprise : m.entreprise
+              return `<div title="${echapper(`${fmtDate(p.debut)} → ${fmtDate(p.fin)}`)}" style="position:absolute;left:${bp.gauche}%;width:${bp.largeur}%;top:3px;bottom:3px;background:${couleur}${rayures};border:${bordure};border-radius:3px;overflow:hidden"><span style="position:relative;display:block;font-size:9px;font-weight:700;line-height:16px;padding-left:4px;white-space:nowrap;color:#fff">${echapper(texte)}${e.avancementPct !== null ? ` &middot; ${e.avancementPct} %` : ''}</span>${bandeau}</div>`
+            })
+            .join('')
           const prolongation =
             e.prolongationJours > 0 && e.finDefendable && e.intervention
               ? (() => {
@@ -1001,7 +1163,10 @@ function ouvrirChantierPDF(
   const blocConflits = conflits.length
     ? `<div class="muted" style="margin-top:10px"><strong>Entreprises attendues à deux endroits à la fois :</strong> ${echapper(
         conflits
-          .map((c) => `${c.entreprise} (${fmtDate(c.debut)} → ${fmtDate(c.fin)}, ${c.jours} j)`)
+          .map(
+            (c) =>
+              `${c.entreprise} (${fmtDate(c.debut)} → ${fmtDate(c.fin)}, ${c.jours} j${c.aLibelle || c.bLibelle ? ` — ${[c.aLibelle, c.bLibelle].filter(Boolean).join(' / ')}` : ''})`,
+          )
           .join(' · '),
       )}</div>`
     : ''
@@ -1057,7 +1222,8 @@ const PAS_PAR_ECHELLE: Record<Echelle, { value: string; label: string }[]> = {
 const PAS_DEFAUT: Record<Echelle, number> = { semaine: 13, mois: 12 }
 
 function GanttChantier() {
-  const { state, update, replace } = useStore()
+  const { state } = useStore()
+  const ecrireReports = useEcritureReports()
   const today = useToday()
   const route = useRoute()
 
@@ -1082,7 +1248,7 @@ function GanttChantier() {
   const jourVisible = today >= f.debut && today < f.fin
 
   const marchesAffiches = state.marches.filter(
-    (m) => projets.some((p) => p.id === m.projetId) && interventionDe(m) !== null,
+    (m) => projets.some((p) => p.id === m.projetId) && interventionsDe(m).length > 0,
   )
   // les conflits se cherchent sur TOUS les marchés, pas sur les seuls
   // affichés : l'entreprise doublement attendue l'est presque toujours sur
@@ -1090,6 +1256,10 @@ function GanttChantier() {
   // qu'on ne le voyait pas
   const conflits = chevauchementsEntreprise(state.marches)
   const idsEnConflit = marchesEnConflit(conflits)
+  // 5.23 — le marquage se fait à la maille de la PÉRIODE : hachurer les trois
+  // barres d'un lot parce que son second passage croise un autre chantier
+  // accuserait deux interventions parfaitement en règle
+  const clesEnConflit = periodesEnConflit(conflits)
 
   const etats = new Map<string, EtatLot>()
   for (const m of marchesAffiches) etats.set(m.id, etatLot(m, state.tachesChantier, state.intemperies, today))
@@ -1125,25 +1295,21 @@ function GanttChantier() {
 
   const naviguer = (sens: number) => setAncre(decalerFenetre(f, sens).debut)
 
-  const appliquerLeGeste = (m: MarcheTravaux, prise: Prise, geste: GesteApplique) => {
-    const reports = reportsDuGeste(state.marches, m.id, prise, geste, propager)
+  const appliquerLeGeste = (
+    m: MarcheTravaux,
+    periodeId: string | null,
+    prise: Prise,
+    geste: GesteApplique,
+  ) => {
+    const reports = reportsDuGeste(state.marches, m.id, periodeId, prise, geste, propager)
     if (reports.length === 0) return
-    const snap = state
-    update((d) => {
-      for (const r of reports) {
-        const cible = d.marches.find((x) => x.id === r.marcheId)
-        if (!cible) continue
-        cible.dateDebut = r.debut
-        cible.dateFin = r.fin
-      }
-    })
-    const suivants = reports.length - 1
+    const libelle = etats.get(m.id)?.interventions.find((i) => i.id === periodeId)?.libelle
     const verbe = prise === 'deplacer' ? 'déplacé' : prise === 'debut' ? 'début ajusté' : 'fin ajustée'
-    toast(
-      `${m.lot} ${verbe} : ${fmtDate(geste.debut)} → ${fmtDate(geste.fin)}` +
-        (suivants > 0 ? ` · ${suivants} lot${suivants > 1 ? 's' : ''} suivant${suivants > 1 ? 's' : ''} décalé${suivants > 1 ? 's' : ''}` : '') +
-        (geste.bute ? ' (butée : un lot ne peut pas finir avant de commencer)' : ''),
-      { undo: () => replace(snap) },
+    ecrireReports(
+      reports,
+      `${m.lot}${libelle ? ` · ${libelle}` : ''} ${verbe} : ${fmtDate(geste.debut)} → ${fmtDate(geste.fin)}` +
+        mentionSuivants(reports, m.id) +
+        (geste.bute ? ' (butée : une intervention ne peut pas finir avant de commencer)' : ''),
     )
   }
 
@@ -1229,14 +1395,16 @@ function GanttChantier() {
         <Card titre="Une entreprise, deux chantiers à la fois">
           <p className="muted small" style={{ marginTop: 0 }}>
             Une entreprise ne se dédouble pas. Ces interventions se chevauchent pour la même
-            entreprise — c'est la promesse de délai qu'on donne en réunion qui est en jeu.
+            entreprise — c'est la promesse de délai qu'on donne en réunion qui est en jeu. Deux
+            passages d'un MÊME lot ne sont jamais un conflit : une entreprise qui revient est le cas
+            normal d'un chantier.
           </p>
           <Table compact head={['Entreprise', 'Période commune', 'Durée', 'Lots concernés']}>
             {conflits.map((c) => {
               const a = state.marches.find((m) => m.id === c.aId)
               const b = state.marches.find((m) => m.id === c.bId)
               return (
-                <tr key={`${c.aId}-${c.bId}`}>
+                <tr key={`${clePeriode(c.aId, c.aPeriodeId)}-${clePeriode(c.bId, c.bPeriodeId)}`}>
                   <td>
                     <strong>{c.entreprise}</strong>{' '}
                     {c.memeChantier ? (
@@ -1253,10 +1421,12 @@ function GanttChantier() {
                     <a href={`#/projets/${a?.projetId}/chantier`}>
                       {a?.projetId} · {a?.lot}
                     </a>
+                    {c.aLibelle ? <span className="muted"> ({c.aLibelle})</span> : ''}
                     {' — '}
                     <a href={`#/projets/${b?.projetId}/chantier`}>
                       {b?.projetId} · {b?.lot}
                     </a>
+                    {c.bLibelle ? <span className="muted"> ({c.bLibelle})</span> : ''}
                   </td>
                 </tr>
               )
@@ -1268,14 +1438,15 @@ function GanttChantier() {
       <Card>
         {vide ? (
           <EmptyState>
-            Aucun lot de chantier daté — renseignez les dates d'intervention des marchés dans l'onglet
-            Chantier d'un projet. Le Gantt se construit tout seul à partir de ces deux dates.
+            Aucun lot de chantier daté — renseignez les périodes d'intervention des marchés dans
+            l'onglet Chantier d'un projet. Le Gantt se construit tout seul à partir d'elles, une
+            barre par période.
           </EmptyState>
         ) : (
           <>
             <p className="muted small" style={{ marginTop: 0 }}>
               {glissementPraticable
-                ? 'Glissez une barre pour déplacer l’intervention, ses bords pour l’allonger ou la raccourcir. Un clic ouvre le lot : les deux dates s’y saisissent au clavier. Chaque geste laisse un « Annuler ».'
+                ? 'Glissez une barre pour déplacer l’intervention, ses bords pour l’allonger ou la raccourcir. Une entreprise qui revient a plusieurs barres sur la même ligne : chacune se déplace seule. Un clic ouvre le lot : les dates s’y saisissent au clavier. Chaque geste laisse un « Annuler ».'
                 : 'À cette échelle un jour tient dans moins de trois pixels : le glissement viserait au hasard. Cliquez le lot et saisissez les dates au clavier — ou zoomez sur les semaines.'}
             </p>
             <div style={{ overflowX: 'auto' }}>
@@ -1349,6 +1520,12 @@ function GanttChantier() {
                               <span className="muted" style={{ fontSize: 10 }}>
                                 {m.entreprise.length > 20 ? m.entreprise.slice(0, 20) + '…' : m.entreprise}
                               </span>
+                              {/* un lot qui revient le DIT dans sa marge : sinon
+                                  trois barres sur une ligne se lisent comme trois
+                                  lots dont deux auraient perdu leur libellé */}
+                              {e.interventions.length > 1 && (
+                                <Badge tone="info">{e.interventions.length} passages</Badge>
+                              )}
                               {e.gravite === 2 && <Badge tone="danger">retard</Badge>}
                               {e.gravite === 1 && <Badge tone="warn">décroche</Badge>}
                             </div>
@@ -1356,13 +1533,13 @@ function GanttChantier() {
                               data-piste
                               style={{ position: 'relative', height: 26, background: 'var(--bg-soft, #f6f7fa)', borderRadius: 5 }}
                             >
-                              <BarreGantt
+                              <BarresLot
                                 marche={m}
                                 etat={e}
                                 couleur={couleur}
                                 fenetre={f}
-                                enConflit={idsEnConflit.has(m.id)}
-                                onGeste={(prise, geste) => appliquerLeGeste(m, prise, geste)}
+                                conflits={clesEnConflit}
+                                onGeste={(periodeId, prise, geste) => appliquerLeGeste(m, periodeId, prise, geste)}
                                 onOuvrir={() => setLotOuvert(lotOuvert === m.id ? null : m.id)}
                               />
                               <RangeeJalons jalons={jalonsLot} interactif={false} />

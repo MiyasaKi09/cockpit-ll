@@ -1090,6 +1090,15 @@ function CentreActions({ personne }: { personne: string }) {
         // se dédit ensuite. L'alerte s'éteint d'elle-même au recalcul.
         const t = d.tachesChantier.find((x) => x.id === action.refId)
         if (t) t.confirmeLe = today
+      } else if (action.kind === 'confirmer_periode') {
+        // 5.23 — même fait daté, mais porté par LA PÉRIODE : une entreprise
+        // qui revient en juin se reconfirme, et la confirmation de février
+        // reste où elle est. Confirmer le mauvais passage serait pire que ne
+        // rien confirmer — on croirait le retour couvert.
+        const p = d.marches
+          .find((m) => m.id === action.refId)
+          ?.interventions?.find((x) => x.id === action.periodeId)
+        if (p) p.confirmeLe = today
       } else if (action.kind === 'obligation_faite') {
         const o = d.obligations.find((x) => x.id === action.refId)
         if (!o) return
@@ -1108,7 +1117,7 @@ function CentreActions({ personne }: { personne: string }) {
     const libelle =
       action.kind === 'valider_situation'
         ? 'Situation validée.'
-        : action.kind === 'confirmer_tache'
+        : action.kind === 'confirmer_tache' || action.kind === 'confirmer_periode'
           ? 'Entreprise confirmée.'
           : 'Obligation faite.'
     toast(libelle, { undo: () => replace(snap) })

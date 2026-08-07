@@ -4,6 +4,8 @@
 
 import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react'
 import type {
+  AppState,
+  CertificatPaiement,
   DesordreGPA,
   EtatPointSeance,
   EvenementMarche,
@@ -14,6 +16,7 @@ import type {
   PointSeance,
   Projet,
   ReunionChantier,
+  Situation,
   StatutReunion,
   TypeEvenementMarche,
   TypeGarantie,
@@ -21,7 +24,7 @@ import type {
 } from '../types'
 import { useStore } from '../store'
 import { useMoi } from '../moi'
-import { LIBELLE_GARANTIE, garantieDuMarche } from '../derive'
+import { LIBELLE_GARANTIE, decompteSituation, garantieDuMarche } from '../derive'
 // C1/C2 — l'avancement d'un lot et le prédicat « entreprise à confirmer »
 // ont DÉJÀ leur autorité (src/chantier.ts) : les cartes de cet onglet les
 // importent. Les recopier ici donnerait deux chiffres possibles pour la
@@ -49,7 +52,30 @@ import {
 // (src/entreprise.ts) : la datalist du marché la réutilise au lieu d'en
 // écrire une seconde, sinon « Martin BTP » et « SARL Martin BTP »
 // continueraient de scinder la fiche transverse en silence.
-import { entrepriseDe, marchesDe } from '../entreprise'
+//
+// 5.22 — la MÊME autorité porte désormais l'état de l'entreprise SUR CE
+// CHANTIER : `syntheseEntreprise` agrège tous chantiers confondus, la carte
+// ci-dessous RESTREINT sa sortie au projet courant. Le critère « situation
+// attendue » et le TEXTE du brouillon de relance viennent de là aussi : la
+// fiche transverse, l'onglet « Attendues » et cet écran doivent dire — et
+// écrire — exactement la même chose le même jour.
+import {
+  JOUR_ATTENTE_SITUATION,
+  JOUR_RELANCE_SITUATION,
+  corpsRelanceSituation,
+  entrepriseDe,
+  marchesDe,
+  situationAttendueNonRecue,
+  situationDuMois,
+  sujetRelanceSituation,
+  syntheseEntreprise,
+  type LigneMarcheFiche,
+} from '../entreprise'
+// 5.19 — le certificat de paiement : `certificatDeSituation` dit s'il est
+// ÉMIS (il est alors FIGÉ, jamais recalculé), `construireCertificat` dit ce
+// que le document PROPOSERAIT. Cet écran ne fait que LIRE ces deux réponses :
+// l'émission elle-même reste le geste unique de Situations.tsx.
+import { certificatDeSituation, construireCertificat } from '../certificat'
 // C1 — le gabarit du dossier de séance vit dans src/pdf.ts, avec les autres
 // impressions (facture, certificat, revue, décompte). Import STATIQUE : c'est
 // le compilateur qui vérifie alors que l'écran et le gabarit parlent de la
@@ -100,20 +126,42 @@ import {
   Money,
   NumInput,
   PctInput,
+  Progress,
   Select,
   Table,
   TextArea,
   TextInput,
   confirmer,
+  navigate,
   toast, RowMenu } from '../ui'
 import type { Tone } from '../ui'
-import { addDays, diffDays, fmtDate, fmtMoney, fmtPct, fold, ouvrirGmail, todayISO, uid } from '../util'
+import {
+  addDays,
+  diffDays,
+  fmtDate,
+  fmtMois,
+  fmtMoney,
+  fmtPct,
+  fold,
+  monthKey,
+  ouvrirGmail,
+  todayISO,
+  uid,
+} from '../util'
 import { MODELES_WHISPER, transcrireFichier, type ProgresTranscription } from '../transcription'
 import { CONTRAT_CR, genererDocxCR, parseRetourCR, retourVersTexte } from '../crdocx'
 import { lireRacine, nomConforme, rangerFichier, supporteFS, type ResultatRangement } from '../fsdrive'
 import { creerDocument, empreinteSha256, enregistrerDocument, remplacerDocument } from '../registre'
 import { copier } from '../prompts'
 import FicheEntreprise from './FicheEntreprise'
+// 5.21 — les DEUX gestes du cycle mensuel, montés depuis le chantier sans
+// être réécrits. Ils vivent dans l'écran Situations parce que c'est là qu'ils
+// ont été écrits ; ils s'ouvrent ici parce que c'est là qu'on voit qu'il faut
+// les faire. (Cycle d'import assumé : Situations importe FicheEntreprise, qui
+// importe ce fichier. Aucun des trois modules n'évalue d'appel au niveau
+// module — que des déclarations `function` hissées et des littéraux — donc le
+// cycle se résout au rendu.)
+import { ModalCertificat, ModalEdition, prochainNumeroSituation } from './Situations'
 
 // ============================================================
 // Marchés de travaux
@@ -3320,6 +3368,770 @@ function AssistantCR({
   )
 }
 
+// ============================================================
+// 5.22 — L'ENTREPRISE, SUR CE CHANTIER
+// ============================================================
+//
+// L'agence : « Entreprise c'est bien mais faut pouvoir gérer AUSSI sur chaque
+// chantier dans la fiche projet ». La fiche transverse (#/entreprises/<clé>)
+// répond à « où en est-on avec HORIZONS, tous chantiers ? » ; ICI on répond à
+// « où en est-on avec les entreprises DE CE CHANTIER ? » — la question qu'on
+// se pose en réunion, sur place, au téléphone.
+//
+// AUCUN CALCUL N'EST AJOUTÉ. `syntheseEntreprise` (src/entreprise.ts) agrège
+// déjà tout, tous chantiers confondus ; cette carte RESTREINT sa sortie au
+// projet courant et la range PAR ENTREPRISE. Chaque chiffre garde son
+// autorité, et une seule :
+//   · retenue de garantie ....... `retenueGarantieMarche` (5.1), via la synthèse
+//   · situation attendue ........ `situationAttendueNonRecue` (critère partagé)
+//   · texte de la relance ....... `corpsRelanceSituation` (le MÊME brouillon
+//                                  que l'onglet « Attendues » et la fiche)
+//   · net à payer à vérifier .... `decompteSituation` (src/derive.ts)
+//   · net certifié au maître
+//     d'ouvrage ................. `construireCertificat` / le certificat ÉMIS,
+//                                  figé, jamais recalculé (5.19)
+//   · visas en retard ........... `visasEnRetard` (5.8)
+//   · pénalités encourues ....... `totalEncouruMarche` (5.2/5.3), via la synthèse
+//   · avancement du lot ......... `avancementLot` (5.6)
+//
+// LES DEUX GESTES DU MOIS S'EXÉCUTENT ICI, SANS ÊTRE RÉÉCRITS. Saisir la
+// situation reçue et émettre le certificat de paiement sont des gestes qui
+// CONSTRUISENT des documents contractuels : `ModalEdition` fige le décompte,
+// `ModalCertificat` numérote, fige, signe et avance la résorption de
+// l'avance. En écrire une seconde version ferait deux papiers possibles pour
+// le même mois. Ils sont donc IMPORTÉS de src/modules/Situations.tsx et
+// montés tels quels — une seule implémentation, deux portes. La carte, elle,
+// ne fait qu'AFFICHER : le montant que le certificat proposerait vient de
+// `construireCertificat`, jamais d'une soustraction écrite ici.
+
+/** adresse de la fiche TRANSVERSE — « voir tout ce que fait cette entreprise,
+ *  tous chantiers ». La clé est celle d'`entreprisesSuivies` : l'identifiant
+ *  du registre quand il existe, sinon le nom plié. */
+const routeFicheEntreprise = (cle: string) => `#/entreprises/${encodeURIComponent(cle)}`
+/** la situation DÉSIGNÉE, mise en évidence dans « À vérifier » — Situations.tsx
+ *  lit `#/situations/<onglet>/<id>` et fait défiler jusqu'à la ligne */
+const routeVerifierSituation = (id: string) => `#/situations/verifier/${encodeURIComponent(id)}`
+/** l'historique PRÉ-FILTRÉ sur l'entreprise : c'est là que vit le geste
+ *  « Certificat de paiement » (route `#/situations/<onglet>/chercher/<nom>`) */
+const routeHistoriqueEntreprise = (nom: string) =>
+  `#/situations/historique/chercher/${encodeURIComponent(nom)}`
+
+/** où en est le mois pour UN marché — une LECTURE composée de sélecteurs
+ *  d'autorité, pas une machine à états écrite ici */
+type EtatMois = 'inactif' | 'attendue' | 'a_verifier' | 'rejetee' | 'validee' | 'certifie'
+
+const LIBELLE_ETAT_MOIS: Record<EtatMois, { label: string; tone: Tone }> = {
+  inactif: { label: 'marché clos', tone: 'muted' },
+  attendue: { label: 'situation non reçue', tone: 'warn' },
+  a_verifier: { label: 'reçue — à vérifier', tone: 'info' },
+  rejetee: { label: 'rejetée', tone: 'danger' },
+  validee: { label: 'validée — à certifier', tone: 'danger' },
+  certifie: { label: 'certificat émis', tone: 'ok' },
+}
+
+interface CycleMarche {
+  marche: MarcheTravaux
+  etat: EtatMois
+  /** le mois concerné ('AAAA-MM') — le mois courant */
+  mois: string
+  situation: Situation | undefined
+  /** certificat ÉMIS de la situation du mois — figé (5.19) */
+  certificat: CertificatPaiement | undefined
+  /** gravité de l'attente, du critère PARTAGÉ : 0 = rien n'est encore dû */
+  gravite: 0 | 2 | 3
+  /** avancement du lot au planning travaux — null : « on ne sait pas » */
+  avancement: number | null
+}
+
+function cycleDuMois(state: AppState, m: MarcheTravaux, today: string): CycleMarche {
+  const mois = monthKey(today)
+  // 5.6 — la MÊME fonction que lit le contrôle des situations (5.5) : deux
+  // avancements pour un lot, ce serait deux écarts possibles au même contrôle
+  const base = { marche: m, mois, avancement: avancementLot(state.tachesChantier, m.id) }
+  if (!m.actif)
+    return { ...base, etat: 'inactif', situation: undefined, certificat: undefined, gravite: 0 }
+  const situation = situationDuMois(state, m, mois)
+  if (!situation) {
+    // avant le 10, une situation qui manque n'est pas un retard : l'autorité
+    // le dit (null), l'écran ne le décide pas
+    const attente = situationAttendueNonRecue(state, m, today)
+    return {
+      ...base,
+      etat: 'attendue',
+      situation: undefined,
+      certificat: undefined,
+      gravite: attente ? attente.gravite : 0,
+    }
+  }
+  if (situation.statut === 'rejetee')
+    return { ...base, etat: 'rejetee', situation, certificat: undefined, gravite: 0 }
+  const certificat = certificatDeSituation(state, situation.id)
+  if (certificat) return { ...base, etat: 'certifie', situation, certificat, gravite: 0 }
+  return {
+    ...base,
+    etat: situation.statut === 'validee' ? 'validee' : 'a_verifier',
+    situation,
+    certificat: undefined,
+    gravite: 0,
+  }
+}
+
+interface LotChantier {
+  /** la ligne de la SYNTHÈSE : elle porte la RG et le dernier certificat,
+   *  tels que src/entreprise.ts les a lus — rien n'est relu ici */
+  ligne: LigneMarcheFiche
+  cycle: CycleMarche
+}
+
+interface EntrepriseChantier {
+  /** clé canonique — la même que transporte `#/entreprises/<clé>` */
+  cle: string
+  nom: string
+  /** le nom tel qu'il est écrit sur le marché : c'est LUI que portent les
+   *  situations, donc lui que le filtre de l'historique reconnaît */
+  nomMarche: string
+  contactNom: string | null
+  contactEmail: string | null
+  lots: LotChantier[]
+  visas: Visa[]
+  visasRetard: Visa[]
+  desordres: DesordreGPA[]
+  /** Σ des expositions de pénalité de SES lots sur CE chantier — une addition
+   *  des totaux rendus par src/penalites.ts, jamais une re-dérivation */
+  encouruHT: number
+  /** constats de pénalité qu'aucune décision n'a encore figés — le MÊME
+   *  prédicat que le badge de la section « Pénalités » plus bas */
+  penalitesADecider: number
+}
+
+/** les entreprises de CE chantier, chacune avec ce que la synthèse sait
+ *  d'elle, restreint au projet. Fonction pure : `today` est un argument, et
+ *  rien n'y touche au store. (Elle vit dans le module d'écran faute d'un
+ *  fichier où la poser — voir le rapport : sa place est src/entreprise.ts,
+ *  à côté de `entreprisesSuivies` qui fait le même travail tous chantiers.) */
+function entreprisesDuChantier(
+  state: AppState,
+  projetId: string,
+  today: string,
+): EntrepriseChantier[] {
+  const cles: string[] = []
+  const vues = new Set<string>()
+  for (const m of Array.isArray(state.marches) ? state.marches : []) {
+    if (!m || m.projetId !== projetId) continue
+    const brut = m.entrepriseId || m.entreprise || ''
+    if (!brut) continue
+    // même dédoublonnage que la liste transverse : un marché portant
+    // `entrepriseId` et un marché ne portant que le nom tombent sur LA MÊME
+    // ligne — sinon le chantier montrerait deux fois la même entreprise
+    const ent = entrepriseDe(state, brut)
+    const cle = ent ? ent.id : fold(m.entreprise || '')
+    if (!cle || vues.has(cle)) continue
+    vues.add(cle)
+    cles.push(cle)
+  }
+
+  return cles.map((cle) => {
+    const syn = syntheseEntreprise(state, cle, today)
+    const lignes = syn.marches.filter((l) => l.marche.projetId === projetId)
+    const ids = new Set(lignes.map((l) => l.marche.id))
+    const visas = syn.visasEnAttente.filter((v) => v.marcheId && ids.has(v.marcheId))
+    let encouruHT = 0
+    for (const p of syn.penalitesEncourues) if (ids.has(p.marche.id)) encouruHT += p.encouruHT
+    return {
+      cle,
+      nom: syn.nom,
+      nomMarche: lignes[0]?.marche.entreprise || syn.nom,
+      contactNom: syn.contactNom,
+      contactEmail: syn.contactEmail,
+      lots: lignes.map((ligne) => ({ ligne, cycle: cycleDuMois(state, ligne.marche, today) })),
+      visas,
+      // le RETARD passe par l'autorité 5.8, appliquée à la liste que la
+      // synthèse a déjà restreinte aux marchés de CETTE entreprise
+      visasRetard: visasEnRetard(visas, today),
+      desordres: syn.desordresGPAOuverts.filter((d) => d.marcheId && ids.has(d.marcheId)),
+      encouruHT,
+      penalitesADecider: (Array.isArray(state.evenementsMarche) ? state.evenementsMarche : []).filter(
+        (e) => e && ids.has(e.marcheId) && !e.penaliteAppliquee,
+      ).length,
+    }
+  })
+}
+
+/** LE CYCLE DU MOIS pour un lot : où il en est, combien, et le geste suivant.
+ *  Le geste est soit un BROUILLON (relance, jamais un envoi — §15), soit la
+ *  MODALE de Situations.tsx montée ici même, soit — quand il n'y a rien à
+ *  faire que relire — un lien qui dépose sur la ligne exacte.
+ *
+ *  5.21 : « saisir » et « émettre » s'exécutent DEPUIS LE CHANTIER. Les deux
+ *  modales sont importées, pas réécrites : `ModalEdition` fige le décompte,
+ *  `ModalCertificat` numérote / fige / avance la résorption de l'avance —
+ *  une seconde version de l'une ou de l'autre ferait deux papiers possibles
+ *  pour le même mois. Le geste reste unique, c'est sa PORTE qui se dédouble.
+ *  Bénéfice mesurable : la situation reçue en réunion se saisissait en
+ *  quittant l'écran puis en retapant projet / marché / entreprise / lot /
+ *  mois ; elle se saisit ici pré-remplie. */
+function BlocCycleMois({
+  lot,
+  contactEmail,
+  nomAgence,
+  plusieursLots,
+}: {
+  lot: LotChantier
+  contactEmail: string | null
+  nomAgence: string
+  plusieursLots: boolean
+}) {
+  const { state } = useStore()
+  const { ligne, cycle } = lot
+  const m = cycle.marche
+  const s = cycle.situation
+  const etat = LIBELLE_ETAT_MOIS[cycle.etat]
+  /** la saisie pré-remplie (brouillon de situation) et l'émission, montées
+   *  ici mais IMPLÉMENTÉES dans Situations.tsx */
+  const [saisie, setSaisie] = useState<Situation | null>(null)
+  const [certifier, setCertifier] = useState(false)
+  // une attente qui n'a pas atteint le 10 n'est pas un retard : le badge se
+  // tait plutôt que de crier sur du normal
+  const tone: Tone =
+    cycle.etat === 'attendue'
+      ? cycle.gravite === 3
+        ? 'danger'
+        : cycle.gravite === 2
+          ? 'warn'
+          : 'muted'
+      : etat.tone
+
+  const relancer = () =>
+    ouvrirGmail(
+      m.contactEmail || contactEmail || '',
+      sujetRelanceSituation(m, cycle.mois),
+      corpsRelanceSituation(m, cycle.mois, nomAgence),
+    )
+
+  /** le brouillon que `ModalEdition` recevra : les cinq champs que cet écran
+   *  connaît déjà (projet, marché, entreprise, lot, mois) plus le n° d'ordre
+   *  PROPOSÉ par `prochainNumeroSituation` — la même proposition que fait la
+   *  fiche quand on y choisit le marché à la main, pas une seconde règle.
+   *  Rien n'est écrit tant qu'on n'a pas enregistré. */
+  const ouvrirSaisie = () =>
+    setSaisie({
+      // id calculé AVANT la mutation (producteur rejouable), comme dans
+      // l'onglet « À vérifier »
+      id: uid('sit'),
+      projetId: m.projetId,
+      marcheId: m.id,
+      entreprise: m.entreprise,
+      lot: m.lot || undefined,
+      mois: cycle.mois,
+      numero: prochainNumeroSituation(state, m.id),
+      // « null n'est pas 0 » : les montants ne s'inventent pas, ils se lisent
+      // sur le papier que l'entreprise a remis
+      montantMoisHT: null,
+      montantCumulHT: null,
+      statut: 'a_verifier',
+      confiance: null,
+      source: `saisie manuelle du ${fmtDate(todayISO())} depuis le chantier`,
+      dateReception: todayISO(),
+    })
+
+  return (
+    <div className="small" style={{ marginBottom: plusieursLots ? 10 : 0 }}>
+      {plusieursLots && <div className="muted">{m.lot}</div>}
+      <Badge tone={tone}>{etat.label}</Badge>
+
+      {cycle.etat === 'attendue' && (
+        <>
+          <div className="muted" style={{ margin: '3px 0' }}>
+            {cycle.gravite === 0
+              ? `terme échu — l’entreprise a jusqu’au ${JOUR_ATTENTE_SITUATION} du mois`
+              : cycle.gravite === 3
+                ? `attendue depuis le ${JOUR_RELANCE_SITUATION} — la vérification et le paiement se décalent d’autant`
+                : `attendue depuis le ${JOUR_ATTENTE_SITUATION} du mois`}
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+            <Btn
+              small
+              onClick={relancer}
+              title={`Brouillon Gmail pré-rempli vers ${m.contactEmail || contactEmail || 'aucune adresse connue — à compléter dans Gmail'} — le MÊME texte que l’onglet « Attendues ». L’envoi reste un clic humain.`}
+            >
+              Relancer
+            </Btn>
+            <Btn
+              small
+              onClick={ouvrirSaisie}
+              title={`Ouvre LA fiche de saisie de « À vérifier » (même formulaire, même contrôle 5.5, même figeage du décompte), pré-remplie : ${m.entreprise}${m.lot ? ` — ${m.lot}` : ''}, ${fmtMois(cycle.mois)}. Il ne reste que les montants du papier à recopier.`}
+            >
+              Saisir la situation
+            </Btn>
+          </div>
+        </>
+      )}
+
+      {cycle.etat === 'a_verifier' && s && (
+        <>
+          {(() => {
+            // 5.1 — le décompte de vérification (vers l'entreprise) : la
+            // SEULE lecture du net à payer, garantie comprise
+            const dec = decompteSituation(state, s)
+            return (
+              <div style={{ margin: '3px 0' }}>
+                net à payer <strong>{fmtMoney(dec.netAPayerHT)}</strong> HT
+                {dec.coherences.length > 0 && (
+                  <>
+                    {' '}
+                    <span title={dec.coherences.join(' · ')}>
+                      <Badge tone="warn">incohérence</Badge>
+                    </span>
+                  </>
+                )}
+              </div>
+            )
+          })()}
+          <a
+            href={routeVerifierSituation(s.id)}
+            title="Dépose sur CETTE ligne dans « À vérifier » : le contrôle d’avancement s’ouvre au clic sur « Valider »"
+          >
+            Vérifier et valider →
+          </a>
+        </>
+      )}
+
+      {cycle.etat === 'validee' && s && (
+        <>
+          {(() => {
+            // 5.19 — ce que le certificat PROPOSERAIT : construit par
+            // l'autorité, affiché sans être figé. L'émission reste le geste
+            // unique de Situations.tsx — c'est sa modale qui s'ouvre au
+            // bouton ci-dessous, pas une copie.
+            const c = construireCertificat(state, s.id)
+            return (
+              <div style={{ margin: '3px 0' }}>
+                {c ? (
+                  <>
+                    certificat n° {c.numeroPropose} proposé —{' '}
+                    <strong>{fmtMoney(c.lignes.netAPayerTTC)}</strong> TTC au maître d’ouvrage
+                  </>
+                ) : (
+                  <span className="muted">
+                    situation sans marché rattaché — rien à certifier tant qu’elle n’y est pas liée
+                  </span>
+                )}
+              </div>
+            )
+          })()}
+          <Btn
+            small
+            kind="primary"
+            onClick={() => setCertifier(true)}
+            title="Ouvre LA modale d’émission (Situations.tsx) : chaque ligne calculée reste corrigeable, « Émettre » fige le document et ouvre le PDF. C’est le seul chemin d’émission du dépôt."
+          >
+            Émettre le certificat
+          </Btn>
+        </>
+      )}
+
+      {cycle.etat === 'certifie' && cycle.certificat && s && (
+        <>
+          <div style={{ margin: '3px 0' }}>
+            n° {cycle.certificat.numero} — <strong>{fmtMoney(cycle.certificat.netAPayerTTC)}</strong>{' '}
+            TTC, émis le {fmtDate(cycle.certificat.emisLe)} par {cycle.certificat.emisPar}
+          </div>
+          <a
+            href={routeHistoriqueEntreprise(s.entreprise)}
+            title="Un certificat émis est figé : il se rouvre en réimpression, jamais en recalcul"
+          >
+            Réimprimer →
+          </a>
+        </>
+      )}
+
+      {cycle.etat === 'rejetee' && s && (
+        <>
+          <div className="muted" style={{ margin: '3px 0' }}>
+            {s.notes ? s.notes.split('\n').pop() : 'motif non consigné'} — une situation corrigée
+            reste attendue pour ce mois
+          </div>
+          <a href={routeHistoriqueEntreprise(s.entreprise)}>Historique →</a>
+        </>
+      )}
+
+      {/* le dernier certificat ÉMIS du lot — celui que la synthèse a
+          sélectionné (aucun recalcul) : il dit où on en est du paiement
+          quand le mois courant, lui, n'a encore rien produit */}
+      {cycle.etat !== 'certifie' && (
+        <div className="muted" style={{ marginTop: 4 }}>
+          {ligne.dernierCertificat
+            ? `dernier certificat : n° ${ligne.dernierCertificat.numero} (${fmtMois(ligne.dernierCertificat.mois)}) — ${fmtMoney(ligne.dernierCertificat.netAPayerTTC)} TTC`
+            : 'aucun certificat de paiement émis à ce jour'}
+        </div>
+      )}
+
+      {/* 5.21 — les deux gestes du cycle, montés depuis Situations.tsx. Une
+          seule implémentation dans le dépôt : celle qui fige le décompte et
+          celle qui fige le certificat. `certifier` se relit sur l'état frais
+          (`state.situations`) plutôt que sur la copie capturée : après une
+          émission, la modale doit voir le certificat qu'elle vient de poser
+          et refuser le doublon. */}
+      {saisie && <ModalEdition sit={saisie} creation onClose={() => setSaisie(null)} />}
+      {certifier &&
+        s &&
+        (() => {
+          const frais = state.situations.find((x) => x.id === s.id)
+          return frais ? <ModalCertificat sit={frais} onClose={() => setCertifier(false)} /> : null
+        })()}
+    </div>
+  )
+}
+
+/** la retenue de garantie d'un lot — cycle de vie lu par l'autorité 5.1 ;
+ *  « à libérer » est de l'argent de l'entreprise qu'on garde sans droit */
+function BlocGarantie({ ligne, plusieursLots }: { ligne: LigneMarcheFiche; plusieursLots: boolean }) {
+  const rg = ligne.rg
+  return (
+    <div className="small" style={{ marginBottom: plusieursLots ? 10 : 0 }}>
+      {plusieursLots && <div className="muted">{ligne.marche.lot}</div>}
+      {rg.garantie !== 'retenue' ? (
+        <span
+          className="muted"
+          title={`${LIBELLE_GARANTIE[rg.garantie]}${ligne.marche.garantieRecueLe ? ` reçue le ${fmtDate(ligne.marche.garantieRecueLe)}` : ''} — rien n’est retenu sur les situations (CCAG art. 33)`}
+        >
+          {LIBELLE_GARANTIE[rg.garantie]} — rien retenu
+        </span>
+      ) : rg.statut === 'liberee' ? (
+        <Badge tone="ok">RG libérée</Badge>
+      ) : rg.statut === 'a_liberer' ? (
+        <>
+          <a
+            href="#/situations/rg"
+            title="Onglet « Retenues de garantie » — c’est là que la levée se constate et se date"
+          >
+            <Badge tone="danger">à libérer</Badge>
+          </a>{' '}
+          <strong>{fmtMoney(rg.retenueHT)}</strong> HT
+          <div className="muted">
+            garantie de parfait achèvement échue{rg.dateLevee ? ` le ${fmtDate(rg.dateLevee)}` : ''}
+          </div>
+        </>
+      ) : rg.statut === 'retenue' ? (
+        <>
+          <strong>{fmtMoney(rg.retenueHT)}</strong> HT <Badge tone="info">retenue</Badge>
+          {rg.dateLevee && <div className="muted">levée le {fmtDate(rg.dateLevee)}</div>}
+        </>
+      ) : rg.travauxCumulHT === 0 ? (
+        // 0 € n'est pas « rien à retenir » : c'est « rien à retenir ENCORE ».
+        // Le dire évite de lire une RG nulle là où il n'y a simplement pas
+        // encore de situation validée à laquelle l'appliquer.
+        <span className="muted">
+          aucune situation validée — rien retenu à ce jour ({fmtPct(ligne.marche.tauxRG, 0)} au marché)
+        </span>
+      ) : (
+        <>
+          <strong>{fmtMoney(rg.retenueHT)}</strong> HT
+          <div className="muted">retenue à ce jour — réception non prononcée</div>
+        </>
+      )}
+    </div>
+  )
+}
+
+/** LA CARTE : une ligne par entreprise du chantier, son état et ses gestes.
+ *  `onAller` déplie ET amène à l'écran le registre du bas qui porte le geste
+ *  (viser, décider une pénalité, traiter un désordre) : le compteur cesse
+ *  d'être une information pour devenir un chemin. */
+export function CarteEntreprisesDuChantier({
+  projet: p,
+  onAller,
+}: {
+  projet: Projet
+  onAller: (section: 'visas' | 'penalites' | 'gpa') => void
+}) {
+  const { state } = useStore()
+  const today = todayISO()
+  const moisCourant = monthKey(today)
+  const nomAgence = state.settings.nomAgence
+  /** aperçu transverse en modale — le nom de l'entreprise, comme partout */
+  const [fiche, setFiche] = useState<string | null>(null)
+  /** la fiche du marché : le MÊME formulaire que la carte « Marchés » plus
+   *  bas (même modale, même écriture) — un geste peut partir de deux écrans,
+   *  un calcul ne peut pas avoir deux autorités */
+  const [modalMarche, setModalMarche] = useState<{ marche?: MarcheTravaux } | null>(null)
+
+  const entreprises = entreprisesDuChantier(state, p.id, today)
+  // un marché sans NOM d'entreprise (import ancien) ne peut pas se ranger
+  // sous une entreprise : le dire plutôt que d'afficher « aucun marché »,
+  // qui serait faux et enverrait en resaisir un second
+  const marchesProjet = state.marches.filter((m) => m.projetId === p.id)
+  const sansEntreprise = marchesProjet.length - entreprises.reduce((t, e) => t + e.lots.length, 0)
+
+  // le résumé du mois : des COMPTES d'états déjà décidés par `cycleDuMois`
+  const cycles = entreprises.flatMap((e) => e.lots.map((l) => l.cycle))
+  const attendues = cycles.filter((c) => c.etat === 'attendue' && c.gravite > 0).length
+  const aVerifier = cycles.filter((c) => c.etat === 'a_verifier').length
+  const aCertifier = cycles.filter((c) => c.etat === 'validee').length
+
+  return (
+    <Card
+      titre="Entreprises du chantier"
+      actions={
+        <a
+          href="#/entreprises"
+          className="small"
+          title="Toutes les entreprises de l’agence, tous chantiers — qui me doit quoi aujourd’hui"
+        >
+          Toutes les entreprises →
+        </a>
+      }
+    >
+      {entreprises.length === 0 ? (
+        <EmptyState>
+          {marchesProjet.length === 0 ? (
+            <>
+              Aucun marché de travaux — ajoutez chaque lot à la signature : c’est le support des
+              situations mensuelles, des visas, des pénalités, de la retenue de garantie et de la
+              GPA.
+            </>
+          ) : (
+            <>
+              {marchesProjet.length} marché(s) saisis, aucun ne porte de nom d’entreprise : le suivi
+              par entreprise ne peut pas les ranger. Renseignez le titulaire de chaque lot dans
+              « Marchés de travaux — le contrat », juste en dessous.
+            </>
+          )}
+          <div style={{ marginTop: 10 }}>
+            <Btn small kind="primary" onClick={() => setModalMarche({})}>
+              Ajouter un marché
+            </Btn>
+          </div>
+        </EmptyState>
+      ) : (
+        <>
+          {(attendues > 0 || aVerifier > 0 || aCertifier > 0) && (
+            <div className="pill-note" style={{ marginTop: 0 }}>
+              Cycle du mois ({fmtMois(moisCourant)}) :{' '}
+              {[
+                attendues > 0 ? `${attendues} situation(s) à relancer` : null,
+                aVerifier > 0 ? `${aVerifier} à vérifier` : null,
+                aCertifier > 0 ? `${aCertifier} à certifier` : null,
+              ]
+                .filter(Boolean)
+                .join(' · ')}
+              .
+            </div>
+          )}
+          <Table
+            compact
+            head={[
+              'Entreprise',
+              'Lots et avancement',
+              `Situation — ${fmtMois(moisCourant)}`,
+              'Retenue de garantie',
+              'À traiter ici',
+              '',
+            ]}
+          >
+            {entreprises.map((e) => {
+              const plusieursLots = e.lots.length > 1
+              const rien =
+                e.visas.length === 0 && e.penalitesADecider === 0 && e.desordres.length === 0
+              return (
+                <tr key={e.cle}>
+                  <td>
+                    <BtnLien
+                      title="Aperçu : tous ses marchés, sa RG, ses visas, ses pénalités, ses désordres — tous chantiers"
+                      onClick={() => setFiche(e.cle)}
+                    >
+                      <strong>{e.nom}</strong>
+                    </BtnLien>
+                    <div className="muted small">
+                      {e.contactNom || <span>contact non renseigné</span>}
+                      {e.contactEmail ? <div>{e.contactEmail}</div> : null}
+                    </div>
+                    <div className="small" style={{ marginTop: 4 }}>
+                      <a
+                        href={routeFicheEntreprise(e.cle)}
+                        title="Voir tout ce que fait cette entreprise, tous chantiers — sa fiche en pleine page"
+                      >
+                        tous chantiers →
+                      </a>
+                    </div>
+                  </td>
+
+                  <td>
+                    {e.lots.map(({ ligne, cycle }) => (
+                      <div
+                        key={ligne.marche.id}
+                        className="small"
+                        style={{ marginBottom: plusieursLots ? 10 : 0 }}
+                      >
+                        <strong>{ligne.marche.lot}</strong>{' '}
+                        {ligne.marche.actif ? (
+                          <Badge tone="ok">en cours</Badge>
+                        ) : (
+                          <span className="muted">clos</span>
+                        )}
+                        <div className="muted">
+                          {fmtMoney(ligne.marche.montantInitialHT + ligne.marche.avenantsHT)} HT
+                          {ligne.marche.avenantsHT !== 0
+                            ? ` · avenants ${fmtMoney(ligne.marche.avenantsHT)}`
+                            : ''}
+                        </div>
+                        {cycle.avancement === null ? (
+                          <div className="muted">
+                            avancement inconnu —{' '}
+                            <a href={`#/projets/${p.id}/planning`}>aucune tâche au planning</a>
+                          </div>
+                        ) : (
+                          <Progress
+                            value={cycle.avancement}
+                            max={100}
+                            // couleur NEUTRE imposée : la teinte par défaut
+                            // (rouge sous 60 %) crierait sur un lot à 20 % au
+                            // deuxième mois d'un chantier de dix — un état
+                            // parfaitement normal. L'avancement se COMPARE
+                            // (au planning, au % demandé par la situation),
+                            // il ne se juge pas seul.
+                            couleur="var(--accent)"
+                            header={
+                              <>
+                                <span className="muted">avancement au planning</span>
+                                <span>{fmtPct(cycle.avancement / 100, 0)}</span>
+                              </>
+                            }
+                          />
+                        )}
+                      </div>
+                    ))}
+                  </td>
+
+                  <td>
+                    {e.lots.map((lot) => (
+                      <BlocCycleMois
+                        key={lot.ligne.marche.id}
+                        lot={lot}
+                        contactEmail={e.contactEmail}
+                        nomAgence={nomAgence}
+                        plusieursLots={plusieursLots}
+                      />
+                    ))}
+                  </td>
+
+                  <td>
+                    {e.lots.map(({ ligne }) => (
+                      <BlocGarantie
+                        key={ligne.marche.id}
+                        ligne={ligne}
+                        plusieursLots={plusieursLots}
+                      />
+                    ))}
+                  </td>
+
+                  <td>
+                    {rien ? (
+                      <span className="muted small">rien en attente</span>
+                    ) : (
+                      <>
+                        {/* les badges restent COURTS : `.badge` ne se coupe pas
+                            (white-space: nowrap), et sous 700 px un badge trop
+                            long sort de la carte — l'outil sert au chantier,
+                            au téléphone. Le détail chiffré va en dessous. */}
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                          {e.visas.length > 0 && (
+                            <BtnLien
+                              title="Déplier le registre des visas, plus bas dans cet onglet, et l’amener à l’écran"
+                              onClick={() => onAller('visas')}
+                            >
+                              <Badge tone="warn">{e.visas.length} visa(s) à viser</Badge>
+                            </BtnLien>
+                          )}
+                          {e.visasRetard.length > 0 && (
+                            <BtnLien
+                              title="Échéance du CCAP dépassée : c’est la responsabilité de la MOE qui court — notre retard, pas le sien"
+                              onClick={() => onAller('visas')}
+                            >
+                              <Badge tone="danger">{e.visasRetard.length} en retard</Badge>
+                            </BtnLien>
+                          )}
+                          {e.penalitesADecider > 0 && (
+                            <BtnLien
+                              title="Déplier le journal des pénalités : la décision d’appliquer ou de renoncer reste humaine"
+                              onClick={() => onAller('penalites')}
+                            >
+                              <Badge tone="warn">{e.penalitesADecider} pénalité(s)</Badge>
+                            </BtnLien>
+                          )}
+                          {e.desordres.length > 0 && (
+                            <BtnLien
+                              title="Déplier le registre GPA : relances tracées et mise en demeure avant la fin de l’année de parfait achèvement"
+                              onClick={() => onAller('gpa')}
+                            >
+                              <Badge tone="warn">{e.desordres.length} désordre(s) GPA</Badge>
+                            </BtnLien>
+                          )}
+                        </div>
+                        {e.penalitesADecider > 0 && (
+                          <div className="muted small" style={{ marginTop: 4 }}>
+                            pénalité(s) à décider
+                            {/* pas de montant quand l'exposition est nulle : aucun
+                                taux au CCAP ⇒ `penaliteEncourue` répond null, et
+                                « 0 € encourus » affirmerait un calcul qui n'a pas eu lieu */}
+                            {e.encouruHT > 0 ? ` — ${fmtMoney(e.encouruHT)} HT encourus` : ''}
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </td>
+
+                  <td className="right">
+                    <RowMenu
+                      items={[
+                        ...e.lots.map(({ ligne }) => ({
+                          label: `Modifier « ${ligne.marche.lot} »`,
+                          title:
+                            'Montant, avenants, taux de RG, révision, délai de vérification, contact — la même fiche que la carte « Marchés de travaux »',
+                          onClick: () => setModalMarche({ marche: ligne.marche }),
+                        })),
+                        {
+                          label: 'Ses situations et certificats',
+                          title: 'Historique des situations, décomptes figés et certificats émis',
+                          onClick: () => navigate(routeHistoriqueEntreprise(e.nomMarche)),
+                        },
+                        {
+                          label: 'Fiche entreprise — tous chantiers',
+                          onClick: () => navigate(routeFicheEntreprise(e.cle)),
+                        },
+                        {
+                          label: 'Planning des travaux du chantier',
+                          onClick: () => navigate(`#/projets/${p.id}/planning`),
+                        },
+                      ]}
+                    />
+                  </td>
+                </tr>
+              )
+            })}
+          </Table>
+          {sansEntreprise > 0 && (
+            <p className="small muted" style={{ marginTop: 8 }}>
+              {sansEntreprise} marché(s) de ce chantier ne portent aucun nom d’entreprise : ils
+              n’apparaissent pas ci-dessus, mais restent entiers dans « Marchés de travaux — le
+              contrat ». Renseigner le titulaire les y ramène.
+            </p>
+          )}
+        </>
+      )}
+
+      {modalMarche && (
+        <ModalMarche
+          projetId={p.id}
+          marche={modalMarche.marche}
+          onClose={() => setModalMarche(null)}
+        />
+      )}
+      {fiche && <FicheEntreprise nomOuId={fiche} onClose={() => setFiche(null)} />}
+    </Card>
+  )
+}
+
 /** C2 — une carte qui n'a rien à dire ne prend plus une page d'écran : elle
  *  devient une LIGNE de titre avec son compteur, qu'un clic déplie. Le badge
  *  (« 2 en retard ») reste visible replié — c'est lui qui donne envie de
@@ -3333,6 +4145,7 @@ function SectionRepliable({
   resume,
   badges,
   ouverteParDefaut,
+  appel = 0,
   children,
 }: {
   titre: string
@@ -3342,6 +4155,12 @@ function SectionRepliable({
   /** ouverte quand la carte appelle un geste ; repliée quand elle est de
    *  l'histoire ou hors phase — chaque section porte SA raison, en commentaire */
   ouverteParDefaut: boolean
+  /** 5.22 — COMPTEUR d'appels depuis la carte « Entreprises du chantier » :
+   *  cliquer « 3 visas à viser » sur la ligne d'une entreprise doit DÉPLIER
+   *  le registre et l'amener à l'écran, pas seulement informer. Un compteur
+   *  plutôt qu'un booléen : deux appels de suite sur la même section (on
+   *  replie à la main, on reclique) doivent tous deux agir. */
+  appel?: number
   children: ReactNode
 }) {
   // l'état initial ne vaut qu'à l'ouverture de l'onglet : une section dépliée
@@ -3349,11 +4168,21 @@ function SectionRepliable({
   // document. Le `key={projet.id}` du montage garantit qu'on repart du bon
   // état en changeant de projet.
   const [ouverte, setOuverte] = useState(ouverteParDefaut)
+  const ref = useRef<HTMLDetailsElement | null>(null)
+  useEffect(() => {
+    // `appel === 0` = montage : rien n'a été demandé, on ne bouge pas l'écran.
+    // Cet effet n'écrit RIEN dans le store — il ouvre un <details> et fait
+    // défiler ; la machine ne décide d'aucun contenu (§15).
+    if (!appel) return
+    setOuverte(true)
+    ref.current?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+  }, [appel])
   return (
     <details
+      ref={ref}
       open={ouverte}
       onToggle={(e) => setOuverte(e.currentTarget.open)}
-      style={{ marginBottom: ouverte ? 0 : 12 }}
+      style={{ marginBottom: ouverte ? 0 : 12, scrollMarginTop: 12 }}
     >
       <summary
         style={{
@@ -3381,6 +4210,12 @@ function SectionRepliable({
 export default function ProjetChantier({ projet }: { projet: Projet }) {
   const { state } = useStore()
   const today = todayISO()
+
+  // 5.22 — l'appel d'une section depuis la carte « Entreprises du chantier » :
+  // un compteur par registre, incrémenté au clic sur le badge de la ligne.
+  const [appels, setAppels] = useState({ visas: 0, penalites: 0, gpa: 0 })
+  const aller = (section: 'visas' | 'penalites' | 'gpa') =>
+    setAppels((a) => ({ ...a, [section]: a[section] + 1 }))
 
   // C2 — les compteurs des lignes repliées lisent EXACTEMENT ce que leur
   // carte affiche : mêmes filtres, mêmes sélecteurs d'autorité. Un compteur
@@ -3414,7 +4249,34 @@ export default function ProjetChantier({ projet }: { projet: Projet }) {
   return (
     <>
       <CarteReunions projet={projet} />
-      <CarteMarches projet={projet} />
+
+      {/* 5.22 — LA TÊTE DE L'ONGLET : l'entreprise, pas le document. Où en
+          est sa situation du mois, son dernier certificat, sa retenue de
+          garantie, ses visas, ses pénalités, ses désordres — et le geste
+          suivant à côté du chiffre qui l'appelle. */}
+      <CarteEntreprisesDuChantier projet={projet} onAller={aller} />
+
+      {/* 5.22 — les MARCHÉS se replient sous les entreprises. Rien n'est
+          retiré : le formulaire du contrat (taux de RG, série de révision,
+          mois zéro, délai de vérification, avance forfaitaire, contact) et
+          la confrontation « total des marchés / travaux de l'opération »
+          restent entiers, à un clic. Ils se règlent à la signature du lot,
+          pas tous les mois — les ranger sous le suivi mensuel, c'est mettre
+          en tête ce qu'on ouvre tous les jours.
+          Ouverte tant qu'aucun marché n'est saisi : c'est alors la seule
+          chose à faire dans cet onglet. */}
+      <SectionRepliable
+        key={`${projet.id}-marches`}
+        titre="Marchés de travaux — le contrat"
+        resume={
+          marches.length === 0
+            ? 'aucun marché saisi'
+            : `${marches.length} lot(s) — montants et avenants, taux de RG, révision, délais de vérification, contacts`
+        }
+        ouverteParDefaut={marches.length === 0}
+      >
+        <CarteMarches projet={projet} />
+      </SectionRepliable>
 
       {/* 5.8 — le registre des visas vit sous les marchés : les documents
           d'exécution arrivent des entreprises titulaires, et le délai du
@@ -3422,7 +4284,7 @@ export default function ProjetChantier({ projet }: { projet: Projet }) {
           Ouvert tant qu'un document attend un visa : c'est le seul état où
           la responsabilité de la MOE court. */}
       <SectionRepliable
-        key={projet.id}
+        key={`${projet.id}-visas`}
         titre="Visas des documents d'exécution"
         resume={
           visas.length === 0
@@ -3443,6 +4305,7 @@ export default function ProjetChantier({ projet }: { projet: Projet }) {
           ) : null
         }
         ouverteParDefaut={visasAViser.length > 0}
+        appel={appels.visas}
       >
         <CarteVisas projet={projet} />
       </SectionRepliable>
@@ -3452,7 +4315,7 @@ export default function ProjetChantier({ projet }: { projet: Projet }) {
           Ouvert tant qu'un constat attend une décision ; une fois tout
           décidé, c'est un journal — il se relit, il n'appelle rien. */}
       <SectionRepliable
-        key={projet.id}
+        key={`${projet.id}-penalites`}
         titre="Pénalités de marché"
         resume={
           marches.length === 0
@@ -3469,6 +4332,7 @@ export default function ProjetChantier({ projet }: { projet: Projet }) {
           ) : null
         }
         ouverteParDefaut={penalitesADecider.length > 0}
+        appel={appels.penalites}
       >
         <CartePenalites projet={projet} />
       </SectionRepliable>
@@ -3478,7 +4342,7 @@ export default function ProjetChantier({ projet }: { projet: Projet }) {
           Ouvert tant qu'un marché est en cours ET qu'il y a des jours
           consignés : la pluie ne se constate que sur un chantier ouvert. */}
       <SectionRepliable
-        key={projet.id}
+        key={`${projet.id}-intemperies`}
         titre="Intempéries"
         resume={
           intemperies.length === 0
@@ -3495,7 +4359,7 @@ export default function ProjetChantier({ projet }: { projet: Projet }) {
           Repliée tant qu'aucune réception n'est prononcée — la GPA n'a
           alors pas commencé, et une carte hors phase est du bruit. */}
       <SectionRepliable
-        key={projet.id}
+        key={`${projet.id}-gpa`}
         titre="GPA — année de parfait achèvement"
         resume={
           premiereReception === null
@@ -3516,6 +4380,7 @@ export default function ProjetChantier({ projet }: { projet: Projet }) {
           ) : null
         }
         ouverteParDefaut={desordresGPAOuverts.length > 0}
+        appel={appels.gpa}
       >
         <CarteGPA projet={projet} />
       </SectionRepliable>

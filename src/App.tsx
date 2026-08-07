@@ -6,6 +6,10 @@ import { Btn, ConfirmHost, Icon, Select, ToastHost, useRoute, useToday } from '.
 import { alertesActives } from './alerts'
 import { documentsATraiter } from './derive'
 import { badgeFinance } from './financeActions'
+// 5.21 — le compteur du menu « Entreprises ». Même sélecteur, même prédicat
+// (`poids > 0`) que la tuile « Qui demandent une action » de l'écran : le
+// menu et l'écran ne peuvent pas annoncer deux nombres différents.
+import { entreprisesSuivies } from './entreprise'
 import { basculerTheme, themeCourant } from './theme'
 import { useMoi, useSessionSupabase } from './moi'
 import type { InstantaneSession } from './sync'
@@ -68,6 +72,13 @@ const Documents = lazy(() => import('./modules/Documents'))
 // pointe `#/propositions` : sans ce `case`, le clic retombait sur l'accueil
 // sans un mot.
 const Propositions = lazy(() => import('./modules/Propositions'))
+// 5.21 — l'entreprise avait tout SAUF une adresse : `syntheseEntreprise`
+// agrégeait déjà marchés tous chantiers, RG, pénalités, GPA, visas et
+// situations manquantes, mais ne s'ouvrait que dans une modale, et seulement
+// depuis un projet. Un seul `case` suffit : le module découpe lui-même
+// `#/entreprises` (liste) de `#/entreprises/<clé>` (fiche en page) sur
+// `route[1]`, comme Projets.tsx le fait pour `#/projets/<id>`.
+const Entreprises = lazy(() => import('./modules/Entreprises'))
 const AssistantPage = lazy(() => import('./modules/Assistant').then((m) => ({ default: m.AssistantPage })))
 
 // Menu recomposé (audit simplification) : « une page = un objectif ».
@@ -100,6 +111,15 @@ const NAV: { groupe: string; repliable?: boolean; items: { path: string; label: 
     items: [
       { path: 'finance', label: 'Finance' },
       { path: 'situations', label: 'Situations' },
+      // 5.21 — juste après Situations, et NON dans « Agence » à côté de
+      // l'Annuaire : l'annuaire répond « quel est son téléphone », cet
+      // écran répond « où en est son marché » — RG échue, situation qui ne
+      // vient pas, visa qu'on n'a pas rendu, pénalité qu'on n'a pas décidée.
+      // C'est le portefeuille du titulaire là où Situations est le mois du
+      // chantier : deux faces du même suivi, elles se lisent l'une après
+      // l'autre. Sans cette ligne, l'écran serait exactement le livrable
+      // sans porte qu'on est en train de réparer.
+      { path: 'entreprises', label: 'Entreprises' },
       { path: 'pilotage', label: 'Pilotage' },
     ],
   },
@@ -202,6 +222,13 @@ export default function App() {
   const nbDocsATraiter = documentsATraiter(state).length
   // badge Finance : uniquement les décisions humaines (audit §3.3)
   const nbFinance = badgeFinance(state, today)
+  // 5.21 — combien d'entreprises demandent une action. Le prédicat n'est pas
+  // choisi ici : `poids` vient de `POIDS_MOTIF` (src/entreprise.ts), et c'est
+  // le même filtre que la tuile « Qui demandent une action » et que la
+  // bascule de la liste — le menu ne peut donc pas annoncer 3 quand l'écran
+  // en montre 2. Une porte neuve sans compteur, on la lit une fois puis on
+  // l'oublie ; c'est le compteur qui fait revenir.
+  const nbEntreprises = entreprisesSuivies(state, today).filter((l) => l.poids > 0).length
   const [theme, setTheme] = useState(themeCourant())
   const [rechercheOuverte, setRechercheOuverte] = useState(false)
   /** tiroir de navigation mobile (ouvert par le hamburger de la topbar) */
@@ -280,6 +307,13 @@ export default function App() {
       break
     case 'situations':
       page = <Situations />
+      break
+    // 5.21 — `#/entreprises` (liste) et `#/entreprises/<clé>` (fiche en
+    // page). La clé est celle d'`entreprisesSuivies` : l'id du registre
+    // quand il existe, sinon le nom plié — `navigate` l'encode, `useRoute`
+    // le décode, un nom à espaces voyage intact.
+    case 'entreprises':
+      page = <Entreprises />
       break
     case 'facturation':
       page = <Facturation />
@@ -420,6 +454,9 @@ export default function App() {
                       <span className="nav-count">{nbDocsATraiter}</span>
                     )}
                     {it.path === 'finance' && nbFinance > 0 && <span className="nav-count">{nbFinance}</span>}
+                    {it.path === 'entreprises' && nbEntreprises > 0 && (
+                      <span className="nav-count">{nbEntreprises}</span>
+                    )}
                   </a>
                 ))}
             </div>

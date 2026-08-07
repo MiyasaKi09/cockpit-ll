@@ -170,7 +170,7 @@ function BadgeEcartControle({ state, sit }: { state: AppState; sit: Situation })
 /** n° d'ordre PROPOSÉ pour une nouvelle situation d'un marché : le plus haut
  *  déjà reçu + 1 (1 si c'est la première). Une proposition, pas une règle —
  *  le champ reste ouvert, les entreprises numérotent comme elles veulent. */
-function prochainNumeroSituation(state: AppState, marcheId: string): number {
+export function prochainNumeroSituation(state: AppState, marcheId: string): number {
   let max = 0
   for (const s of state.situations) {
     if (s.marcheId === marcheId && typeof s.numero === 'number' && s.numero > max) max = s.numero
@@ -462,7 +462,14 @@ function CarteImport() {
  *  point d'entrée : seul le JSON de la routine en créait. Le même formulaire
  *  sert les deux gestes — décompte, contrôle 5.5 et cohérences compris —
  *  plutôt qu'un second écran de saisie qui divergerait. */
-function ModalEdition({ sit, creation, onClose }: { sit: Situation; creation?: boolean; onClose: () => void }) {
+// 5.21 — EXPORTÉE, pas recopiée. Deux écrans (l'onglet Chantier d'un projet,
+// la fiche entreprise) affichent « situation non reçue » et savent déjà tout
+// ce qu'il faut pour la saisir : projet, marché, entreprise, lot, mois. Sans
+// cet `export`, ils ne pouvaient qu'envoyer sur `#/situations/verifier` et
+// laisser retaper ces cinq champs. Une seconde fiche de saisie aurait été le
+// pire des deux : elle FIGE le décompte au passage à « validée » — deux
+// formulaires, deux décomptes possibles pour le même papier.
+export function ModalEdition({ sit, creation, onClose }: { sit: Situation; creation?: boolean; onClose: () => void }) {
   const { state, update, replace } = useStore()
   const today = useToday()
   const moi = useMoi()
@@ -587,9 +594,10 @@ function ModalEdition({ sit, creation, onClose }: { sit: Situation; creation?: b
     <Modal titre={creation ? 'Saisir une situation' : 'Éditer la situation'} onClose={onClose} large>
       {creation && (
         <p className="muted small" style={{ marginTop: 0 }}>
-          Situation reçue autrement que par situations@ (courrier, remise en réunion) :
-          choisissez le marché, le reste se pré-remplit. Elle entrera « à vérifier », comme
-          celles de la routine.
+          Situation reçue autrement que par situations@ (courrier, remise en réunion). Le
+          marché fixe le reste ; ouverte depuis un chantier ou une fiche entreprise, elle
+          arrive déjà rattachée — il ne reste que les montants du papier. Elle entrera
+          « à vérifier », comme celles de la routine.
         </p>
       )}
       <div className="form-row">
@@ -1314,7 +1322,14 @@ const LIGNES_CERTIFICAT: (readonly [keyof LignesCertificat | null, string, { for
  *  (le document réel le prouve — la RG de l'état n° 4 sort d'une lecture
  *  contractuelle qu'aucune règle ne produit) ; « Émettre » FIGE et ouvre le
  *  PDF. Un certificat émis se rouvre en LECTURE, il ne se recalcule pas. */
-function ModalCertificat({ sit, onClose }: { sit: Situation; onClose: () => void }) {
+// 5.21 — EXPORTÉE, et c'est la SEULE façon d'émettre. Le certificat de
+// paiement est un document contractuel : numérotation, figeage, signature,
+// avance du compteur de résorption. Les deux écrans qui annoncent « validée
+// — à certifier » réclamaient le geste ; la réponse n'est pas d'en écrire
+// une seconde version (deux papiers possibles pour le même mois, deux
+// numérotations, deux résorptions), c'est de monter CELLE-CI depuis là où
+// la personne se trouve.
+export function ModalCertificat({ sit, onClose }: { sit: Situation; onClose: () => void }) {
   const { state, update } = useStore()
   const today = useToday()
   const moi = useMoi()

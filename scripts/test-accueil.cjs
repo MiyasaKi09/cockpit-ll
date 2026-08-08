@@ -143,16 +143,55 @@ assert.ok(
 )
 
 // les modules de calcul autorisés à l'accueil (contrat des modules)
+//
+// RÉÉCRITE le 08/08/2026 — « la semaine devient vraie ». La règle est
+// inchangée (l'accueil AFFICHE, il ne calcule pas) ; c'est sa liste qui
+// mentait. Le Cockpit importe désormais quatre modules de calcul de plus :
+// `planningTravaux`, `visas`, `entreprise` et `seanceChantier`. La règle
+// telle qu'elle était écrite les ignorait — non pas parce qu'ils étaient
+// permis, mais parce qu'ils n'étaient pas encore nés quand la liste a été
+// posée. Une règle qui laisse passer ce qu'elle prétend interdire est pire
+// qu'aucune règle : on la cite en revue.
+//
+// L'EXCEPTION, ET CE QUI LA BORNE. Ces quatre-là ne sont pas consommés : ils
+// sont TRANSMIS. `derive.ts` ne peut pas les importer (cinq chargeurs de test
+// bornent son graphe à miqcp / facture / util / gpa), alors le Cockpit lui
+// passe leurs FONCTIONS en argument — `AUTORITES_DATEES`. C'est la même
+// fonction qui calcule, il n'existe pas de second prédicat.
+//
+// L'exception ne peut pas s'élargir en silence : `test-inventaire-dates.cjs`
+// épingle les SYMBOLES importés de ces quatre modules, un par un, et refuse
+// que le Cockpit en redéfinisse un seul. Ajouter `syntheseEntreprise` à la
+// ligne d'import d'`../entreprise` y échoue immédiatement.
 const importsCockpit = [...cockpit.matchAll(/^import[\s\S]*?from '(\.\.?\/[^']+)'/gm)].map((m) => m[1])
-const MODULES_CALCUL_AUTORISES = new Set(['../derive', '../economie', '../alerts', '../financeActions'])
+const MODULES_CALCUL_AUTORISES = new Set([
+  '../derive', '../economie', '../alerts', '../financeActions',
+  // transmis à derive, jamais consommés — voir ci-dessus
+  '../planningTravaux', '../visas', '../entreprise', '../seanceChantier',
+])
 const CALCULS_METIER = [
   '../achats', '../banque', '../comptable', '../facture', '../tresorerie', '../echeancier',
   '../miqcp', '../revue', '../radar', '../veille', '../boamp', '../candidature', '../dossier',
+  '../planningTravaux', '../visas', '../entreprise', '../seanceChantier', '../penalites',
+  '../chantier', '../gpa', '../conges', '../chargeProspective', '../controleSituation',
 ]
 for (const mod of importsCockpit) {
   assert.ok(
     !CALCULS_METIER.includes(mod) || MODULES_CALCUL_AUTORISES.has(mod),
-    `Cockpit.tsx importe ${mod} : l'accueil ne consomme que derive / economie / alerts / financeActions`,
+    `Cockpit.tsx importe ${mod} : l'accueil affiche, il ne calcule pas.\n` +
+      'Les seuls modules de calcul admis sont derive / economie / alerts / financeActions, plus les\n' +
+      'quatre autorités que le Cockpit TRANSMET à derive (planningTravaux, visas, entreprise,\n' +
+      'seanceChantier) parce que derive ne peut pas les importer lui-même.\n' +
+      'Si ce module doit servir à la semaine, passez-le comme les autres — en argument de\n' +
+      '`AutoritesDatees` — plutôt que de calculer dans l’écran.',
+  )
+}
+// Et l'inverse : la liste des interdits ne doit pas pourrir. Un module de
+// calcul cité ici mais disparu du dépôt donnerait une protection imaginaire.
+for (const mod of CALCULS_METIER) {
+  assert.ok(
+    fs.existsSync(path.join(racine, `src/${mod.slice(3)}.ts`)),
+    `${mod} est interdit d’accueil mais n’existe plus dans src/ : retirez-le, sinon la liste protège du vide.`,
   )
 }
 
@@ -473,10 +512,58 @@ for (const [nom, source] of [
     )
   }
 }
-assert.ok(
-  /<Table head=\{\[/.test(cockpit),
-  'la semaine de l’équipe se rend avec le composant Table',
-)
+// RÉÉCRITE le 08/08/2026. L'assertion d'origine — « un `<Table head={[` existe
+// quelque part dans le Cockpit » — passait toujours, et elle ne parlait plus du
+// bon tableau : elle décrivait la carte « Semaine de l'équipe », qui est partie
+// sous un repli « Voir plus », pendant que la GRILLE DE SEPT JOURS, devenue le
+// premier bloc de l'écran, échappait au contrôle (son en-tête est une variable,
+// `head={tete}`, et non un littéral).
+//
+// C'est cette grille qui compte le plus : c'est elle qu'on lit debout sur un
+// chantier, et c'est `Table` — et lui seul — qui la replie en cartes empilées
+// sous 700 px (`.table-cartes`, `data-label`). Montée à la main, elle
+// deviendrait sept colonnes illisibles sur un téléphone.
+{
+  const debut = cockpit.indexOf('function CarteLaSemaine')
+  assert.ok(debut > 0, 'la grille de sept jours (CarteLaSemaine) a disparu du Cockpit')
+  const grille = cockpit.slice(debut, cockpit.indexOf('\nexport default function', debut))
+
+  // On repère le tableau par SON CONTENU et non par un nom de variable : la
+  // première bande est « Rendez-vous », et ce qui l'entoure doit être un
+  // `Table` OUVERT — d'où la comparaison des deux dernières balises qui la
+  // précèdent. Chercher `head={tete}` aurait figé le nom d'une variable
+  // locale, qu'un renommage anodin aurait cassé sans qu'aucune règle ne
+  // soit enfreinte.
+  const avantPremiereBande = grille.slice(0, grille.indexOf("bande('Rendez-vous')"))
+  assert.ok(
+    avantPremiereBande.lastIndexOf('<Table') > avantPremiereBande.lastIndexOf('</Table>'),
+    'la grille de sept jours ne passe plus par `Table`.\n' +
+      'C’est `Table` — et lui seul — qui la replie en cartes empilées sous 700 px (`.table-cartes`,\n' +
+      '`data-label`). Montée à la main, elle devient sept colonnes qui débordent de l’écran, et c’est\n' +
+      'précisément sur un téléphone, debout sur un chantier, qu’on la lit.',
+  )
+
+  // les quatre bandes tiennent dans UN SEUL tableau — c'était le choix de
+  // conception : quatre tableaux côte à côte auraient produit quatre replis
+  // mobiles désalignés, et l'écran aurait cessé de se lire d'un trait. (Le
+  // second `Table` de cette carte est la charge par phase, sous la grille :
+  // le temps se saisit à la semaine, il n'a pas de colonne de jour.)
+  const debutTableau = avantPremiereBande.lastIndexOf('<Table')
+  const unTableau = grille.slice(debutTableau, grille.indexOf('</Table>', debutTableau))
+  for (const titre of ['Sur le chantier', 'Nous deux', 'Ce qui tombe']) {
+    assert.ok(
+      unTableau.includes(`bande('${titre}')`),
+      `la bande « ${titre} » a quitté le tableau où vit « Rendez-vous ».\n` +
+        'Quatre `Table` empilés se replieraient en quatre blocs désalignés sous 700 px, et les sept\n' +
+        'colonnes de jour cesseraient d’être alignées entre les bandes — la semaine ne se lirait plus\n' +
+        'd’un trait, ce qui est tout ce qu’on lui demande.',
+    )
+  }
+  assert.ok(
+    (cockpit.match(/<Table\b/g) || []).length >= 3,
+    'le Cockpit monte moins de tableaux qu’attendu : grille de semaine, charge par phase, semaine de l’équipe.',
+  )
+}
 
 // ==========================================================================
 // 6. Le filtre par personne part de useMoi()

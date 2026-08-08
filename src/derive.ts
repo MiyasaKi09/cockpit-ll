@@ -1,7 +1,7 @@
 // Valeurs dérivées — une seule source de vérité par donnée :
 // le facturé vient des factures, les heures réelles du pointage.
 
-import type { AppState, BaselineHeures, Consultation, EcheanceFacturation, Facture, MarcheTravaux, Phase, PhaseCode, Projet, Situation, StatutConsultation, TypeGarantie } from './types'
+import type { AppState, BaselineHeures, Consultation, EcheanceFacturation, Facture, MarcheTravaux, Phase, PhaseCode, PointSeance, Projet, Situation, StatutConsultation, TypeGarantie, Visa } from './types'
 import { PHASES_ORDRE, calculHonoraires } from './miqcp'
 import {
   creanceFactureTTC,
@@ -10,7 +10,7 @@ import {
   soldeFacture,
   ttcFacture,
 } from './facture'
-import { addDays, diffDays, fmtDate, fmtMoney, fold } from './util'
+import { addDays, diffDays, fmtDate, fmtMois, fmtMoney, fold } from './util'
 import { finGPA } from './gpa'
 
 /** Les libellés des phases de mission appartiennent à `src/miqcp.ts` — ils
@@ -474,16 +474,28 @@ export function chargePlanifieeSemaine(state: AppState, personne: string, lundi:
   return heures
 }
 
-/** heures d'absence (congés) d'une personne sur la semaine du lundi donné */
-export function heuresAbsenceSemaine(state: AppState, personne: string, lundi: string): number {
-  const abs = (state.absences || []).filter((a) => a.personne === personne)
-  if (abs.length === 0) return 0
-  let jours = 0
-  for (let i = 0; i < 5; i++) {
+/**
+ * Un booléen par jour à partir du lundi : la personne est-elle absente ce
+ * jour-là ?
+ *
+ * SEULE lecture du calendrier des congés. La capacité de la semaine et le
+ * creux dessiné jour par jour sur la bande « nous deux » de l'accueil
+ * doivent répondre la même chose le même jour — deux prédicats de dates
+ * divergeraient sans que rien ne le signale : la capacité tomberait sans
+ * que le creux se dessine, ou l'inverse.
+ */
+export function joursAbsents(state: AppState, personne: string, lundi: string, nbJours = 7): boolean[] {
+  const abs = (state.absences || []).filter((a) => a && a.personne === personne)
+  return Array.from({ length: nbJours }, (_, i) => {
     const jour = addDays(lundi, i)
-    if (abs.some((a) => a.debut <= jour && a.fin >= jour)) jours++
-  }
-  return jours * state.settings.heuresParJour
+    return abs.some((a) => a.debut <= jour && a.fin >= jour)
+  })
+}
+
+/** heures d'absence (congés) d'une personne sur la semaine du lundi donné —
+ *  les cinq jours OUVRÉS : un congé posé un samedi ne retire pas de capacité */
+export function heuresAbsenceSemaine(state: AppState, personne: string, lundi: string): number {
+  return joursAbsents(state, personne, lundi, 5).filter(Boolean).length * state.settings.heuresParJour
 }
 
 /** capacité RÉELLE d'une personne pour la semaine, congés déduits (heures) */
@@ -1248,6 +1260,67 @@ export const COULEURS_ECHEANCE = {
   obligation: 'var(--cat-amber)',
   crm: 'var(--ink-3)',
   projet: 'var(--cat-teal)',
+  // Les familles ajoutées par « la semaine devient vraie » : c'est la moitié
+  // du temps de l'agence, et l'inventaire ne la voyait pas.
+  chantier: 'var(--cat-teal)',
+  conge: 'var(--ink-3)',
+  visa: 'var(--danger)',
+  situation: 'var(--warn)',
+  achat: 'var(--cat-amber)',
+  seance: 'var(--accent)',
+}
+
+// ------------------------------------------------------------------
+// LES AUTORITÉS QU'ON NE PEUT PAS IMPORTER ICI — et pourquoi.
+//
+// `derive.ts` est chargé hors navigateur par plusieurs scripts de test avec
+// une liste FERMÉE de dépendances (`scripts/test-accueil.cjs`,
+// `test-facture-invariants.cjs`, `test-baseline-heures.cjs`,
+// `test-equipe-projet.cjs`, `test-finance-essentiel.cjs` : ils n'exposent
+// que `./miqcp`, `./facture`, `./util` et `./gpa`, et lèvent « Import
+// inattendu dans derive.ts » sur tout le reste). Ajouter ici un import de
+// `./planningTravaux`, `./visas`, `./entreprise` ou `./seanceChantier`
+// ferait donc échouer cinq tests — et ces chargeurs sont hors du périmètre
+// de ce livrable.
+//
+// La sortie n'est PAS de recalculer : un second calcul est exactement le
+// défaut que tout ce dépôt combat. Les autorités sont INJECTÉES par l'écran,
+// comme `validationsAttendues` reçoit déjà les pièces distantes qu'elle ne
+// peut pas dériver. C'est la MÊME fonction qui calcule — pas une copie : le
+// jour où l'une change, l'inventaire change avec elle.
+//
+// Les types, eux, s'importent : `import type` disparaît à la compilation et
+// n'atteint jamais le chargeur (c'est déjà le cas de `./google`,
+// `./financeActions` et `./ui` plus haut).
+//
+// Aucune famille injectée ne se replie sur un calcul de secours : sans son
+// autorité, elle se TAIT. Une famille silencieuse se répare ; une famille
+// approximative ment sans le dire.
+// ------------------------------------------------------------------
+
+import type { InterventionDatee, MarchePlanifie } from './planningTravaux'
+import type { AttenteSituation } from './entreprise'
+
+export interface AutoritesDatees {
+  /** date du jour — les familles jugées PAR RAPPORT à aujourd'hui (situation
+   *  attendue) restent muettes sans elle */
+  today?: string
+  /** `interventionsDe` (src/planningTravaux.ts) — les périodes d'un lot */
+  interventionsDe?: (m: MarchePlanifie) => readonly InterventionDatee[]
+  /** `periodesEnConflit(chevauchementsEntreprise(marches))`
+   *  (src/planningTravaux.ts) — les périodes où une entreprise est attendue
+   *  à deux endroits à la fois, sous la forme `marcheId|periodeId` */
+  periodesEnConflit?: (marches: MarcheTravaux[]) => ReadonlySet<string>
+  /** `clePeriode` (src/planningTravaux.ts) — la clé du jeu ci-dessus */
+  clePeriode?: (marcheId: string, periodeId: string | null) => string
+  /** `visasEnAttente` (src/visas.ts) — les documents encore à viser */
+  visasEnAttente?: (visas: Visa[]) => Visa[]
+  /** `echeanceVisa` (src/visas.ts) — reçu le + délai du CCAP */
+  echeanceVisa?: (v: Pick<Visa, 'recuLe' | 'delaiJours'>) => string | null
+  /** `situationAttendueNonRecue` (src/entreprise.ts) */
+  situationAttendueNonRecue?: (state: AppState, m: MarcheTravaux, today: string) => AttenteSituation | null
+  /** `pointResolu` (src/seanceChantier.ts) — un point fait ou sans suite */
+  pointResolu?: (p: Pick<PointSeance, 'etat'>) => boolean
 }
 
 /**
@@ -1257,8 +1330,20 @@ export const COULEURS_ECHEANCE = {
  * mensuelle. L'accueil en a besoin pour ses « prochaines échéances » :
  * la fonction remonte donc au module de calcul plutôt que d'être
  * recopiée sur un second écran.
+ *
+ * IL ÉTAIT AVEUGLE À LA MOITIÉ DU TEMPS DE L'AGENCE. Les rendus de phase,
+ * les factures et les remises d'offres y étaient ; les périodes
+ * d'intervention des entreprises, les congés, les visas, les situations
+ * attendues, les limites de vérification, les points de séance et les
+ * échéances fournisseurs n'y étaient pas. C'est cette incomplétude, et elle
+ * seule, qui obligeait à ouvrir huit écrans pour lire une semaine.
+ *
+ * `autorites` est facultatif : sans lui, l'inventaire rend exactement ce
+ * qu'il rendait avant (c'est ce que fait `Calendrier.tsx`, qui n'a pas
+ * changé). Les quatre familles qui dépendent d'un module non importable
+ * apparaissent dès que l'écran passe l'autorité correspondante.
  */
-export function evenements(state: AppState): EvtCal[] {
+export function evenements(state: AppState, autorites: AutoritesDatees = {}): EvtCal[] {
   const evts: EvtCal[] = []
 
   for (const p of state.projets) {
@@ -1383,13 +1468,159 @@ export function evenements(state: AppState): EvtCal[] {
       })
   }
 
+  // ============================================================
+  // Les familles ajoutées — l'inventaire voit enfin le chantier,
+  // les gens et les délais contractuels.
+  // ============================================================
+
+  const marches = Array.isArray(state.marches) ? state.marches : []
+
+  // ---- les entreprises SUR LE CHANTIER (périodes d'intervention) ----
+  // Une par PÉRIODE, jamais l'enveloppe du lot : un lot en trois passages
+  // recouvre ses propres trous, et l'entrée en chantier de son retour de
+  // juin est justement la date qu'on oublie.
+  if (autorites.interventionsDe) {
+    for (const m of marches) {
+      if (!m || !m.actif) continue
+      const quoi = [m.lot, m.entreprise].filter(Boolean).join(' · ')
+      for (const i of autorites.interventionsDe(m)) {
+        const nomPeriode = i.libelle ? ` (${i.libelle})` : ''
+        evts.push({
+          date: i.debut,
+          label: `▶ ${m.lot}`,
+          icon: 'hardhat',
+          lien: `#/projets/${m.projetId}/chantier`,
+          couleur: COULEURS_ECHEANCE.chantier,
+          titreLong: `Entrée en chantier — ${quoi}${nomPeriode}${i.confirmeLe ? '' : ' — venue NON confirmée'}`,
+        })
+        if (i.fin !== i.debut)
+          evts.push({
+            date: i.fin,
+            label: `◀ ${m.lot}`,
+            icon: 'hardhat',
+            lien: `#/projets/${m.projetId}/chantier`,
+            couleur: COULEURS_ECHEANCE.chantier,
+            titreLong: `Fin d'intervention — ${quoi}${nomPeriode}`,
+          })
+      }
+    }
+  }
+
+  // ---- nous deux : les congés ----
+  // Datés sur leur PREMIER jour, la période entière dans le titre. Le creux
+  // des jours suivants se lit sur la bande « nous deux » de la semaine
+  // (`semaineComplete`), qui interroge la même collection.
+  for (const a of Array.isArray(state.absences) ? state.absences : []) {
+    if (!a || !a.debut) continue
+    evts.push({
+      date: a.debut,
+      label: a.personne,
+      icon: 'user',
+      lien: '#/planning',
+      couleur: COULEURS_ECHEANCE.conge,
+      titreLong: `Congé — ${a.personne}, du ${fmtDate(a.debut)} au ${fmtDate(a.fin)}${a.motif ? ` · ${a.motif}` : ''}`,
+    })
+  }
+
+  // ---- les visas à rendre ----
+  // Le retard de visa n'est pas un oubli sans conséquence : il ENGAGE la
+  // responsabilité de la MOE (src/visas.ts). Il n'avait pourtant aucune
+  // date dans l'inventaire.
+  if (autorites.visasEnAttente && autorites.echeanceVisa) {
+    for (const v of autorites.visasEnAttente(Array.isArray(state.visas) ? state.visas : [])) {
+      const date = autorites.echeanceVisa(v)
+      if (!date) continue
+      evts.push({
+        date,
+        label: `visa ${v.lot}`,
+        icon: 'file',
+        lien: `#/projets/${v.projetId}/chantier`,
+        couleur: COULEURS_ECHEANCE.visa,
+        titreLong: `Visa à rendre — ${v.document} (${v.lot})`,
+      })
+    }
+  }
+
+  // ---- les situations attendues et non reçues ----
+  // L'autorité rend un VERDICT, pas une date : elle répond « au jour dit,
+  // la situation du mois manque ». L'événement porte donc `today` — lui
+  // inventer une autre date reviendrait à écrire une seconde règle sur le
+  // jour à partir duquel une situation est en retard.
+  if (autorites.situationAttendueNonRecue && autorites.today) {
+    for (const m of marches) {
+      const att = autorites.situationAttendueNonRecue(state, m, autorites.today)
+      if (!att) continue
+      evts.push({
+        date: autorites.today,
+        label: `situation ${m.lot}`,
+        icon: 'alert',
+        lien: '#/entreprises',
+        couleur: COULEURS_ECHEANCE.situation,
+        titreLong: `Situation ${fmtMois(att.mois)} non reçue — ${m.lot} · ${m.entreprise}`,
+      })
+    }
+  }
+
+  // ---- les limites contractuelles de vérification ----
+  // `dateLimiteVerif` vit dans ce fichier depuis toujours et n'était lue que
+  // pour compter les retards dans « validations attendues » : la date
+  // elle-même n'apparaissait sur aucun calendrier.
+  for (const s of situationsAVerifier(state)) {
+    evts.push({
+      date: dateLimiteVerif(state, s),
+      label: `vérif ${s.entreprise}`,
+      icon: 'check',
+      lien: '#/situations',
+      couleur: COULEURS_ECHEANCE.situation,
+      titreLong: `Limite de vérification — ${s.entreprise} (${fmtMois(s.mois)})`,
+    })
+  }
+
+  // ---- les points de séance qui ont une échéance ----
+  if (autorites.pointResolu) {
+    for (const p of Array.isArray(state.pointsSeance) ? state.pointsSeance : []) {
+      if (!p || !p.echeance || autorites.pointResolu(p)) continue
+      evts.push({
+        date: p.echeance,
+        label: p.libelle,
+        icon: 'hardhat',
+        lien: `#/projets/${p.projetId}/chantier`,
+        couleur: COULEURS_ECHEANCE.seance,
+        titreLong: `Point de séance — ${p.libelle} (${p.responsable || 'responsable ?'})`,
+      })
+    }
+  }
+
+  // ---- les échéances fournisseurs ----
+  // Une facture d'achat porte sa date d'échéance depuis le lot F ; personne
+  // ne la voyait venir. Écartée ou déjà payée, elle ne tombe plus.
+  for (const f of Array.isArray(state.facturesAchat) ? state.facturesAchat : []) {
+    if (!f || !f.dateEcheance || f.payeLe || f.statut === 'ecartee') continue
+    evts.push({
+      date: f.dateEcheance,
+      label: `€ ${f.fournisseur}`,
+      icon: 'file',
+      lien: '#/finance/achats',
+      couleur: COULEURS_ECHEANCE.achat,
+      titreLong: `Facture fournisseur à payer — ${f.fournisseur} (${fmtMoney(f.montantTTC)} TTC)`,
+    })
+  }
+
   return evts
 }
 
-/** échéances datées entre aujourd'hui et aujourd'hui + `jours` (bornes incluses) */
-export function prochainesEcheances(state: AppState, today: string, jours = 14): EvtCal[] {
+/** échéances datées entre aujourd'hui et aujourd'hui + `jours` (bornes incluses).
+ *  `autorites` traverse jusqu'à `evenements` : la file du matin et la bande
+ *  « ce qui tombe » de la semaine lisent le MÊME inventaire, complété de la
+ *  même façon. */
+export function prochainesEcheances(
+  state: AppState,
+  today: string,
+  jours = 14,
+  autorites: AutoritesDatees = {},
+): EvtCal[] {
   const fin = addDays(today, jours)
-  return evenements(state)
+  return evenements(state, { ...autorites, today: autorites.today ?? today })
     .filter((e) => e.date >= today && e.date <= fin)
     .sort((a, b) => a.date.localeCompare(b.date) || a.titreLong.localeCompare(b.titreLong))
 }
@@ -1467,4 +1698,265 @@ export function semaineParPersonne(
       absence: heuresAbsenceSemaine(state, nom, lundi),
     }
   })
+}
+
+// ==================================================================
+// LA SEMAINE — sept jours, quatre bandes, un seul écran.
+//
+// L'accueil ÉTAIT déjà un écran de semaine : horizon de sept jours,
+// bouton « Revenir à cette semaine », carte « Semaine de l'équipe ».
+// Ce qui lui manquait n'était pas un écran de plus, c'était de VOIR :
+// `evenements()` ci-dessus ignorait la moitié du temps de l'agence, et
+// `chargeParPhase` — la fonction qui répond mot pour mot à « qui fait
+// quoi cette semaine » — n'avait qu'un seul appelant, le conflit de
+// congé.
+//
+// Tout est assemblé ICI, pas à l'écran : le Cockpit rend ce modèle, il
+// ne le calcule pas. C'est la règle du contrat des modules, et c'est
+// aussi ce qui rend la semaine testable sans navigateur.
+// ==================================================================
+
+/** ce qui EST planifié une semaine donnée, ligne à ligne */
+export interface LigneChargeSemaine {
+  projetId: string
+  nomProjet: string
+  phase: PhaseCode
+  heures: number
+}
+
+/**
+ * Ce qui est planifié cette semaine-là, ligne à ligne — « P03 · DCE — 12 h ».
+ *
+ * Aucun calcul nouveau : `chargePlanifieeSemaine` est REJOUÉE sur un état
+ * restreint à une seule phase d'un seul projet. La somme des lignes est donc,
+ * par construction, le total que `semaineParPersonne` affiche — refaire la
+ * boucle ferait diverger les deux au premier changement de la règle de
+ * répartition.
+ *
+ * DETTE DÉCLARÉE : `src/modules/Planning.tsx` porte un jumeau PRIVÉ du même
+ * nom, dont il était l'unique appelant (les pistes de report d'un congé). La
+ * logique pure appartient à `src/*.ts` : elle est donc montée ici, à sa
+ * place. Le jumeau de Planning.tsx doit devenir un `import` de celle-ci à la
+ * première tranche qui a le droit d'écrire dans cet écran — ce livrable ne
+ * l'a pas.
+ */
+export function chargeParPhase(state: AppState, personne: string, lundi: string): LigneChargeSemaine[] {
+  const lignes: LigneChargeSemaine[] = []
+  for (const p of state.projets) {
+    for (const ph of p.phases) {
+      const heures = chargePlanifieeSemaine({ ...state, projets: [{ ...p, phases: [ph] }] }, personne, lundi)
+      if (heures > 0) lignes.push({ projetId: p.id, nomProjet: p.nom, phase: ph.code, heures })
+    }
+  }
+  return lignes.sort((a, b) => b.heures - a.heures || a.projetId.localeCompare(b.projetId))
+}
+
+/** heures POINTÉES sur un couple projet × phase, une semaine donnée */
+export interface LignePointageSemaine {
+  projetId: string
+  phase: PhaseCode
+  heures: number
+}
+
+/**
+ * Heures pointées par une personne cette semaine, à la maille projet × phase.
+ *
+ * `tempsParPersonne` totalise par personne — c'est ce qu'il faut pour une
+ * ligne de bilan, pas pour une case de saisie. La maille projet × phase est
+ * celle du tableau de temps (`Temps.tsx`) et celle de la charge planifiée :
+ * c'est la seule qui permette de poser le pointé EN FACE du prévu.
+ */
+export function heuresPointeesSemaine(state: AppState, personne: string, lundi: string): LignePointageSemaine[] {
+  const par = new Map<string, LignePointageSemaine>()
+  for (const t of state.temps || []) {
+    if (!t || t.personne !== personne || t.semaine !== lundi) continue
+    const cle = `${t.projetId}|${t.phase}`
+    const cur = par.get(cle) || { projetId: t.projetId, phase: t.phase, heures: 0 }
+    cur.heures += t.heures || 0
+    par.set(cle, cur)
+  }
+  return [...par.values()]
+}
+
+/** une intervention d'entreprise posée sur la semaine — bande « sur le chantier » */
+export interface BarreChantier {
+  /** clé de rendu, stable pour une période donnée */
+  cle: string
+  marcheId: string
+  projetId: string
+  lot: string
+  entreprise: string
+  /** « reprises », « seconde phase » — ce qui distingue deux passages du lot */
+  libelle?: string
+  debut: string
+  fin: string
+  /** un booléen par jour de la semaine : le lot est-il sur place ce jour-là */
+  jours: boolean[]
+  /** l'entreprise a confirmé sa venue POUR CETTE PÉRIODE (5.23) */
+  confirmee: boolean
+  /** la même entreprise est attendue ailleurs en même temps — elle ne se
+   *  dédouble pas. `false` aussi quand l'autorité n'a pas été passée : on
+   *  n'affirme pas l'absence de conflit, on ne la dessine simplement pas. */
+  chevauche: boolean
+  lien: string
+}
+
+/** la charge d'une personne, prévu et pointé en regard */
+export interface LigneChargePhase {
+  projetId: string
+  nomProjet: string
+  phase: PhaseCode
+  /** heures PLANIFIÉES par les phases actives (`chargeParPhase`) */
+  planifiees: number
+  /** heures POINTÉES cette semaine sur ce projet et cette phase */
+  pointees: number
+}
+
+/** une personne sur la semaine : son bilan, ses jours de congé, son détail */
+export interface LigneNousDeux extends LigneSemainePersonne {
+  /** un booléen par jour : congé (le creux de la bande) */
+  conges: boolean[]
+  charges: LigneChargePhase[]
+}
+
+/** la semaine entière, telle que l'accueil la rend */
+export interface SemaineComplete {
+  lundi: string
+  dimanche: string
+  /** les sept dates ISO, du lundi au dimanche */
+  jours: string[]
+  /** (a) rendez-vous — un tableau par jour */
+  rendezVous: ReunionDuJour[][]
+  /** (b) sur le chantier — une barre par lot et par période */
+  chantier: BarreChantier[]
+  /** (c) nous deux */
+  nousDeux: LigneNousDeux[]
+  /** (d) ce qui tombe — un tableau par jour, SANS troncature */
+  echeances: EvtCal[][]
+  /** total des échéances de la semaine (somme des sept jours) */
+  nbEcheances: number
+}
+
+/**
+ * La semaine, dans l'ordre de la question qu'on se pose le lundi matin :
+ * qui vient nous voir, qui est sur le chantier, ce que nous deux avons à
+ * faire, et ce qui tombe.
+ *
+ * Rien n'est calculé ici qui ne le soit déjà ailleurs : les rendez-vous
+ * viennent de `reunionsDuJour` (la même fonction, appelée sept fois), le
+ * chantier de `interventionsDe`, les congés de `joursAbsents`, la charge de
+ * `chargeParPhase`, le bilan de `semaineParPersonne` et les échéances de
+ * `evenements`. Le seul apport est de les mettre EN REGARD.
+ */
+export function semaineComplete(
+  state: AppState,
+  lundi: string,
+  options: {
+    /** flux Google Agenda, capté par le seul chemin navigateur */
+    agenda?: readonly EvenementAgenda[]
+    /** roster à afficher (défaut : l'équipe des réglages) */
+    personnes?: readonly string[]
+    /** les autorités non importables — voir `AutoritesDatees` */
+    autorites?: AutoritesDatees
+  } = {},
+): SemaineComplete {
+  const autorites = options.autorites || {}
+  const jours = Array.from({ length: 7 }, (_, i) => addDays(lundi, i))
+  const dimanche = jours[6]
+
+  // ---- (a) rendez-vous : heure, projet, participants ----
+  const rendezVous = jours.map((j) => reunionsDuJour(state, j, options.agenda))
+
+  // ---- (b) sur le chantier : une puce par lot et par entreprise ----
+  const marches = Array.isArray(state.marches) ? state.marches : []
+  const conflits = autorites.periodesEnConflit ? autorites.periodesEnConflit(marches) : null
+  const chantier: BarreChantier[] = []
+  if (autorites.interventionsDe) {
+    for (const m of marches) {
+      if (!m || !m.actif) continue
+      for (const i of autorites.interventionsDe(m)) {
+        if (i.fin < lundi || i.debut > dimanche) continue
+        chantier.push({
+          cle: `${m.id}~${i.id ?? 'enveloppe'}`,
+          marcheId: m.id,
+          projetId: m.projetId,
+          lot: m.lot,
+          entreprise: m.entreprise,
+          libelle: i.libelle,
+          debut: i.debut,
+          fin: i.fin,
+          jours: jours.map((j) => i.debut <= j && j <= i.fin),
+          confirmee: !!i.confirmeLe,
+          chevauche: !!(conflits && autorites.clePeriode && conflits.has(autorites.clePeriode(m.id, i.id))),
+          lien: `#/projets/${m.projetId}/chantier`,
+        })
+      }
+    }
+  }
+  chantier.sort(
+    (a, b) =>
+      a.projetId.localeCompare(b.projetId) || a.debut.localeCompare(b.debut) || a.lot.localeCompare(b.lot),
+  )
+
+  // ---- (c) nous deux : congés en creux, charge en clair, heures en face ----
+  //
+  // `semaineParPersonne` ajoute d'office les noms qui ont POINTÉ sans figurer
+  // dans le roster — c'est voulu pour un bilan (un renommage ne doit pas
+  // faire disparaître des heures), et c'est faux pour un FILTRE : demander
+  // « Julien » et voir Zoé apparaître parce qu'elle a pointé ferait mentir le
+  // filtre. Le roster demandé, quand il y en a un, tranche donc ici.
+  const roster = options.personnes && options.personnes.length > 0 ? new Set(options.personnes) : null
+  const nousDeux: LigneNousDeux[] = semaineParPersonne(state, lundi, options.personnes)
+    .filter((l) => !roster || roster.has(l.personne))
+    .map((l) => {
+    const pointees = new Map(
+      heuresPointeesSemaine(state, l.personne, lundi).map((x) => [`${x.projetId}|${x.phase}`, x.heures]),
+    )
+    const charges: LigneChargePhase[] = chargeParPhase(state, l.personne, lundi).map((c) => ({
+      projetId: c.projetId,
+      nomProjet: c.nomProjet,
+      phase: c.phase,
+      planifiees: c.heures,
+      pointees: pointees.get(`${c.projetId}|${c.phase}`) ?? 0,
+    }))
+    // une heure pointée là où rien n'était planifié ne disparaît pas : c'est
+    // le cas le plus fréquent d'une semaine réelle, et une ligne invisible
+    // serait une heure qu'on croit perdue
+    for (const [cle, heures] of pointees) {
+      if (charges.some((c) => `${c.projetId}|${c.phase}` === cle)) continue
+      const coupure = cle.lastIndexOf('|')
+      const projetId = cle.slice(0, coupure)
+      charges.push({
+        projetId,
+        nomProjet: projetById(state, projetId)?.nom || projetId,
+        phase: cle.slice(coupure + 1) as PhaseCode,
+        planifiees: 0,
+        pointees: heures,
+      })
+    }
+    return {
+      ...l,
+      conges: joursAbsents(state, l.personne, lundi),
+      charges: charges.sort(
+        (a, b) => b.planifiees - a.planifiees || b.pointees - a.pointees || a.projetId.localeCompare(b.projetId),
+      ),
+    }
+  })
+
+  // ---- (d) ce qui tombe : tout l'inventaire, sans troncature ----
+  const tous = evenements(state, autorites)
+  const echeances = jours.map((j) =>
+    tous.filter((e) => e.date === j).sort((a, b) => a.titreLong.localeCompare(b.titreLong)),
+  )
+
+  return {
+    lundi,
+    dimanche,
+    jours,
+    rendezVous,
+    chantier,
+    nousDeux,
+    echeances,
+    nbEcheances: echeances.reduce((s, l) => s + l.length, 0),
+  }
 }

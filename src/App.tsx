@@ -81,13 +81,35 @@ const Propositions = lazy(() => import('./modules/Propositions'))
 const Entreprises = lazy(() => import('./modules/Entreprises'))
 const AssistantPage = lazy(() => import('./modules/Assistant').then((m) => ({ default: m.AssistantPage })))
 
-// Menu recomposé (audit simplification) : « une page = un objectif ».
-// Travail et Gestion restent ouverts ; Agence et Outils se replient,
-// l'état est mémorisé sur le poste. Les fonctions rares vivent dans
-// la recherche « / » plutôt que dans le menu.
+// TRANCHE 2 DE LA REFONTE (docs/REFONTE_NAVIGATION.md §3.1, §5).
+//
+// Seize destinations, toutes visibles en permanence, sur tous les écrans, pour
+// deux personnes : une destination est l'endroit le PLUS CHER de l'outil, et
+// on en montrait seize à la fois. La cible du plan est CINQ entrées visibles —
+// les deux ancres (la semaine, les projets) et les trois questions insolubles
+// dans un projet (une entreprise sur plusieurs chantiers, l'argent de
+// l'agence, un dossier qui n'a pas encore de projet) — plus UN groupe replié
+// pour les onze autres.
+//
+// RIEN N'EST SUPPRIMÉ, et c'est la règle qui commande : les onze lignes sont
+// toujours là, un clic sur « Agence » les rouvre, l'état est mémorisé sur le
+// poste, et TOUTES les routes du `switch` ci-dessous restent servies — une
+// adresse tapée, un favori, un lien d'alerte continuent d'arriver exactement
+// au même endroit. Ce qui baisse, c'est ce qu'on VOIT (16 → 5) ; ce qui se
+// MESURE (test-surface.cjs compte ce tableau en entier) ne bouge pas d'un
+// endroit, et le plan le dit sans détour : replier rend l'outil respirable, ce
+// sont les tranches 3 et 4 qui retirent vraiment de la dette.
+//
+// Le corollaire est la réserve n°6 du §7 : replier suppose de retrouver. Les
+// onze libellés sont indexés dans la palette « / » (src/modules/
+// RechercheOverlay.tsx, groupe « Écrans ») — sans quoi « replié » voudrait
+// dire « perdu ».
 const NAV: { groupe: string; repliable?: boolean; items: { path: string; label: string }[] }[] = [
   {
-    groupe: 'Travail',
+    // Ce groupe-ci n'affiche PAS son titre : il est la seule liste toujours
+    // visible, donc il est le menu. Un intitulé au-dessus n'apprend rien et
+    // ajoute une ligne à balayer — le nom ne sert qu'à la clé de rendu.
+    groupe: 'Ancres',
     items: [
       // L'accueil EST l'écran de semaine — il l'était déjà à moitié (horizon
       // de sept jours, « Revenir à cette semaine », carte « Semaine de
@@ -95,52 +117,39 @@ const NAV: { groupe: string; repliable?: boolean; items: { path: string; label: 
       // qu'il aurait toujours dû être : un filtre de jour (`#/AAAA-MM-JJ`),
       // pas une destination. Aucune entrée ajoutée, aucune retirée.
       { path: '', label: 'La semaine' },
-      // A1 — la revue des détections. Elle a SA ligne et pas seulement
-      // l'alerte de l'accueil : cette alerte est en gravité 1 (une détection
-      // n'est jamais urgente), donc la première à être poussée hors de vue
-      // un jour chargé — et un moteur qu'on oublie d'ouvrir redevient un
-      // moteur sans porte. « IA » dit d'où vient la proposition, pour qu'on
-      // ne la confonde pas avec une proposition d'honoraires.
-      { path: 'propositions', label: 'Propositions IA' },
-      { path: 'taches', label: 'Mes tâches' },
       { path: 'projets', label: 'Projets' },
-      { path: 'documents', label: 'Documents' },
-      { path: 'planning', label: 'Planning' },
-      { path: 'temps', label: 'Temps' },
-    ],
-  },
-  {
-    // audit finance §3.1 : une seule entrée Finance (6 vues internes) ;
-    // Pilotage reste accessible par sa route et la Vue d'ensemble
-    groupe: 'Gestion',
-    items: [
-      { path: 'finance', label: 'Finance' },
-      { path: 'situations', label: 'Situations' },
-      // 5.21 — juste après Situations, et NON dans « Agence » à côté de
-      // l'Annuaire : l'annuaire répond « quel est son téléphone », cet
-      // écran répond « où en est son marché » — RG échue, situation qui ne
-      // vient pas, visa qu'on n'a pas rendu, pénalité qu'on n'a pas décidée.
-      // C'est le portefeuille du titulaire là où Situations est le mois du
-      // chantier : deux faces du même suivi, elles se lisent l'une après
-      // l'autre. Sans cette ligne, l'écran serait exactement le livrable
-      // sans porte qu'on est en train de réparer.
+      // 5.21 — l'annuaire répond « quel est son téléphone », cet écran répond
+      // « où en est son marché » : RG échue, situation qui ne vient pas, visa
+      // qu'on n'a pas rendu. C'est LA vue de recoupement légitime du §2.3 —
+      // une entreprise travaille sur plusieurs chantiers, la question est
+      // insoluble dans un projet — et c'est à ce titre qu'elle reste visible.
       { path: 'entreprises', label: 'Entreprises' },
-      { path: 'pilotage', label: 'Pilotage' },
+      // audit finance §3.1 : une seule entrée Finance (9 vues internes)
+      { path: 'finance', label: 'Finance' },
+      { path: 'ao', label: 'Développement' },
     ],
   },
   {
+    // Les onze repliées. L'ordre suit le §3.1 du plan : ce qui touche encore
+    // au chantier d'abord, les outils en dernier.
     groupe: 'Agence',
     repliable: true,
     items: [
-      { path: 'ao', label: 'Développement' },
+      { path: 'situations', label: 'Situations' },
+      { path: 'planning', label: 'Planning' },
+      { path: 'temps', label: 'Temps' },
+      { path: 'taches', label: 'Mes tâches' },
+      { path: 'documents', label: 'Documents' },
+      { path: 'pilotage', label: 'Pilotage' },
+      // A1 — la revue des détections garde SA ligne : son alerte d'accueil est
+      // en gravité 1 (une détection n'est jamais urgente), donc la première à
+      // être poussée hors de vue un jour chargé, et un moteur qu'on oublie
+      // d'ouvrir redevient un moteur sans porte. « IA » dit d'où vient la
+      // proposition, pour qu'on ne la confonde pas avec une proposition
+      // d'honoraires.
+      { path: 'propositions', label: 'Propositions IA' },
       { path: 'ressources', label: 'Annuaire' },
       { path: 'agenda', label: 'Échéances agence' },
-    ],
-  },
-  {
-    groupe: 'Outils',
-    repliable: true,
-    items: [
       { path: 'assistant', label: 'Assistant' },
       { path: 'automatisations', label: 'Automatisations' },
     ],
@@ -148,6 +157,38 @@ const NAV: { groupe: string; repliable?: boolean; items: { path: string; label: 
 ]
 
 const CLE_NAV_GROUPES = 'cockpit-ll-nav-groupes'
+
+/** Les sections qui affichent l'écran d'une entrée de menu SANS porter son
+ *  adresse : `#/prompts` monte Automatisations, `#/calendrier` monte Planning,
+ *  `#/sante` monte Paramètres… Le §3.2 appelle ça arriver « en passant ».
+ *
+ *  Sans cette table, aucune entrée ne s'allume et on se croit ailleurs — et
+ *  depuis la tranche 2 le défaut est pire : le groupe replié resterait FERMÉ
+ *  sur l'écran où l'on se trouve, sans rien pour dire où l'on est. */
+const ALIAS_SECTION: Record<string, string> = {
+  facturation: 'finance',
+  contrats: 'finance',
+  calendrier: 'planning',
+  revue: 'pilotage',
+  analyse: 'pilotage',
+  prompts: 'automatisations',
+  routines: 'automatisations',
+  developpement: 'ao',
+  references: 'ao',
+  demarrer: 'parametres',
+  sante: 'parametres',
+}
+
+/** L'entrée de menu qu'une adresse allume — UNE seule autorité, lue par
+ *  l'entrée elle-même, par le groupe qui décide de s'ouvrir et par le pied de
+ *  menu. Deux réponses différentes à cette question et le menu montrerait un
+ *  écran actif pendant qu'un groupe fermé en cache un autre. */
+function entreeActive(section: string, jourDeRoute: string | null): string {
+  // un jour filtré (`#/2026-08-10`) reste la semaine : sans cette ligne
+  // l'entrée s'éteint et on se croit ailleurs
+  if (jourDeRoute !== null) return ''
+  return ALIAS_SECTION[section] ?? section
+}
 
 /** statut compact des données (pied de menu) — le détail vit dans la
  *  santé des données, ouverte au clic. La session est passée en argument :
@@ -234,6 +275,17 @@ export default function App() {
   // en montre 2. Une porte neuve sans compteur, on la lit une fois puis on
   // l'oublie ; c'est le compteur qui fait revenir.
   const nbEntreprises = entreprisesSuivies(state, today).filter((l) => l.poids > 0).length
+  // Le compteur d'une entrée de menu se déclare ICI et nulle part ailleurs :
+  // le groupe replié en fait la somme (voir plus bas). Écrit en quatre `&&`
+  // dans le JSX, comme avant, la pastille du groupe aurait dû recopier la
+  // liste — et le jour où une entrée gagne un compteur, la porte fermée
+  // l'aurait avalé en silence.
+  const compteurs: Record<string, number> = {
+    '': nbAlertes,
+    documents: nbDocsATraiter,
+    finance: nbFinance,
+    entreprises: nbEntreprises,
+  }
   const [theme, setTheme] = useState(themeCourant())
   const [rechercheOuverte, setRechercheOuverte] = useState(false)
   /** tiroir de navigation mobile (ouvert par le hamburger de la topbar) */
@@ -246,9 +298,13 @@ export default function App() {
       return {}
     }
   })
-  const basculerGroupe = (g: string) =>
+  /** `ouvert` est l'état VISIBLE au moment du clic, pas l'état mémorisé : un
+   *  groupe ouvert d'office parce qu'il contient l'écran courant se serait
+   *  sinon replié sur `!false === true`, c'est-à-dire pas du tout — un bouton
+   *  qui ne répond pas, sur onze entrées. */
+  const basculerGroupe = (g: string, ouvert: boolean) =>
     setGroupesOuverts((prev) => {
-      const next = { ...prev, [g]: !(prev[g] ?? false) }
+      const next = { ...prev, [g]: !ouvert }
       try {
         localStorage.setItem(CLE_NAV_GROUPES, JSON.stringify(next))
       } catch {
@@ -282,6 +338,8 @@ export default function App() {
   // que `#/`, une colonne isolée. Ce n'est pas une destination de plus —
   // c'est la lecture d'un segment, et l'accueil reste l'unique écran.
   const jourDeRoute = /^\d{4}-\d{2}-\d{2}$/.test(section) ? section : null
+  // l'entrée de menu allumée par l'adresse courante, alias compris
+  const actif = entreeActive(section, jourDeRoute)
 
   let page
   switch (section) {
@@ -427,50 +485,61 @@ export default function App() {
           <kbd>/</kbd>
         </button>
         {NAV.map((g) => {
-          // un groupe replié s'ouvre tout seul quand il contient l'écran actif
-          const ouvert = !g.repliable || (groupesOuverts[g.groupe] ?? false) || g.items.some((it) => it.path === section)
+          const contientActif = g.items.some((it) => it.path === actif)
+          // Le choix mémorisé l'emporte ; à défaut, le groupe s'ouvre de
+          // lui-même quand il contient l'écran courant. Dans l'autre ordre
+          // (auto-ouverture prioritaire), la personne qui replie le groupe
+          // depuis un de ses écrans le verrait se rouvrir aussitôt.
+          const ouvert = !g.repliable || (groupesOuverts[g.groupe] ?? contientActif)
+          // Ce qui attend DERRIÈRE la porte fermée. Replier ne doit pas revenir
+          // à cacher un signal : le groupe montre la somme des compteurs qu'il
+          // contient tant qu'il est fermé, et les rend à chaque entrée dès
+          // qu'il s'ouvre. La pastille n'ouvre RIEN toute seule — un menu qui
+          // se déplie sans qu'on l'ait touché est exactement la surface qu'on
+          // vient de replier.
+          const enAttente = g.items.reduce((n, it) => n + (compteurs[it.path] || 0), 0)
           return (
             <div key={g.groupe}>
-              {g.repliable ? (
+              {g.repliable && (
                 <button
-                  className="nav-group nav-group-btn"
-                  onClick={() => basculerGroupe(g.groupe)}
+                  // `actif` sur la porte fermée : c'est ce qui remplace
+                  // l'entrée surlignée quand elle est repliée. Sans lui, on
+                  // travaille dans un écran dont le menu ne dit plus le nom.
+                  className={`nav-group nav-group-btn ${!ouvert && contientActif ? 'actif' : ''}`}
+                  onClick={() => basculerGroupe(g.groupe, ouvert)}
                   aria-expanded={ouvert}
+                  aria-current={!ouvert && contientActif ? 'true' : undefined}
+                  aria-label={
+                    !ouvert && enAttente > 0 ? `${g.groupe} — ${enAttente} en attente` : g.groupe
+                  }
+                  title={
+                    ouvert
+                      ? `Replier ${g.groupe} — les ${g.items.length} écrans restent atteignables par la recherche « / »`
+                      : `Déplier ${g.groupe} — ${g.items.length} écrans` +
+                        (contientActif ? ', dont celui où vous êtes' : '') +
+                        (enAttente > 0 ? `, ${enAttente} en attente` : '')
+                  }
                 >
-                  {g.groupe} <span aria-hidden="true">{ouvert ? '▾' : '▸'}</span>
+                  <span>{g.groupe}</span>
+                  <span className="nav-group-fin">
+                    {!ouvert && enAttente > 0 && (
+                      <span className="nav-count" aria-hidden="true">
+                        {enAttente}
+                      </span>
+                    )}
+                    <span aria-hidden="true">{ouvert ? '▾' : '▸'}</span>
+                  </span>
                 </button>
-              ) : (
-                <div className="nav-group">{g.groupe}</div>
               )}
               {ouvert &&
                 g.items.map((it) => (
                   <a
                     key={it.path}
                     href={`#/${it.path}`}
-                    className={`nav-item ${g.repliable ? 'nav-item-sec' : ''} ${
-                      section === it.path ||
-                      // un jour filtré (`#/2026-08-10`) reste la semaine :
-                      // sans cette ligne, l'entrée s'éteint et on se croit
-                      // ailleurs — le défaut « en passant » du §3.2
-                      (it.path === '' && jourDeRoute !== null) ||
-                      (it.path === 'finance' && ['facturation', 'contrats'].includes(section)) ||
-                      // §3.2 « en passant » : `#/prompts` et `#/routines` affichent
-                      // l'écran Automatisations — sans cette ligne, arriver par un de
-                      // ces liens n'allumait aucune entrée et on se croyait ailleurs
-                      (it.path === 'automatisations' && ['prompts', 'routines'].includes(section))
-                        ? 'active'
-                        : ''
-                    }`}
+                    className={`nav-item ${g.repliable ? 'nav-item-sec' : ''} ${it.path === actif ? 'active' : ''}`}
                   >
                     <span>{it.label}</span>
-                    {it.path === '' && nbAlertes > 0 && <span className="nav-count">{nbAlertes}</span>}
-                    {it.path === 'documents' && nbDocsATraiter > 0 && (
-                      <span className="nav-count">{nbDocsATraiter}</span>
-                    )}
-                    {it.path === 'finance' && nbFinance > 0 && <span className="nav-count">{nbFinance}</span>}
-                    {it.path === 'entreprises' && nbEntreprises > 0 && (
-                      <span className="nav-count">{nbEntreprises}</span>
-                    )}
+                    {(compteurs[it.path] || 0) > 0 && <span className="nav-count">{compteurs[it.path]}</span>}
                   </a>
                 ))}
             </div>
@@ -480,7 +549,7 @@ export default function App() {
           <IdentiteCourante />
           <a
             href="#/parametres"
-            className={`nav-item nav-item-sec ${section === 'parametres' ? 'active' : ''}`}
+            className={`nav-item nav-item-sec ${actif === 'parametres' ? 'active' : ''}`}
             style={{ marginBottom: 6 }}
           >
             <span>Paramètres</span>

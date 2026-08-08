@@ -261,8 +261,11 @@ jobs:
       - name: Finance entry screen reuses existing selectors, nine destinations kept
         run: npm run test:finance-essentiel
 
-      - name: Surface ceiling — places, and cards per screen, may not grow
+      - name: Surface ceiling — places, visible menu entries, and cards per screen, may not grow
         run: npm run test:surface
+
+      - name: Folded menu entries stay findable in the palette, and no route stops answering
+        run: npm run test:navigation-repliee
 
       - name: Dated inventory sees every family, and goes quiet without its authority
         run: npm run test:inventaire-dates

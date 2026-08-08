@@ -304,6 +304,21 @@ pre {
 .nav-group-btn:hover { color: var(--ink); }
 .nav-group-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
+/* Tranche 2 — la porte fermee doit dire ce qu'elle contient.
+   A droite du titre : le compteur de ce qui attend derriere (somme des
+   entrees repliees) puis le chevron. Sans lui, replier reviendrait a
+   cacher un signal, et un signal cache ne se rattrape jamais. */
+.nav-group-fin { display: inline-flex; align-items: center; gap: 6px; flex: none; }
+.nav-group-btn .nav-count { font-size: 10px; padding: 0 5px; border-width: 1px; }
+
+/* Le groupe ferme qui contient l'ecran courant s'allume : c'est ce qui
+   remplace l'entree surlignee tant qu'elle est repliee — on doit pouvoir
+   lire ou l'on est sans deplier.
+   Un filet a gauche plutot qu'une pastille : le bouton est un flex a deux
+   enfants (titre / compteur+chevron), un troisieme element centrerait le
+   titre. L'ombre interne ne deplace rien. */
+.nav-group-btn.actif { color: var(--accent); box-shadow: inset 2px 0 0 var(--accent); }
+
 /* statut compact des donnees, dans la ligne Parametres du pied de menu */
 .nav-statut {
   font-family: var(--font-mono);
@@ -1266,6 +1281,13 @@ button.etoile:hover { color: var(--warn); }
   .rowmenu-item { padding: 10px 12px; }
   input[type='checkbox'], input[type='radio'] { width: 18px; height: 18px; }
   .etoile { font-size: 19px; padding: 2px; }
+  /* Tranche 2 — le tiroir au pouce. Le groupe repliable est desormais la
+     porte de ONZE ecrans : un titre de section de 10 px se rate au doigt,
+     et un menu qu'on rate est un menu qu'on n'ouvre plus. Les entrees
+     secondaires qu'il contient se dimensionnent comme les principales. */
+  .nav-group-btn { min-height: 40px; padding-top: 6px; padding-bottom: 6px; }
+  .nav-item { min-height: 40px; }
+  .nav-item-sec { min-height: 40px; padding: 8px 10px; font-size: 13px; }
 }
 
 /* ---------- M.3 — le chrono, deux emplacements, un composant ----------

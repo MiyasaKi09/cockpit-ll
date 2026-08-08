@@ -53,6 +53,34 @@ const PLAFOND_ENDROITS = 75
  *  total ne bougerait pas. */
 const PLAFOND_DESTINATIONS = 16
 
+/** LES ENTRÉES DE MENU QU'ON VOIT SANS RIEN DÉPLIER.
+ *
+ *  Le §3.3 du plan a dû introduire cette distinction, et elle n'est pas
+ *  cosmétique : « replier retire de la VUE, pas du COMPTE ». La tranche 2 met
+ *  onze des seize entrées dans un groupe « Agence » fermé. Le compte total ne
+ *  bouge pas d'une ligne — la route existe, le code aussi, et c'est voulu
+ *  puisqu'on ne supprime rien — mais ce que l'agence VOIT en permanence passe
+ *  de seize à cinq. C'est de ce chiffre-là qu'elle se plaint (« on se perd
+ *  dans le site »), et il n'était mesuré nulle part.
+ *
+ *  Sans ce second plafond, la tranche 2 serait intégralement réversible en
+ *  silence : il suffirait de retirer `repliable: true` d'un groupe, ou de
+ *  remonter trois entrées dans le groupe visible, pour que le menu regrimpe
+ *  sans qu'aucun test ne bronche — PLAFOND_DESTINATIONS, lui, resterait tenu.
+ *  C'est exactement la forme de rechute que ce fichier existe pour empêcher.
+ *
+ *  Le contrôle jumeau vit dans scripts/test-navigation-repliee.cjs : celui-ci
+ *  compte ce qui disparaît de la vue, celui-là vérifie que ce qui disparaît
+ *  reste trouvable. L'un sans l'autre serait nuisible. */
+const PLAFOND_DESTINATIONS_VISIBLES = 5
+
+/** Les deux ancres du §2, nommées par leur adresse : elles ne peuvent PAS être
+ *  repliées. Un plafond de visibles se tient aussi en repliant tout — un menu
+ *  vide passe n'importe quel plafond, et ce serait la pire des simplifications.
+ *  Ces deux-là sont le plancher, et il est nommé plutôt que chiffré : « au
+ *  moins deux entrées » n'aurait pas dit LESQUELLES. */
+const ANCRES_TOUJOURS_VISIBLES = { '': 'La semaine', projets: 'Projets' }
+
 /** cartes montées dans UN fichier d'écran. Le détenteur est nommé plus bas
  *  et vérifié : c'est celui qui débordera en premier. */
 const PLAFOND_CARTES_PAR_ECRAN = 12
@@ -133,31 +161,65 @@ function elements(rel, nom) {
 // ==========================================================================
 
 // --- 1a. les destinations du menu ------------------------------------------
+//
+// UNE seule lecture de `NAV` pour les DEUX comptes. La tentation était d'en
+// écrire une seconde, plus simple, pour le compte des visibles ; deux lectures
+// du même tableau sont deux autorités libres de diverger, et c'est justement
+// entre ces deux chiffres que le plan demande de faire la différence.
 
-function destinations() {
+function groupesDeNav() {
   const sf = arbre('src/App.tsx')
-  const trouvees = []
+  const groupes = []
+  const litteral = (noeud) => noeud.getText(sf).replace(/^['"`]|['"`]$/g, '')
+  const champ = (objet, nom) =>
+    objet.properties.find((p) => ts.isPropertyAssignment(p) && p.name.getText(sf) === nom)
+
   const visiter = (n) => {
-    if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.name.text === 'NAV' && n.initializer) {
-      const compter = (x) => {
-        // `{ path: 'projets', label: 'Projets' }` — une entrée = un `path`
-        if (ts.isPropertyAssignment(x) && x.name.getText(sf) === 'path') {
-          const groupe = x.parent.properties.find(
-            (p) => ts.isPropertyAssignment(p) && p.name.getText(sf) === 'label',
-          )
-          trouvees.push(groupe ? groupe.initializer.getText(sf).replace(/['"`]/g, '') : x.initializer.getText(sf))
+    if (
+      ts.isVariableDeclaration(n) &&
+      ts.isIdentifier(n.name) &&
+      n.name.text === 'NAV' &&
+      n.initializer &&
+      ts.isArrayLiteralExpression(n.initializer)
+    ) {
+      for (const g of n.initializer.elements) {
+        if (!ts.isObjectLiteralExpression(g)) continue
+        const nom = champ(g, 'groupe')
+        const repliable = champ(g, 'repliable')
+        const items = champ(g, 'items')
+        const entrees = []
+        if (items && ts.isArrayLiteralExpression(items.initializer)) {
+          for (const it of items.initializer.elements) {
+            // `{ path: 'projets', label: 'Projets' }` — une entrée = un `path`
+            if (!ts.isObjectLiteralExpression(it)) continue
+            const p = champ(it, 'path')
+            const l = champ(it, 'label')
+            entrees.push({
+              path: p ? litteral(p.initializer) : null,
+              label: l ? litteral(l.initializer) : null,
+              ligne: ligneDe(sf, it),
+            })
+          }
         }
-        ts.forEachChild(x, compter)
+        groupes.push({
+          groupe: nom ? litteral(nom.initializer) : '(groupe sans nom)',
+          // un groupe sans `repliable` est visible : c'est le défaut du menu
+          repliable: !!repliable && repliable.initializer.getText(sf) === 'true',
+          items: entrees,
+        })
       }
-      compter(n.initializer)
     }
     ts.forEachChild(n, visiter)
   }
   visiter(sf)
-  return trouvees
+  return groupes
 }
 
-const DESTINATIONS = destinations()
+const GROUPES = groupesDeNav()
+const ENTREES = GROUPES.flatMap((g) => g.items)
+const DESTINATIONS = ENTREES.map((e) => e.label)
+/** ce qu'on voit sans rien déplier : les entrées des groupes non repliables */
+const VISIBLES = GROUPES.filter((g) => !g.repliable).flatMap((g) => g.items)
 
 // Un test qui ne voit rien passe toujours. `NAV` renommé, déplacé dans un
 // autre fichier ou construit dynamiquement, et le compteur rendrait 0 — le
@@ -169,6 +231,41 @@ assert.ok(
     'Le compteur d’endroits est débranché : il rendra « 0 endroit » et le plafond sera tenu par du vide.\n' +
     'Si `NAV` a changé de forme ou de fichier, c’est CE test qu’il faut suivre, pas contourner.',
 )
+
+// Une entrée dont le `path` ou le `label` ne se lit pas serait comptée comme
+// les autres tout en étant invisible aux contrôles qui la suivent (le repli,
+// la recherche, la route). Mieux vaut échouer ici que compter un fantôme.
+for (const e of ENTREES) {
+  assert.ok(
+    e.path !== null && e.label !== null,
+    `src/App.tsx:${e.ligne} — entrée de menu illisible (path=${e.path}, label=${e.label}).\n` +
+      'Une entrée qui ne se lit pas sort de tous les contrôles qui suivent : elle serait repliée sans\n' +
+      'être indexée dans la recherche, et personne ne le saurait.',
+  )
+}
+
+// Deux entrées pour la même adresse, c'est deux portes vers le même endroit :
+// de la surface pure, celle qui ne se voit pas dans un total.
+{
+  const vus = new Map()
+  for (const e of ENTREES) {
+    assert.ok(
+      !vus.has(e.path),
+      `Deux entrées de menu mènent à « #/${e.path} » : « ${vus.get(e.path)} » et « ${e.label} ».\n` +
+        'Deux portes vers le même écran, c’est une ligne de menu à balayer pour rien.',
+    )
+    vus.set(e.path, e.label)
+  }
+}
+
+// Un groupe repliable vide est un bouton qui ne mène nulle part — et il ferait
+// baisser le compte des visibles sans rien replier du tout.
+for (const g of GROUPES) {
+  assert.ok(
+    g.items.length > 0,
+    `Le groupe de menu « ${g.groupe} » ne contient aucune entrée : c’est un bouton qui ne mène nulle part.`,
+  )
+}
 
 // --- 1b. les jeux d'onglets -------------------------------------------------
 //
@@ -291,6 +388,30 @@ assert.ok(
     'pour faire passer la CI.',
 )
 
+// LE COMPTE QUI A BAISSÉ. Les deux assertions se lisent ensemble : la
+// précédente dit que le menu ne DÉCLARE pas plus de seize entrées, celle-ci
+// qu'il n'en MONTRE pas plus de cinq. Le plan (§3.3) tient les deux chiffres
+// séparés parce qu'ils ne disent pas la même chose — l'un mesure la dette,
+// l'autre la gêne, et la tranche 2 ne fait baisser que la seconde.
+assert.ok(
+  VISIBLES.length <= PLAFOND_DESTINATIONS_VISIBLES,
+  `${VISIBLES.length} entrées de menu visibles sans rien déplier, le plafond est ${PLAFOND_DESTINATIONS_VISIBLES}.\n` +
+    `Visibles : ${VISIBLES.map((e) => e.label).join(' · ')}\n` +
+    `Repliées : ${GROUPES.filter((g) => g.repliable)
+      .map((g) => `${g.groupe} (${g.items.length})`)
+      .join(' · ') || '(aucune)'}\n\n` +
+    'C’est LE chiffre dont l’agence se plaint — « on se perd dans le site » —, et il était mesuré nulle\n' +
+    'part avant la tranche 2 : seize entrées visibles en permanence, sur tous les écrans, pour deux\n' +
+    'personnes. La cible du plan (§3.1) est cinq : les deux ancres (la semaine, les projets) et les trois\n' +
+    'questions insolubles dans un projet (une entreprise sur plusieurs chantiers, l’argent de l’agence,\n' +
+    'un dossier qui n’a pas encore de projet).\n\n' +
+    'Rien n’oblige à supprimer une entrée pour repasser sous le plafond : mettez-la dans le groupe\n' +
+    'repliable (`repliable: true`, src/App.tsx) — elle reste à un clic, sa route ne bouge pas, et elle se\n' +
+    'retrouve par la recherche « / ». Mais alors AJOUTEZ-LA AUSSI à `ECRANS`\n' +
+    '(src/modules/RechercheOverlay.tsx) : sans quoi « replié » veut dire « perdu », et\n' +
+    'scripts/test-navigation-repliee.cjs vous le dira.',
+)
+
 assert.ok(
   NB_ENDROITS <= PLAFOND_ENDROITS,
   `${NB_ENDROITS} endroits (${DESTINATIONS.length} destinations + ${NB_ONGLETS} onglets), ` +
@@ -304,6 +425,22 @@ assert.ok(
     'Si l’endroit neuf est vraiment irremplaçable, relevez PLAFOND_ENDROITS et écrivez dans le commit\n' +
     'ce qu’il porte que l’existant ne pouvait pas porter, et quel endroit il remplace.',
 )
+
+// Le plafond des visibles se tient aussi en repliant TOUT — et un menu vide
+// passerait n'importe quel plafond. Les deux ancres du §2 sont donc nommées :
+// ce sont les seules dont le repli serait une régression et non un progrès.
+for (const [chemin, libelle] of Object.entries(ANCRES_TOUJOURS_VISIBLES)) {
+  const entree = VISIBLES.find((e) => e.path === chemin)
+  assert.ok(
+    entree,
+    `L’ancre « ${libelle} » (#/${chemin}) n’est plus une entrée de menu VISIBLE.\n` +
+      `Visibles : ${VISIBLES.map((e) => e.label).join(' · ') || '(aucune)'}\n\n` +
+      'Le §2 du plan pose deux ancres — le temps qui passe et le travail qu’on fait — et tout le reste\n' +
+      'est une vue de recoupement. Replier une ancre ferait baisser le compte des visibles sans rien\n' +
+      'simplifier : ce serait passer le contrôle en cachant ce qu’on ouvre tous les matins.\n' +
+      'Si l’ancre a changé d’adresse ou de libellé, c’est ANCRES_TOUJOURS_VISIBLES qu’il faut suivre.',
+  )
+}
 
 // ==========================================================================
 // CONTRÔLE N°2 — le plafond de cartes
@@ -369,8 +506,20 @@ assert.ok(
     'cinquante corrections dont aucune, prise seule, n’était déraisonnable.',
 )
 
+// LES DEUX CHIFFRES SONT DITS, TOUJOURS, ET DANS CET ORDRE. Le premier est
+// celui que l'agence ressent, le second celui que la refonte doit encore
+// faire baisser. N'en afficher qu'un laisserait croire qu'il n'y en a qu'un —
+// et c'est en confondant les deux qu'on prendrait un menu replié pour une
+// dette remboursée.
+const replies = ENTREES.length - VISIBLES.length
 console.log(
-  `Surface : ${NB_ENDROITS} endroits / ${PLAFOND_ENDROITS} ` +
+  `Menu VU : ${VISIBLES.length} entrées visibles / ${PLAFOND_DESTINATIONS_VISIBLES}` +
+    (replies > 0
+      ? ` (+ ${replies} repliées dans ${GROUPES.filter((g) => g.repliable).map((g) => `« ${g.groupe} »`).join(', ')})`
+      : '') +
+    `. Menu MESURÉ : ${DESTINATIONS.length} destinations / ${PLAFOND_DESTINATIONS} — replier retire de la vue, ` +
+    'pas du compte (§3.3).\n' +
+    `Surface : ${NB_ENDROITS} endroits / ${PLAFOND_ENDROITS} ` +
     `(${DESTINATIONS.length} destinations / ${PLAFOND_DESTINATIONS} + ${NB_ONGLETS} onglets sur ` +
     `${ONGLETS_PAR_ECRAN.length} écrans), ${totalCartes} cartes / ${PLAFOND_CARTES_TOTAL} ` +
     `dont ${pireNombre} / ${PLAFOND_CARTES_PAR_ECRAN} au maximum par écran (${path.basename(pireEcran)}). ` +

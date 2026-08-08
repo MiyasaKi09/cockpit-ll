@@ -1,6 +1,6 @@
 // Recherche globale — palette de commandes (overlay « / »).
 // Une tâche, un matériau, une entreprise, un contact, un mot du
-// journal… → tout ce qui y touche, avec le chemin vers chaque fiche
+// journal, UN ÉCRAN → tout ce qui y touche, avec le chemin vers chaque fiche
 // et les projets reliés. Clavier : ↑ ↓ pour naviguer, Entrée pour
 // ouvrir, Échap pour fermer. Les résultats sont de VRAIS liens
 // (clavier, lecteur d'écran, clic molette) et les derniers éléments
@@ -34,6 +34,127 @@ interface Resultat {
   /** projets reliés (les liens inverses) */
   projets?: string[]
 }
+
+// ---------- les écrans eux-mêmes ----------
+//
+// RÉSERVE N°6 DU PLAN (docs/REFONTE_NAVIGATION.md §7), et elle est sérieuse :
+// « replier suppose de retrouver ».
+//
+// La tranche 2 replie onze destinations dans le groupe « Agence » du menu.
+// Cette palette n'indexait que des OBJETS — un projet, un document, une tâche,
+// une entreprise — jamais les ÉCRANS : taper « automatisations » ou
+// « annuaire » ne rendait rien. Sans ces lignes, « replié » voudrait dire
+// « perdu », et la tranche 2 aurait dégradé l'outil au lieu de l'améliorer.
+//
+// Ce n'est PAS un endroit de plus : aucune route n'est créée, aucun écran
+// n'est ajouté, le compteur de surface (scripts/test-surface.cjs) ne bouge
+// pas. C'est un index — la contrepartie exacte du repli.
+//
+// `mots` porte les synonymes, parce qu'on cherche avec le mot qu'on a en tête
+// et non avec le libellé du menu : « congés » pour Planning, « prompt » pour
+// Automatisations, « TVA » pour Finance, « artisan » pour l'Annuaire. Les
+// adresses qui mènent au même écran par une autre porte (`#/prompts`,
+// `#/calendrier`, `#/sante`…) y figurent aussi : on les tape parfois de
+// mémoire.
+//
+// `detail` dit OÙ l'écran vit dans le menu : la palette apprend le repli au
+// lieu de le contourner — la fois d'après, on sait où cliquer.
+
+const DANS_MENU = 'Menu'
+const DANS_AGENCE = 'Menu · groupe « Agence » (replié)'
+
+const ECRANS: { titre: string; detail: string; lien: string; mots: string }[] = [
+  // les cinq visibles
+  {
+    titre: 'La semaine',
+    detail: `${DANS_MENU} · accueil`,
+    lien: '#/',
+    mots: "accueil aujourd'hui jour alertes file du matin rendez-vous chantier congés échéances",
+  },
+  { titre: 'Projets', detail: DANS_MENU, lien: '#/projets', mots: 'chantiers affaires fiche phases honoraires journal' },
+  {
+    titre: 'Entreprises',
+    detail: DANS_MENU,
+    lien: '#/entreprises',
+    mots: 'titulaires marchés lots retenue de garantie RG pénalités visas GPA portefeuille',
+  },
+  {
+    titre: 'Finance',
+    detail: DANS_MENU,
+    lien: '#/finance',
+    mots: 'argent trésorerie factures ventes achats frais banque comptable revue prévisions connecteurs TVA facturation contrats',
+  },
+  {
+    titre: 'Développement',
+    detail: DANS_MENU,
+    lien: '#/ao',
+    mots: "appels d'offres AO radar pipeline dossiers consultations acheteurs références veille",
+  },
+  // les onze repliées — l'ordre du §3.1
+  {
+    titre: 'Situations',
+    detail: DANS_AGENCE,
+    lien: '#/situations',
+    mots: 'situations de travaux acomptes certificat de paiement à vérifier attendues historique retenues de garantie',
+  },
+  {
+    titre: 'Planning',
+    detail: DANS_AGENCE,
+    lien: '#/planning',
+    mots: 'échéances études chantier OPC charge absences congés calendrier frise',
+  },
+  {
+    titre: 'Temps',
+    detail: DANS_AGENCE,
+    lien: '#/temps',
+    mots: 'heures saisie ma semaine historique feuille de temps pointage chrono',
+  },
+  { titre: 'Mes tâches', detail: DANS_AGENCE, lien: '#/taches', mots: 'à faire liste rappels responsable échéance' },
+  {
+    titre: 'Documents',
+    detail: DANS_AGENCE,
+    lien: '#/documents',
+    mots: 'registre documentaire fichiers pièces drive à rattacher à vérifier classement DCE',
+  },
+  {
+    titre: 'Pilotage',
+    detail: DANS_AGENCE,
+    lien: '#/pilotage',
+    mots: 'indicateurs tableau de bord missions revue rentabilité marge analyse',
+  },
+  {
+    titre: 'Propositions IA',
+    detail: DANS_AGENCE,
+    lien: '#/propositions',
+    mots: 'détections à revoir suggestions messages accepter ignorer',
+  },
+  {
+    titre: 'Annuaire',
+    detail: DANS_AGENCE,
+    lien: '#/ressources',
+    mots: "contacts artisans matériaux carnet d'adresses téléphone fournisseurs ressources",
+  },
+  {
+    titre: 'Échéances agence',
+    detail: DANS_AGENCE,
+    lien: '#/agenda',
+    mots: "obligations URSSAF TVA déclarations assurances contrats de l'agence agenda",
+  },
+  { titre: 'Assistant', detail: DANS_AGENCE, lien: '#/assistant', mots: 'Claude IA discussion aide rédaction' },
+  {
+    titre: 'Automatisations',
+    detail: DANS_AGENCE,
+    lien: '#/automatisations',
+    mots: 'prompts routines gabarits modèles automatismes Claude',
+  },
+  // et le pied de menu — c'est là qu'on répare quand ça tombe en panne (§7.5)
+  {
+    titre: 'Paramètres',
+    detail: 'Pied du menu',
+    lien: '#/parametres',
+    mots: 'réglages agence coûts équipe branchements sauvegarde données santé bien démarrer',
+  },
+]
 
 // ---------- récents (localStorage, jamais synchronisé) ----------
 
@@ -73,6 +194,20 @@ function chercher(state: AppState, q: string): Resultat[] {
   const hit = (...champs: (string | undefined | null)[]) =>
     fold(champs.filter(Boolean).join(' ')).includes(cible)
   const res: Resultat[] = []
+
+  // EN PREMIER, et c'est délibéré : qui tape « annuaire » veut l'écran
+  // Annuaire, pas les trente lignes qui contiennent le mot. Le premier
+  // résultat est celui que la touche Entrée ouvre.
+  //
+  // Le TITRE l'emporte sur le synonyme : « échéances » vise « Échéances
+  // agence » avant « La semaine », qui n'en porte que le mot-clé.
+  const ecrans = ECRANS.filter((e) => hit(e.titre, e.mots))
+  for (const e of [
+    ...ecrans.filter((e) => fold(e.titre).includes(cible)),
+    ...ecrans.filter((e) => !fold(e.titre).includes(cible)),
+  ]) {
+    res.push({ groupe: 'Écrans', titre: e.titre, detail: e.detail, lien: e.lien })
+  }
 
   for (const p of state.projets) {
     if (hit(p.id, p.nom, p.moa, p.adresse, p.notes))
@@ -341,7 +476,7 @@ export default function RechercheOverlay({ onClose }: { onClose: () => void }) {
             value={q}
             onChange={(e) => setQ(e.target.value)}
             onKeyDown={onKeyDown}
-            placeholder="Rechercher — « chanvre », « Martin BTP », « acrotère »…"
+            placeholder="Rechercher — « annuaire », « chanvre », « Martin BTP »…"
             aria-label="Terme de recherche"
             role="combobox"
             aria-expanded={plat.length > 0}
@@ -363,7 +498,8 @@ export default function RechercheOverlay({ onClose }: { onClose: () => void }) {
             <div className="cmdk-empty">
               {enSaisie
                 ? `Aucun résultat pour « ${q} ».`
-                : 'Tapez au moins 2 caractères. ↑ ↓ pour naviguer, Entrée pour ouvrir, Échap pour fermer.'}
+                : 'Tapez au moins 2 caractères — les écrans du menu se cherchent aussi par leur nom ' +
+                  '(« automatisations », « annuaire »). ↑ ↓ pour naviguer, Entrée pour ouvrir, Échap pour fermer.'}
             </div>
           ) : (
             groupes.map(([groupe, items]) => (

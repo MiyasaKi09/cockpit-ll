@@ -19,9 +19,9 @@
 
 import { useMemo, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
-import type { Alerte, Courrier, DecompteFige } from '../types'
+import type { Alerte, Courrier, DecompteFige, MarcheTravaux } from '../types'
 import { useStore } from '../store'
-import { Btn, Card, DateF, DateInput, EmptyState, Icon, LienGmail, Modal, Money, Page, ResumeMessage, RowMenu, Select, Stat, Table, confirmer, navigate, toast, useToday } from '../ui'
+import { Btn, Card, DateF, DateInput, EmptyState, Icon, LienGmail, Modal, Money, NumInput, Page, ResumeMessage, RowMenu, Select, Stat, Table, confirmer, navigate, toast, useToday } from '../ui'
 import type { ContexteAlertes, MessageNotifiable, PropositionNotifiable, RelanceProposee } from '../alerts'
 import { alertesActives, estMarquableVu, relanceDeLAlerte } from '../alerts'
 import { dateDe, fusionnerBoite, urgenceDe } from '../boite'
@@ -38,6 +38,7 @@ import { usePropositions } from '../propositions'
 import { LIBELLES_IMPORTANCE, estImportance } from '../categorisation'
 import { courriersARattacher, projetsCorrigibles } from '../rattachement'
 import { lienGmail } from '../util'
+import type { AutoritesDatees, BarreChantier, LigneChargePhase, SemaineComplete } from '../derive'
 import {
   LIBELLES_PHASES,
   caCible,
@@ -48,10 +49,28 @@ import {
   phasesEnCours,
   prochainesEcheances,
   reunionsDuJour,
+  semaineComplete,
   semaineParPersonne,
   situationsAVerifier,
   validationsAttendues,
 } from '../derive'
+// ---------- les autorités que `derive.ts` NE PEUT PAS importer ----------
+//
+// `derive.ts` est chargé hors navigateur par cinq scripts de test avec une
+// liste FERMÉE de dépendances (`./miqcp`, `./facture`, `./util`, `./gpa`) :
+// un import de plus les fait échouer sur « Import inattendu dans derive.ts »,
+// et ces chargeurs sont hors du périmètre de ce livrable.
+//
+// L'accueil ne les APPELLE pas pour son compte — il ne recalcule rien : il
+// les PASSE à `derive.evenements` / `derive.semaineComplete`, qui restent les
+// seuls à décider ce qui compte et comment ça s'écrit. C'est le même geste
+// que les pièces distantes de `validationsAttendues`, et il garantit que
+// l'inventaire des dates lit la MÊME fonction que l'écran d'origine — pas
+// une copie qui divergerait au premier changement de règle.
+import { chevauchementsEntreprise, clePeriode, interventionsDe, periodesEnConflit } from '../planningTravaux'
+import { echeanceVisa, visasEnAttente } from '../visas'
+import { situationAttendueNonRecue } from '../entreprise'
+import { pointResolu } from '../seanceChantier'
 import { corpsRelanceNote, sujetRelanceNote } from '../cotraitants'
 // B1 — l'accueil valide aussi des situations : il doit donc figer le décompte
 // exactement comme l'écran des situations. Le calcul est IMPORTÉ, jamais refait.
@@ -60,7 +79,7 @@ import type { ActionFinance } from '../financeActions'
 import { actionsATraiter } from '../financeActions'
 import { useNbEntrantsDistants } from '../entrants'
 import { useMoi } from '../moi'
-import { addDays, diffDays, fmtDate, fmtHeures, fmtMoney, fmtPct, mondayOf, ouvrirGmail } from '../util'
+import { addDays, diffDays, fmtDate, fmtHeures, fmtMoney, fmtPct, mondayOf, ouvrirGmail, uid } from '../util'
 import { useSurveillanceCtx } from '../surveillance'
 
 // ---------- petits composants locaux ----------
@@ -109,6 +128,21 @@ const CONCOURS_EN_PRODUCTION = new Set(['candidature', 'selectionne'])
 
 /** statuts où plus aucun dépôt n'est attendu */
 const CONSULTATION_CLOSE = new Set(['no_go', 'deposee', 'gagnee', 'perdue'])
+
+/** Les autorités passées à `derive` — constante de module : elles ne
+ *  changent jamais, et les reconstruire à chaque rendu ferait recalculer la
+ *  semaine entière pour rien. `today` s'y ajoute à l'usage. */
+const AUTORITES_DATEES: Omit<AutoritesDatees, 'today'> = {
+  interventionsDe,
+  clePeriode,
+  // la seule composition faite ici, et elle ne calcule rien : deux fonctions
+  // de `planningTravaux` mises bout à bout, dans l'ordre que ce module impose
+  periodesEnConflit: (marches: MarcheTravaux[]) => periodesEnConflit(chevauchementsEntreprise(marches)),
+  visasEnAttente,
+  echeanceVisa,
+  situationAttendueNonRecue,
+  pointResolu,
+}
 
 /** colonne des « Repères du jour » */
 function Repere({ titre, children }: { titre: string; children: ReactNode }) {
@@ -1556,9 +1590,334 @@ function CarteSemaine({ personne }: { personne: string }) {
   )
 }
 
+// ==========================================================================
+// LA SEMAINE — sept colonnes, quatre bandes, un seul écran.
+//
+// Ce n'est pas un écran de plus : c'est l'accueil, qui avait déjà l'horizon
+// de sept jours et le bouton « Revenir à cette semaine », et qui cesse
+// d'être à moitié aveugle. Rien n'est calculé ici — `derive.semaineComplete`
+// assemble les quatre bandes, l'écran les rend.
+//
+// Un seul `Table` porte les quatre bandes : c'est lui qui donne, sous
+// 700 px, le repli en cartes empilées avec le nom du jour en libellé
+// (`.table-cartes`, `data-label`). Aucun composant mobile séparé — l'outil
+// sert SUR le chantier, avec le même écran, plus ou moins déplié.
+// ==========================================================================
+
+const JOURS_COURTS = ['lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi', 'dimanche']
+
+/** « mardi 11 » — l'index du jour se lit sur la date, sans horloge */
+function libelleJour(iso: string): string {
+  const js = (new Date(`${iso}T12:00:00Z`).getUTCDay() + 6) % 7
+  return `${JOURS_COURTS[js]} ${Number(iso.slice(8, 10))}`
+}
+
+/** deux entreprises au même endroit au même moment : on le HACHURE, on ne
+ *  le corrige pas — la machine propose, l'humain décide */
+const HACHURES = 'repeating-linear-gradient(45deg, var(--danger) 0 3px, transparent 3px 7px)'
+/** le creux d'un congé : la place reste dessinée, elle est simplement vide */
+const CREUX = 'repeating-linear-gradient(45deg, var(--line) 0 3px, transparent 3px 7px)'
+
+const STYLE_BANDE: CSSProperties = {
+  fontSize: 11,
+  fontWeight: 700,
+  textTransform: 'uppercase',
+  letterSpacing: '0.06em',
+  color: 'var(--ink-3)',
+  background: 'var(--bg-soft)',
+}
+
+/** la puce d'un lot présent ce jour-là */
+function PuceChantier({ barre, present }: { barre: BarreChantier; present: boolean }) {
+  // rien, et pas un tiret : sous 700 px une cellule VIDE disparaît de la
+  // carte (`.table-cartes td:empty`) — sept tirets par lot y seraient du bruit
+  if (!present) return null
+  return (
+    <span
+      title={`${barre.lot} · ${barre.entreprise} — du ${fmtDate(barre.debut)} au ${fmtDate(barre.fin)}${
+        barre.chevauche ? ' — CHEVAUCHEMENT : cette entreprise est attendue ailleurs en même temps' : ''
+      }`}
+      style={{
+        display: 'block',
+        height: 12,
+        borderRadius: 3,
+        background: barre.chevauche ? HACHURES : 'var(--cat-teal)',
+        border: barre.chevauche ? '1.5px solid var(--danger)' : '1.5px solid transparent',
+        opacity: barre.confirmee ? 1 : 0.55,
+      }}
+    />
+  )
+}
+
+/**
+ * Les heures de la semaine, saisies SUR PLACE.
+ *
+ * Le geste est celui du tableau de temps, à la ligne près : même clé
+ * naturelle (semaine × personne × projet × phase), même règle « 0 ou vide
+ * retire la ligne ». Le temps se saisit à la SEMAINE dans ce dépôt
+ * (`TempsEntry.semaine`) : une case par jour donnerait une précision que la
+ * donnée ne porte pas, donc un chiffre inventé.
+ */
+function SaisieHeures({
+  personne,
+  lundi,
+  ligne,
+}: {
+  personne: string
+  lundi: string
+  ligne: LigneChargePhase
+}) {
+  const { update } = useStore()
+  return (
+    <NumInput
+      value={ligne.pointees > 0 ? ligne.pointees : null}
+      style={{ width: 74 }}
+      placeholder="0"
+      ariaLabel={`Heures de ${personne} — ${ligne.projetId} ${ligne.phase} — semaine du ${fmtDate(lundi)}`}
+      onChange={(v) =>
+        update((d) => {
+          const i = d.temps.findIndex(
+            (t) =>
+              t.semaine === lundi &&
+              t.personne === personne &&
+              t.projetId === ligne.projetId &&
+              t.phase === ligne.phase,
+          )
+          if (v === null || v <= 0) {
+            if (i >= 0) d.temps.splice(i, 1)
+            return
+          }
+          if (i >= 0) d.temps[i].heures = v
+          else
+            d.temps.push({
+              id: uid('tps'),
+              semaine: lundi,
+              personne,
+              projetId: ligne.projetId,
+              phase: ligne.phase,
+              heures: v,
+            })
+        })
+      }
+    />
+  )
+}
+
+function CarteLaSemaine({
+  semaine,
+  today,
+  jour,
+  personne,
+}: {
+  semaine: SemaineComplete
+  today: string
+  /** filtre de jour — `null` : la semaine entière */
+  jour: string | null
+  personne: string
+}) {
+  // « Aujourd'hui » n'est plus un écran : c'est une colonne qu'on isole.
+  const index = semaine.jours.map((_, i) => i).filter((i) => !jour || semaine.jours[i] === jour)
+  const nbCol = index.length + 1
+  const tete = ['', ...index.map((i) => `${libelleJour(semaine.jours[i])}${semaine.jours[i] === today ? ' · aujourd’hui' : ''}`)]
+
+  const bande = (titre: string) => (
+    <tr>
+      <td colSpan={nbCol} style={STYLE_BANDE}>
+        {titre}
+      </td>
+    </tr>
+  )
+
+  return (
+    <Card
+      titre={jour ? `Le ${fmtDate(jour)}` : `Sept jours — ${semaine.nbEcheances} échéance${semaine.nbEcheances > 1 ? 's' : ''}`}
+      actions={
+        <span className="segmente" role="group" aria-label="Filtrer sur un jour">
+          <button aria-pressed={jour === null} onClick={() => navigate('/')}>
+            La semaine
+          </button>
+          {semaine.jours.map((j) => (
+            <button key={j} aria-pressed={jour === j} onClick={() => navigate(`/${j}`)} title={fmtDate(j)}>
+              {libelleJour(j).slice(0, 3)}
+            </button>
+          ))}
+        </span>
+      }
+    >
+      <Table head={tete}>
+        {/* ---------- (a) rendez-vous ---------- */}
+        {bande('Rendez-vous')}
+        <tr>
+          <td className="muted small">heure · projet · participants</td>
+          {index.map((i) => (
+            <td key={semaine.jours[i]}>
+              {semaine.rendezVous[i].length === 0
+                ? null
+                : semaine.rendezVous[i].map((r) => (
+                    <div key={r.id} className="small" style={{ padding: '2px 0' }}>
+                      <strong>{r.heure || 'journée'}</strong>{' '}
+                      {r.lien ? <a href={r.lien}>{r.titre}</a> : r.titre}
+                      {r.detail && <div className="muted">{r.detail}</div>}
+                    </div>
+                  ))}
+            </td>
+          ))}
+        </tr>
+
+        {/* ---------- (b) sur le chantier ---------- */}
+        {bande('Sur le chantier')}
+        {semaine.chantier.length === 0 ? (
+          <tr>
+            <td colSpan={nbCol} className="muted small">
+              Aucun lot en intervention cette semaine — les périodes se saisissent sur le marché
+              (onglet Chantier d'un projet).
+            </td>
+          </tr>
+        ) : (
+          semaine.chantier.map((b) => (
+            <tr key={b.cle}>
+              <td>
+                <a href={b.lien}>
+                  <strong>{b.lot}</strong>
+                </a>{' '}
+                <span className="small">{b.entreprise}</span>
+                {b.libelle && <span className="muted small"> · {b.libelle}</span>}
+                <div className="muted small">
+                  {b.projetId}
+                  {!b.confirmee && (
+                    <>
+                      {' '}
+                      <span className="badge badge-warn">venue non confirmée</span>
+                    </>
+                  )}
+                  {b.chevauche && (
+                    <>
+                      {' '}
+                      <span className="badge badge-danger">attendue ailleurs</span>
+                    </>
+                  )}
+                </div>
+              </td>
+              {index.map((i) => (
+                <td key={semaine.jours[i]}>
+                  <PuceChantier barre={b} present={b.jours[i]} />
+                </td>
+              ))}
+            </tr>
+          ))
+        )}
+
+        {/* ---------- (c) nous deux ---------- */}
+        {bande('Nous deux')}
+        {semaine.nousDeux.length === 0 ? (
+          <tr>
+            <td colSpan={nbCol} className="muted small">
+              Aucune personne à afficher — l'équipe se renseigne dans Paramètres.
+            </td>
+          </tr>
+        ) : (
+          semaine.nousDeux.map((l) => (
+            <tr key={l.personne}>
+              <td>
+                <strong>{l.personne}</strong>
+                <div className="muted small">
+                  {fmtHeures(l.heures)} pointées · {fmtHeures(l.charge)} planifiées ·{' '}
+                  <span className={l.capacite > 0 && l.charge > l.capacite ? 'danger-text' : undefined}>
+                    {fmtHeures(l.capacite)} de capacité
+                  </span>
+                </div>
+              </td>
+              {index.map((i) => (
+                <td key={semaine.jours[i]}>
+                  {l.conges[i] ? (
+                    <span
+                      title={`${l.personne} est en congé le ${fmtDate(semaine.jours[i])}`}
+                      style={{ display: 'block', height: 12, borderRadius: 3, background: CREUX }}
+                    />
+                  ) : null}
+                </td>
+              ))}
+            </tr>
+          ))
+        )}
+
+        {/* ---------- (d) ce qui tombe ---------- */}
+        {bande('Ce qui tombe')}
+        <tr>
+          <td className="muted small">toute échéance datée, sans troncature</td>
+          {index.map((i) => (
+            <td key={semaine.jours[i]}>
+              {semaine.echeances[i].length === 0
+                ? null
+                : semaine.echeances[i].map((e, k) => (
+                    <div key={`${e.date}-${k}`} className="small" style={{ padding: '2px 0' }}>
+                      <a href={e.lien} style={{ color: e.couleur, fontWeight: 600 }}>
+                        {e.icon && <Icon name={e.icon} size={12} style={{ verticalAlign: '-0.1em' }} />}{' '}
+                        {e.titreLong}
+                      </a>
+                    </div>
+                  ))}
+            </td>
+          ))}
+        </tr>
+      </Table>
+
+      {/* ---------- (c) suite : la charge EN CLAIR, et les heures en face ----------
+          « P03 · DCE — 12 h » : `chargeParPhase` existait depuis des semaines
+          et n'avait qu'un seul appelant. Elle ne vit pas dans une colonne de
+          jour parce que le temps se saisit À LA SEMAINE dans ce dépôt : une
+          case par jour afficherait une précision que la donnée n'a pas. */}
+      {semaine.nousDeux.some((l) => l.charges.length > 0) && (
+        <div style={{ marginTop: 14 }}>
+          <div style={{ ...STYLE_GROUPE, margin: '0 0 6px' }}>
+            Charge planifiée et heures de la semaine{personne ? ` — ${personne}` : ''}
+          </div>
+          <Table
+            compact
+            head={[
+              'Personne',
+              'Projet · phase',
+              <span key="p" className="right">
+                Planifié
+              </span>,
+              <span key="h" className="right">
+                Heures
+              </span>,
+            ]}
+          >
+            {semaine.nousDeux.flatMap((l) =>
+              l.charges.map((c) => (
+                <tr key={`${l.personne}|${c.projetId}|${c.phase}`}>
+                  <td>{l.personne}</td>
+                  <td>
+                    <a href={`#/projets/${c.projetId}`} title={c.nomProjet}>
+                      <strong>{c.projetId}</strong>
+                    </a>{' '}
+                    · {c.phase}{' '}
+                    <span className="muted small">{LIBELLES_PHASES[c.phase] || ''}</span>
+                  </td>
+                  <td className="right num">{c.planifiees > 0 ? fmtHeures(c.planifiees) : <span className="muted">—</span>}</td>
+                  <td className="right">
+                    <SaisieHeures personne={l.personne} lundi={semaine.lundi} ligne={c} />
+                  </td>
+                </tr>
+              )),
+            )}
+          </Table>
+          <p className="muted small" style={{ margin: '8px 2px 0' }}>
+            Les heures se saisissent ici, pour la semaine entière : c'est la même ligne que le
+            tableau de <a href="#/temps">Temps</a>, écrite au même endroit. Une case vide ou à zéro
+            retire la ligne.
+          </p>
+        </div>
+      )}
+    </Card>
+  )
+}
+
 // ---------- module ----------
 
-export default function Cockpit() {
+export default function Cockpit({ jour }: { jour?: string | null } = {}) {
   const { state } = useStore()
   const today = useToday()
   // la surveillance tourne à la racine de l'app (INT-02) — ici on ne fait que lire.
@@ -1582,18 +1941,36 @@ export default function Cockpit() {
     [state.settings.personnes, state.settings.equipe],
   )
 
+  // « Aujourd'hui » n'est plus un écran : c'est le jour qu'on isole dans la
+  // semaine. Sans filtre, la semaine est celle d'aujourd'hui ; avec, celle
+  // du jour demandé — l'adresse `#/AAAA-MM-JJ` est lue par App.tsx.
+  const jourFiltre = jour && /^\d{4}-\d{2}-\d{2}$/.test(jour) ? jour : null
+  const lundi = mondayOf(jourFiltre || today)
+
+  // les autorités que `derive` ne peut pas importer, voir AUTORITES_DATEES
+  const autorites = useMemo<AutoritesDatees>(() => ({ ...AUTORITES_DATEES, today }), [today])
+  const semaine = useMemo(
+    () =>
+      semaineComplete(state, lundi, {
+        agenda: agendaGoogle,
+        personnes: personne ? [personne] : undefined,
+        autorites,
+      }),
+    [state, lundi, agendaGoogle, personne, autorites],
+  )
+
   const meteo = meteoFinanciere(state, today)
   const excel = state.settings.dernierImportExcel
 
   const phases = phasesEnCours(state, today)
   const reunions = reunionsDuJour(state, today, agendaGoogle)
-  const echeances = prochainesEcheances(state, today, 14)
+  const echeances = prochainesEcheances(state, today, 14, autorites)
 
   return (
     <Page
-      titre="aujourd’hui"
+      titre={`la semaine du ${fmtDate(lundi)} au ${fmtDate(addDays(lundi, 6))}`}
       wordmark
-      meta={`Décisions du jour · ${dateFR}`}
+      meta={jourFiltre ? `Filtré sur le ${fmtDate(jourFiltre)}` : `Aujourd’hui · ${dateFR}`}
       actions={
         <span className="segmente" role="group" aria-label="Filtrer par personne">
           {['', ...nomsFiltre].map((p) => (
@@ -1604,83 +1981,20 @@ export default function Cockpit() {
         </span>
       }
     >
-      {/* ---------- météo financière ----------
-          Chaque tuile mène à l'écran où son chiffre se DÉTAILLE et se
-          corrige : trois chiffres qu'on lisait le matin et qu'il fallait
-          ensuite retrouver de mémoire dans le menu. La tuile Trésorerie
-          non renseignée garde son propre lien (« renseigner → ») : deux
-          liens imbriqués n'en font aucun. */}
+      {/* ---------- LA SEMAINE, EN TÊTE ----------
+          Ce n'est pas une carte de plus : c'est l'ordre de lecture d'un lundi
+          matin. Qui vient nous voir, qui est sur le chantier, ce que nous deux
+          avons à faire, ce qui tombe — et l'argent seulement après, sous le
+          pli. Tout vient de `derive.semaineComplete`, qui lit le même
+          inventaire que la file du matin ci-dessous. */}
       <div style={{ marginBottom: 16 }}>
-        <div className="grid3">
-          {meteo.tresorerie === null ? (
-            <Stat
-              accent="yellow"
-              label="Trésorerie"
-              value={<a href="#/parametres" style={{ fontSize: 15, color: 'inherit' }}>renseigner →</a>}
-              sub="solde disponible en banque"
-            />
-          ) : (
-            <TuileLien href="#/finance/banque" titre="Voir les relevés et le solde importé">
-              <Stat
-                accent="yellow"
-                label="Trésorerie"
-                value={<Money v={meteo.tresorerie} />}
-                sub={meteo.tresorerieMajLe ? `relevé du ${fmtDate(meteo.tresorerieMajLe)}` : 'solde disponible en banque'}
-                tone={meteo.tresorerie < 0 ? 'danger' : undefined}
-              />
-            </TuileLien>
-          )}
-          <TuileLien href="#/facturation" titre="Voir les échéances à émettre et les factures en attente">
-            <Stat
-              accent="blue"
-              label="Facturable 90 j"
-              value={<Money v={meteo.facturable90j} />}
-              sub="HT restant à encaisser ou à facturer sous 90 jours"
-            />
-          </TuileLien>
-          <TuileLien href="#/projets" titre="Voir les projets actifs et leurs honoraires restants">
-            <Stat
-              accent="red"
-              label="Carnet"
-              value={<Money v={meteo.carnetHT} />}
-              sub="honoraires signés restant au carnet"
-            />
-          </TuileLien>
-        </div>
-        {caCible(state) > 0 && (() => {
-          const annee = Number(today.slice(0, 4))
-          const ca = caRealiseAnnee(state, annee)
-          const cible = caCible(state)
-          const pct = ca / cible
-          const couleur = pct >= 1 ? 'var(--ok)' : pct >= 0.6 ? 'var(--c-blue)' : 'var(--c-red)'
-          return (
-            <div className="gauge" style={{ marginTop: 12 }}>
-              <a href="#/pilotage/missions" className="gauge-t" style={{ color: 'inherit', textDecoration: 'none' }}>
-                CA {annee} · {fmtPct(pct, 0)}
-              </a>
-              <span className="gauge-bar">
-                <i style={{ width: `${Math.min(100, pct * 100)}%`, background: couleur }} />
-              </span>
-              <span className="gauge-t muted">
-                {fmtMoney(ca)} / {fmtMoney(cible)}
-              </span>
-            </div>
-          )
-        })()}
-        {excel && (
-          <p className="muted small" style={{ margin: '8px 2px 0' }}>
-            Excel maître importé le {fmtDate(excel.date)} ({excel.fichier}) : carnet{' '}
-            {fmtMoney(excel.carnetHT)}, facturé {fmtMoney(excel.factureHT)} — source maître la
-            première année.
-          </p>
-        )}
+        <CarteLaSemaine semaine={semaine} today={today} jour={jourFiltre} personne={personne} />
       </div>
 
       {/* ---------- centre d'actions + rail latéral ---------- */}
       <div className="cockpit-cols">
         <div className="cockpit-main">
           <CentreActions personne={personne} />
-          <CarteSemaine personne={personne} />
         </div>
 
         {/* ---------- repères du jour (rail latéral discret) ---------- */}
@@ -1769,6 +2083,103 @@ export default function Cockpit() {
           </Card>
         </aside>
       </div>
+
+      {/* ==================================================================
+          SOUS LE PLI — ce qui QUITTE le dessus de l'écran.
+          Lire la trésorerie avant de savoir qui est sur quel chantier, c'est
+          l'ordre inverse de celui d'un lundi matin. Rien n'est supprimé :
+          les trois tuiles, la jauge de CA, le rappel de l'import Excel et le
+          tableau heures / charge / capacité sont à un clic, au même endroit,
+          avec les mêmes liens. Deux résumés remplacent, au premier coup
+          d'œil, deux blocs qui occupaient le haut de la page.
+          ================================================================== */}
+      <details style={{ marginTop: 16 }}>
+        <summary style={{ ...STYLE_GROUPE, margin: '2px', cursor: 'pointer', display: 'list-item' }}>
+          Voir plus — l’argent : trésorerie, facturable 90 j, carnet, objectif de CA
+        </summary>
+        <div style={{ marginTop: 10 }}>
+          {/* ---------- météo financière ----------
+              Chaque tuile mène à l'écran où son chiffre se DÉTAILLE et se
+              corrige : trois chiffres qu'on lisait le matin et qu'il fallait
+              ensuite retrouver de mémoire dans le menu. La tuile Trésorerie
+              non renseignée garde son propre lien (« renseigner → ») : deux
+              liens imbriqués n'en font aucun. */}
+          <div style={{ marginBottom: 16 }}>
+            <div className="grid3">
+              {meteo.tresorerie === null ? (
+                <Stat
+                  accent="yellow"
+                  label="Trésorerie"
+                  value={<a href="#/parametres" style={{ fontSize: 15, color: 'inherit' }}>renseigner →</a>}
+                  sub="solde disponible en banque"
+                />
+              ) : (
+                <TuileLien href="#/finance/banque" titre="Voir les relevés et le solde importé">
+                  <Stat
+                    accent="yellow"
+                    label="Trésorerie"
+                    value={<Money v={meteo.tresorerie} />}
+                    sub={meteo.tresorerieMajLe ? `relevé du ${fmtDate(meteo.tresorerieMajLe)}` : 'solde disponible en banque'}
+                    tone={meteo.tresorerie < 0 ? 'danger' : undefined}
+                  />
+                </TuileLien>
+              )}
+              <TuileLien href="#/facturation" titre="Voir les échéances à émettre et les factures en attente">
+                <Stat
+                  accent="blue"
+                  label="Facturable 90 j"
+                  value={<Money v={meteo.facturable90j} />}
+                  sub="HT restant à encaisser ou à facturer sous 90 jours"
+                />
+              </TuileLien>
+              <TuileLien href="#/projets" titre="Voir les projets actifs et leurs honoraires restants">
+                <Stat
+                  accent="red"
+                  label="Carnet"
+                  value={<Money v={meteo.carnetHT} />}
+                  sub="honoraires signés restant au carnet"
+                />
+              </TuileLien>
+            </div>
+            {caCible(state) > 0 && (() => {
+              const annee = Number(today.slice(0, 4))
+              const ca = caRealiseAnnee(state, annee)
+              const cible = caCible(state)
+              const pct = ca / cible
+              const couleur = pct >= 1 ? 'var(--ok)' : pct >= 0.6 ? 'var(--c-blue)' : 'var(--c-red)'
+              return (
+                <div className="gauge" style={{ marginTop: 12 }}>
+                  <a href="#/pilotage/missions" className="gauge-t" style={{ color: 'inherit', textDecoration: 'none' }}>
+                    CA {annee} · {fmtPct(pct, 0)}
+                  </a>
+                  <span className="gauge-bar">
+                    <i style={{ width: `${Math.min(100, pct * 100)}%`, background: couleur }} />
+                  </span>
+                  <span className="gauge-t muted">
+                    {fmtMoney(ca)} / {fmtMoney(cible)}
+                  </span>
+                </div>
+              )
+            })()}
+            {excel && (
+              <p className="muted small" style={{ margin: '8px 2px 0' }}>
+                Excel maître importé le {fmtDate(excel.date)} ({excel.fichier}) : carnet{' '}
+                {fmtMoney(excel.carnetHT)}, facturé {fmtMoney(excel.factureHT)} — source maître la
+                première année.
+              </p>
+            )}
+          </div>
+        </div>
+      </details>
+
+      <details style={{ marginTop: 10 }}>
+        <summary style={{ ...STYLE_GROUPE, margin: '2px', cursor: 'pointer', display: 'list-item' }}>
+          Voir plus — heures, charge et capacité de la semaine
+        </summary>
+        <div style={{ marginTop: 10 }}>
+          <CarteSemaine personne={personne} />
+        </div>
+      </details>
     </Page>
   )
 }

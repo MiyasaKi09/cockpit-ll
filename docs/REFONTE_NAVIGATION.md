@@ -17,11 +17,19 @@
 | | |
 |---|---:|
 | Destinations au menu | **16** |
-| Sous-onglets | **46** |
-| **Endroits distincts où l'on peut se trouver** | **62** |
+| Sous-onglets | **59** |
+| **Endroits distincts où l'on peut se trouver** | **75** |
 | Écrans | 51 |
-| Cartes | 182 |
+| Cartes | 183 |
 | Modales | 86 |
+
+> **Correction du 07/08, et elle est instructive.** Ce document annonçait
+> d'abord 46 onglets et 62 endroits. Le contrôle mécanique de la tranche 1, qui
+> compte par le compilateur et non à la main, en trouve **59 et 75** : mon
+> relevé avait oublié cinq écrans à onglets (Assistant, Pilotage, Propositions,
+> et un quatrième onglet de Documents). Un plan dont le chiffre de départ est
+> faux ne vaut rien — d'où le contrôle, qui mesure désormais à notre place.
+> Toutes les valeurs ci-dessous sont celles du compilateur.
 
 Pour **deux personnes**. Il y a plus d'endroits dans cet outil que l'agence n'a
 de moments dans la semaine pour les visiter.
@@ -243,14 +251,33 @@ doublon venu de Finance. **−1 endroit.**
 
 ### 3.3 Le décompte
 
+Deux comptes différents, et il faut les distinguer — la tranche 1 me l'a
+appris en me contredisant.
+
+**Ce que l'on VOIT** — ce dont l'agence se plaint :
+
 | | Avant | Après |
 |---|---:|---:|
-| Destinations au menu | 16 | **5 visibles + 1 groupe replié** |
-| Sous-onglets | 46 | **25** |
-| **Endroits** | **62** | **≈ 36** |
+| Destinations visibles au menu | 16 | **5** (+ 1 groupe replié) |
 
-**−42 % d'endroits, à fonctions constantes.** Aucune donnée, aucun calcul,
-aucun geste n'est perdu.
+**Ce que l'on MESURE** — ce que le contrôle compte, et qui seul empêche la
+rechute :
+
+| | Avant | Après visé |
+|---|---:|---:|
+| Entrées de menu | 16 | **9** |
+| Sous-onglets | 59 | **38** |
+| **Endroits** | **75** | **≈ 47** |
+
+**−37 % d'endroits mesurés, et le menu visible divisé par trois.** Aucune
+donnée, aucun calcul, aucun geste n'est perdu.
+
+> **La distinction n'est pas cosmétique.** Replier une destination dans un
+> groupe fermé la retire de la vue mais PAS du compte : la route existe, le
+> code aussi. C'est voulu — on ne supprime rien — mais cela veut dire qu'une
+> refonte qui se contenterait de replier ferait baisser la gêne sans faire
+> baisser la dette. Les tranches 3 et 4 sont celles qui retirent vraiment des
+> endroits ; la tranche 2 ne fait que rendre l'outil respirable en attendant.
 
 ---
 

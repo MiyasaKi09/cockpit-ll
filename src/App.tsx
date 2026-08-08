@@ -89,7 +89,12 @@ const NAV: { groupe: string; repliable?: boolean; items: { path: string; label: 
   {
     groupe: 'Travail',
     items: [
-      { path: '', label: "Aujourd'hui" },
+      // L'accueil EST l'écran de semaine — il l'était déjà à moitié (horizon
+      // de sept jours, « Revenir à cette semaine », carte « Semaine de
+      // l'équipe »). Le libellé le dit enfin, et « aujourd'hui » redevient ce
+      // qu'il aurait toujours dû être : un filtre de jour (`#/AAAA-MM-JJ`),
+      // pas une destination. Aucune entrée ajoutée, aucune retirée.
+      { path: '', label: 'La semaine' },
       // A1 — la revue des détections. Elle a SA ligne et pas seulement
       // l'alerte de l'accueil : cette alerte est en gravité 1 (une détection
       // n'est jamais urgente), donc la première à être poussée hors de vue
@@ -273,10 +278,15 @@ export default function App() {
 
   const [section] = route
 
+  // Le filtre de JOUR de la semaine : `#/2026-08-10` affiche le même écran
+  // que `#/`, une colonne isolée. Ce n'est pas une destination de plus —
+  // c'est la lecture d'un segment, et l'accueil reste l'unique écran.
+  const jourDeRoute = /^\d{4}-\d{2}-\d{2}$/.test(section) ? section : null
+
   let page
   switch (section) {
     case '':
-      page = <Cockpit />
+      page = <Cockpit jour={jourDeRoute} />
       break
     case 'taches':
       page = <Taches />
@@ -384,7 +394,7 @@ export default function App() {
       page = <Propositions />
       break
     default:
-      page = <Cockpit />
+      page = <Cockpit jour={jourDeRoute} />
   }
 
   return (
@@ -439,6 +449,10 @@ export default function App() {
                     href={`#/${it.path}`}
                     className={`nav-item ${g.repliable ? 'nav-item-sec' : ''} ${
                       section === it.path ||
+                      // un jour filtré (`#/2026-08-10`) reste la semaine :
+                      // sans cette ligne, l'entrée s'éteint et on se croit
+                      // ailleurs — le défaut « en passant » du §3.2
+                      (it.path === '' && jourDeRoute !== null) ||
                       (it.path === 'finance' && ['facturation', 'contrats'].includes(section)) ||
                       // §3.2 « en passant » : `#/prompts` et `#/routines` affichent
                       // l'écran Automatisations — sans cette ligne, arriver par un de

@@ -4,7 +4,6 @@ import { Suspense, lazy, useEffect, useState } from 'react'
 import { useStore } from './store'
 import { Btn, ConfirmHost, Icon, Select, ToastHost, useRoute, useToday } from './ui'
 import { alertesActives } from './alerts'
-import { documentsATraiter } from './derive'
 import { badgeFinance } from './financeActions'
 // 5.21 — le compteur du menu « Entreprises ». Même sélecteur, même prédicat
 // (`poids > 0`) que la tuile « Qui demandent une action » de l'écran : le
@@ -49,7 +48,10 @@ const Parite = lazy(() => import('./modules/Parite'))
 const RechercheOverlay = lazy(() => import('./modules/RechercheOverlay'))
 const Pilotage = lazy(() => import('./modules/Pilotage'))
 const Projets = lazy(() => import('./modules/Projets'))
-const Situations = lazy(() => import('./modules/Situations'))
+// TRANCHE 3 — plus de `lazy(() => import('./modules/Situations'))` : ce module
+// n'a plus d'écran à charger. Ses quatre vues sont montées par Entreprises, et
+// ses deux modales contractuelles (`ModalEdition`, `ModalCertificat`) sont
+// importées par la fiche entreprise et l'onglet Chantier, comme avant.
 const Facturation = lazy(() => import('./modules/Facturation'))
 const Contrats = lazy(() => import('./modules/Contrats'))
 const Finance = lazy(() => import('./modules/Finance'))
@@ -81,6 +83,30 @@ const Propositions = lazy(() => import('./modules/Propositions'))
 const Entreprises = lazy(() => import('./modules/Entreprises'))
 const AssistantPage = lazy(() => import('./modules/Assistant').then((m) => ({ default: m.AssistantPage })))
 
+// TRANCHE 3 — DEUX ENTRÉES QUITTENT `NAV`, ET PAS SEULEMENT LA VUE.
+//
+// La tranche 2 avait replié onze entrées : la gêne baissait, la dette non —
+// « replier retire de la VUE, pas du COMPTE » (§3.3). Celle-ci retire deux
+// entrées du tableau lui-même :
+//
+//   · « Situations » : ses quatre onglets répondaient déjà aux colonnes
+//     d'Entreprises (§2.3). L'écran est devenu une vue d'Entreprises, et
+//     `case 'situations'` monte désormais `<Entreprises />` — donc
+//     `ALIAS_SECTION` doit allumer « Entreprises » quand on arrive par
+//     l'ancienne adresse, sans quoi le groupe replié resterait fermé et rien
+//     ne dirait où l'on est.
+//   · « Documents » : le registre est devenu une vue du projet, les deux files
+//     datées (« à vérifier », « à rattacher ») sont déjà remontées dans la
+//     semaine par la tranche 1, et leur compteur se lit dans le Cockpit — ce
+//     pourquoi le badge `documents` quitte aussi ce menu. `case 'documents'`
+//     reste servi : la boîte d'arrivée n'a pas encore de projet, c'est le
+//     premier des trois cas transverses légitimes du §2.2.
+//
+// AUCUNE ROUTE NE DISPARAÎT. Les deux `case` sont là, à leur place, et les
+// deux libellés restent indexés par la palette « / » : une entrée retirée du
+// menu doit rester trouvable, faute de quoi « replié » veut dire « perdu »
+// (réserve n°6 du §7).
+//
 // TRANCHE 2 DE LA REFONTE (docs/REFONTE_NAVIGATION.md §3.1, §5).
 //
 // Seize destinations, toutes visibles en permanence, sur tous les écrans, pour
@@ -135,11 +161,12 @@ const NAV: { groupe: string; repliable?: boolean; items: { path: string; label: 
     groupe: 'Agence',
     repliable: true,
     items: [
-      { path: 'situations', label: 'Situations' },
+      // « Situations » et « Documents » ont quitté ce groupe à la tranche 3 :
+      // le premier est devenu une vue d'Entreprises, le second une vue du
+      // projet. Leurs routes répondent toujours (voir le `switch`).
       { path: 'planning', label: 'Planning' },
       { path: 'temps', label: 'Temps' },
       { path: 'taches', label: 'Mes tâches' },
-      { path: 'documents', label: 'Documents' },
       { path: 'pilotage', label: 'Pilotage' },
       // A1 — la revue des détections garde SA ligne : son alerte d'accueil est
       // en gravité 1 (une détection n'est jamais urgente), donc la première à
@@ -168,6 +195,11 @@ const CLE_NAV_GROUPES = 'cockpit-ll-nav-groupes'
 const ALIAS_SECTION: Record<string, string> = {
   facturation: 'finance',
   contrats: 'finance',
+  // TRANCHE 3 — `#/situations` monte `<Entreprises />` : l'ancienne adresse
+  // continue de répondre, et c'est bien l'entrée « Entreprises » qu'elle
+  // allume. Sans cette ligne, on arriverait par une alerte sur un écran dont
+  // le menu ne dit plus le nom.
+  situations: 'entreprises',
   calendrier: 'planning',
   revue: 'pilotage',
   analyse: 'pilotage',
@@ -263,9 +295,6 @@ export default function App() {
   // « local » après une connexion réussie, jusqu'au rechargement de la page
   const session = useSessionSupabase()
   const nbAlertes = alertesActives(state, today).filter((a) => a.gravite >= 2).length
-  // le triplet de statuts « en attente d'un geste » se déclare dans derive.ts :
-  // recopié ici, il divergeait du bloc « validations attendues » de l'accueil
-  const nbDocsATraiter = documentsATraiter(state).length
   // badge Finance : uniquement les décisions humaines (audit §3.3)
   const nbFinance = badgeFinance(state, today)
   // 5.21 — combien d'entreprises demandent une action. Le prédicat n'est pas
@@ -280,9 +309,13 @@ export default function App() {
   // dans le JSX, comme avant, la pastille du groupe aurait dû recopier la
   // liste — et le jour où une entrée gagne un compteur, la porte fermée
   // l'aurait avalé en silence.
+  // TRANCHE 3 — `documents` a quitté ce tableau EN MÊME TEMPS que le menu :
+  // un compteur sans ligne où s'afficher n'aurait rien compté. Les deux files
+  // qu'il annonçait (« à vérifier », « à rattacher ») sont dans l'inventaire de
+  // la semaine depuis la tranche 1 et le Cockpit lit le même `documentsATraiter`
+  // — le nombre n'est pas perdu, il a changé de porteur.
   const compteurs: Record<string, number> = {
     '': nbAlertes,
-    documents: nbDocsATraiter,
     finance: nbFinance,
     entreprises: nbEntreprises,
   }
@@ -373,13 +406,21 @@ export default function App() {
     case 'projets':
       page = <Projets />
       break
+    // TRANCHE 3 — L'ANCIENNE ADRESSE DES SITUATIONS, SERVIE PAR SON NOUVEL
+    // ENDROIT. `#/situations`, `#/situations/rg`, `#/situations/attendues`,
+    // `#/situations/verifier/<id>` (alerte, `alerts.ts`) et
+    // `#/situations/<vue>/chercher/<entreprise>` (palette « / », fiche
+    // entreprise, onglet Chantier) continuent de répondre EXACTEMENT — c'est
+    // `Entreprises` qui découpe ces segments désormais, avec la même lecture.
+    // Rien à réécrire chez les émetteurs, et rien qui retombe sur l'accueil.
     case 'situations':
-      page = <Situations />
+      page = <Entreprises />
       break
     // 5.21 — `#/entreprises` (liste) et `#/entreprises/<clé>` (fiche en
     // page). La clé est celle d'`entreprisesSuivies` : l'id du registre
     // quand il existe, sinon le nom plié — `navigate` l'encode, `useRoute`
     // le décode, un nom à espaces voyage intact.
+    // Depuis la tranche 3, s'y ajoute `#/entreprises/situations/<vue>`.
     case 'entreprises':
       page = <Entreprises />
       break
@@ -445,6 +486,11 @@ export default function App() {
     case 'assistant':
       page = <AssistantPage />
       break
+    // TRANCHE 3 — la destination a quitté le menu, la route reste servie : la
+    // boîte d'arrivée traite ce qui n'a PAS encore de projet (§2.2, premier des
+    // trois cas transverses légitimes), et `#/documents/tous[/<id>]` — écrite
+    // par la palette et par Achats — ouvre le registre replié en pied d'écran.
+    // Le registre PAR PROJET, lui, vit dans la fiche projet, onglet Documents.
     case 'documents':
       page = <Documents />
       break

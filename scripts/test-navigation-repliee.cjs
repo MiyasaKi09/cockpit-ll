@@ -280,7 +280,17 @@ const ROUTES_SERVIES = {
   automatisations: 'Automatisations — repliée.',
   demarrer: 'Paramètres, onglet Bien démarrer — arrivée « en passant » (ALIAS_SECTION).',
   projets: 'Projets — ancre visible. Porte de `#/projets/<id>[/<onglet>]`, visée par six alertes.',
-  situations: 'Situations — repliée. Porte de `#/situations/verifier/<id>` (alerte « situation à vérifier »). La tranche 3 en fera une vue d’Entreprises : la ROUTE survivra à la destination.',
+  // TRANCHE 3 — la destination a quitté `NAV`, la route est restée. C'est le
+  // cas que cet inventaire existe pour surveiller : neuf émetteurs écrivent
+  // `#/situations`, trois d'entre eux écrivent des adresses PROFONDES, et
+  // `alerts.ts` en émet tous les jours. Le `case` monte `<Entreprises />`, et
+  // ALIAS_SECTION allume « Entreprises » — sans quoi le groupe replié resterait
+  // fermé et rien à l'écran ne dirait où l'on est.
+  situations:
+    'Situations — plus une destination depuis la tranche 3 : une VUE d’Entreprises. Servie par ' +
+    '`<Entreprises />`, indexée par la palette « / », visée par `alerts.ts` (`/verifier/<id>`, ' +
+    '`/attendues`, `/rg`), par la fiche entreprise et par l’onglet Chantier. La ROUTE a survécu à la ' +
+    'destination : c’est la règle de la refonte, pas une tolérance.',
   entreprises: 'Entreprises — visible. `#/entreprises/<clé>` ouvre la fiche en page.',
   facturation: 'Facturation — porte de `#/facturation/chercher/<numéro>` (alerte d’impayé, la plus fréquente du fil).',
   contrats: 'Contrats clients — atteinte depuis Finance ; le menu Finance l’allume par ALIAS_SECTION.',
@@ -298,7 +308,15 @@ const ROUTES_SERVIES = {
   calendrier: 'Planning, onglet Échéances — arrivée « en passant » (ALIAS_SECTION).',
   planning: 'Planning — repliée.',
   assistant: 'Assistant — replié.',
-  documents: 'Documents — repliée. Porte de `#/documents/tous/<id>` (la palette ouvre la fiche du document).',
+  // TRANCHE 3 — même cas, et pour la moitié de son contenu seulement : le
+  // REGISTRE est parti dans la fiche projet, la boîte d'arrivée est restée ici
+  // parce qu'elle traite ce qui n'a PAS encore de projet (§2.2, premier des
+  // trois cas transverses légitimes). L'écran s'intitule « Arrivées » désormais.
+  documents:
+    'Arrivées — plus une destination depuis la tranche 3, la route reste servie. Ce qui n’a pas encore ' +
+    'de projet (boîte d’arrivée, à vérifier, à rattacher) ; `derive.ts` y envoie trois alertes. Porte de ' +
+    '`#/documents/tous[/<id>]`, qui déplie le registre transverse et y ouvre la fiche d’un document ' +
+    '(palette « / », Achats). Le registre d’un CHANTIER, lui, se lit dans sa fiche projet.',
   propositions: 'Propositions IA — repliée. Cible de l’alerte agrégée de l’accueil, en gravité 1.',
 }
 
@@ -355,6 +373,36 @@ const INDEXES_HORS_MENU = {
   '#/parametres': 'Paramètres — pied du menu, jamais replié (§7.5)',
 }
 
+// LES DESTINATIONS DISPARUES — indexées, et c'est désormais LE chemin.
+// --------------------------------------------------------------------------
+// La tranche 3 est la première à retirer des lignes de `NAV` au lieu de les
+// replier. La différence compte pour ce fichier-ci, et elle joue contre nous :
+// une entrée repliée garde un bouton derrière une porte fermée, celles-ci n'ont
+// plus de bouton du tout. La palette n'est plus un confort, elle est le seul
+// chemin qui reste à qui n'a pas l'adresse en tête.
+//
+// D'où trois exigences, plus dures que pour une repliée, et vérifiées plus bas :
+//   1. le libellé remonte EN PREMIER quand on le tape (comme une repliée) ;
+//   2. un SYNONYME est vérifié pour elle (comme une repliée) ;
+//   3. son `detail` NE NOMME PLUS un groupe de menu. Une repliée doit dire son
+//      groupe — c'est ainsi que la palette apprend le repli. Celle-ci ne peut
+//      pas : le bouton n'existe plus. Dire « groupe Agence » enverrait chercher
+//      dans une liste où il n'y a rien à trouver, et l'on conclurait que la
+//      recherche ment. Son `detail` doit dire ce qu'elle est DEVENUE.
+const DESTINATIONS_DISPARUES = {
+  '#/situations':
+    'vue d’Entreprises depuis la tranche 3 — la route survit à la destination, et la palette est ' +
+    'désormais le seul chemin nommé vers elle (« certificat de paiement » y mène aussi)',
+  '#/documents':
+    'arrivées sans projet ; le registre documentaire vit dans la fiche projet depuis la tranche 3 ' +
+    '(« drive » y mène aussi)',
+}
+
+for (const [lien, raison] of Object.entries(DESTINATIONS_DISPARUES)) {
+  assert.ok(raison, `DESTINATIONS_DISPARUES[${lien}] doit dire POURQUOI l’écran a quitté le menu.`)
+  INDEXES_HORS_MENU[lien] = raison
+}
+
 {
   const attendus = new Map(ENTREES.map((e) => [`#/${e.path}`, e]))
   const indexes = new Map(ECRANS.map((e) => [e.lien, e]))
@@ -406,6 +454,39 @@ const INDEXES_HORS_MENU = {
         `« ${e.label} » est une entrée VISIBLE du menu, mais la palette la dit repliée ` +
           `(« ${detail} »).\n` +
           'Un écran qu’on annonce replié alors qu’il est sous les yeux fait douter du reste de la palette.',
+      )
+    }
+  }
+
+  // ET LE SYMÉTRIQUE, QUI N'EXISTAIT PAS AVANT LA TRANCHE 3 : un écran qui a
+  // QUITTÉ le menu ne doit plus nommer un groupe de menu. La boucle ci-dessus
+  // ne peut pas le voir — elle parcourt `ENTREES`, et ces écrans n'y sont plus.
+  //
+  // Le défaut est silencieux et il retourne la palette contre elle-même : la
+  // recherche trouve l'écran, annonce « groupe Agence (replié) », on déplie le
+  // groupe, on ne trouve rien. Deux fois de suite et l'on cesse de croire ce
+  // que la palette raconte — y compris pour les neuf entrées où c'est vrai.
+  //
+  // La comparaison porte sur les GROUPES RÉELS de `NAV`, pas sur le mot
+  // « menu » : « Pied du menu » (Paramètres) est exact, ce bouton existe.
+  {
+    const groupes = GROUPES.map((g) => g.groupe)
+    for (const lien of Object.keys(DESTINATIONS_DISPARUES)) {
+      const e = indexes.get(lien)
+      assert.ok(e, `${lien} est déclaré dans DESTINATIONS_DISPARUES mais n’est plus indexé par la palette.`)
+      const menteur = groupes.find((g) => e.detail.includes(g))
+      assert.ok(
+        !menteur,
+        `« ${e.titre} » (${lien}) a quitté le menu, mais la palette annonce « ${e.detail} » — elle nomme ` +
+          `le groupe « ${menteur} », où il n’y a plus de ligne à ce nom.\n` +
+          'La personne va déplier ce groupe et n’y trouvera rien. Le `detail` d’un écran sorti du menu doit\n' +
+          'dire ce que l’écran est DEVENU (« vue d’Entreprises », « le registre est dans le projet »), pas\n' +
+          'où était son bouton : c’est ce qui fait que la palette APPREND le déménagement au lieu de le\n' +
+          `contourner. Raison déclarée ici : « ${DESTINATIONS_DISPARUES[lien]} ».`,
+      )
+      assert.ok(
+        e.detail.trim().length > 0,
+        `« ${e.titre} » (${lien}) n’a plus d’entrée de menu ET aucun \`detail\` : rien ne dira où il est passé.`,
       )
     }
   }
@@ -505,6 +586,30 @@ function ecransPour(saisie) {
         'ne rien rendre, parce qu’on ne s’en aperçoit qu’une fois arrivé.',
     )
   }
+
+  // ET LES DESTINATIONS DISPARUES, avec la même exigence — parce que pour
+  // elles il n'y a plus de repli à ouvrir en cas d'échec. La boucle ci-dessus
+  // parcourt `NAV` : « Situations » et « Documents » en sont sortis à la
+  // tranche 3, et l'exigence serait donc partie avec eux, en silence, au moment
+  // exact où elle devenait la seule.
+  for (const lien of Object.keys(DESTINATIONS_DISPARUES)) {
+    const titre = ECRANS.find((e) => e.lien === lien).titre
+    const rendu = ecransPour(titre)
+    assert.ok(
+      rendu.length > 0,
+      `Taper « ${titre} » dans la palette « / » ne rend AUCUN écran, et cet écran n’a PLUS de ligne de ` +
+        'menu depuis la tranche 3.\n' +
+        'Il n’est donc plus atteignable que par son adresse tapée de mémoire. Ce n’est plus « replié », ' +
+        'c’est perdu.',
+    )
+    assert.equal(
+      rendu[0].lien,
+      lien,
+      `Taper « ${titre} » ouvre « ${rendu[0].titre} » (${rendu[0].lien}) et non ${lien}.\n` +
+        'Le mot est resté dans la tête de l’agence même si la ligne a quitté le menu : c’est exactement ' +
+        'pour ça que l’écran reste indexé sous son ANCIEN nom, et il doit sortir en premier.',
+    )
+  }
 }
 
 // --- 3c. et par le mot qu'on a en tête ---------------------------------------
@@ -535,6 +640,22 @@ const SYNONYMES_QUI_DOIVENT_MENER = {
 
 {
   const couverts = new Set(Object.values(SYNONYMES_QUI_DOIVENT_MENER))
+
+  // Les destinations DISPARUES d'abord : elles n'ont même plus de ligne
+  // repliée, donc le synonyme est le dernier chemin nommé. `certificat de
+  // paiement` et `drive` étaient déjà là quand ces deux écrans étaient
+  // repliés ; sans cette boucle, l'exigence se serait évaporée avec leur
+  // sortie de `NAV` — la boucle suivante ne parcourt que `REPLIEES`.
+  for (const lien of Object.keys(DESTINATIONS_DISPARUES)) {
+    assert.ok(
+      couverts.has(lien),
+      `${lien} a quitté le menu à la tranche 3 et aucun synonyme n’est vérifié pour lui.\n` +
+        'Une destination repliée garde un bouton derrière une porte fermée ; celle-ci n’a plus de bouton ' +
+        'du tout. Le mot avec lequel on la cherchera vraiment est le dernier chemin nommé qui reste : ' +
+        'ajoutez-le à SYNONYMES_QUI_DOIVENT_MENER, et d’abord au champ `mots` de l’écran.',
+    )
+  }
+
   for (const e of REPLIEES) {
     assert.ok(
       couverts.has(`#/${e.path}`),
@@ -625,12 +746,236 @@ const SYNONYMES_QUI_DOIVENT_MENER = {
         'Le menu désignerait un écran, l’écran en montrerait un autre.',
     )
   }
+
+  // TRANCHE 3 — LE CAS QUE LA TRANCHE 2 NE POUVAIT PAS PRODUIRE. Une section
+  // qui n'est plus au menu et qui ne PARTAGE aucun composant avec un écran de
+  // menu tombe dans le `continue` ci-dessus : `#/parite` est là pour ça, et
+  // c'est juste — il n'y a rien à allumer.
+  //
+  // Mais `#/documents` vient d'entrer dans ce cas-là par la porte inverse : ce
+  // n'est pas un écran d'exploitation oublié, c'est une DESTINATION dont on a
+  // retiré la ligne. Personne ne s'en apercevra en cliquant, et pourtant on y
+  // arrive tous les jours par trois alertes de `derive.ts`, et le menu ne dira
+  // plus rien. Le constat est donc écrit ici, nommé, plutôt que laissé au
+  // silence du `continue` — le jour où quelqu'un rend une ligne de menu à cet
+  // écran, ou lui trouve un alias, cette assertion le lui dira.
+  for (const lien of Object.keys(DESTINATIONS_DISPARUES)) {
+    const section = lien.replace(/^#\//, '')
+    const aliasse = ALIAS.has(section)
+    const composants = [...(ROUTES.get(section) || [])]
+    const partage = composants.some((c) => composantsDeMenu.has(c))
+    assert.ok(
+      aliasse || !partage,
+      `« ${lien} » a quitté le menu mais monte ${composants.join(', ')} — l’écran d’une entrée de menu —, ` +
+        'sans qu’ALIAS_SECTION le dise.\n' +
+        'On arriverait sur un écran dont le menu ne dit pas le nom, groupe replié fermé. C’est ce qui a été ' +
+        'fait pour « #/situations » (aliassé vers « entreprises ») : faites-en autant ici.',
+    )
+  }
+}
+
+// ==========================================================================
+// CONTRÔLE N°5 — UN CONTENU QUI DÉMÉNAGE LAISSE SON ADRESSE MENER AU CONTENU
+// ==========================================================================
+//
+// LE DÉFAUT QUE CE CONTRÔLE FERME, ET IL EST NEUF
+// --------------------------------------------------------------------------
+// Le contrôle n°1 vérifie qu'un `case` répond encore. C'était assez tant que la
+// refonte ne faisait que replier : l'écran derrière le `case` était le même, il
+// lisait les mêmes segments d'adresse.
+//
+// La tranche 3 casse cette équivalence. `case 'situations'` monte désormais
+// `<Entreprises />`, un AUTRE écran, qui a dû réapprendre à découper
+// `#/situations/verifier/<id>`, `#/situations/attendues`, `#/situations/rg` et
+// `#/situations/historique/chercher/<nom>`. L'inventaire du n°1 resterait vert
+// si ce découpage disparaissait : la route répond, elle monte un écran, et
+// l'écran est plein — de la liste complète des entreprises, sans filtre, sans
+// mise en évidence, sans le repli qu'on venait ouvrir.
+//
+// C'est le défaut du 06/08/2026 dans une variante plus vicieuse : là, un
+// identifiant n'était lu par personne ; ici, il l'était et le déménagement peut
+// le reperdre en silence. Et l'émetteur, ce sont les alertes de `src/alerts.ts`,
+// donc le fil du matin, tous les jours.
+//
+// CE QUE CE CONTRÔLE PEUT, ET CE QU'IL NE PEUT PAS
+// --------------------------------------------------------------------------
+// Prouver statiquement qu'un écran « traite bien » un segment demanderait de
+// comprendre sa sémantique — hors de portée, et une heuristique s'y tromperait
+// en silence, ce qui est le mal qu'on soigne. On applique donc le patron déjà
+// éprouvé par `PORTES_ATTENDUES` (test-criteres-usage.cjs) et par `RECENSES`
+// (test-tableaux.cjs) : la lecture est NOMMÉE à la main, et l'inventaire se
+// compare à ce que `src/` émet réellement, DANS LES DEUX SENS.
+//
+//   · une forme d'adresse émise et non inventoriée ⇒ échec : personne n'a dit
+//     où elle atterrit maintenant que la destination a disparu ;
+//   · une forme inventoriée que plus personne n'émet ⇒ échec : l'entrée est
+//     périmée et couvrirait n'importe quoi ;
+//   · une preuve absente du fichier lecteur ⇒ échec : le découpage a été retiré,
+//     l'adresse répond et ne mène plus au contenu.
+
+const ADRESSES_DEMENAGEES = {
+  // --- l'ancienne destination Situations, servie par Entreprises ------------
+  '#/situations': {
+    lecteur: 'src/modules/Entreprises.tsx',
+    preuve: 'function segmentsDeSituation(route: string[])',
+    mene: 'la liste des entreprises, repli « À vérifier » — la vue où l’ancien écran déposait déjà',
+  },
+  '#/situations/verifier': {
+    lecteur: 'src/modules/Entreprises.tsx',
+    preuve: "segments[1] && segments[1] !== 'chercher' ? segments[1] : ''",
+    mene:
+      'le repli « À vérifier », ouvert, la ligne de `<id>` mise en évidence (alerte « situation à ' +
+      'vérifier », alerts.ts) ou le filtre pré-rempli par `chercher/<nom>` (palette « / »)',
+  },
+  '#/situations/attendues': {
+    lecteur: 'src/modules/Entreprises.tsx',
+    preuve: 'MOTIF_DE_VUE',
+    mene:
+      'la liste filtrée sur « Situation attendue » + le repli des relances. C’est le filtre de la liste ' +
+      'existante, pas un onglet neuf : la colonne « Ce qui crie aujourd’hui » disait déjà « 2 situations ' +
+      'non reçues ». Émise par alerts.ts.',
+  },
+  '#/situations/rg': {
+    lecteur: 'src/modules/Entreprises.tsx',
+    preuve: 'MOTIF_DE_VUE',
+    mene:
+      'la liste filtrée sur « RG à libérer » + le repli des retenues, où la levée se marque. Émise par ' +
+      'alerts.ts et par l’onglet Chantier.',
+  },
+  '#/situations/historique': {
+    lecteur: 'src/modules/Entreprises.tsx',
+    preuve: "vue === 'historique' && entrepriseRoute",
+    mene:
+      'avec un nom (`/chercher/<nom>`, écrite par l’onglet Chantier et la palette) : LA FICHE de cette ' +
+      'entreprise, historique compris — c’est le déménagement du §3.2, « Historique — par projet » ' +
+      'appartenait au titulaire. Sans nom : le repli de l’historique complet, puisque l’adresse ne porte ' +
+      'aucun filtre.',
+  },
+
+  // --- l'ancienne destination Documents ------------------------------------
+  '#/documents': {
+    lecteur: 'src/modules/Documents.tsx',
+    preuve: 'ONGLETS.some((o) => o.id === route[1]) ? route[1] : ',
+    mene: 'les arrivées sans projet — boîte d’arrivée, à vérifier, à rattacher. Trois alertes de derive.ts.',
+  },
+  '#/documents/rattacher': {
+    lecteur: 'src/modules/Documents.tsx',
+    preuve: "{ id: 'rattacher', label: 'À rattacher' }",
+    mene: 'l’onglet du rattachement, inchangé (alerte « message sans projet », derive.ts)',
+  },
+  '#/documents/tous': {
+    lecteur: 'src/modules/Documents.tsx',
+    preuve: 'const registreDemande = route[1] === SEGMENT_REGISTRE',
+    mene:
+      'le registre transverse, DÉPLIÉ par l’adresse (`<details open>`) — il n’est plus un onglet. ' +
+      '`/tous/<id>` y ouvre la fiche du document (palette « / », Achats).',
+  },
+  '#/documents/…': {
+    lecteur: 'src/modules/Documents.tsx',
+    preuve: 'onSelect={(id) => navigate(`/documents/${id}`)}',
+    mene: 'la bascule d’onglet de l’écran lui-même — le seul émetteur d’un segment calculé ici',
+  },
+}
+
+{
+  const fichiersSrc = (dossier) => {
+    const out = []
+    for (const e of fs.readdirSync(dossier, { withFileTypes: true })) {
+      const complet = path.join(dossier, e.name)
+      if (e.isDirectory()) out.push(...fichiersSrc(complet))
+      else if (/\.tsx?$/.test(e.name)) out.push(path.relative(racine, complet))
+    }
+    return out.sort()
+  }
+
+  const SECTIONS = new Set(Object.keys(DESTINATIONS_DISPARUES).map((l) => l.replace(/^#\//, '')))
+
+  // Les adresses se lisent dans l'ARBRE, jamais au grep : ces deux sections
+  // sont les plus commentées du dépôt depuis la tranche 3, et une expression
+  // régulière compterait chaque `#/situations` d'un commentaire comme un
+  // émetteur. Seuls un littéral de chaîne et la TÊTE d'un gabarit sont des
+  // adresses réellement écrites dans l'application.
+  const emetteurs = new Map()
+  for (const rel of fichiersSrc(path.join(racine, 'src'))) {
+    const sf = ts.createSourceFile(
+      rel,
+      lire(rel),
+      ts.ScriptTarget.ES2022,
+      true,
+      rel.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+    )
+    const noter = (texte) => {
+      const m = /^#?\/([a-z-]+)(?:\/(.*))?$/.exec(texte)
+      if (!m || !SECTIONS.has(m[1])) return
+      // le segment qui suit la section : statique s'il est écrit, « … » si le
+      // gabarit s'arrête juste après la barre (segment calculé)
+      const suite = m[2] === undefined ? null : m[2].split('/')[0] || '…'
+      const forme = suite === null ? `#/${m[1]}` : `#/${m[1]}/${suite}`
+      if (!emetteurs.has(forme)) emetteurs.set(forme, new Set())
+      emetteurs.get(forme).add(rel)
+    }
+    const visiter = (n) => {
+      if (ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n)) noter(n.text)
+      else if (ts.isTemplateExpression(n)) noter(n.head.text)
+      ts.forEachChild(n, visiter)
+    }
+    visiter(sf)
+  }
+
+  // Un balayage qui ne voit rien validerait à vide — le mode de panne de toute
+  // cette refonte est la mesure absente.
+  assert.ok(
+    emetteurs.size >= 6,
+    `le balayage n’a trouvé que ${emetteurs.size} forme(s) d’adresse pour ${[...SECTIONS].join(', ')} : ` +
+      'la lecture de l’arbre est cassée, et ce contrôle validerait le vide.',
+  )
+
+  const detail = (f) => [...(emetteurs.get(f) || [])].map((x) => path.basename(x)).join(', ')
+
+  assert.deepEqual(
+    [...emetteurs.keys()].sort(),
+    Object.keys(ADRESSES_DEMENAGEES).sort(),
+    'INVENTAIRE DES ADRESSES DONT LA DESTINATION A DISPARU (tranche 3).\n' +
+      '  · une forme EN TROP = une adresse profonde est écrite quelque part dans src/ sans que personne\n' +
+      '    ait dit ce qu’elle ouvre depuis que sa destination n’existe plus. Déclarez-la, avec le fichier\n' +
+      '    qui découpe le segment ET la preuve de ce découpage — après avoir VÉRIFIÉ dans ce fichier.\n' +
+      '  · une forme MANQUANTE = l’entrée est périmée : plus aucun émetteur, elle couvre le vide.\n' +
+      `  émetteurs vus : ${[...emetteurs.keys()].sort().map((f) => `${f} (${detail(f)})`).join(' · ')}`,
+  )
+
+  for (const [forme, { lecteur, preuve, mene }] of Object.entries(ADRESSES_DEMENAGEES)) {
+    assert.ok(mene, `${forme} est inventoriée sans dire où elle MÈNE : c’est la seule information utile ici.`)
+    assert.ok(
+      fs.existsSync(path.join(racine, lecteur)),
+      `${lecteur} est désigné comme le lecteur de « ${forme} » mais n’existe plus.`,
+    )
+    assert.ok(
+      lire(lecteur).includes(preuve),
+      `ADRESSE DEVENUE MUETTE — « ${forme} » est encore écrite par ${detail(forme)}, mais\n` +
+        `  ${lecteur} ne contient plus « ${preuve} » : plus rien n’y lit ce segment.\n\n` +
+        `  Ce que l’adresse devait ouvrir : ${mene}\n\n` +
+        '  La route RÉPOND toujours — le `case` est là, l’écran se monte —, donc rien ne plante et le\n' +
+        '  contrôle n°1 reste vert. On arrive simplement sur la liste entière, sans filtre, sans mise en\n' +
+        '  évidence, sans le repli qu’on venait ouvrir : on croit avoir mal cliqué, on recommence, et le\n' +
+        '  défaut survit des mois. C’est le 06/08/2026 en pire, parce qu’ici la lecture EXISTAIT.\n' +
+        '  Si le découpage a changé de forme ou de fichier, mettez la preuve à jour APRÈS avoir vérifié\n' +
+        '  qu’une lecture existe encore.',
+    )
+  }
+
+  console.log(
+    `Adresses déménagées : ${emetteurs.size} formes émises pour ${SECTIONS.size} destinations disparues, ` +
+      'chacune avec le fichier qui découpe son segment et la preuve de ce découpage — une ancienne adresse ' +
+      'ne peut plus se contenter de répondre, elle doit mener au contenu.',
+  )
 }
 
 console.log(
   `Navigation repliée : ${ROUTES.size} routes servies, toutes inventoriées (aucune n’a cessé de répondre) ; ` +
     `${ENTREES.length} entrées de menu dont ${REPLIEES.length} repliées dans ` +
-    `${GROUPES.filter((g) => g.repliable).map((g) => `« ${g.groupe} »`).join(', ') || 'aucun groupe'} — ` +
-    `chacune retrouvée par son nom ET par un synonyme dans la palette « / », en premier résultat ; ` +
-    `${ALIAS.size} adresses « en passant » allument bien l’entrée de leur écran.`,
+    `${GROUPES.filter((g) => g.repliable).map((g) => `« ${g.groupe} »`).join(', ') || 'aucun groupe'}, ` +
+    `plus ${Object.keys(DESTINATIONS_DISPARUES).length} destinations retirées du menu à la tranche 3 dont la ` +
+    'route et le contenu répondent toujours — chacune retrouvée par son nom ET par un synonyme dans la ' +
+    `palette « / », en premier résultat ; ${ALIAS.size} adresses « en passant » allument bien l’entrée de ` +
+    'leur écran.',
 )

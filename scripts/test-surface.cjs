@@ -19,17 +19,32 @@
 // Ce fichier est ce tableau de bord. Il ne juge pas la qualité d'un écran : il
 // COMPTE, et il refuse que le compte monte.
 //
-// RELEVER UN PLAFOND EST UNE DÉCISION, PAS UN AJUSTEMENT.
+// DESCENDRE LE PLAFOND APRÈS CHAQUE TRANCHE, C'EST LE TRAVAIL.
 // --------------------------------------------------------------------------
-// Les trois nombres ci-dessous sont des CONSTATS du jour où ils ont été écrits,
-// pas des objectifs. Les tranches 2 à 4 de la refonte les feront BAISSER — et
-// chaque baisse se réécrit ici, ce qui est le geste normal.
+// Ce n'est pas l'entretien du test, c'est la livraison. Une tranche qui retire
+// sept endroits et laisse le plafond à soixante-quinze n'a rien rendu
+// irréversible : elle a fait de la place. Les sept endroits regagneront cette
+// place en six mois, un par correction raisonnable, et le tableau de bord
+// restera vert du début à la fin — c'est mot pour mot l'histoire des cent
+// cinquante corrections qui ont produit les soixante-quinze.
 //
-// Les augmenter est l'inverse : c'est ajouter un endroit où l'on peut se
-// perdre. Si vous venez modifier un de ces nombres vers le haut, écrivez dans
-// le même commit ce que l'endroit neuf apporte QUE l'existant ne pouvait pas
-// porter, et quel endroit il remplace. « Il fallait bien le mettre quelque
-// part » est exactement le raisonnement qui a produit les soixante-deux.
+// La règle est donc : la tranche n'est finie que quand le plafond vaut le
+// nouveau constat, AU CHIFFRE PRÈS. Pas arrondi vers le haut « pour se laisser
+// une marge » — un plafond avec du mou n'est pas un plafond, c'est un endroit
+// déjà accordé à celui qui viendra.
+//
+// LES CONSTATS SONT DONC UNE SUITE, PAS QUATRE NOMBRES MODIFIABLES.
+// --------------------------------------------------------------------------
+// Les plafonds en vigueur sont LUS dans la dernière ligne de l'historique
+// ci-dessous, et l'historique est vérifié : les comptes qu'une refonte doit
+// faire baisser ne peuvent pas remonter d'une ligne à la suivante.
+//
+// Pourquoi cette forme plutôt que quatre `const` : un nombre seul se relève en
+// un caractère, et le diff est illisible (« 68 → 75 » ressemble à un
+// ajustement). Une LIGNE d'historique, il faut l'écrire, la dater, la nommer et
+// dire ce qu'elle apporte — et si elle remonte un compte, le contrôle de
+// monotonie la refuse et nomme la ligne précédente. Relever un plafond reste
+// possible : c'est une décision, elle s'écrit, et elle se voit.
 
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
@@ -39,19 +54,106 @@ const ts = require('typescript')
 const racine = path.resolve(__dirname, '..')
 
 // ==========================================================================
-// LES PLAFONDS — constatés le 08/08/2026, après la tranche 1
+// L'HISTORIQUE DES CONSTATS — la dernière ligne fait les plafonds
 // ==========================================================================
 
+const CONSTATS = [
+  {
+    quand: '08/08/2026',
+    tranche: 'tranches 1 et 2 — la semaine devient vraie, le menu se replie',
+    // 16 + 59. Replier ne retire pas du COMPTE (§3.3) : la tranche 2 n'a fait
+    // bouger que `visibles`, de seize à cinq.
+    destinations: 16,
+    visibles: 5,
+    endroits: 75,
+    ecransAOnglets: 14,
+    // 183 et non 182 : la tranche 1 a monté `CarteLaSemaine` au Cockpit le
+    // jour même où deux blocs y passaient sous un `<details>`. Ce compteur
+    // voit la carte qui arrive, pas le pli qui se ferme (dit plus bas).
+    cartes: 183,
+    apporte: 'la mesure elle-même : avant ce fichier, la surface n’était comptée nulle part.',
+  },
+  {
+    quand: '08/08/2026',
+    tranche: 'tranche 3 — Situations devient une vue d’Entreprises, le registre rejoint le projet',
+    // −2 destinations : « Situations » et « Documents » quittent `NAV`. Ce ne
+    // sont pas deux entrées repliées de plus — les deux lignes ne sont plus
+    // dans le tableau. Leurs ROUTES, elles, répondent toujours : c'est
+    // scripts/test-navigation-repliee.cjs qui le tient.
+    destinations: 14,
+    visibles: 5,
+    // −7 endroits : les 2 destinations, les 4 onglets de Situations
+    // (« À vérifier · Attendues · Historique · Retenues de garantie ») et
+    // l'onglet « Tous les documents ». 54 onglets sur 13 écrans.
+    endroits: 68,
+    // Situations.tsx n'a plus d'export par défaut : il n'est plus un écran,
+    // il est le module des vues de situation. Un écran à onglets en moins.
+    ecransAOnglets: 13,
+    // −1 : `CarteRegistreProjet` (ProjetDocuments.tsx) était un SECOND
+    // registre — même table, sans recherche, sans filtre, sans « Ouvrir »,
+    // sans fiche. Deux réponses possibles à « qu'a-t-on reçu sur ce
+    // chantier » : il n'en reste qu'une, et c'est celle qui a les gestes.
+    cartes: 182,
+    apporte:
+      'la première baisse de DETTE : des endroits qui cessent d’exister, pas seulement d’être vus. ' +
+      'Aucun écran, aucun onglet, aucune carte ajoutés en échange — les quatre vues de situation ' +
+      'sont montées en repli, et un repli n’est pas un endroit.',
+  },
+]
+
+// Un historique dont la lecture serait cassée rendrait des plafonds `undefined`,
+// et `x <= undefined` est faux : le test échouerait, mais en accusant l'écran.
+assert.ok(CONSTATS.length >= 2, 'CONSTATS doit garder au moins le constat d’origine et le constat en vigueur')
+for (const c of CONSTATS) {
+  for (const cle of ['destinations', 'visibles', 'endroits', 'ecransAOnglets', 'cartes']) {
+    assert.equal(
+      typeof c[cle],
+      'number',
+      `CONSTATS[« ${c.tranche} »].${cle} n’est pas un nombre : les plafonds seraient \`undefined\`.`,
+    )
+  }
+  assert.ok(c.apporte, `le constat « ${c.tranche} » ne dit pas ce qu’il apporte : un chiffre sans raison se relève sans raison.`)
+}
+
+// LE CONTRÔLE QUI REND LA BAISSE IRRÉVERSIBLE. Trois des cinq comptes ne
+// peuvent que descendre : ce sont ceux que la refonte existe pour faire
+// descendre. `cartes` en est exclu, et il faut le dire au lieu de le taire —
+// la tranche 1 en a monté une (`CarteLaSemaine`) en repliant deux blocs le
+// même jour, donc l'exception est réelle ; `ecransAOnglets` en est exclu aussi,
+// c'est un plancher de lecture (« le compteur voit-il encore quelque chose »),
+// pas un compte de surface.
+for (let i = 1; i < CONSTATS.length; i++) {
+  const avant = CONSTATS[i - 1]
+  const apres = CONSTATS[i]
+  for (const [cle, quoi] of [
+    ['destinations', 'les destinations déclarées au menu'],
+    ['visibles', 'les entrées de menu visibles sans rien déplier'],
+    ['endroits', 'les endroits mesurés — LA mesure de succès de la refonte'],
+  ]) {
+    assert.ok(
+      apres[cle] <= avant[cle],
+      `CONSTATS remonte ${quoi} : ${avant[cle]} (« ${avant.tranche} ») → ${apres[cle]} (« ${apres.tranche} »).\n\n` +
+        'C’EST LA SEULE MESURE DE SUCCÈS DE LA REFONTE, ET ELLE NE MONTE PAS. Descendre le plafond après\n' +
+        'chaque tranche est le travail ; le remonter est l’annuler. Si l’endroit neuf est vraiment\n' +
+        'irremplaçable, il faut le dire ici en clair — ce que l’endroit porte que l’existant ne pouvait pas\n' +
+        'porter, et quel endroit il remplace — et assumer que la ligne restera dans l’historique.\n' +
+        '« Il fallait bien le mettre quelque part » est le raisonnement qui a produit les soixante-quinze.',
+    )
+  }
+}
+
+const EN_VIGUEUR = CONSTATS[CONSTATS.length - 1]
+
 /** destinations du menu (`NAV`, src/App.tsx) + jeux d'onglets (`<Tabs`).
- *  Constat du jour : 16 + 59. La tranche 2 vise 5 destinations visibles + un
- *  groupe replié ; la tranche 4 ramène la fiche projet de 9 à 4 moments. */
-const PLAFOND_ENDROITS = 75
+ *  Constat en vigueur : 14 + 54. La tranche 4 ramènera la fiche projet de 9 à
+ *  4 moments, et cette ligne redescendra encore. */
+const PLAFOND_ENDROITS = EN_VIGUEUR.endroits
 
 /** les destinations à elles seules. Sous-plafond volontaire : sans lui, on
  *  pourrait ajouter une DESTINATION (le plus coûteux des endroits — elle
  *  s'impose à l'œil en permanence) en retirant un onglet ailleurs, et le
  *  total ne bougerait pas. */
-const PLAFOND_DESTINATIONS = 16
+const PLAFOND_DESTINATIONS = EN_VIGUEUR.destinations
 
 /** LES ENTRÉES DE MENU QU'ON VOIT SANS RIEN DÉPLIER.
  *
@@ -72,7 +174,7 @@ const PLAFOND_DESTINATIONS = 16
  *  Le contrôle jumeau vit dans scripts/test-navigation-repliee.cjs : celui-ci
  *  compte ce qui disparaît de la vue, celui-là vérifie que ce qui disparaît
  *  reste trouvable. L'un sans l'autre serait nuisible. */
-const PLAFOND_DESTINATIONS_VISIBLES = 5
+const PLAFOND_DESTINATIONS_VISIBLES = EN_VIGUEUR.visibles
 
 /** Les deux ancres du §2, nommées par leur adresse : elles ne peuvent PAS être
  *  repliées. Un plafond de visibles se tient aussi en repliant tout — un menu
@@ -89,15 +191,18 @@ const PLAFOND_CARTES_PAR_ECRAN = 12
  *  seul laisse passer la croissance étalée : douze écrans qui prennent une
  *  carte chacun ne déclenchent rien et font pourtant douze cartes de plus.
  *
- *  183, et non les 182 de l'inventaire du plan (compté contre `f8f5677`) :
- *  la tranche 1 a monté UNE carte, `CarteLaSemaine` dans le Cockpit. Elle
- *  n'ajoute pourtant rien à l'écran d'accueil au premier coup d'œil — la
- *  météo financière et le tableau heures/charge/capacité sont partis sous
- *  deux `<details>` « Voir plus » le même jour. C'est le sur-comptage annoncé
- *  plus bas : ce compteur voit la carte qui arrive, pas le pli qui se ferme.
- *  Le constat est écrit tel quel plutôt qu'arrondi vers le haut — un plafond
- *  avec du mou n'est pas un plafond. */
-const PLAFOND_CARTES_TOTAL = 183
+ *  182 depuis la tranche 3, qui a retiré `CarteRegistreProjet` — un second
+ *  registre du même chantier, sans recherche, sans filtre, sans « Ouvrir » et
+ *  sans fiche. Ce n'est pas une carte repliée : elle n'existe plus, et LA
+ *  carte du registre (`CarteTous`) est montée à sa place, avec tous ses
+ *  gestes. On revient donc au 182 de l'inventaire du plan (compté contre
+ *  `f8f5677`) après le 183 de la tranche 1, qui avait monté `CarteLaSemaine`
+ *  au Cockpit — le même jour où la météo financière et le tableau
+ *  heures/charge/capacité y passaient sous deux `<details>` « Voir plus ».
+ *  C'est le sur-comptage annoncé plus bas : ce compteur voit la carte qui
+ *  arrive, pas le pli qui se ferme. Le constat est écrit tel quel plutôt
+ *  qu'arrondi vers le haut — un plafond avec du mou n'est pas un plafond. */
+const PLAFOND_CARTES_TOTAL = EN_VIGUEUR.cartes
 
 /** l'écran qui détient le maximum de cartes. Vérifié, pas seulement écrit :
  *  le jour où un autre le dépasse, c'est LUI qu'il faut regarder, et un nom
@@ -352,17 +457,24 @@ for (const [fichier, jeux] of ONGLETS_PAR_ECRAN) {
       jeu.nombre !== null,
       `${fichier}:${jeu.ligne} — impossible de compter les onglets de \`tabs={${jeu.texte}}\`.\n` +
         'Ce jeu vaudrait 0 dans le décompte des endroits, et un écran entier sortirait de la mesure.\n' +
-        'Apprenez cette forme à `longueurTableau` (ou déclarez les onglets dans une constante de module,\n' +
-        'ce que font déjà treize écrans sur quatorze).',
+        'Apprenez cette forme à `longueurTableau` (ou déclarez les onglets dans une constante de module\n' +
+        'ou un tableau littéral, les deux formes que la moitié des écrans emploie déjà).',
     )
     assert.ok(jeu.nombre > 0, `${fichier}:${jeu.ligne} — un jeu d’onglets vide n’a pas de sens.`)
   }
 }
 
+// CE NOMBRE-CI EST UN PLANCHER, PAS UN PLAFOND, et il ne mesure pas la
+// surface : il mesure que le COMPTEUR VOIT ENCORE. `Tabs` renommé, et les 54
+// onglets tomberaient à zéro sans qu'une seule assertion de plafond bronche.
+// Il descend donc quand un écran à onglets disparaît pour de bon — la tranche 3
+// en a retiré un, Situations.tsx n'ayant plus d'export par défaut : il n'est
+// plus un écran, il est le module des vues de situation.
 assert.ok(
-  ONGLETS_PAR_ECRAN.length >= 14,
-  `Seuls ${ONGLETS_PAR_ECRAN.length} écrans à onglets trouvés (14 attendus au minimum).\n` +
-    'Soit la refonte a supprimé des écrans — mettez ce plancher à jour dans le même commit —,\n' +
+  ONGLETS_PAR_ECRAN.length >= EN_VIGUEUR.ecransAOnglets,
+  `Seuls ${ONGLETS_PAR_ECRAN.length} écrans à onglets trouvés (${EN_VIGUEUR.ecransAOnglets} attendus au minimum).\n` +
+    'Soit la refonte a supprimé des écrans — descendez ce plancher dans le même commit, en ajoutant la\n' +
+    'ligne correspondante à CONSTATS : c’est là que la baisse se déclare —,\n' +
     'soit `Tabs` a changé de nom et le compteur ne voit plus rien.',
 )
 
@@ -383,9 +495,13 @@ assert.ok(
   `${DESTINATIONS.length} destinations au menu, le plafond est ${PLAFOND_DESTINATIONS}.\n` +
     `Menu actuel : ${DESTINATIONS.join(' · ')}\n\n` +
     'Une DESTINATION est l’endroit le plus cher de l’outil : elle est visible en permanence, pour tout le\n' +
-    'monde, sur tous les écrans. La refonte en promet 5 visibles + un groupe replié (tranche 2).\n' +
-    'Relever PLAFOND_DESTINATIONS est une décision qui s’explique dans le commit — pas un ajustement\n' +
-    'pour faire passer la CI.',
+    'monde, sur tous les écrans. La refonte en promet 5 visibles + un groupe replié (tranche 2), et la\n' +
+    'tranche 3 a retiré du TABLEAU les deux dont le contenu a déménagé — « Situations » (vue\n' +
+    'd’Entreprises) et « Documents » (le registre vit dans la fiche projet). Leurs routes répondent\n' +
+    'toujours : c’est scripts/test-navigation-repliee.cjs qui le tient, et une entrée de menu n’est pas\n' +
+    'le seul chemin vers un écran — la palette « / » en est un.\n' +
+    'Le plafond se lit dans la dernière ligne de CONSTATS. Le relever demande d’y ajouter une ligne\n' +
+    'datée, nommée, qui dit ce qu’elle apporte — pas de changer un chiffre pour faire passer la CI.',
 )
 
 // LE COMPTE QUI A BAISSÉ. Les deux assertions se lisent ensemble : la
@@ -421,9 +537,12 @@ assert.ok(
     'Une livraison qui ajoute un écran ou un onglet est un échec même si elle raccourcit un parcours —\n' +
     'c’est ainsi qu’on est passé à soixante-deux endroits pour deux personnes.\n\n' +
     'Rien n’oblige à supprimer pour autant : on REPLIE (un `<details>`, un groupe de menu, un « Voir\n' +
-    'plus »), on regroupe, on retrouve par la recherche « / ». Les données et le code restent.\n' +
-    'Si l’endroit neuf est vraiment irremplaçable, relevez PLAFOND_ENDROITS et écrivez dans le commit\n' +
-    'ce qu’il porte que l’existant ne pouvait pas porter, et quel endroit il remplace.',
+    'plus »), on regroupe, on retrouve par la recherche « / ». Les données et le code restent — c’est ce\n' +
+    'qu’a fait la tranche 3 : les quatre vues de situation sont montées en repli chez Entreprises, et un\n' +
+    'repli n’est pas un endroit.\n' +
+    'Si l’endroit neuf est vraiment irremplaçable, ajoutez une ligne à CONSTATS et écrivez-y ce qu’il\n' +
+    'porte que l’existant ne pouvait pas porter, et quel endroit il remplace. Le contrôle de monotonie\n' +
+    'refusera la ligne : c’est voulu, et c’est le moment de se demander si l’endroit valait la refonte.',
 )
 
 // Le plafond des visibles se tient aussi en repliant TOUT — et un menu vide
@@ -523,5 +642,10 @@ console.log(
     `(${DESTINATIONS.length} destinations / ${PLAFOND_DESTINATIONS} + ${NB_ONGLETS} onglets sur ` +
     `${ONGLETS_PAR_ECRAN.length} écrans), ${totalCartes} cartes / ${PLAFOND_CARTES_TOTAL} ` +
     `dont ${pireNombre} / ${PLAFOND_CARTES_PAR_ECRAN} au maximum par écran (${path.basename(pireEcran)}). ` +
-    'Comptés par le compilateur ; les plafonds sont des constats, pas des objectifs, et les baisser est le travail.',
+    '\n' +
+    `Plafonds lus dans la dernière ligne de CONSTATS (${EN_VIGUEUR.tranche}) : ` +
+    `${CONSTATS[0].endroits} endroits au premier constat, ${EN_VIGUEUR.endroits} aujourd’hui, ` +
+    `soit ${EN_VIGUEUR.endroits - CONSTATS[0].endroits}. Comptés par le compilateur ; un plafond est un ` +
+    'constat et non un objectif, et le DESCENDRE après chaque tranche est le travail — pas son entretien : ' +
+    'un plafond qu’on ne descend pas laisse la place libre pour regrimper demain.',
 )

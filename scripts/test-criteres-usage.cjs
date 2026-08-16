@@ -348,17 +348,47 @@ function alertesDeclarees() {
 // lien à identifiant sans que quelqu'un désigne le code qui le lit — et
 // l'alarme le jour où ce code disparaît.
 
+// UNE PORTE PEUT AVOIR PLUSIEURS MAILLONS, et la tranche 3 l'a rendu
+// nécessaire — pas par élégance, parce que sans ça ce contrôle serait devenu
+// FAUX SANS ÉCHOUER, exactement le défaut qu'il existe pour fermer.
+//
+// Avant la tranche 3, `#/situations/verifier/<id>` était découpée ET consommée
+// dans Situations.tsx : un fichier, une preuve. Depuis, `case 'situations'`
+// monte `<Entreprises />` — c'est Entreprises.tsx qui découpe le segment, et
+// Situations.tsx qui met la ligne en évidence à l'arrivée. Or Situations.tsx
+// contient toujours le mot « cibleId » (c'est la prop de sa carte) : l'entrée
+// d'origine restait donc VERTE en désignant un fichier qui ne lit plus
+// l'adresse. Le contrôle aurait continué de rassurer alors que le maillon
+// neuf — le découpage, celui qui peut disparaître d'un refactor — n'était
+// surveillé par personne.
+//
+// La chaîne est donc écrite en entier : `route` → segment lu → geste à
+// l'arrivée. Chaque maillon nommé, chacun vérifié.
 const PORTES_ATTENDUES = {
   // `#/projets/<id>` et `#/projets/<id>/<onglet>` — six alertes s'y rendent
-  projets: { fichier: 'src/modules/Projets.tsx', preuve: 'const id = route[1]' },
+  projets: [['src/modules/Projets.tsx', 'const id = route[1]', 'découpe et ouvre la fiche']],
   // `#/facturation/chercher/<terme>` — le terme se dépose dans la recherche
-  facturation: { fichier: 'src/modules/Facturation.tsx', preuve: "route[1] === 'chercher'" },
-  // `#/situations/verifier/<id>` — LA porte qui manquait le 06/08/2026
-  situations: { fichier: 'src/modules/Situations.tsx', preuve: 'cibleId' },
+  facturation: [['src/modules/Facturation.tsx', "route[1] === 'chercher'", 'découpe et pré-remplit la recherche']],
+  // `#/situations/verifier/<id>` — LA porte qui manquait le 06/08/2026, et qui
+  // a DÉMÉNAGÉ à la tranche 3 sans que l'alerte change d'un caractère
+  situations: [
+    [
+      'src/modules/Entreprises.tsx',
+      "const idRoute = segments[1] && segments[1] !== 'chercher' ? segments[1] : ''",
+      'découpe l’identifiant de l’ancienne adresse, servie par le nouvel endroit',
+    ],
+    [
+      'src/modules/Situations.tsx',
+      'cibleId',
+      'met la ligne en évidence et la ramène à l’écran (la carte, montée en repli par Entreprises)',
+    ],
+  ],
   // `#/finance/banque/<id>` — la connexion bancaire visée par l'alerte
-  finance: { fichier: 'src/modules/Banque.tsx', preuve: 'cibleConnexion' },
+  finance: [['src/modules/Banque.tsx', 'cibleConnexion', 'découpe et met en évidence la connexion']],
   // `#/ressources/artisan/<id>` — la fiche entreprise, pas l'annuaire entier
-  ressources: { fichier: 'src/modules/Ressources.tsx', preuve: "route[1] === 'artisan' && route[2]" },
+  ressources: [
+    ['src/modules/Ressources.tsx', "route[1] === 'artisan' && route[2]", 'découpe et ouvre la fiche'],
+  ],
 }
 
 {
@@ -403,26 +433,42 @@ const PORTES_ATTENDUES = {
       '  · une famille MANQUANTE = l’entrée est périmée : retirez-la, sinon elle couvre le vide.',
   )
 
-  for (const [famille, { fichier, preuve }] of Object.entries(PORTES_ATTENDUES)) {
+  let maillons = 0
+  for (const [famille, chaine] of Object.entries(PORTES_ATTENDUES)) {
     assert.ok(
-      fs.existsSync(path.join(racine, fichier)),
-      `${fichier} est désigné comme la porte de « #/${famille}/… » mais n’existe plus.`,
+      Array.isArray(chaine) && chaine.length > 0,
+      `PORTES_ATTENDUES.${famille} doit être une chaîne de maillons [[fichier, preuve, rôle], …].`,
     )
-    assert.ok(
-      lire(fichier).includes(preuve),
-      `PORTE PERDUE — « #/${famille}/<identifiant> » est encore émis par src/alerts.ts, mais\n` +
-        `  ${fichier} ne contient plus « ${preuve} » : plus rien n’y lit l’identifiant.\n` +
-        '  Le lien est redevenu un dépôt en haut d’une liste, en silence — c’est exactement le\n' +
-        '  défaut du 06/08/2026, où l’alerte « situation à vérifier » pointait dans le vide\n' +
-        '  pendant que ce test restait vert.\n' +
-        '  Si la lecture a simplement changé de forme, mettez la preuve à jour APRÈS avoir vérifié\n' +
-        '  qu’une porte existe encore.',
-    )
+    for (const [fichier, preuve, role] of chaine) {
+      maillons++
+      assert.ok(role, `le maillon ${fichier} de « #/${famille}/… » ne dit pas ce qu’il fait.`)
+      assert.ok(
+        fs.existsSync(path.join(racine, fichier)),
+        `${fichier} est désigné comme un maillon de la porte de « #/${famille}/… » mais n’existe plus.`,
+      )
+      assert.ok(
+        lire(fichier).includes(preuve),
+        `PORTE PERDUE — « #/${famille}/<identifiant> » est encore émis par src/alerts.ts, mais\n` +
+          `  ${fichier} ne contient plus « ${preuve} ».\n` +
+          `  Ce maillon ${role} : sans lui, l’identifiant voyage et personne ne le lit.\n` +
+          '  Le lien est redevenu un dépôt en haut d’une liste, en silence — c’est exactement le\n' +
+          '  défaut du 06/08/2026, où l’alerte « situation à vérifier » pointait dans le vide\n' +
+          '  pendant que ce test restait vert.\n' +
+          (chaine.length > 1
+            ? `  Cette porte a ${chaine.length} maillons parce que son contenu a DÉMÉNAGÉ : le fichier qui\n` +
+              '  découpe l’adresse n’est plus celui qui affiche le résultat. Les deux se vérifient, sinon\n' +
+              '  le maillon restant suffirait à garder le test vert.\n'
+            : '') +
+          '  Si la lecture a simplement changé de forme ou de fichier, mettez la preuve à jour APRÈS\n' +
+          '  avoir vérifié qu’une porte existe encore.',
+      )
+    }
   }
 
   console.log(
-    `Portes des liens d’alerte : ${familles.size} familles à identifiant, chacune avec le fichier ` +
-      'qui la lit et la preuve de sa lecture — un lien nouveau ne peut plus être ajouté sans porte.',
+    `Portes des liens d’alerte : ${familles.size} familles à identifiant et ${maillons} maillons, chacun avec ` +
+      'le fichier qui le porte et la preuve de sa lecture — un lien nouveau ne peut plus être ajouté sans ' +
+      'porte, et un contenu qui déménage ne peut plus laisser derrière lui une porte qui semble tenue.',
   )
 }
 

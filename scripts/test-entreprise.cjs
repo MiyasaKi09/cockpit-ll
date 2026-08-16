@@ -308,9 +308,9 @@ const S = etat({
   assert.match(srcAlerts, /situationAttendueNonRecue/, 'alerts.ts consomme le critère de src/entreprise.ts')
   assert.doesNotMatch(srcAlerts, /jourDuMois/, 'alerts.ts ne garde aucun critère local « jour du mois » — une seconde définition divergerait')
   const srcEcran = lire('src/modules/Situations.tsx')
-  assert.match(srcEcran, /situationDuMois/, 'l’onglet Attendues lit le même rapprochement')
+  assert.match(srcEcran, /situationDuMois/, 'la carte Attendues lit le même rapprochement')
   assert.doesNotMatch(srcEcran, /function situationDuMois/, '… sans le redéfinir localement')
-  assert.match(srcEcran, /sujetRelanceSituation/, 'la relance de l’onglet Attendues vient de src/entreprise.ts')
+  assert.match(srcEcran, /sujetRelanceSituation/, 'la relance de la carte Attendues vient de src/entreprise.ts')
   assert.doesNotMatch(srcEcran, /Sauf erreur de notre part, nous n'avons pas reçu votre situation/, 'le texte du brouillon ne vit qu’à UN endroit')
 
   // le brouillon : sujet et corps définis une fois, pour les deux écrans
@@ -386,7 +386,7 @@ const S = etat({
       'seconde version. Un document contractuel émis par deux chemins, ce sont deux vérités.',
   )
   assert.match(ecran, /ouvrirGmail\(/, 'le seul geste préparé est un BROUILLON (gmailComposeUrl, §15)')
-  assert.match(ecran, /corpsRelanceSituation/, '… et c’est le même texte que l’onglet Attendues')
+  assert.match(ecran, /corpsRelanceSituation/, '… et c’est le même texte que la carte Attendues')
   assert.match(ecran, /<Table/, 'les listes passent par Table (src/ui.tsx) — la règle des tableaux')
   assert.match(ecran, /#\/projets\/\$\{projetId\}\/chantier/, 'chaque ligne renvoie vers l’écran où l’on AGIT')
 }
@@ -416,7 +416,21 @@ const S = etat({
 
 {
   assert.match(lire('src/modules/ProjetChantier.tsx'), /FicheEntreprise/, 'le nom de l’entreprise ouvre la fiche depuis la liste des marchés du projet')
-  assert.match(lire('src/modules/Situations.tsx'), /FicheEntreprise/, '… et depuis les onglets Attendues / Retenues')
+  // TRANCHE 3 — « les onglets Attendues / Retenues » n'existent plus : ce sont
+  // des CARTES, montées en repli par l'écran Entreprises. L'assertion ne change
+  // pas (c'est le même code, au même endroit, qui ouvre la même fiche), sa
+  // description si — un message qui nomme un onglet disparu envoie chercher
+  // dans une rangée d'onglets qu'on ne trouvera pas.
+  assert.match(lire('src/modules/Situations.tsx'), /FicheEntreprise/, '… et depuis les cartes Attendues / Retenues')
+  // et depuis la liste transverse elle-même, qui est devenue la porte
+  // principale : c'est là qu'aboutissent `#/situations/historique/chercher/<nom>`
+  // et la ligne cliquée. Sans ce point d'ouverture, l'historique aurait
+  // déménagé vers une fiche qu'on n'atteindrait plus.
+  assert.match(
+    lire('src/modules/Entreprises.tsx'),
+    /CorpsFicheEntreprise/,
+    'la liste Entreprises ouvre la fiche EN PAGE — depuis la tranche 3, c’est là que vit l’historique des situations',
+  )
 }
 
 console.log(

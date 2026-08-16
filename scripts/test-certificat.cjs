@@ -361,8 +361,15 @@ const SURCHARGE_RG_CHAMANT = { retenueGarantieTTC: 144.44 }
   assert.match(pdf, /Présent état/, 'la colonne « présent état » du document réel')
   assert.match(pdf, /Cumulés depuis l'origine/, 'la colonne « cumulés depuis l’origine » du document réel')
 
-  // l'écran : construire (propositions + corrections), FIGER au geste
-  // « Émettre », rouvrir un émis en réimpression
+  // le module des vues de situation : construire (propositions + corrections),
+  // FIGER au geste « Émettre », rouvrir un émis en réimpression.
+  //
+  // TRANCHE 3 — ce fichier n'est plus un ÉCRAN (il n'a plus d'export par
+  // défaut : `#/situations` monte `<Entreprises />`), il est le module qui
+  // définit les quatre vues et les deux modales contractuelles. Rien de ce que
+  // ce bloc vérifie n'en dépend : le code du geste n'a pas bougé d'un octet, il
+  // est monté ailleurs. Le mot « écran » est corrigé pour qu'on ne cherche pas
+  // une `Page` qui n'existe plus.
   const ecran = lire('src/modules/Situations.tsx')
   assert.match(ecran, /construireCertificat/, 'la modale construit depuis la situation')
   assert.match(ecran, /figerCertificat/, 'le geste « Émettre » fige')
@@ -371,7 +378,7 @@ const SURCHARGE_RG_CHAMANT = { retenueGarantieTTC: 144.44 }
   assert.match(ecran, /avanceRembourseeApresEmission/, 'la résorption émise avance le compteur du marché')
 }
 
-// --- UN SEUL CHEMIN POUR ÉMETTRE, MAINTENANT QU'IL Y A TROIS PORTES -------
+// --- UN SEUL CHEMIN POUR ÉMETTRE, QUEL QUE SOIT LE NOMBRE DE PORTES -------
 //
 // 5.21 a ouvert le cycle mensuel depuis TROIS écrans : l'onglet Situations,
 // la fiche entreprise et l'onglet Chantier du projet. C'était la demande de
@@ -379,39 +386,106 @@ const SURCHARGE_RG_CHAMANT = { retenueGarantieTTC: 144.44 }
 // projet » — et c'est aussi le moment précis où un dépôt se met à produire
 // deux documents contractuels différents pour la même situation.
 //
-// La règle n'est pas « un seul écran » : c'est UN SEUL AUTEUR. Les trois
-// portes doivent mener au même composant, celui qui numérote, fige et signe.
+// La règle n'est pas « un seul écran » : c'est UN SEUL AUTEUR. Les portes
+// doivent mener au même composant, celui qui numérote, fige et signe.
 // Un second `ModalCertificat` écrit ailleurs, même fidèlement copié, dériverait
 // au premier correctif appliqué d'un seul côté — et rien ne dirait lequel des
 // deux papiers fait foi.
+//
+// TRANCHE 3 — LES PORTES ONT CHANGÉ, PAS LA RÈGLE, ET LE CONTRÔLE A DÛ ÊTRE
+// DURCI POUR LE RESTER.
+// --------------------------------------------------------------------------
+// Le §7.4 du plan l'annonçait : « on passe de trois adresses à deux —
+// Situations perd la sienne au profit d'Entreprises — sans toucher au code,
+// qui est verrouillé pour qu'il n'y ait qu'un seul auteur ». C'est ce qui a été
+// fait : `ModalCertificat` est restée définie dans Situations.tsx, qui n'est
+// plus un écran mais le module des vues de situation.
+//
+// Sauf que ce contrôle-ci NE LISAIT QUE TROIS FICHIERS NOMMÉS. Un second
+// `ModalCertificat` écrit dans Entreprises.tsx — l'écran qui monte désormais
+// les cartes, donc le premier endroit où l'on serait tenté d'en recopier une —
+// serait passé au vert. L'assertion suit donc le déménagement en cessant d'être
+// une liste : elle balaie TOUT src/. Elle ne peut plus s'affaiblir par
+// omission, et elle vaut aussi pour les portes qui n'existent pas encore.
+// C'est un document contractuel : deux auteurs voudraient dire deux vérités
+// possibles, et personne pour dire laquelle a été remise à l'entreprise.
+
+const fichiersSrc = (dossier) => {
+  const out = []
+  for (const e of fs.readdirSync(dossier, { withFileTypes: true })) {
+    const complet = path.join(dossier, e.name)
+    if (e.isDirectory()) out.push(...fichiersSrc(complet))
+    else if (/\.tsx?$/.test(e.name)) out.push(path.relative(racine, complet))
+  }
+  return out.sort()
+}
 
 {
-  const definitions = []
-  for (const fichier of ['src/modules/Situations.tsx', 'src/modules/FicheEntreprise.tsx', 'src/modules/ProjetChantier.tsx']) {
-    const src = lire(fichier)
-    if (/function ModalCertificat|const ModalCertificat\s*[:=]/.test(src)) definitions.push(fichier)
-  }
+  const TOUT_SRC = fichiersSrc(path.join(racine, 'src'))
+  assert.ok(TOUT_SRC.length > 40, `le balayage de src/ ne rend que ${TOUT_SRC.length} fichiers : la lecture est cassée`)
+
+  const definitions = TOUT_SRC.filter((f) =>
+    /function ModalCertificat|const ModalCertificat\s*[:=]/.test(lire(f)),
+  )
   assert.deepEqual(
     definitions,
     ['src/modules/Situations.tsx'],
-    'UN SEUL écran DÉFINIT le geste d’émission ; les autres l’IMPORTENT.\n' +
+    'UN SEUL fichier DÉFINIT le geste d’émission, dans TOUT src/ ; les autres l’IMPORTENT.\n' +
       `  constaté : [${definitions.join(', ')}]\n` +
       '  Deux définitions = deux certificats possibles pour la même situation, et aucun moyen de\n' +
-      '  savoir lequel a été remis à l’entreprise.',
+      '  savoir lequel a été remis à l’entreprise. Le balayage est global depuis la tranche 3 : une\n' +
+      '  liste de fichiers nommés laissait passer une copie écrite dans un écran neuf — et la tranche 3\n' +
+      '  en a justement fait un nouveau porteur des cartes (Entreprises.tsx).',
   )
 
-  for (const fichier of ['src/modules/FicheEntreprise.tsx', 'src/modules/ProjetChantier.tsx']) {
+  // LES PORTES, NOMMÉES. Ce ne sont plus les trois de 5.21 : `#/situations` a
+  // cessé d'être une destination, et c'est Entreprises qui a repris sa vue.
+  // Chacune doit IMPORTER, jamais définir — et le fait qu'elles soient nommées
+  // ici est ce qui rend visible le jour où l'une disparaît.
+  const PORTES_DU_CERTIFICAT = {
+    // la fiche d'une entreprise : c'est là que le décompte figé se réimprime
+    'src/modules/FicheEntreprise.tsx': 'la fiche entreprise (portefeuille du titulaire)',
+    // « faut pouvoir gérer aussi sur chaque chantier » — la demande de l'agence
+    'src/modules/ProjetChantier.tsx': 'l’onglet Chantier du projet',
+  }
+
+  for (const [fichier, quoi] of Object.entries(PORTES_DU_CERTIFICAT)) {
     assert.match(
       lire(fichier),
       /import \{[^}]*ModalCertificat[^}]*\} from '\.\/Situations'/,
-      `${fichier} ouvre le cycle mensuel : il doit IMPORTER ModalCertificat, pas en écrire un.`,
+      `${fichier} ouvre le cycle mensuel (${quoi}) : il doit IMPORTER ModalCertificat, pas en écrire un.`,
     )
   }
 
-  // et le figeage lui-même n'a qu'un auteur, où qu'on l'appelle
-  const auteurs = ['src/certificat.ts', 'src/modules/Situations.tsx', 'src/modules/FicheEntreprise.tsx', 'src/modules/ProjetChantier.tsx'].filter(
-    (f) => /function figerCertificat|const figerCertificat\s*=/.test(lire(f)),
+  // ET LA PORTE QUI A REMPLACÉ SITUATIONS. Le certificat s'émet depuis la
+  // carte « À vérifier » et se réimprime depuis l'historique : si Entreprises
+  // cessait de monter ces deux cartes, le geste ne disparaîtrait pas du code —
+  // il disparaîtrait de la seule vue transverse qui le portait, et personne
+  // n'aurait rien à corriger pour que ce test reste vert. C'est le contrôle qui
+  // manquait : le §7.4 promet DEUX adresses, pas une.
+  const entreprises = lire('src/modules/Entreprises.tsx')
+  assert.match(
+    entreprises,
+    /import \{[\s\S]*?\} from '\.\/Situations'/,
+    'src/modules/Entreprises.tsx a repris la vue Situations (tranche 3) : il doit importer ses cartes.',
   )
+  for (const carte of ['CarteAVerifier', 'CarteHistorique']) {
+    assert.match(
+      entreprises,
+      new RegExp(`<${carte}\\b`),
+      `src/modules/Entreprises.tsx ne monte plus <${carte} />.\n` +
+        '  Le §7.4 du plan promet DEUX adresses pour le certificat de paiement — Entreprises et l’onglet\n' +
+        '  Chantier — parce que l’agence a demandé de « pouvoir gérer aussi sur chaque chantier ». Cette\n' +
+        '  carte est la porte d’Entreprises : sans elle, la vue transverse ne permet plus ni d’émettre\n' +
+        '  (CarteAVerifier) ni de réimprimer un décompte figé (CarteHistorique), et il ne reste qu’une\n' +
+        '  porte. Le code du geste, lui, serait toujours là : rien d’autre ne le signalerait.',
+    )
+  }
+
+  // et le figeage lui-même n'a qu'un auteur, où qu'on l'appelle — balayé sur
+  // TOUT src/ pour la même raison que ci-dessus : une liste de quatre fichiers
+  // nommés ne dit rien du cinquième.
+  const auteurs = TOUT_SRC.filter((f) => /function figerCertificat|const figerCertificat\s*=/.test(lire(f)))
   assert.deepEqual(auteurs, ['src/certificat.ts'], 'le figeage s’écrit dans src/certificat.ts et nulle part ailleurs')
 }
 

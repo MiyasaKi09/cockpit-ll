@@ -241,7 +241,11 @@ const situation = (over = {}) => ({
   )
 }
 
-// --- le câblage dans l'écran ------------------------------------------------
+// --- le câblage dans le module des vues de situation -----------------------
+//
+// TRANCHE 3 : Situations.tsx n'est plus un écran (`#/situations` monte
+// `<Entreprises />`), c'est le module qui définit ses cartes. Le code lu
+// ci-dessous n'a pas bougé — seul l'endroit où il se monte a changé.
 
 {
   const ecran = lire('src/modules/Situations.tsx')

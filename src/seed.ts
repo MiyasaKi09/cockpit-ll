@@ -1103,6 +1103,7 @@ export function seedState(): AppState {
     taches: [],
     chronos: [],
     pointages: [],
+    recapsJournee: [],
 
     courriers: [
       {

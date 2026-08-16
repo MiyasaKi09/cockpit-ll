@@ -270,6 +270,9 @@ jobs:
       - name: Dated inventory sees every family, and goes quiet without its authority
         run: npm run test:inventaire-dates
 
+      - name: End-of-day recap — single estimator, pure trigger decision, human-only writes
+        run: npm run test:recap-journee
+
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 

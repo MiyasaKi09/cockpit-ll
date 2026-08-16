@@ -1642,6 +1642,20 @@ export interface PointageLocal {
   majLe: string
 }
 
+/** 2.8 — la réponse d'une personne au récapitulatif d'UN jour. `ignore`
+ *  ferme sans rien écrire ; `complete` signifie qu'au moins un pointage
+ *  `source: 'recap_fin_journee'` a été créé par le geste. Dans les deux cas
+ *  la question de ce jour-là ne se repose pas. */
+export interface RecapJournee {
+  id: string
+  personne: string
+  /** AAAA-MM-JJ — le jour récapitulé, pas celui du clic */
+  jour: string
+  etat: 'ignore' | 'complete'
+  /** horodatage du geste */
+  le: string
+}
+
 export interface ChronoEnCours {
   personne: string
   debut: string
@@ -2077,6 +2091,10 @@ export interface Settings {
   margeSecuritePct?: number | null
   coutHoraireRevient: number
   heuresParJour: number
+  /** 2.8 — heure (HH:MM) à partir de laquelle le récapitulatif de fin de
+   *  journée a le droit de paraître. Absente = défaut du module
+   *  (`HEURE_RECAP_DEFAUT`, src/recapJournee.ts). */
+  heureRecap?: string
   /** objectif de CA saisi à la main (utilisé si margeCiblePct est vide) */
   caCibleHT: number
   /** marge nette visée (0,20 = 20 %) : si renseignée, le CA cible est calculé
@@ -2373,6 +2391,10 @@ export interface AppState {
    *  DE SORTIE le jour où la file sera branchée — les identifiants sont déjà
    *  des uuid générés ici, donc un rejeu est idempotent par la clé primaire. */
   pointages: PointageLocal[]
+  /** 2.8 — réponses aux récapitulatifs de fin de journée : une entrée par
+   *  (personne, jour) répondu. « Ignorer » s'y écrit aussi — c'est ce qui
+   *  fait que la question ne se repose pas (§12.4). */
+  recapsJournee: RecapJournee[]
   tempsHorsProjet: TempsHorsProjet[]
   absences: Absence[]
   evaluations: EvaluationEntreprise[]

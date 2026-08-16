@@ -19,9 +19,9 @@
 
 import { useMemo, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
-import type { Alerte, Courrier, DecompteFige, MarcheTravaux } from '../types'
+import type { Alerte, Courrier, DecompteFige, MarcheTravaux, PhaseCode } from '../types'
 import { useStore } from '../store'
-import { Btn, Card, DateF, DateInput, EmptyState, Icon, LienGmail, Modal, Money, NumInput, Page, ResumeMessage, RowMenu, Select, Stat, Table, confirmer, navigate, toast, useToday } from '../ui'
+import { Badge, Btn, Card, DateF, DateInput, EmptyState, Icon, LienGmail, Modal, Money, NumInput, Page, ResumeMessage, RowMenu, Select, Stat, Table, confirmer, navigate, toast, useToday } from '../ui'
 import type { ContexteAlertes, MessageNotifiable, PropositionNotifiable, RelanceProposee } from '../alerts'
 import { alertesActives, estMarquableVu, relanceDeLAlerte } from '../alerts'
 import { dateDe, fusionnerBoite, urgenceDe } from '../boite'
@@ -41,6 +41,7 @@ import { lienGmail } from '../util'
 import type { AutoritesDatees, BarreChantier, LigneChargePhase, SemaineComplete } from '../derive'
 import {
   LIBELLES_PHASES,
+  STATUTS_ACTIFS,
   caCible,
   caRealiseAnnee,
   meteoFinanciere,
@@ -67,7 +68,8 @@ import {
 // que les pièces distantes de `validationsAttendues`, et il garantit que
 // l'inventaire des dates lit la MÊME fonction que l'écran d'origine — pas
 // une copie qui divergerait au premier changement de règle.
-import { estLigneChrono } from '../pointages'
+import { creerPointage, estLigneChrono } from '../pointages'
+import { marquerRecap, projetsTouches, recapAPresenter, tempsNonEnregistre } from '../recapJournee'
 import { chevauchementsEntreprise, clePeriode, interventionsDe, periodesEnConflit } from '../planningTravaux'
 import { echeanceVisa, visasEnAttente } from '../visas'
 import { situationAttendueNonRecue } from '../entreprise'
@@ -1939,6 +1941,182 @@ function CarteLaSemaine({
 
 // ---------- module ----------
 
+/**
+ * 2.8 — le récapitulatif de fin de journée (§12.4), en PIED du Cockpit.
+ *
+ * Pas de fenêtre modale : une journée finit souvent en fermant l'onglet, un
+ * déclencheur bloquant serait ignoré puis désactivé. La DÉCISION d'afficher
+ * est pure et testée (`recapAPresenter`, src/recapJournee.ts) : à partir de
+ * l'heure paramétrée le jour même, ou au premier chargement pour le dernier
+ * jour ouvré non récapitulé. L'écran ne fait que la rendre — pas de
+ * minuteur : ouvrir le Cockpit le soir suffit.
+ *
+ * « Ignorer » ferme sans rien écrire et ne repose pas la question.
+ * « Compléter » ouvre la saisie pré-remplie des projets touchés : chaque
+ * ligne acceptée crée un pointage normal, daté du jour récapitulé, attribué,
+ * `source: 'recap_fin_journee'` — que la projection (B.5) compte aussitôt
+ * dans la feuille et la marge. L'estimation, elle, n'écrit JAMAIS.
+ */
+function RecapFinJournee({ today }: { today: string }) {
+  const { state, update, replace } = useStore()
+  const moi = useMoi().nom || ''
+  const [ouvert, setOuvert] = useState(false)
+  const [lignes, setLignes] = useState<Record<string, { phase: string; heures: number | null }>>({})
+
+  // l'heure LOCALE du rendu — la comparaison à `heureRecap` se fait en heure
+  // de la personne, pas en UTC : « 17 h 30 » veut dire 17 h 30 au bureau
+  const maintenant = `${today}T${new Date().toTimeString().slice(0, 5)}`
+  const aPresenter = moi ? recapAPresenter(state, moi, maintenant) : null
+  if (!aPresenter) return null
+
+  const { jour, veille } = aPresenter
+  const manque = tempsNonEnregistre(state, moi, jour)
+  const touches = projetsTouches(state, moi, jour)
+  const actifs = state.projets.filter((p) => STATUTS_ACTIFS.includes(p.statut))
+  const nomDe = (id: string) => state.projets.find((p) => p.id === id)?.nom || id
+  /** la phase active du projet CE jour-là — pré-remplie, jamais imposée */
+  const phaseActiveDe = (projetId: string): string => {
+    const p = state.projets.find((x) => x.id === projetId)
+    return p?.phases.find((ph) => ph.debut && ph.fin && ph.debut <= jour && jour <= ph.fin)?.code || ''
+  }
+  const phasesDe = (projetId: string): PhaseCode[] =>
+    state.projets.find((x) => x.id === projetId)?.phases.map((ph) => ph.code) || []
+
+  const ouvrir = () => {
+    setLignes(Object.fromEntries(touches.map((id) => [id, { phase: phaseActiveDe(id), heures: null }])))
+    setOuvert(true)
+  }
+
+  const enregistrer = () => {
+    const valides = Object.entries(lignes).filter(([, l]) => l.phase && l.heures && l.heures > 0)
+    if (valides.length === 0) {
+      toast('Renseignez au moins une ligne — des heures et une phase.', { tone: 'warn' })
+      return
+    }
+    const snap = state
+    const quand = new Date().toISOString()
+    update((d) => {
+      for (const [projetId, l] of valides) {
+        d.pointages = [
+          ...(d.pointages || []),
+          // un pointage NORMAL : daté du jour récapitulé (midi, pour rester
+          // dans le bon jour sous tous les fuseaux), durée saisie à la main,
+          // source tracée — la projection B.5 le compte au geste même
+          creerPointage({
+            personne: moi,
+            debut: `${jour}T12:00:00.000Z`,
+            fin: `${jour}T12:00:00.000Z`,
+            minutes: Math.round((l.heures || 0) * 60),
+            projetId,
+            phase: l.phase as PhaseCode,
+            source: 'recap_fin_journee',
+          }),
+        ]
+      }
+      d.recapsJournee = [...(d.recapsJournee || []), marquerRecap(moi, jour, 'complete', quand)]
+    })
+    setOuvert(false)
+    toast(
+      `${valides.length} pointage(s) du ${fmtDate(jour)} enregistré(s) — comptés dans la feuille et la marge.`,
+      { tone: 'ok', undo: () => replace(snap) },
+    )
+  }
+
+  const ignorer = () => {
+    const snap = state
+    update((d) => {
+      d.recapsJournee = [...(d.recapsJournee || []), marquerRecap(moi, jour, 'ignore', new Date().toISOString())]
+    })
+    setOuvert(false)
+    toast(`Récapitulatif du ${fmtDate(jour)} ignoré — la question ne se reposera pas pour ce jour.`, {
+      undo: () => replace(snap),
+    })
+  }
+
+  return (
+    <div style={{ marginTop: 16, border: '1px solid var(--line)', borderRadius: 6, padding: '10px 12px' }}>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <Badge tone="info">fin de journée</Badge>
+        <span className="small">
+          {touches.length > 0 ? (
+            <>
+              Vous avez travaillé {veille ? <>le <DateF d={jour} /></> : "aujourd'hui"} sur :{' '}
+              {touches.map((id) => nomDe(id)).join(', ')}.
+            </>
+          ) : (
+            <>Rien de pointé {veille ? <>le <DateF d={jour} /></> : "aujourd'hui"}.</>
+          )}{' '}
+          <strong>Temps non enregistré estimé : {fmtHeures(manque)}.</strong>
+        </span>
+        <span className="spacer" />
+        {!ouvert && (
+          <Btn small onClick={ouvrir}>
+            Compléter
+          </Btn>
+        )}
+        <Btn small kind="ghost" onClick={ignorer}>
+          Ignorer
+        </Btn>
+      </div>
+      {ouvert && (
+        <div style={{ marginTop: 8, display: 'grid', gap: 6 }}>
+          {Object.entries(lignes).map(([projetId, l]) => (
+            <div key={projetId} style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <span className="small" style={{ minWidth: 160 }}>
+                {projetId} — {nomDe(projetId)}
+              </span>
+              <Select
+                value={l.phase}
+                onChange={(v) => setLignes((ls) => ({ ...ls, [projetId]: { ...ls[projetId], phase: v } }))}
+                options={[
+                  { value: '', label: 'Phase ?' },
+                  ...phasesDe(projetId).map((c) => ({ value: c, label: `${c} — ${LIBELLES_PHASES[c]}` })),
+                ]}
+                style={{ maxWidth: 190 }}
+              />
+              <NumInput
+                value={l.heures}
+                onChange={(v) => setLignes((ls) => ({ ...ls, [projetId]: { ...ls[projetId], heures: v } }))}
+                style={{ width: 70 }}
+                ariaLabel={`Heures du ${fmtDate(jour)} sur ${projetId}`}
+              />
+              <Btn
+                small
+                kind="ghost"
+                title={`Retirer ${projetId} du récapitulatif`}
+                onClick={() =>
+                  setLignes(({ [projetId]: _, ...reste }) => reste)
+                }
+              >
+                ✕
+              </Btn>
+            </div>
+          ))}
+          {actifs.some((p) => !(p.id in lignes)) && (
+            <Select
+              value=""
+              onChange={(v) => v && setLignes((ls) => ({ ...ls, [v]: { phase: phaseActiveDe(v), heures: null } }))}
+              options={[
+                { value: '', label: '+ ajouter un projet…' },
+                ...actifs.filter((p) => !(p.id in lignes)).map((p) => ({ value: p.id, label: `${p.id} — ${p.nom}` })),
+              ]}
+              style={{ maxWidth: 240 }}
+            />
+          )}
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <Btn small onClick={enregistrer}>
+              Enregistrer les pointages
+            </Btn>
+            <span className="muted small">
+              Chaque ligne crée un pointage daté du {fmtDate(jour)} — l'estimation, elle, n'écrit rien.
+            </span>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function Cockpit({ jour }: { jour?: string | null } = {}) {
   const { state } = useStore()
   const today = useToday()
@@ -2202,6 +2380,10 @@ export default function Cockpit({ jour }: { jour?: string | null } = {}) {
           <CarteSemaine personne={personne} />
         </div>
       </details>
+
+      {/* 2.8 — fin de journée, en PIED : le dernier regard du soir, jamais
+          une fenêtre qui bloque. Voir RecapFinJournee. */}
+      <RecapFinJournee today={today} />
     </Page>
   )
 }

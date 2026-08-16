@@ -122,6 +122,9 @@ function migrate(parsed: AppState): AppState {
   // chrono en cours, ce qui est la vérité. Rien à reprendre, rien à inventer.
   etat.chronos = Array.isArray(parsed.chronos) ? parsed.chronos : []
   etat.pointages = Array.isArray(parsed.pointages) ? parsed.pointages : []
+  // 2.8 — champ ajouté sans palier : un état antérieur n'a simplement
+  // répondu à aucun récapitulatif, ce qui est la vérité. Rien à reprendre.
+  etat.recapsJournee = Array.isArray(parsed.recapsJournee) ? parsed.recapsJournee : []
   etat.reunions = Array.isArray(parsed.reunions) ? parsed.reunions : []
   // C3 — points de séance. Champ ajouté sans palier, et SANS reprise : les
   // points d'ordre du jour des réunions passées vivent dans le texte des CR

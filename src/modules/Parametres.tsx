@@ -28,6 +28,7 @@ import {
   useRoute,
   useToday, RowMenu } from '../ui'
 import { DOMAINE_AGENCE, download, fmtDate, fmtMois, fmtMoney, fmtPct, fold, todayISO, uid } from '../util'
+import { HEURE_RECAP_DEFAUT } from '../recapJournee'
 import { cleSerie, valeursSerie } from '../revisionPrix'
 import { SERIE_BT01, etatBt01, seuilPlancherActualise } from '../miqcp'
 import { ecartSoldeManuel, soldeBancaire } from '../banque'
@@ -1380,6 +1381,18 @@ export default function Parametres({ ongletInitial = 'agence' }: { ongletInitial
           </Field>
           <Field label="Heures / jour">
             <NumInput value={s.heuresParJour} onChange={(v) => maj((d) => void (d.settings.heuresParJour = v ?? 7.8))} />
+          </Field>
+          <Field
+            label="Récapitulatif du soir à partir de"
+            hint="le bandeau « fin de journée » du Cockpit n'apparaît qu'à partir de cette heure — avant, « temps non enregistré » serait un faux signal"
+          >
+            <input
+              className="input"
+              type="time"
+              value={s.heureRecap || HEURE_RECAP_DEFAUT}
+              onChange={(e) => maj((d) => void (d.settings.heureRecap = e.target.value || undefined))}
+              aria-label="Heure à partir de laquelle le récapitulatif de fin de journée apparaît"
+            />
           </Field>
           <Field label="Seuil de dérive heures" hint="90 % = alerte quand 90 % du budget d'heures est consommé">
             <PctInput

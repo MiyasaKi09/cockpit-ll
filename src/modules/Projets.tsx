@@ -12,6 +12,7 @@ import { useStore } from '../store'
 import { useMoi } from '../moi'
 import { alertesActives } from '../alerts'
 import { type ChronoActif, arreterChrono, basculerChrono, chronoDe, poserChrono } from '../chrono'
+import { estLigneChrono } from '../pointages'
 import { messageArretHonnete } from './ChronoBarre'
 import { ligneActivable,
   Badge,
@@ -424,9 +425,14 @@ function EspaceProjet({ projetId, onglet }: { projetId: string; onglet?: string 
     // laissaient des lignes orphelines rattachées à un projet disparu —
     // notes de cotraitants, échéances prévues, visas, désordres GPA.
     const cotraitantsIds = state.cotraitants.filter((c) => c.projetId === p.id).map((c) => c.id)
+    // les pointages de chrono ne sont PAS supprimés : ils sont détachés du
+    // projet (le temps a été travaillé, il reste enregistré) — la ligne les
+    // annonce à part, et les lignes projetées `tp-…` ne se comptent pas comme
+    // des saisies puisqu'elles suivront les pointages détachés
+    const pointagesLies = (state.pointages || []).filter((x) => x.projetId === p.id).length
     const lies: [string, number][] = [
       ['marché(s)', state.marches.filter((x) => x.projetId === p.id).length],
-      ['saisie(s) de temps', state.temps.filter((x) => x.projetId === p.id).length],
+      ['saisie(s) de temps', state.temps.filter((x) => x.projetId === p.id && !estLigneChrono(x.id)).length],
       ['réunion(s) de chantier', state.reunions.filter((x) => x.projetId === p.id).length],
       ['lot(s) DCE', state.lotsDce.filter((x) => x.projetId === p.id).length],
       ['tâche(s) de planning travaux', state.tachesChantier.filter((x) => x.projetId === p.id).length],
@@ -452,7 +458,10 @@ function EspaceProjet({ projetId, onglet }: { projetId: string; onglet?: string 
       !(await confirmer({
         message:
           `Supprimer définitivement le projet ${p.id} — ${p.nom} ?` +
-          (detail ? `\nSeront supprimés avec lui : ${detail}.` : '\nAucune donnée rattachée.'),
+          (detail ? `\nSeront supprimés avec lui : ${detail}.` : '\nAucune donnée rattachée.') +
+          (pointagesLies > 0
+            ? `\n${pointagesLies} pointage(s) de chrono seront détachés du projet — le temps reste enregistré, il sort de la feuille jusqu'à un nouveau rattachement.`
+            : ''),
         danger: true,
         confirmerLabel: 'Supprimer',
       }))
@@ -462,6 +471,12 @@ function EspaceProjet({ projetId, onglet }: { projetId: string; onglet?: string 
       d.projets = d.projets.filter((x) => x.id !== p.id)
       d.marches = d.marches.filter((m) => m.projetId !== p.id)
       d.temps = d.temps.filter((t) => t.projetId !== p.id)
+      // détachés, pas supprimés : sans ce passage, la réconciliation du store
+      // recréerait les lignes `tp-…` du projet disparu — et ses heures
+      // continueraient de compter dans les totaux de la semaine
+      d.pointages = (d.pointages || []).map((x) =>
+        x.projetId === p.id ? { ...x, projetId: null, phase: null } : x,
+      )
       d.reunions = d.reunions.filter((r) => r.projetId !== p.id)
       d.lotsDce = d.lotsDce.filter((l) => l.projetId !== p.id)
       d.tachesChantier = d.tachesChantier.filter((t) => t.projetId !== p.id)
@@ -708,7 +723,7 @@ function BoutonChronoProjet({ projet: p }: { projet: Projet }) {
     const demarrage = `Chrono démarré sur ${p.id}${phase ? ` · ${phase.code}` : ''}.`
     // la bascule est silencieuse si on ne la dit pas : le chrono précédent
     // vient d'être arrêté ET enregistré
-    toast(arret ? `${messageArretHonnete(arret.message, !!arret.pointage)} ${demarrage}` : demarrage, { tone: 'ok' })
+    toast(arret ? `${messageArretHonnete(arret.message, arret.pointage)} ${demarrage}` : demarrage, { tone: 'ok' })
   }
 
   const arreter = () => {
@@ -718,7 +733,7 @@ function BoutonChronoProjet({ projet: p }: { projet: Projet }) {
       d.chronos = poserChrono(d.chronos as ChronoActif[], null, qui)
       if (pointage) d.pointages = [...(d.pointages || []), pointage]
     })
-    toast(messageArretHonnete(message, !!pointage), { tone: pointage ? 'ok' : 'warn' })
+    toast(messageArretHonnete(message, pointage), { tone: pointage ? 'ok' : 'warn' })
   }
 
   return iciEnCours ? (

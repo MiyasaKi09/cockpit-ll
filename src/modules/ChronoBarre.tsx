@@ -33,29 +33,35 @@ import {
 } from '../chrono'
 
 /**
- * L'HONNÊTETÉ D'ATTENTE (audit d'usage, action 26).
+ * L'HONNÊTETÉ D'ARRÊT, seconde époque (B.5).
  *
- * `arreterChrono` annonce « 1 h 20 enregistrées », et c'est vrai : le
- * pointage est écrit dans `state.pointages`. Ce qui n'est pas vrai, c'est ce
- * que la phrase laisse entendre — que ce temps est compté. `projeterVersTemps`
- * et `tempsParTache` (`src/pointages.ts`) n'ont aujourd'hui AUCUN appelant :
- * la collection est écrite-seulement. Le temps n'apparaît ni dans « Ma
- * semaine », seule source de la marge, ni sur la tâche.
+ * La première époque de cette fonction était un pansement d'attente : la
+ * projection n'avait aucun appelant, et le toast avouait que « 1 h 20
+ * enregistrées » n'était pas comptée. Depuis le branchement
+ * (`reconcilierTempsChrono`, appelé par le store), un pointage qui porte
+ * projet ET phase entre tout seul dans « Ma semaine » et dans la marge :
+ * la phrase de `arreterChrono` est alors toute la vérité, et le message
+ * n'ajoute rien — une confirmation de plus à chaque arrêt serait du bruit.
  *
- * Trois issues, toutes coûteuses, quand on ne le dit pas : le temps est
- * perdu, il est ressaisi (et compté deux fois le jour du branchement), ou il
- * est cru compté (et la marge ment dès aujourd'hui).
+ * Restent deux cas où la phrase seule laisserait croire plus qu'elle ne dit :
+ *   - rien d'enregistré (chrono sous la minute) : aucune promesse ajoutée,
+ *     on ne renvoie pas vers une ligne qui n'existe pas ;
+ *   - un pointage SANS projet ou SANS phase : il est conservé (et compte sur
+ *     sa tâche s'il en porte une), mais la clé de la feuille exige les deux —
+ *     le dire ici, avec le geste qui répare (le rattacher sous « Ma
+ *     semaine »), plutôt que de laisser la marge se tromper en silence.
  *
  * Le message vit ICI, et la fiche tâche l'importe : deux formulations pour le
  * même événement feraient dire au même arrêt deux choses différentes selon
  * l'endroit d'où on l'a cliqué.
- *
- * Cette mention se retire au branchement de la projection (B.4/B.5/B.9 du
- * plan) — elle est un pansement d'attente, pas un acquis.
  */
-export function messageArretHonnete(message: string, enregistre: boolean): string {
-  if (!enregistre) return message
-  return `${message} Pas encore compté dans la feuille — à reporter dans « Ma semaine ».`
+export function messageArretHonnete(
+  message: string,
+  pointage: { projetId: string | null; phase: string | null } | null | undefined,
+): string {
+  if (!pointage) return message
+  if (pointage.projetId && pointage.phase) return message
+  return `${message} Sans projet ou sans phase, pas compté dans la feuille — à rattacher sous « Ma semaine ».`
 }
 
 /** Rafraîchit chaque seconde — et seulement quand un chrono tourne. */
@@ -91,7 +97,7 @@ export default function ChronoBarre({ emplacement }: { emplacement: 'topbar' | '
       d.chronos = poserChrono(d.chronos as ChronoActif[], null, moi)
       if (pointage) d.pointages = [...(d.pointages || []), pointage]
     })
-    toast(messageArretHonnete(message, !!pointage), { tone: pointage ? 'ok' : 'warn' })
+    toast(messageArretHonnete(message, pointage), { tone: pointage ? 'ok' : 'warn' })
   }
 
   return (

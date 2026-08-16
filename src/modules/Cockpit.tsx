@@ -67,6 +67,7 @@ import {
 // que les pièces distantes de `validationsAttendues`, et il garantit que
 // l'inventaire des dates lit la MÊME fonction que l'écran d'origine — pas
 // une copie qui divergerait au premier changement de règle.
+import { estLigneChrono } from '../pointages'
 import { chevauchementsEntreprise, clePeriode, interventionsDe, periodesEnConflit } from '../planningTravaux'
 import { echeanceVisa, visasEnAttente } from '../visas'
 import { situationAttendueNonRecue } from '../entreprise'
@@ -142,6 +143,9 @@ const AUTORITES_DATEES: Omit<AutoritesDatees, 'today'> = {
   echeanceVisa,
   situationAttendueNonRecue,
   pointResolu,
+  // B.5 — le partage saisies/chrono des cellules de charge se calcule dans
+  // `derive`, avec l'autorité de pointages.ts passée en argument
+  estLigneProjetee: estLigneChrono,
 }
 
 /** colonne des « Repères du jour » */
@@ -1668,38 +1672,56 @@ function SaisieHeures({
   ligne: LigneChargePhase
 }) {
   const { update } = useStore()
+  // B.5 — `ligne.pointees` somme TOUTE la grille du temps, lignes projetées
+  // du chrono (`tp-…`) comprises. La cellule, elle, n'édite que la SAISIE :
+  // éditer une ligne projetée serait défait par la réconciliation du store
+  // au geste suivant, sans erreur ni trace. Le partage saisies/chrono vient
+  // de `derive` (autorité `estLigneProjetee`) — cet écran ne relit pas la
+  // grille, une agrégation n'a qu'un propriétaire.
+  const chrono = Math.max(0, Math.round((ligne.pointees - ligne.saisies) * 100) / 100)
   return (
-    <NumInput
-      value={ligne.pointees > 0 ? ligne.pointees : null}
-      style={{ width: 74 }}
-      placeholder="0"
-      ariaLabel={`Heures de ${personne} — ${ligne.projetId} ${ligne.phase} — semaine du ${fmtDate(lundi)}`}
-      onChange={(v) =>
-        update((d) => {
-          const i = d.temps.findIndex(
-            (t) =>
-              t.semaine === lundi &&
-              t.personne === personne &&
-              t.projetId === ligne.projetId &&
-              t.phase === ligne.phase,
-          )
-          if (v === null || v <= 0) {
-            if (i >= 0) d.temps.splice(i, 1)
-            return
-          }
-          if (i >= 0) d.temps[i].heures = v
-          else
-            d.temps.push({
-              id: uid('tps'),
-              semaine: lundi,
-              personne,
-              projetId: ligne.projetId,
-              phase: ligne.phase,
-              heures: v,
-            })
-        })
-      }
-    />
+    <>
+      <NumInput
+        value={ligne.saisies > 0 ? ligne.saisies : null}
+        style={{ width: 74 }}
+        placeholder="0"
+        ariaLabel={`Heures de ${personne} — ${ligne.projetId} ${ligne.phase} — semaine du ${fmtDate(lundi)}`}
+        onChange={(v) =>
+          update((d) => {
+            const i = d.temps.findIndex(
+              (t) =>
+                !estLigneChrono(t.id) &&
+                t.semaine === lundi &&
+                t.personne === personne &&
+                t.projetId === ligne.projetId &&
+                t.phase === ligne.phase,
+            )
+            if (v === null || v <= 0) {
+              if (i >= 0) d.temps.splice(i, 1)
+              return
+            }
+            if (i >= 0) d.temps[i].heures = v
+            else
+              d.temps.push({
+                id: uid('tps'),
+                semaine: lundi,
+                personne,
+                projetId: ligne.projetId,
+                phase: ligne.phase,
+                heures: v,
+              })
+          })
+        }
+      />
+      {chrono > 0 && (
+        <span
+          className="muted small"
+          title="Au chrono sur cette ligne — compté dans les totaux, en plus de la cellule saisie ; se corrige sous « Ma semaine »"
+        >
+          {' '}+ {fmtHeures(chrono)}
+        </span>
+      )}
+    </>
   )
 }
 

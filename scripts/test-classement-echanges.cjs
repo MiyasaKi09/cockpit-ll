@@ -351,11 +351,18 @@ for (const [objet, attendu] of IMPORTANCES) {
   )
 }
 
-// Les dix marqueurs d'action de `src/tagging.ts` sont RELUS là-bas, et chacun
-// doit encore être reconnu ici : c'est la méthode déjà employée pour `fold`,
-// qui compare deux implémentations par leur comportement et non par leur texte.
-const listeMarqueurs = /const MARQUEURS_ACTION = \[([\s\S]*?)\]/.exec(lire(CHEMIN_TAGGING))
-assert.ok(listeMarqueurs, `${CHEMIN_TAGGING} : MARQUEURS_ACTION est introuvable — le plan le désigne comme source`)
+// Les dix marqueurs d'action sont RELUS à leur source, et chacun doit encore
+// être reconnu ici : c'est la méthode déjà employée pour `fold`, qui compare
+// deux implémentations par leur comportement et non par leur texte.
+//
+// La source a DÉMÉNAGÉ de `src/tagging.ts` vers le module partagé au
+// branchement serveur des détecteurs : celui-ci n'importe rien — c'est ce qui
+// lui permet de tourner dans Deno, dans le navigateur et dans un test — donc
+// il ne pouvait pas continuer à lire `tagging.ts`, qui l'importe désormais.
+// Une seule liste, dans l'autre sens ; l'assertion, elle, ne bouge pas.
+const CHEMIN_MARQUEURS = 'supabase/functions/_shared/detecteurs.ts'
+const listeMarqueurs = /const MARQUEURS_ACTION = \[([\s\S]*?)\]/.exec(lire(CHEMIN_MARQUEURS))
+assert.ok(listeMarqueurs, `${CHEMIN_MARQUEURS} : MARQUEURS_ACTION est introuvable — le plan le désigne comme source`)
 const marqueurs = listeMarqueurs[1]
   .split(',')
   .map((m) => m.trim().replace(/^'|'$/g, ''))

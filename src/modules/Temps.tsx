@@ -36,7 +36,7 @@ import {
   heuresPrevues,
   heuresReelles,
 } from '../derive'
-import { heuresDepuisMinutes, lundiDe } from '../pointages'
+import { estLigneChrono, facturableParDefaut, heuresDepuisMinutes, lundiDe } from '../pointages'
 
 const NB_SEMAINES = 6
 
@@ -150,9 +150,15 @@ function TableauPersonne({
     toast('Ligne retirée.', { undo: () => replace(snap) })
   }
 
+  // Les lignes PROJETÉES (`tp-…`, chrono) restent hors des cellules : la
+  // réconciliation du store les réécrirait au geste suivant, et l'édition
+  // disparaîtrait sans erreur. Elles s'affichent en lecture seule plus bas,
+  // sur le modèle des heures pointées depuis les dossiers.
   const heuresDe = (semaine: string, c: Couple): number | null => {
     const e = state.temps.find(
-      (t) => t.semaine === semaine && t.personne === personne && t.projetId === c.projetId && t.phase === c.phase,
+      (t) =>
+        !estLigneChrono(t.id) &&
+        t.semaine === semaine && t.personne === personne && t.projetId === c.projetId && t.phase === c.phase,
     )
     return e ? e.heures : null
   }
@@ -160,7 +166,9 @@ function TableauPersonne({
   const poser = (semaine: string, c: Couple, v: number | null) =>
     update((d) => {
       const i = d.temps.findIndex(
-        (t) => t.semaine === semaine && t.personne === personne && t.projetId === c.projetId && t.phase === c.phase,
+        (t) =>
+          !estLigneChrono(t.id) &&
+          t.semaine === semaine && t.personne === personne && t.projetId === c.projetId && t.phase === c.phase,
       )
       if (v === null || v <= 0) {
         if (i >= 0) d.temps.splice(i, 1)
@@ -344,6 +352,33 @@ function TableauPersonne({
                   })}
                   <td className="right num muted">
                     {fmtHeures(lies.filter((t) => semaines.includes(t.semaine)).reduce((x, t) => x + t.heures, 0))}
+                  </td>
+                </tr>
+              )
+            })()}
+            {(() => {
+              // B.5 — les lignes projetées du chrono, hors cellules mais pas
+              // hors totaux : sans cette ligne, les colonnes sommeraient plus
+              // que les cases visibles, et deux chiffres différents pour la
+              // même semaine font perdre la confiance dans la feuille entière.
+              const chronos = state.temps.filter((t) => estLigneChrono(t.id) && t.personne === personne)
+              if (!semaines.some((sem) => chronos.some((t) => t.semaine === sem))) return null
+              return (
+                <tr>
+                  <td className="small col-figee">
+                    Au chrono
+                    <div className="muted small">compté dans les totaux — se corrige sous « Ma semaine »</div>
+                  </td>
+                  {semaines.map((sem) => {
+                    const h = chronos.filter((t) => t.semaine === sem).reduce((x, t) => x + t.heures, 0)
+                    return (
+                      <td key={sem} className="right num muted">
+                        {h > 0 ? fmtHeures(h) : '·'}
+                      </td>
+                    )
+                  })}
+                  <td className="right num muted">
+                    {fmtHeures(chronos.filter((t) => semaines.includes(t.semaine)).reduce((x, t) => x + t.heures, 0))}
                   </td>
                 </tr>
               )
@@ -539,16 +574,31 @@ function SaisieSemaine({ today }: { today: string }) {
     )
   couples.sort((a, b) => Number(aDesHeures(b)) - Number(aDesHeures(a)) || triCouples(a, b))
 
+  // même règle que la grille : une cellule n'édite JAMAIS une ligne projetée
+  // (`tp-…`) — la réconciliation du store la réécrirait au geste suivant. Le
+  // chrono s'affiche à part : « + X h » sur la ligne, et le détail plus bas.
   const heuresDe = (c: Couple): number | null => {
     const e = state.temps.find(
-      (t) => t.semaine === semaine && t.personne === personne && t.projetId === c.projetId && t.phase === c.phase,
+      (t) =>
+        !estLigneChrono(t.id) &&
+        t.semaine === semaine && t.personne === personne && t.projetId === c.projetId && t.phase === c.phase,
     )
     return e ? e.heures : null
   }
+  const chronoDe = (c: Couple): number =>
+    state.temps
+      .filter(
+        (t) =>
+          estLigneChrono(t.id) &&
+          t.semaine === semaine && t.personne === personne && t.projetId === c.projetId && t.phase === c.phase,
+      )
+      .reduce((s, t) => s + t.heures, 0)
   const poser = (c: Couple, v: number | null) =>
     update((d) => {
       const i = d.temps.findIndex(
-        (t) => t.semaine === semaine && t.personne === personne && t.projetId === c.projetId && t.phase === c.phase,
+        (t) =>
+          !estLigneChrono(t.id) &&
+          t.semaine === semaine && t.personne === personne && t.projetId === c.projetId && t.phase === c.phase,
       )
       if (v === null || v <= 0) {
         if (i >= 0) d.temps.splice(i, 1)
@@ -583,7 +633,11 @@ function SaisieSemaine({ today }: { today: string }) {
    *  de la semaine courante sont remplies (préparé avant la mutation) */
   const copierSemainePrecedente = () => {
     const avant = addDays(semaine, -7)
-    const temps = state.temps.filter((t) => t.personne === personne && t.semaine === avant)
+    // jamais les lignes projetées : copier du chrono en saisie manuelle le
+    // compterait deux fois — une fois recopié, une fois reprojeté
+    const temps = state.temps.filter(
+      (t) => !estLigneChrono(t.id) && t.personne === personne && t.semaine === avant,
+    )
     // les heures pointées depuis un dossier appartiennent à LEUR semaine :
     // la copie ne reprend que la saisie libre
     const hp = state.tempsHorsProjet.filter((t) => t.personne === personne && t.semaine === avant && !t.consultationId)
@@ -595,8 +649,12 @@ function SaisieSemaine({ today }: { today: string }) {
     const nouveaux = temps
       .filter(
         (t) =>
+          // une CASE est occupée par une saisie, pas par une ligne projetée :
+          // le chrono de la semaine courante ne bloque pas la reprise
           !state.temps.some(
-            (x) => x.semaine === semaine && x.personne === personne && x.projetId === t.projetId && x.phase === t.phase,
+            (x) =>
+              !estLigneChrono(x.id) &&
+              x.semaine === semaine && x.personne === personne && x.projetId === t.projetId && x.phase === t.phase,
           ),
       )
       .map((t) => ({ id: uid('tps'), semaine, personne, projetId: t.projetId, phase: t.phase, heures: t.heures }))
@@ -629,14 +687,14 @@ function SaisieSemaine({ today }: { today: string }) {
   const etat = etatSemaine(total, capacite)
   const projetsHorsListe = actifs.filter((p) => !couples.some((c) => c.projetId === p.id))
 
-  // --- garde-fou du chrono (audit d'usage, action 26) ---------------------
+  // --- le chrono, compté et corrigeable (B.5) -----------------------------
   //
-  // `state.pointages` est écrite-seulement : `projeterVersTemps` n'a aucun
-  // appelant, donc le temps chronométré n'entre NI dans le total ci-dessus,
-  // NI dans la marge. Tant que la projection n'est pas branchée (B.4/B.5/B.9
-  // au plan), l'écran le dit et donne les trois gestes qui restent humains :
-  // voir, corriger, supprimer. Le report dans la grille reste une décision —
-  // la machine propose, elle n'écrit pas un temps à la place de quelqu'un.
+  // Depuis le branchement de la projection (`reconcilierTempsChrono`, store),
+  // un chrono arrêté qui porte projet et phase entre TOUT SEUL dans le total
+  // ci-dessus et dans la marge — plus rien à reporter à la main. Ce bloc
+  // garde les gestes qui restent humains : corriger une durée, supprimer un
+  // chrono oublié, et RATTACHER un pointage sans projet ou sans phase — le
+  // seul qui ne peut pas entrer dans la feuille, sa clé les exige tous deux.
   //
   // Un chrono EN COURS n'est pas compté : ce n'est pas du temps passé, c'est
   // du temps en train de passer — la même règle que `projeterVersTemps`.
@@ -648,6 +706,16 @@ function SaisieSemaine({ today }: { today: string }) {
   const heuresChrono = heuresDepuisMinutes(
     chronosSemaine.reduce((s, p) => s + (p.minutes || 0), 0),
   )
+  const chronosOrphelins = chronosSemaine.filter((p) => !p.projetId || !p.phase)
+  const heuresChronoOrphelines = heuresDepuisMinutes(
+    chronosOrphelins.reduce((s, p) => s + (p.minutes || 0), 0),
+  )
+  // ce que la projection a réellement posé dans la grille cette semaine — lu
+  // dans `state.temps` comme le total lui-même, pour dire « dont » sans
+  // recompter par un second chemin
+  const heuresChronoComptees = state.temps
+    .filter((t) => estLigneChrono(t.id) && t.personne === personne && t.semaine === semaine)
+    .reduce((s, t) => s + t.heures, 0)
 
   const corrigerDuree = (id: string, heures: number | null) =>
     update((d) => {
@@ -666,6 +734,38 @@ function SaisieSemaine({ today }: { today: string }) {
       tone: 'warn',
       undo: () => replace(snap),
     })
+  }
+
+  /** les phases du projet, dans l'ordre MIQCP — pas le référentiel entier :
+   *  une phase que le projet ne porte pas ne peut pas recevoir d'heures */
+  const phasesDe = (projetId: string): PhaseCode[] => {
+    const p = state.projets.find((x) => x.id === projetId)
+    return [...(p?.phases || [])].map((ph) => ph.code).sort((a, b) => indexPhase(a) - indexPhase(b))
+  }
+
+  /** pose projet puis phase sur un pointage qui n'en a pas : dès que les deux
+   *  y sont, la projection le compte — dans le total et la marge, au geste
+   *  même. C'est le rattachement, pas un report : la durée ne bouge pas. */
+  const rattacherPointage = (p: PointageLocal, projetId: string | null, phase: PhaseCode | null) => {
+    const snap = state
+    update((d) => {
+      const cible = (d.pointages || []).find((x) => x.id === p.id)
+      if (!cible) return
+      // B.7 : un facturable resté au défaut suit la règle vers son nouveau
+      // projet ; un facturable corrigé par un humain ne se réécrit pas
+      if (cible.facturable === facturableParDefaut(cible.projetId ?? null)) {
+        cible.facturable = facturableParDefaut(projetId)
+      }
+      cible.projetId = projetId
+      cible.phase = phase
+      cible.majLe = new Date().toISOString()
+    })
+    if (projetId && phase) {
+      toast(`Chrono rattaché à ${projetId} · ${phase} — compté dans le total et la marge.`, {
+        tone: 'ok',
+        undo: () => replace(snap),
+      })
+    }
   }
 
   /** ce que le chrono visait — projet · phase, tâche, ou le libellé saisi */
@@ -707,7 +807,12 @@ function SaisieSemaine({ today }: { today: string }) {
       </div>
 
       <p className="small" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', margin: '4px 0 8px' }}>
-        <strong>{fmtHeures(total)} saisies</strong>
+        <strong>{fmtHeures(total)} comptées</strong>
+        {heuresChronoComptees > 0 && (
+          <span className="muted" title="Projection des chronos arrêtés portant projet et phase — le détail se corrige dans le bloc chrono ci-dessous">
+            dont {fmtHeures(heuresChronoComptees)} au chrono
+          </span>
+        )}
         {capacite > 0 ? (
           <>
             <span
@@ -732,7 +837,7 @@ function SaisieSemaine({ today }: { today: string }) {
         <Btn small onClick={copierSemainePrecedente}>Copier la semaine précédente</Btn>
       </p>
 
-      {heuresChrono > 0 && (
+      {chronosSemaine.length > 0 && (
         <div
           style={{
             border: '1px solid var(--line)',
@@ -742,18 +847,23 @@ function SaisieSemaine({ today }: { today: string }) {
           }}
         >
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-            <Badge tone="warn">chrono</Badge>
-            <strong className="small">Temps chronométré non reporté : {fmtHeures(heuresChrono)}</strong>
+            <Badge tone={heuresChronoOrphelines > 0 ? 'warn' : 'info'}>chrono</Badge>
+            <strong className="small">
+              Au chrono cette semaine : {fmtHeures(heuresChrono)} — compté dans le total
+              {heuresChronoOrphelines > 0 && ` sauf ${fmtHeures(heuresChronoOrphelines)}`}
+            </strong>
             <span className="spacer" />
             <Btn small kind="ghost" onClick={() => setChronosDeplies(!chronosDeplies)}>
               {chronosDeplies ? 'Replier' : `Voir le détail (${chronosSemaine.length})`}
             </Btn>
           </div>
-          <div className="muted small" style={{ marginTop: 4 }}>
-            Enregistré par le chrono, mais pas encore compté : ni dans le total ci-dessus, ni dans la
-            marge des projets. À reporter à la main dans les lignes ci-dessous — le report
-            automatique arrive avec le branchement de la projection.
-          </div>
+          {heuresChronoOrphelines > 0 && (
+            <div className="muted small" style={{ marginTop: 4 }}>
+              Un pointage sans projet ou sans phase ne peut pas entrer dans la feuille — sa clé les
+              exige tous les deux. Rattachez-le dans le détail ci-dessous : il compte aussitôt, dans
+              le total comme dans la marge.
+            </div>
+          )}
           {chronosDeplies && (
             <div style={{ marginTop: 8 }}>
               <Table compact head={['Jour', 'Sur quoi', 'Durée', '']}>
@@ -768,6 +878,30 @@ function SaisieSemaine({ today }: { today: string }) {
                     <td className="small">
                       {cibleDuPointage(p)}
                       {p.commentaire && <div className="muted small">{p.commentaire}</div>}
+                      {(!p.projetId || !p.phase) && (
+                        <div style={{ display: 'flex', gap: 6, marginTop: 4, flexWrap: 'wrap' }}>
+                          <Select
+                            value={p.projetId || ''}
+                            onChange={(v) => rattacherPointage(p, v || null, null)}
+                            options={[
+                              { value: '', label: 'Projet ?' },
+                              ...actifs.map((x) => ({ value: x.id, label: `${x.id} — ${x.nom}` })),
+                            ]}
+                            style={{ maxWidth: 190 }}
+                          />
+                          {p.projetId && (
+                            <Select
+                              value={p.phase || ''}
+                              onChange={(v) => rattacherPointage(p, p.projetId ?? null, (v || null) as PhaseCode | null)}
+                              options={[
+                                { value: '', label: 'Phase ?' },
+                                ...phasesDe(p.projetId).map((c) => ({ value: c, label: `${c} — ${LIBELLES_PHASES[c]}` })),
+                              ]}
+                              style={{ maxWidth: 190 }}
+                            />
+                          )}
+                        </div>
+                      )}
                     </td>
                     <td className="right">
                       <NumInput
@@ -819,6 +953,14 @@ function SaisieSemaine({ today }: { today: string }) {
                   {p?.nom || 'projet inconnu'} · {LIBELLES_PHASES[c.phase] || c.phase}
                 </div>
               </div>
+              {chronoDe(c) > 0 && (
+                <span
+                  className="muted small"
+                  title="Au chrono sur cette ligne — compté dans le total, en plus de la cellule saisie"
+                >
+                  + {fmtHeures(chronoDe(c))} chrono
+                </span>
+              )}
               <NumInput
                 value={heuresDe(c)}
                 onChange={(v) => poser(c, v)}

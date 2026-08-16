@@ -1321,6 +1321,11 @@ export interface AutoritesDatees {
   situationAttendueNonRecue?: (state: AppState, m: MarcheTravaux, today: string) => AttenteSituation | null
   /** `pointResolu` (src/seanceChantier.ts) — un point fait ou sans suite */
   pointResolu?: (p: Pick<PointSeance, 'etat'>) => boolean
+  /** `estLigneChrono` (src/pointages.ts) — distingue une ligne de temps
+   *  PROJETÉE depuis les pointages (`tp-…`) d'une saisie d'écran. Sans elle,
+   *  `saisies` vaut `pointees` : la cellule éditable de l'accueil montrerait
+   *  aussi le chrono, et l'écraser ferait diverger cellule et total. */
+  estLigneProjetee?: (id: string) => boolean
 }
 
 /**
@@ -1808,8 +1813,14 @@ export interface LigneChargePhase {
   phase: PhaseCode
   /** heures PLANIFIÉES par les phases actives (`chargeParPhase`) */
   planifiees: number
-  /** heures POINTÉES cette semaine sur ce projet et cette phase */
+  /** heures POINTÉES cette semaine sur ce projet et cette phase — saisies
+   *  ET lignes projetées du chrono confondues : le chiffre qu'on compare
+   *  aux planifiées */
   pointees: number
+  /** la part SAISIE seule — ce que la cellule éditable montre et écrit.
+   *  Sans l'autorité `estLigneProjetee`, vaut `pointees` (aucun partage
+   *  n'est inventé) ; l'écart `pointees - saisies` est la part du chrono. */
+  saisies: number
 }
 
 /** une personne sur la semaine : son bilan, ses jours de congé, son détail */
@@ -1912,12 +1923,29 @@ export function semaineComplete(
     const pointees = new Map(
       heuresPointeesSemaine(state, l.personne, lundi).map((x) => [`${x.projetId}|${x.phase}`, x.heures]),
     )
+    // B.5 — la part du chrono par ligne, quand l'autorité est fournie : la
+    // cellule éditable de l'accueil ne montre et n'écrit que la SAISIE, et
+    // c'est ici que le partage se calcule — pas dans l'écran, qui n'a pas le
+    // droit de relire `state.temps` (une agrégation, un propriétaire).
+    const projetee = autorites.estLigneProjetee
+    const chronoParCle = new Map<string, number>()
+    if (projetee) {
+      for (const t of state.temps || []) {
+        if (t.personne !== l.personne || t.semaine !== lundi || !projetee(t.id)) continue
+        const cle = `${t.projetId}|${t.phase}`
+        chronoParCle.set(cle, (chronoParCle.get(cle) || 0) + (t.heures || 0))
+      }
+    }
+    // sans autorité, aucun partage n'est inventé : `saisies` vaut `pointees`
+    const saisiesDe = (cle: string, total: number): number =>
+      projetee ? Math.max(0, Math.round((total - (chronoParCle.get(cle) || 0)) * 100) / 100) : total
     const charges: LigneChargePhase[] = chargeParPhase(state, l.personne, lundi).map((c) => ({
       projetId: c.projetId,
       nomProjet: c.nomProjet,
       phase: c.phase,
       planifiees: c.heures,
       pointees: pointees.get(`${c.projetId}|${c.phase}`) ?? 0,
+      saisies: saisiesDe(`${c.projetId}|${c.phase}`, pointees.get(`${c.projetId}|${c.phase}`) ?? 0),
     }))
     // une heure pointée là où rien n'était planifié ne disparaît pas : c'est
     // le cas le plus fréquent d'une semaine réelle, et une ligne invisible
@@ -1932,6 +1960,7 @@ export function semaineComplete(
         phase: cle.slice(coupure + 1) as PhaseCode,
         planifiees: 0,
         pointees: heures,
+        saisies: saisiesDe(cle, heures),
       })
     }
     return {

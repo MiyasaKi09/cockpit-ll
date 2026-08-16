@@ -31,7 +31,7 @@ import { fmtDate, fmtHeures, lienGmail } from '../util'
 import { LIBELLES_PHASES, PHASES_ORDRE } from '../miqcp'
 import { messageArretHonnete } from './ChronoBarre'
 import { type ChronoActif, arreterChrono, basculerChrono, chronoDe, poserChrono } from '../chrono'
-import { type Pointage, tempsParTache } from '../pointages'
+import { type Pointage, heuresDepuisMinutes, tempsParTache } from '../pointages'
 import {
   LIBELLES_PRIORITE_TACHE,
   LIBELLES_SOURCE_TACHE,
@@ -103,7 +103,7 @@ export function useChronoTache() {
     // — et jusqu'où elle l'a été (`messageArretHonnete`).
     toast(
       arret
-        ? `${messageArretHonnete(arret.message, !!arret.pointage)} Chrono démarré sur « ${t.titre} ».`
+        ? `${messageArretHonnete(arret.message, arret.pointage)} Chrono démarré sur « ${t.titre} ».`
         : `Chrono démarré sur « ${t.titre} ».`,
       { tone: 'ok' },
     )
@@ -116,7 +116,7 @@ export function useChronoTache() {
       d.chronos = poserChrono(d.chronos as ChronoActif[], null, qui)
       if (pointage) d.pointages = [...(d.pointages || []), pointage]
     })
-    toast(messageArretHonnete(message, !!pointage), { tone: pointage ? 'ok' : 'warn' })
+    toast(messageArretHonnete(message, pointage), { tone: pointage ? 'ok' : 'warn' })
   }
 
   return {
@@ -171,10 +171,15 @@ export default function FicheTache({ tache, onClose }: { tache: TacheInterne; on
   const phasesDisponibles = phasesDuProjet(t.projetId)
 
   /** temps chronométré sur cette tâche — lu par l'autorité de la notion
-   *  (`tempsParTache`), pas recompté ici : la projection vers
-   *  `tempsEnregistre` (B.9) n'est pas branchée, le chiffre n'a donc encore
-   *  aucun autre chemin pour se montrer. */
+   *  (`tempsParTache`), pas recompté ici. Depuis B.5, un pointage qui porte
+   *  projet et phase entre aussi dans la feuille et la marge ; celui qui n'a
+   *  que la tâche compte ICI seulement — la clé de la feuille exige les deux. */
   const heuresChronometrees = tempsParTache(state.pointages as Pointage[]).get(t.id) ?? 0
+  const heuresOrphelines = heuresDepuisMinutes(
+    ((state.pointages as Pointage[]) || [])
+      .filter((p) => p.tacheId === t.id && p.fin && (!p.projetId || !p.phase))
+      .reduce((s, p) => s + (p.minutes || 0), 0),
+  )
 
   return (
     <Modal titre={t.titre} onClose={onClose} large>
@@ -431,17 +436,23 @@ export default function FicheTache({ tache, onClose }: { tache: TacheInterne; on
                 </>
               )}
             </div>
-            {/* « Enregistré : 0 h » sous un bouton qu'on vient d'arrêter est
-                le mensonge que l'audit pointe (T4) : `tempsEnregistre` est une
-                projection que personne n'a encore branchée. On lit donc le
-                temps chronométré là où il est — par `tempsParTache`, qui EST
-                l'autorité de cette notion — et on dit qu'il n'est pas compté.
-                Cette ligne disparaît au branchement de B.9. */}
+            {/* Le temps chronométré, lu par `tempsParTache` — l'autorité de
+                cette notion. Depuis B.5, ce qui porte projet et phase est
+                aussi compté dans la feuille et la marge ; ce qui ne les porte
+                pas compte ici seulement, et la ligne le DIT avec le geste qui
+                répare — le rattachement vit sous « Ma semaine ». */}
             {heuresChronometrees > 0 && (
               <div className="muted small" style={{ marginTop: 2 }}>
-                {fmtHeures(heuresChronometrees)} chronométrées sur cette tâche, pas encore comptées
-                ci-dessus ni dans la marge — le détail est sous « Ma semaine » dans{' '}
-                <a href="#/temps">Temps passé</a>.
+                {fmtHeures(heuresChronometrees)} chronométrées sur cette tâche
+                {heuresOrphelines > 0 ? (
+                  <>
+                    {' '}— dont {fmtHeures(heuresOrphelines)} sans projet ou sans phase, donc hors
+                    feuille de temps : à rattacher sous « Ma semaine » dans{' '}
+                    <a href="#/temps">Temps passé</a>.
+                  </>
+                ) : (
+                  <> — comptées dans « Ma semaine » et la marge du projet.</>
+                )}
               </div>
             )}
             {/* M.3 — démarrage en un appui. La bascule est dans `chrono.ts` :

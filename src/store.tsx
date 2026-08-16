@@ -5,6 +5,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import type { ReactNode } from 'react'
 import type { AppState, DocumentCorpus, Entreprise, MarcheTravaux, PeriodeIntervention, Personne } from './types'
 import { fold, todayISO, uid } from './util'
+import { reconcilierTempsChrono } from './pointages'
 import { synchroniserEnveloppe } from './planningTravaux'
 import { seedState, STATE_VERSION } from './seed'
 import { PHASES_ORDRE } from './miqcp'
@@ -348,6 +349,12 @@ function migrate(parsed: AppState): AppState {
   // optionnels : les situations et factures existantes sont conservées telles
   // quelles (spread de `parsed`), rien à amorcer.
   amorcerFinance(etat)
+  // B.5 — un état qui ARRIVE (chargement, import, état distant) est remis
+  // d'équerre comme un état qui mute : mêmes pointages ⇒ mêmes lignes `tp-`
+  // dans la grille. Sans ce passage, un export repris ou un poste resté sur
+  // une version antérieure afficherait des totaux sans le temps du chrono —
+  // et la marge ne dirait pas la même chose sur les deux postes.
+  reconcilierTempsChrono(etat)
   return etat
 }
 
@@ -515,6 +522,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setState((prev) => {
       const draft = structuredClone(prev)
       fn(draft)
+      // B.5 — le chrono compte : après CHAQUE mutation, les lignes `tp-` de
+      // la grille sont la projection exacte des pointages. Ici et pas dans
+      // chaque écran : un site d'appel par geste finirait par en oublier un,
+      // et le total divergerait de la marge sans qu'aucune erreur ne le dise.
+      reconcilierTempsChrono(draft)
       refEtat.current = draft
       marquerEtatLocalEnAttente(draft.settings.sync)
       const erreur = persist(draft)

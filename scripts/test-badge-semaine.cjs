@@ -15,23 +15,22 @@
 //    or c'est la seule source de la marge des projets.
 //    `capacitePersonneSemaine` (derive.ts) savait déjà déduire les congés.
 //
-// 2. LE TEMPS QUI S'ÉVAPORE (T4, action 26). Arrêter un chrono affiche
-//    « 1 h 20 enregistrées ». C'est vrai : le pointage est écrit dans
-//    `state.pointages`. Ce qui est faux, c'est ce que la phrase laisse
-//    entendre — `projeterVersTemps` et `tempsParTache` (`pointages.ts`)
-//    n'ont AUCUN appelant, la collection est écrite-seulement. Trois issues,
-//    toutes coûteuses : le temps est perdu, ou ressaisi (et compté DEUX fois
-//    le jour du branchement), ou cru compté (et la marge ment dès
-//    aujourd'hui).
+// 2. LE TEMPS QUI S'ÉVAPORE (T4, action 26). Arrêter un chrono affichait
+//    « 1 h 20 enregistrées » alors que `projeterVersTemps` n'avait AUCUN
+//    appelant : la collection était écrite-seulement, et l'écran portait un
+//    PANSEMENT D'ATTENTE — la mention « non reporté » et son avertissement.
 //
-// CE QUE CE TEST DEVIENDRA
-// -------------------------
-// Le point 2 est un PANSEMENT D'ATTENTE, pas un acquis : au branchement de
-// la projection (B.4/B.5/B.9 du plan, `test-conservation-totaux.cjs` déjà
-// écrit), le temps chronométré entrera dans le total et la mention se
-// retirera. Ce jour-là, les assertions §3 ci-dessous s'inverseront — c'est
-// prévu, et elles disent laquelle et pourquoi. Le point 1, lui, est
-// définitif.
+// CE QUE CE TEST EST DEVENU (B.5)
+// --------------------------------
+// La première version de ce fichier annonçait sa propre inversion : « au
+// branchement de la projection, la mention se retirera ». C'est fait — le
+// store réconcilie `state.temps` avec les pointages à chaque mutation et
+// sur tout état entrant (`reconcilierTempsChrono`, porte tenue par
+// `test-conservation-totaux.cjs` §10). Le §4 tient désormais la nouvelle
+// vérité : le temps chronométré est COMPTÉ, il reste visible avec ses
+// gestes, et l'ancien avertissement a disparu — le maintenir ferait
+// RESSAISIR du temps déjà compté, donc le compter deux fois. Le point 1,
+// lui, était définitif et n'a pas bougé.
 
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
@@ -242,63 +241,82 @@ const afficheTemps = textesAffiches('src/modules/Temps.tsx')
   )
 }
 
-// --- 4. le temps chronométré est VISIBLE quelque part ----------------------
+// --- 4. le temps chronométré est COMPTÉ, et reste visible avec ses gestes --
 //
-// Tant que la projection n'est pas branchée, la seule protection est que le
-// temps enregistré se VOIE, avec les trois gestes qui restent humains :
-// voir, corriger, supprimer. Sans cela il n'existe nulle part.
+// Depuis B.5, un chrono arrêté qui porte projet et phase entre dans
+// `state.temps` en ligne `tp-…` (réconciliation du store) : le total de la
+// semaine et la marge le comptent SANS lire les pointages. Ce paragraphe
+// tient trois choses : le total garde un seul chemin de lecture, l'écran
+// montre le chrono avec ses gestes — corriger, supprimer, et RATTACHER ce
+// qui n'a pas de projet ou de phase — et l'ancien avertissement a disparu.
 
 {
-  // la prémisse, vérifiée et non supposée : le total de la semaine ne lit PAS
-  // les pointages. C'est ce qui rend la mention « non reporté » vraie.
-  // AU BRANCHEMENT (B.4/B.5/B.9), c'est CETTE assertion qui s'inverse en
-  // premier — et le bloc d'attente du §4 se retire avec elle.
+  // le total ne lit toujours PAS les pointages : la projection entre par le
+  // STORE, en écriture. Un second chemin de LECTURE vers la même grandeur
+  // finit toujours par diverger — la règle de derive.ts vaut pour temps.ts.
   assert.doesNotMatch(
     lire('src/temps.ts'),
     /pointages/,
-    'le total de la semaine ignore encore les pointages : c’est le fait que l’écran doit avouer, pas cacher',
+    'le total lit `state.temps`, où la projection ÉCRIT — jamais les pointages directement : deux chemins vers la même grandeur divergent toujours',
   )
 
+  // l'ancien pansement a disparu : le maintenir ferait RESSAISIR du temps
+  // déjà compté — donc le compter deux fois, le défaut exact qu'il fermait
+  assert.doesNotMatch(
+    afficheTemps,
+    /non reporté|reporter à la main/,
+    'l’avertissement d’attente s’est retiré avec le branchement, comme la première version de ce test l’annonçait',
+  )
   assert.match(
     afficheTemps,
-    /Temps chronométré non reporté/,
-    'sous « Ma semaine », le temps chronométré de la semaine s’affiche — sinon il n’existe nulle part (T4)',
+    /Au chrono cette semaine/,
+    'compté n’est pas caché : le chrono reste visible sous « Ma semaine » — c’est là que vivent ses gestes',
   )
   assert.match(
     ecran,
     /state\.pointages/,
-    'le chiffre vient de la collection réellement écrite par le chrono, pas d’une seconde mémoire',
-  )
-  assert.match(
-    afficheTemps.replace(/\s+/g, ' '),
-    /ni dans le total ci-dessus, ni dans la marge/,
-    'la mention dit EXACTEMENT ce qui n’est pas compté : le total de l’écran et la marge des projets',
+    'le chiffre du bloc vient de la collection réellement écrite par le chrono, pas d’une seconde mémoire',
   )
 
-  // les trois gestes humains — le report reste une décision (§15)
+  // les gestes humains — corriger, supprimer, rattacher
   assert.match(afficheTemps, /Voir le détail/, 'voir : la liste se déplie')
   assert.match(ecran, /const corrigerDuree = /, 'corriger : la durée d’un chrono se rectifie sur place')
   assert.match(ecran, /const supprimerPointage = /, 'supprimer : un chrono oublié en marche se retire')
   assert.match(
     ecran,
+    /const rattacherPointage = /,
+    'rattacher : le SEUL pointage que la projection ne peut pas compter est celui sans projet ou sans phase — le geste qui répare vit ici',
+  )
+  assert.match(
+    afficheTemps,
+    /sans projet ou sans phase/,
+    'et l’écran DIT pourquoi ces heures-là n’entrent pas dans la feuille : la clé exige projet ET phase',
+  )
+  assert.match(
+    ecran,
     /const supprimerPointage = [\s\S]{0,600}?undo: \(\) => replace\(snap\)/,
     'la suppression laisse un « Annuler » — patron du dépôt (ui.tsx), sans quoi le geste devient risqué',
   )
-  // …et les trois gestes sont réellement CÂBLÉS à un contrôle : une fonction
+  assert.match(
+    ecran,
+    /const rattacherPointage = [\s\S]{0,900}?undo: \(\) => replace\(snap\)/,
+    'le rattachement aussi laisse un « Annuler » : il fait bouger le total et la marge au geste même',
+  )
+  // …et les gestes sont réellement CÂBLÉS à un contrôle : une fonction
   // écrite mais jamais appelée protège exactement autant qu'aucune fonction
-  for (const geste of ['corrigerDuree', 'supprimerPointage']) {
+  for (const geste of ['corrigerDuree', 'supprimerPointage', 'rattacherPointage']) {
     assert.ok(
       (ecran.match(new RegExp(`\\b${geste}\\b`, 'g')) || []).length >= 2,
       `« ${geste} » doit être appelé depuis la liste, pas seulement déclaré`,
     )
   }
-  // ce que l'écran ne fait PAS : reporter tout seul. On lit les IMPORTS,
-  // pas le texte : le fichier nomme `projeterVersTemps` en commentaire, pour
-  // expliquer précisément qu'il ne l'appelle pas.
+  // ce que l'écran emprunte à pointages.ts : de quoi LIRE et DISTINGUER —
+  // toujours pas de quoi projeter lui-même. La projection n'a qu'un
+  // appelant, le store ; un second site de projection divergerait.
   assert.deepEqual(
     importesDe('src/modules/Temps.tsx', '../pointages').sort(),
-    ['heuresDepuisMinutes', 'lundiDe'],
-    'l’écran d’attente ne branche pas la projection en douce : il n’emprunte à pointages.ts que de quoi LIRE. Le report est le livrable B.5, avec son test de conservation des totaux.',
+    ['estLigneChrono', 'facturableParDefaut', 'heuresDepuisMinutes', 'lundiDe'],
+    'l’écran lit, distingue les lignes projetées et applique la règle B.7 du facturable — il ne PROJETTE pas : `reconcilierTempsChrono` n’a qu’un appelant, le store',
   )
 
   // un chrono EN COURS n'est pas du temps passé : il ne se compte pas
@@ -331,15 +349,30 @@ const afficheTemps = textesAffiches('src/modules/Temps.tsx')
     /export function messageArretHonnete/,
     'le message d’arrêt est une fonction exportée : une seule formulation pour tous les points d’arrêt',
   )
+  // le cas nominal (projet + phase) passe SANS mention : le temps est compté,
+  // « X h enregistrées » est toute la vérité — une confirmation de plus à
+  // chaque arrêt serait du bruit, et le bruit finit ignoré comme les badges
   assert.match(
-    textesAffiches('src/modules/ChronoBarre.tsx'),
-    /Pas encore compté dans la feuille/,
-    'le toast avoue ce que « X h enregistrées » laissait croire — sans quoi le temps est cru compté, et la marge ment',
+    barre,
+    /if \(pointage\.projetId && pointage\.phase\) return message/,
+    'projet ET phase ⇒ le message d’arrêt n’ajoute rien : le pointage entre tout seul dans la feuille et la marge',
   )
   assert.match(
     barre,
-    /if \(!enregistre\) return message/,
+    /if \(!pointage\) return message/,
     'rien d’enregistré (chrono sous la minute) ⇒ aucune promesse ajoutée : on ne renvoie pas vers une ligne qui n’existe pas',
+  )
+  // le seul cas qui parle encore : sans projet ou sans phase, la clé de la
+  // feuille exige les deux — et le message donne le geste qui répare
+  assert.match(
+    textesAffiches('src/modules/ChronoBarre.tsx'),
+    /pas compté dans la feuille — à rattacher sous « Ma semaine »/,
+    'un pointage sans projet ou sans phase est le seul que la projection ne compte pas : le toast le dit AVEC le geste qui répare',
+  )
+  assert.doesNotMatch(
+    textesAffiches('src/modules/ChronoBarre.tsx'),
+    /Pas encore compté/,
+    'l’ancien pansement d’attente a disparu : il promettait un report à la main qui compterait le temps deux fois',
   )
 
   const fiche = lire('src/modules/FicheTache.tsx')
@@ -349,25 +382,35 @@ const afficheTemps = textesAffiches('src/modules/Temps.tsx')
     'la fiche tâche IMPORTE le message au lieu de le reformuler : deux phrases pour le même arrêt feraient deux vérités',
   )
 
-  // L'AUTRE endroit où le temps devait être visible, et où il mentait le plus
-  // fort : « Enregistré : 0:00 » juste sous le bouton qu'on vient d'arrêter
-  // (T4). `Tache.tempsEnregistre` est une projection non branchée ; la fiche
-  // lit donc le temps là où il EST — par `tempsParTache`, l'autorité de cette
-  // notion — et dit qu'il n'est pas compté.
+  // L'AUTRE endroit où le temps est visible : la fiche tâche lit le temps
+  // chronométré par `tempsParTache` — l'autorité de la notion — et dit le
+  // NOUVEAU partage : compté dans la feuille avec projet et phase, compté
+  // ici seulement sans eux, avec le geste qui répare.
   assert.ok(
     importesDe('src/modules/FicheTache.tsx', '../pointages').includes('tempsParTache'),
     'la fiche tâche lit le temps chronométré par `tempsParTache` (pointages.ts) : recompter à la main ferait une seconde autorité pour la même notion',
   )
   assert.match(
     textesAffiches('src/modules/FicheTache.tsx'),
-    /chronométrées sur cette tâche, pas encore comptées/,
-    'la fiche tâche AVOUE l’écart au lieu d’afficher « Enregistré : 0 h » sous un chrono qu’on vient d’arrêter — le mensonge le plus visible du constat T4',
+    /chronométrées sur cette tâche/,
+    'le temps chronométré d’une tâche reste visible sur sa fiche — c’est là qu’on vient de cliquer « arrêter »',
+  )
+  assert.doesNotMatch(
+    textesAffiches('src/modules/FicheTache.tsx'),
+    /pas encore comptées/,
+    'la fiche ne dit plus « pas encore comptées » : depuis B.5 c’est faux pour tout pointage portant projet et phase',
+  )
+  assert.match(
+    textesAffiches('src/modules/FicheTache.tsx').replace(/\s+/g, ' '),
+    /sans projet ou sans phase, donc hors feuille de temps/,
+    'et quand une partie du temps n’entre PAS dans la feuille, la fiche le dit avec la raison et le chemin du rattachement',
   )
 }
 
 console.log(
   'Badge de semaine & chrono : deux jours de congé + 21 h saisies ⇒ « complète » (35 h fixes disaient ' +
     '« incomplète »), capacité personnelle, nulle quand la semaine est entièrement absente, même règle sur ' +
-    'le papier du plan de charge ; et le temps chronométré non reporté est visible sous « Ma semaine » avec ' +
-    'ses trois gestes, un seul message d’arrêt pour tous les points d’arrêt.',
+    'le papier du plan de charge ; et le temps chronométré est COMPTÉ (B.5) — visible sous « Ma semaine » ' +
+    'avec ses gestes (corriger, supprimer, rattacher), un seul message d’arrêt qui ne parle plus que des ' +
+    'pointages sans projet ou sans phase.',
 )

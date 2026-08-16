@@ -15,10 +15,13 @@
 //
 // LA RÈGLE QUI GOUVERNE TOUT CE FICHIER
 // --------------------------------------
-// `state.temps` cesse d'être saisi et devient une PROJECTION. `derive.ts`
-// n'est pas touché : `heuresReelles`, la marge, le plan de charge et la
-// chaîne financière continuent de lire `state.temps` sans savoir d'où il
-// vient. C'est ce qui rend la bascule sûre — et c'est aussi ce qui rend
+// `state.temps` porte DEUX écritures : la saisie hebdomadaire des écrans
+// (lignes `tps-…`) et la projection des pointages (lignes `tp-…`),
+// réconciliées par le store — `reconcilierTempsChrono` ci-dessous, appelé
+// après chaque mutation et sur tout état entrant. `derive.ts` n'est pas
+// touché : `heuresReelles`, la marge, le plan de charge et la chaîne
+// financière continuent de lire `state.temps` sans savoir d'où il vient.
+// C'est ce qui rend la bascule sûre — et c'est aussi ce qui rend
 // `scripts/test-conservation-totaux.cjs` indispensable : si la projection
 // perd un centième d'heure, la marge se met à mentir sans qu'aucune
 // erreur ne se produise.
@@ -147,7 +150,7 @@ export function jourDuPointage(p: Pointage): string {
 // ------------------------------------------------------------
 
 /** clé d'agrégation de la grille hebdomadaire existante */
-function cleTemps(p: Pointage, semaine: string): string {
+function cleTemps(p: PointageProjetable, semaine: string): string {
   return `${semaine}|${p.personne}|${p.projetId}|${p.phase}`
 }
 
@@ -171,7 +174,14 @@ function cleTemps(p: Pointage, semaine: string): string {
  * recalcul produirait un état différent, et la synchronisation croirait à
  * une modification à chaque ouverture.
  */
-export function projeterVersTemps(pointages: Pointage[]): TempsEntry[] {
+/** les seuls champs que la projection lit — `PointageLocal` (types.ts) les
+ *  porte tous, la projection accepte donc les deux formes sans conversion */
+export type PointageProjetable = Pick<
+  Pointage,
+  'personne' | 'debut' | 'fin' | 'minutes' | 'projetId' | 'phase'
+>
+
+export function projeterVersTemps(pointages: PointageProjetable[]): TempsEntry[] {
   const par = new Map<string, { entree: TempsEntry; minutes: number }>()
   for (const p of pointages || []) {
     if (!p.fin) continue
@@ -200,6 +210,43 @@ export function projeterVersTemps(pointages: Pointage[]): TempsEntry[] {
   return [...par.values()]
     .map(({ entree, minutes }) => ({ ...entree, heures: heuresDepuisMinutes(minutes) }))
     .sort((a, b) => a.id.localeCompare(b.id))
+}
+
+/** vrai pour une ligne de `state.temps` ISSUE de la projection (`tp-…`).
+ *
+ *  Les saisies d'écran portent `tps-…` (et le hors-projet `thp-…`) : le
+ *  « s » suffit à les distinguer, et `startsWith('tp-')` ne confond pas les
+ *  deux. La règle que cette fonction fait tenir : une cellule éditable ne
+ *  touche JAMAIS une ligne projetée — la réconciliation la réécrirait au
+ *  geste suivant, et la correction disparaîtrait sans erreur ni trace. */
+export function estLigneChrono(id: string): boolean {
+  return id.startsWith('tp-')
+}
+
+/**
+ * B.5 — LE branchement, en un seul endroit.
+ *
+ * Le store appelle cette fonction après chaque mutation (`update`) et sur
+ * tout état entrant (`migrate` : chargement, import, état distant). Elle
+ * remplace les lignes projetées (`tp-…`) par la projection fraîche des
+ * pointages et ne touche à rien d'autre : les saisies manuelles traversent
+ * par référence, à l'identique.
+ *
+ * Idempotente et déterministe — mêmes pointages, mêmes lignes — donc sûre à
+ * rejouer sur les deux postes : la synchronisation converge au lieu de voir
+ * une modification à chaque passage. Quand il n'y a rien à faire (aucun
+ * pointage projetable, aucune ligne `tp-` en place), elle ne réécrit pas le
+ * tableau du tout.
+ */
+export function reconcilierTempsChrono(etat: {
+  pointages?: PointageProjetable[]
+  temps: TempsEntry[]
+}): void {
+  const projete = projeterVersTemps(etat.pointages || [])
+  const existantes = etat.temps || []
+  const saisies = existantes.filter((t) => !estLigneChrono(t.id))
+  if (projete.length === 0 && saisies.length === existantes.length) return
+  etat.temps = [...saisies, ...projete]
 }
 
 // ------------------------------------------------------------

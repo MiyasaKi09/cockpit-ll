@@ -356,7 +356,122 @@ assert.doesNotMatch(
 )
 assert.match(derive, /state\.temps/, 'et il continue bien de lire la grille')
 
+// ============================================================
+// 10. B.5 — LE branchement : la réconciliation, et sa porte
+// ============================================================
+//
+// `projeterVersTemps` a vécu deux mois sans appelant — du code payé et
+// testé, sans fil. Le branchement vit dans le STORE : après chaque mutation
+// et sur tout état entrant, les lignes `tp-…` de `state.temps` sont la
+// projection exacte des pointages. Ce paragraphe tient les deux bouts :
+// la fonction de réconciliation est correcte (en unité), et le store
+// l'appelle réellement aux deux entrées (en statique) — « livré sans
+// porte » est le mode de panne dominant de ce dépôt.
+
+{
+  const manuelle = { id: 'tps-abc', semaine: '2026-08-03', personne: 'Julien', projetId: 'P01', phase: 'APD', heures: 4 }
+  const perimee = {
+    id: 'tp-2026-07-27|Julien|P01|APD',
+    semaine: '2026-07-27',
+    personne: 'Julien',
+    projetId: 'P01',
+    phase: 'APD',
+    heures: 99,
+  }
+  const etat = {
+    pointages: [pt({ debut: '2026-08-03T09:00:00Z', fin: '2026-08-03T10:30:00Z' })],
+    temps: [manuelle, perimee],
+  }
+  P.reconcilierTempsChrono(etat)
+  assert.equal(etat.temps[0], manuelle, 'la saisie manuelle traverse PAR RÉFÉRENCE, à l’identique — la réconciliation ne touche qu’aux lignes projetées')
+  const projetees = etat.temps.filter((t) => P.estLigneChrono(t.id))
+  assert.equal(projetees.length, 1, 'la ligne périmée (99 h) est REMPLACÉE par la projection fraîche, pas conservée à côté')
+  assert.equal(projetees[0].heures, 1.5)
+  assert.equal(projetees[0].semaine, '2026-08-03')
+
+  // idempotente : rejouée, elle est un point fixe — sinon la synchronisation
+  // verrait une modification à chaque passage, sur les deux postes
+  const avant = JSON.stringify(etat.temps)
+  P.reconcilierTempsChrono(etat)
+  assert.equal(JSON.stringify(etat.temps), avant, 'rejouer la réconciliation ne change rien')
+
+  // quand il n'y a rien à faire, le tableau n'est pas même réécrit
+  const calme = { pointages: [], temps: [manuelle] }
+  const ref = calme.temps
+  P.reconcilierTempsChrono(calme)
+  assert.equal(calme.temps, ref, 'aucun pointage projetable, aucune ligne tp- en place : le tableau reste le même objet')
+
+  // le préfixe distingue les trois familles d'identifiants réels du dépôt
+  assert.equal(P.estLigneChrono('tp-2026-08-03|Julien|P01|APD'), true)
+  assert.equal(P.estLigneChrono('tps-p03-j1'), false, '`tps-…` (saisie d’écran, seed compris) n’est PAS une ligne projetée — le « s » suffit à trancher')
+  assert.equal(P.estLigneChrono('thp-abc'), false, 'le hors-projet non plus')
+}
+
+// — la PORTE : le store appelle la réconciliation aux DEUX entrées.
+{
+  const store = lire('src/store.tsx')
+  assert.match(
+    store,
+    /import \{ reconcilierTempsChrono \} from '\.\/pointages'/,
+    'le store importe la réconciliation depuis son autorité (pointages.ts) — pas de recopie locale',
+  )
+  assert.match(
+    store,
+    /fn\(draft\)[\s\S]{0,600}?reconcilierTempsChrono\(draft\)/,
+    'update() réconcilie APRÈS chaque mutation locale : c’est ce qui fait apparaître le chrono dans le total au geste même — un site par écran en oublierait un',
+  )
+  assert.match(
+    store,
+    /reconcilierTempsChrono\(etat\)\s*\n\s*return etat/,
+    'migrate() réconcilie tout état ENTRANT (chargement, import, état distant) — sans quoi deux postes n’afficheraient pas la même marge',
+  )
+}
+
+// ============================================================
+// 11. Les cellules n'éditent JAMAIS une ligne projetée
+// ============================================================
+//
+// Le piège du branchement : les cellules éditables retrouvent leur ligne
+// par CLÉ (semaine, personne, projet, phase), pas par identifiant. Sans
+// filtre, la cellule attrape la ligne `tp-…`, l'édite — et la
+// réconciliation la réécrit au geste suivant : la correction disparaît
+// sans erreur ni trace. Chaque `find`/`findIndex` sur `state.temps` de ces
+// deux écrans doit donc exclure les lignes projetées.
+
+// NB : le Cockpit n'apparaît que pour son ÉCRITURE (`d.temps.findIndex`) —
+// sa lecture passe par `derive.semaineParPersonne` (champ `saisies`,
+// autorité `estLigneProjetee`), test-accueil.cjs lui interdit de relire la
+// grille en direct.
+for (const [fichier, motif] of [
+  ['src/modules/Temps.tsx', /d\.temps\.findIndex\(/g],
+  ['src/modules/Temps.tsx', /state\.temps\.find\(/g],
+  ['src/modules/Cockpit.tsx', /d\.temps\.findIndex\(/g],
+]) {
+  const source = lire(fichier)
+  let m
+  let n = 0
+  while ((m = motif.exec(source))) {
+    n++
+    const fenetre = source.slice(m.index, m.index + 320)
+    assert.ok(
+      fenetre.includes('estLigneChrono'),
+      `${fichier} : l’accès par clé n°${n} (${motif.source}) doit exclure les lignes projetées (estLigneChrono) — ` +
+        'sinon la cellule édite une ligne tp- et la réconciliation défait le geste en silence',
+    )
+  }
+  assert.ok(n > 0, `${fichier} : au moins un accès par clé attendu (${motif.source}) — le motif ne trouve plus rien, le test ne vérifie plus rien`)
+}
+
+// la copie de semaine ne recopie jamais du chrono en saisie manuelle : il
+// serait compté deux fois — une fois recopié, une fois reprojeté
+assert.match(
+  lire('src/modules/Temps.tsx'),
+  /const temps = state\.temps\.filter\(\s*\(t\) => !estLigneChrono\(t\.id\)/,
+  '« Copier la semaine précédente » ne reprend que les saisies : recopier une ligne tp- doublerait le temps',
+)
+
 console.log(
   'Conservation des totaux : minutes sommées puis divisées une seule fois, minuit sans découpe, ' +
-    'corrections préservées, deux projections cohérentes, et `derive.ts` intact.',
+    'corrections préservées, deux projections cohérentes, `derive.ts` intact — et le branchement B.5 ' +
+    'a sa porte : le store réconcilie aux deux entrées, aucune cellule n’édite une ligne projetée.',
 )

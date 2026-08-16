@@ -138,6 +138,7 @@
 
 import { createClient, type SupabaseClient } from 'jsr:@supabase/supabase-js@2.110.0'
 import { adressesMembresActifs, adresseNormalisee, jetonDeMembreActif } from '../_shared/membres.ts'
+import { detecter, empreinteDetection } from '../_shared/detecteurs.ts'
 import {
   classerAxes,
   genreDepuisTypeContact,
@@ -452,6 +453,128 @@ async function sha256Hex(octets: Uint8Array): Promise<string> {
   return Array.from(new Uint8Array(h), (b) => b.toString(16).padStart(2, '0')).join('')
 }
 
+// ---------- A.10 : les détections déterministes ----------
+//
+// L'étage 1 (`../_shared/detecteurs.ts`) tourne SANS clé d'API, sans
+// réseau et sans coût : quelques expressions régulières sur le texte d'un
+// message. Sa seule destination est la table `propositions`, jamais
+// `workspace.data` — une détection écrite dans l'état partagé serait une
+// tâche, une décision ou un risque créés par une machine, ce que le §15
+// interdit et que le domaine SQL de `statut` rend impossible.
+//
+// Aucune colonne humaine n'est écrite ici : ni `statut` (son défaut est
+// `proposee`), ni `traite_par`, ni `traite_le`. Rien ne quitte l'état
+// `proposee` sans signature — c'est la garantie du schéma, et l'ingestion
+// ne doit pas être l'exception qui la contourne.
+//
+// SEULS LES MESSAGES RATTACHÉS. Une proposition ne porte pas de projet :
+// il se lit par jointure sur `communications.projet_id`. Détecter sur un
+// message non rattaché produirait donc des propositions sans projet, que
+// la revue ne saurait ni classer ni transformer en tâche — du bruit dans
+// la file exactement là où elle doit rester crédible.
+
+/** Ce que le détecteur lit d'un message : l'objet, puis le corps. L'objet
+ *  porte souvent la demande à lui seul (« Relance DCE avant vendredi »),
+ *  et le séparateur est une fin de phrase pour que le découpage ne colle
+ *  pas l'objet à la première ligne du corps. */
+function texteDetectable(objet: string, corps: string): string {
+  return `${(objet || '').trim()}.\n${corps || ''}`
+}
+
+/**
+ * Dépose les détections d'un message, sans jamais en redéposer une déjà là.
+ *
+ * L'index unique de la table est PARTIEL (`where empreinte is not null`) :
+ * Postgres refuse d'arbitrer un `on conflict` sur un index partiel sans son
+ * prédicat, que PostgREST ne sait pas transmettre. On déduplique donc
+ * EXPLICITEMENT, par une lecture préalable — une requête de plus, et
+ * l'idempotence ne dépend pas d'une inférence qui pourrait changer sous
+ * nos pieds. Sans elle, le cron de dix minutes redéposerait les mêmes
+ * détections indéfiniment, et la file de revue serait illisible en un jour.
+ */
+async function deposerDetections(
+  sb: SupabaseClient,
+  communicationId: string,
+  objet: string,
+  corps: string,
+  envoyeLe: string | null,
+): Promise<number> {
+  const detections = detecter(texteDetectable(objet, corps), envoyeLe)
+  if (detections.length === 0) return 0
+
+  const { data: connues, error: erreurLecture } = await sb
+    .from('propositions')
+    .select('genre, empreinte')
+    .eq('communication_id', communicationId)
+  // en cas d'échec de lecture on s'abstient : insérer à l'aveugle
+  // doublerait la file, et une détection manquée se rattrape au passage
+  // suivant — l'inverse n'est pas vrai.
+  if (erreurLecture) return 0
+  const dejaLa = new Set((connues || []).map((p) => `${p.genre}|${p.empreinte}`))
+
+  const lignes = detections
+    .map((d) => ({ d, empreinte: empreinteDetection(d) }))
+    .filter(({ d, empreinte }) => !dejaLa.has(`${d.genre}|${empreinte}`))
+    .map(({ d, empreinte }) => ({
+      communication_id: communicationId,
+      genre: d.genre,
+      charge_utile: d.chargeUtile,
+      extrait: d.extrait,
+      confiance: d.confiance,
+      raisons: d.raisons,
+      origine: d.origine,
+      empreinte,
+    }))
+  if (lignes.length === 0) return 0
+
+  const { error } = await sb.from('propositions').insert(lignes)
+  return error ? 0 : lignes.length
+}
+
+/** combien de messages déjà indexés le rattrapage réexamine par passage */
+const RATTRAPAGE_MESSAGES = 60
+
+/**
+ * Le RATTRAPAGE — sans lui, la fonctionnalité ne produirait rien le jour
+ * de sa mise en service.
+ *
+ * Un message n'est ouvert qu'une fois : le curseur avance et ne redescend
+ * pas. Or les messages déjà indexés n'ont jamais vu les détecteurs, et
+ * surtout : un message indexé SANS projet puis rattaché à la main par un
+ * humain ne repasserait jamais par la boucle — c'est pourtant le cas le
+ * plus fréquent, puisque le rattachement est justement le geste humain que
+ * la chaîne attend.
+ *
+ * On réexamine donc, à chaque passage, les `RATTRAPAGE_MESSAGES` messages
+ * rattachés les plus récents. Ceux qui n'ont rien à donner sont réexaminés
+ * à chaque fois — c'est assumé : quelques dizaines d'expressions
+ * régulières sur des textes courts coûtent moins qu'une colonne de suivi
+ * de plus, et la fenêtre glissante borne le travail quoi qu'il arrive.
+ * Un message plus ancien que cette fenêtre et jamais rattaché reste sans
+ * détections : dit franchement plutôt que promis à moitié.
+ */
+async function rattraperDetections(sb: SupabaseClient): Promise<number> {
+  const { data, error } = await sb
+    .from('communications')
+    .select('id, objet, corps_extrait, envoye_le')
+    .not('projet_id', 'is', null)
+    .order('recu_le', { ascending: false })
+    .limit(RATTRAPAGE_MESSAGES)
+  if (error || !data) return 0
+
+  let deposees = 0
+  for (const c of data) {
+    deposees += await deposerDetections(
+      sb,
+      c.id as string,
+      (c.objet as string) || '',
+      (c.corps_extrait as string) || '',
+      (c.envoye_le as string) || null,
+    )
+  }
+  return deposees
+}
+
 // ---------- la ligne d'index ----------
 
 /** Le contexte du MESSAGE, identique pour toutes ses pièces. C'est lui qui
@@ -723,6 +846,7 @@ Deno.serve(async (req: Request) => {
   let sortants = 0
   let echecs = 0
   let messagesIndexes = 0
+  let detections = 0
   let curseurAtteint = borneBasse
 
   for (const id of ids) {
@@ -784,10 +908,26 @@ Deno.serve(async (req: Request) => {
       copies: msg.copies.map((d) => d.adresse),
       direction: msg.direction,
     })
-    const { error: erreurIndex } = await sb
+    const { data: ligneIndexee, error: erreurIndex } = await sb
       .from('communications')
       .upsert(ligneCommunication(msg, projet, axes, pieces.length), { onConflict: 'gmail_message_id' })
+      // `projet_id` est une colonne GÉNÉRÉE : elle vaut la correction humaine
+      // si elle existe, la proposition sinon. C'est elle qui décide si les
+      // détecteurs ont un projet où accrocher leurs propositions.
+      .select('id, projet_id')
+      .maybeSingle()
     if (!erreurIndex) messagesIndexes++
+
+    // A.10 — l'étage déterministe, sur le message qui vient d'entrer.
+    if (ligneIndexee?.id && ligneIndexee.projet_id) {
+      detections += await deposerDetections(
+        sb,
+        ligneIndexee.id as string,
+        msg.objet,
+        msg.corpsExtrait,
+        msg.envoyeLe,
+      )
+    }
     // ce que ce message vient d'apprendre au fil sert aux suivants du même
     // passage — un fil neuf se rattache d'un coup, pas message par message
     if (!filRattacheA && projet.projetId) projetDuFilParThread.set(msg.threadId, projet.projetId)
@@ -871,6 +1011,13 @@ Deno.serve(async (req: Request) => {
     }
   }
 
+  // A.10 — le rattrapage, APRÈS la boucle : un message rattaché à la main
+  // depuis le dernier passage n'a jamais vu les détecteurs, et il ne
+  // repasserait jamais par la boucle ci-dessus (le curseur ne redescend
+  // pas). C'est le cas le plus fréquent, puisque le rattachement est
+  // précisément le geste humain que la chaîne attend.
+  detections += await rattraperDetections(sb)
+
   // La tranche entièrement traitée fait avancer le curseur jusqu'à sa borne
   // haute, y compris quand elle était vide : sans cela, une période sans
   // courrier retiendrait le curseur pour toujours.
@@ -880,6 +1027,11 @@ Deno.serve(async (req: Request) => {
   const details = [
     `${ids.length} message(s) examiné(s) jusqu'au ${new Date(curseurSuivant).toISOString().slice(0, 16).replace('T', ' ')}`,
     `${messagesIndexes} indexé(s) dans la mémoire des échanges`,
+    // A.10 — le chiffre qui dit si l'étage déterministe sert à quelque
+    // chose. C'est lui qu'on relira dans un mois pour décider de garder
+    // les détecteurs ou de les débrancher : sans mesure affichée, une
+    // fonctionnalité inutile survit indéfiniment.
+    detections ? `${detections} détection(s) proposée(s)` : '',
     ignorees ? `${ignorees} doublon(s) ignoré(s)` : '',
     sortants ? `${sortants} pièce(s) sortante(s) indexée(s)` : '',
     reste > 0 ? `${reste} en attente du prochain passage` : '',
@@ -900,6 +1052,7 @@ Deno.serve(async (req: Request) => {
     nouvelles,
     messages: ids.length,
     messagesIndexes,
+    detections,
     ignorees,
     sortants,
     echecs,

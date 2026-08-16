@@ -50,9 +50,14 @@ function charger(chemin) {
   return mod.exports
 }
 
-const { detecter, dateDansPhrase } = charger('src/detecteurs.ts')
+// Le module PARTAGÉ est l'autorité depuis le branchement serveur : c'est lui
+// qu'on exerce. `src/detecteurs.ts` n'est plus qu'un ré-export, et le §7
+// vérifie que les deux chemins mènent bien aux mêmes fonctions.
+const CHEMIN_PARTAGE = 'supabase/functions/_shared/detecteurs.ts'
+const CHEMIN_INGESTION = 'supabase/functions/gmail-ingestion/index.ts'
+
+const { detecter, dateDansPhrase, empreinteDetection, MARQUEURS_ACTION } = charger(CHEMIN_PARTAGE)
 const { NATURES_RISQUE, GENRES_PROPOSITION } = charger('src/propositions.ts')
-const { MARQUEURS_ACTION } = charger('src/tagging.ts')
 
 const ENVOI = '2026-07-31' // un vendredi
 const genres = (texte, envoye = ENVOI) => detecter(texte, envoye).map((d) => d.genre)
@@ -177,7 +182,7 @@ for (const texte of [
   }
 
   // La garantie structurelle : la seule liste de natures est celle d'A.9.
-  const source = lire('src/detecteurs.ts')
+  const source = lire(CHEMIN_PARTAGE)
   const citees = [...source.matchAll(/nature: '([a-z_]+)'/g)].map((m) => m[1])
   assert.ok(citees.length >= 4, 'les quatre natures doivent être couvertes')
   for (const n of citees)
@@ -232,20 +237,30 @@ for (const texte of [
   assert.equal(un('Merci de relancer le BET lundi prochain.', 'tache', null).chargeUtile.echeance, null)
 }
 
-// --- le lexique d'action est celui de `src/tagging.ts`, pas un second -------
+// --- le lexique d'action n'existe qu'UNE fois ------------------------------
+//
+// L'autorité a suivi les détecteurs dans le module partagé (il n'importe
+// rien : il ne pouvait pas continuer à lire `src/tagging.ts`). C'est donc
+// `tagging.ts` qui l'importe désormais, et le sens de la flèche est la
+// seule chose qui ait changé — pas le nombre de listes.
 
 assert.ok(Array.isArray(MARQUEURS_ACTION) && MARQUEURS_ACTION.length >= 8, 'MARQUEURS_ACTION doit être exporté')
 assert.match(
-  lire('src/detecteurs.ts'),
-  /import \{ MARQUEURS_ACTION \} from '\.\/tagging'/,
-  'le détecteur PART du lexique existant : deux listes auraient fini par diverger, ' +
+  lire('src/tagging.ts'),
+  /import \{ MARQUEURS_ACTION \} from '\.\.\/supabase\/functions\/_shared\/detecteurs'/,
+  'src/tagging.ts IMPORTE le lexique du module partagé : deux listes auraient fini par diverger, ' +
     'et la divergence se verrait là où on la remarque le moins',
+)
+assert.equal(
+  (lire('src/tagging.ts').match(/'ne pas oublier'/g) || []).length,
+  0,
+  'et il n’en garde pas une copie locale — c’était tout l’objet du déplacement',
 )
 
 // --- 5. rien ne sort vers `workspace.data` ----------------------------------
 
 {
-  const source = lire('src/detecteurs.ts')
+  const source = lire(CHEMIN_PARTAGE)
   // Le détecteur ne fait qu'une chose : rendre des objets. Une détection
   // écrite dans l'état partagé serait une tâche, une décision ou un risque
   // créés par une machine — ce que le §15 refuse.
@@ -259,13 +274,165 @@ assert.match(
   ]) {
     assert.doesNotMatch(source, chemin, `le détecteur ne doit rien atteindre qui écrive : ${chemin}`)
   }
-  // Il importe des TYPES de `propositions`, jamais sa couche d'écriture.
-  assert.match(
-    source,
-    /import type \{[\s\S]*?\} from '\.\/propositions'/,
-    'les formes de charge utile viennent d’A.9, mais en type seulement — aucun chemin d’écriture',
-  )
   assert.doesNotMatch(source, /from '\.\/types'/, 'il ne connaît même pas l’état de l’application')
+}
+
+// --- 7. LE MODULE EST RÉELLEMENT PARTAGEABLE, ET RÉELLEMENT BRANCHÉ --------
+//
+// C'est le cœur du livrable : l'étage déterministe a passé deux mois écrit,
+// testé et SANS UN SEUL IMPORTATEUR. Ce paragraphe tient les deux bouts —
+// le module peut tourner dans les trois runtimes, et quelqu'un l'appelle.
+
+const sansCommentaires = (code) =>
+  code.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/^\s*\/\/.*$/gm, ' ')
+
+{
+  const codePartage = sansCommentaires(lire(CHEMIN_PARTAGE))
+  assert.equal(
+    /(^|\n)\s*import\s/.test(codePartage),
+    false,
+    `${CHEMIN_PARTAGE} ne doit RIEN importer : c’est ce qui lui permet de tourner à l’identique dans Deno, ` +
+      'dans le navigateur et ici. Un import, et le partage se défait (même régime que _shared/rattachement.ts).',
+  )
+  for (const interdit of ['Deno.', 'window.', 'localStorage', 'fetch(']) {
+    assert.equal(
+      codePartage.includes(interdit),
+      false,
+      `${CHEMIN_PARTAGE} utilise « ${interdit} » : il cesserait de tourner dans l’un des trois runtimes.`,
+    )
+  }
+
+  // les deux fonctions COPIÉES doivent se comporter comme leurs originales.
+  // On compare les COMPORTEMENTS, pas les textes : une copie reformatée
+  // resterait juste, et une copie subtilement fausse passerait un diff.
+  const U = charger('src/util.ts')
+  const P = charger(CHEMIN_PARTAGE)
+  for (const s of ['Élévation SUD', 'Béton armé', '  ÇA  ', 'déjà-vu', '', 'ŒUVRE', 'Ässmann']) {
+    assert.equal(P.fold(s), U.fold(s), `fold diverge sur « ${s} » — la copie doit être exacte`)
+  }
+  for (const [iso, n] of [
+    ['2026-07-31', 1], ['2026-07-31', 0], ['2026-12-31', 1], ['2026-02-28', 1],
+    ['2028-02-28', 1], ['2026-03-28', 3], ['2026-10-24', 3], ['2026-01-01', -1],
+  ]) {
+    assert.equal(
+      P.addDays(iso, n),
+      U.addDays(iso, n),
+      `addDays diverge sur (${iso}, ${n}) — le passage à l’heure d’été est exactement là où une copie ` +
+        'approximative décale une échéance d’un jour, ce qui reste plausible donc invisible',
+    )
+  }
+
+  // `src/detecteurs.ts` n'est plus qu'un pont : il ne redéfinit rien.
+  const navigateur = sansCommentaires(lire('src/detecteurs.ts'))
+  assert.match(
+    navigateur,
+    /export \{[\s\S]*?detecter[\s\S]*?\} from '\.\.\/supabase\/functions\/_shared\/detecteurs'/,
+    'src/detecteurs.ts doit RÉEXPORTER le module partagé — s’il en garde une copie, les deux divergeront',
+  )
+  assert.doesNotMatch(
+    navigateur,
+    /function detecter|function dateDansPhrase/,
+    'et il ne redéfinit aucun détecteur : c’était le défaut d’origine du §3.7, moteur par porte d’entrée',
+  )
+}
+
+// --- 8. LA PORTE : l'ingestion appelle, écrit dans `propositions`, et rien --
+//        d'autre. « Livré sans porte » est le mode de panne dominant ici :
+//        ce module en a été l'exemple pendant deux mois.
+
+{
+  const ingestion = lire(CHEMIN_INGESTION)
+  assert.match(
+    ingestion,
+    /import \{ detecter, empreinteDetection \} from '\.\.\/_shared\/detecteurs\.ts'/,
+    'l’ingestion importe les détecteurs partagés (extension .ts explicite : Deno l’exige)',
+  )
+  assert.match(
+    ingestion,
+    /detecter\(texteDetectable\(/,
+    'et elle les APPELLE : un module importé sans appel est exactement l’état qu’on vient de quitter',
+  )
+  assert.match(
+    ingestion,
+    /await deposerDetections\(/,
+    'le dépôt est appelé depuis la boucle des messages',
+  )
+  assert.match(
+    ingestion,
+    /await rattraperDetections\(sb\)/,
+    'et le RATTRAPAGE tourne aussi : sans lui, un message rattaché à la main après son indexation ' +
+      'ne verrait jamais les détecteurs — or c’est le cas le plus fréquent, le rattachement étant ' +
+      'précisément le geste humain que la chaîne attend',
+  )
+
+  // La destination est UNIQUE, et les colonnes humaines restent vides.
+  const corpsDepot = ingestion.slice(
+    ingestion.indexOf('async function deposerDetections'),
+    ingestion.indexOf('const RATTRAPAGE_MESSAGES'),
+  )
+  assert.ok(corpsDepot.length > 400, 'le corps de deposerDetections doit être délimité, sinon on ne vérifie rien')
+  assert.match(corpsDepot, /\.from\('propositions'\)/, 'la seule destination des détections est la table `propositions`')
+  for (const interdit of ['workspace', 'taches', 'statut:', 'traite_par', 'traite_le', 'objet_cree']) {
+    assert.equal(
+      corpsDepot.includes(interdit),
+      false,
+      `deposerDetections écrit « ${interdit} » : rien ne quitte l’état « proposee » sans SIGNATURE humaine (§15), ` +
+        'et l’ingestion ne doit pas être l’exception qui contourne la garantie du schéma',
+    )
+  }
+  assert.match(
+    corpsDepot,
+    /origine: d\.origine/,
+    'l’étage qui a détecté est tracé : c’est lui qu’on relira pour décider de garder ou de débrancher',
+  )
+
+  // L'IDEMPOTENCE, sans laquelle le cron de dix minutes noie la file.
+  assert.match(
+    corpsDepot,
+    /\.select\('genre, empreinte'\)[\s\S]{0,400}?dejaLa/,
+    'le dépôt relit les empreintes déjà posées avant d’insérer — l’index unique de la table est PARTIEL, ' +
+      'donc inutilisable comme arbitre d’un `on conflict` : sans cette lecture, chaque passage du cron ' +
+      'redéposerait les mêmes détections et la file serait illisible en un jour',
+  )
+  assert.match(
+    corpsDepot,
+    /if \(erreurLecture\) return 0/,
+    'et si la lecture échoue on s’abstient : insérer à l’aveugle doublerait la file, quand une détection ' +
+      'manquée se rattrape au passage suivant',
+  )
+
+  // L'empreinte porte sur l'IDENTITÉ de la détection, pas sur ce qui bouge.
+  const d1 = { genre: 'tache', extrait: 'Merci de relancer le BET lundi.' }
+  assert.equal(
+    empreinteDetection(d1),
+    empreinteDetection({ ...d1, confiance: 0.9, raisons: ['autre chose'] }),
+    'la confiance et les raisons ne changent pas l’empreinte : un seuil réajusté ferait sinon réapparaître ' +
+      'toute la file, ce qui est exactement le bruit qu’on veut éviter',
+  )
+  assert.notEqual(
+    empreinteDetection(d1),
+    empreinteDetection({ ...d1, extrait: 'Merci de relancer le BET mardi.' }),
+    'deux extraits différents sont deux détections différentes',
+  )
+  assert.notEqual(
+    empreinteDetection(d1),
+    empreinteDetection({ ...d1, genre: 'echeance' }),
+    'et deux genres aussi — l’index unique porte sur (communication, genre, empreinte)',
+  )
+
+  // Seuls les messages RATTACHÉS : une proposition sans projet ne peut ni se
+  // classer ni devenir une tâche.
+  assert.match(
+    ingestion,
+    /ligneIndexee\?\.id && ligneIndexee\.projet_id/,
+    'les détections ne partent que sur un message RATTACHÉ : sans projet, la revue ne saurait qu’en faire',
+  )
+  assert.match(
+    ingestion,
+    /\.not\('projet_id', 'is', null\)[\s\S]{0,200}?RATTRAPAGE_MESSAGES/,
+    'le rattrapage aussi se limite aux messages rattachés, et il est BORNÉ : une fenêtre glissante, ' +
+      'pas un balayage de toute la table à chaque cron',
+  )
 }
 
 // --- 6. le second étage refuse plutôt que de compléter ----------------------

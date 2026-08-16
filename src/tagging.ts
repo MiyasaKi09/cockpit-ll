@@ -8,6 +8,7 @@
 // ============================================================
 
 import type { AppState } from './types'
+import { MARQUEURS_ACTION } from '../supabase/functions/_shared/detecteurs'
 import { fold } from './util'
 
 /** lexique métier : mot détecté (foldé) → tags proposés */
@@ -78,7 +79,14 @@ const LEXIQUE: [string, string[]][] = [
  *  seconde. Deux lexiques auraient fini par diverger, et la divergence se
  *  serait vue là où on la remarque le moins — une tâche détectée dans une
  *  note, pas dans le mail qui l'a produite. */
-export const MARQUEURS_ACTION = ['penser a', 'a faire', 'ne pas oublier', 'rappeler', 'relancer', 'verifier', 'prevoir', 'demander', 'envoyer', 'appeler']
+// L'autorité du lexique a DÉMÉNAGÉ avec les détecteurs
+// (`supabase/functions/_shared/detecteurs.ts`) : le module partagé
+// n'importe rien — c'est ce qui lui permet de tourner dans Deno, dans le
+// navigateur et dans le test — donc il ne pouvait pas continuer à lire
+// cette liste-ci. L'inverse marche, et garde une seule liste : deux
+// lexiques se seraient enrichis séparément, et un marqueur ajouté d'un
+// côté aurait manqué de l'autre sans que rien ne le signale.
+export { MARQUEURS_ACTION }
 
 export interface SuggestionTags {
   tags: string[]

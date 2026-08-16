@@ -51,7 +51,11 @@ const lire = (fichier) => fs.readFileSync(path.join(racine, fichier), 'utf8')
 const CHEMIN_CLASSEUR = 'supabase/functions/_shared/classement-echanges.ts'
 const CHEMIN_CASCADE = 'supabase/functions/_shared/rattachement.ts'
 const CHEMIN_INGESTION = 'supabase/functions/gmail-ingestion/index.ts'
-const CHEMIN_TAGGING = 'src/tagging.ts'
+// Le lexique d'action a suivi les détecteurs dans le module partagé au
+// branchement serveur : celui-ci n'importe rien — c'est ce qui lui permet de
+// tourner dans Deno, dans le navigateur et dans un test — donc il ne pouvait
+// pas continuer à lire `src/tagging.ts`, qui l'importe désormais.
+const CHEMIN_MARQUEURS = 'supabase/functions/_shared/detecteurs.ts'
 
 /** transpile puis exécute un module du dépôt, dépendances injectées à la main */
 function charger(fichier, dependances = {}) {
@@ -351,11 +355,12 @@ for (const [objet, attendu] of IMPORTANCES) {
   )
 }
 
-// Les dix marqueurs d'action de `src/tagging.ts` sont RELUS là-bas, et chacun
-// doit encore être reconnu ici : c'est la méthode déjà employée pour `fold`,
-// qui compare deux implémentations par leur comportement et non par leur texte.
-const listeMarqueurs = /const MARQUEURS_ACTION = \[([\s\S]*?)\]/.exec(lire(CHEMIN_TAGGING))
-assert.ok(listeMarqueurs, `${CHEMIN_TAGGING} : MARQUEURS_ACTION est introuvable — le plan le désigne comme source`)
+// Les dix marqueurs d'action sont RELUS à leur source, et chacun doit encore
+// être reconnu ici : c'est la méthode déjà employée pour `fold`, qui compare
+// deux implémentations par leur comportement et non par leur texte. Une seule
+// liste, désormais dans l'autre sens ; l'assertion, elle, ne bouge pas.
+const listeMarqueurs = /const MARQUEURS_ACTION = \[([\s\S]*?)\]/.exec(lire(CHEMIN_MARQUEURS))
+assert.ok(listeMarqueurs, `${CHEMIN_MARQUEURS} : MARQUEURS_ACTION est introuvable — le plan le désigne comme source`)
 const marqueurs = listeMarqueurs[1]
   .split(',')
   .map((m) => m.trim().replace(/^'|'$/g, ''))

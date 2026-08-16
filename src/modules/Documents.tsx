@@ -1271,7 +1271,25 @@ function ModalDocument({ doc: docInitial, onClose }: { doc: DocumentRecord; onCl
   )
 }
 
-function CarteTous({ docId }: { docId?: string }) {
+/** LE REGISTRE. Il est resté ici — donc UN SEUL auteur, celui que
+ *  `scripts/test-lien-gmail.cjs` désigne pour le retour Gmail d'un document
+ *  classé — mais il se monte désormais à DEUX endroits :
+ *
+ *   · sans `projetId`, c'est le registre transverse : les pièces qui n'ont pas
+ *     encore de projet, et l'atterrissage de `#/documents/tous/<id>` écrit par
+ *     la palette « / ». Il n'est plus un ONGLET : il est replié en pied de
+ *     l'écran des arrivées (§6 : « on replie, on regroupe ») ;
+ *   · avec `projetId`, c'est LE REGISTRE DU PROJET, monté par
+ *     `ProjetDocuments` dans l'onglet Documents de la fiche projet. C'est le
+ *     déménagement demandé par le §3.2 — le sélecteur « Projet » qu'on réglait
+ *     toujours sur le même projet était la signature du morceau exilé, il
+ *     disparaît puisqu'on est dans le projet.
+ *
+ *  Une seule table, un seul « Ouvrir », une seule fiche : la carte que
+ *  `ProjetDocuments` portait en propre (`CarteRegistreProjet`, un tableau sans
+ *  recherche, sans filtre et sans fiche) a été retirée. Deux registres, c'était
+ *  deux réponses possibles à « qu'a-t-on reçu sur ce chantier ». */
+export function CarteTous({ docId, projetId }: { docId?: string; projetId?: string }) {
   const { state } = useStore()
   // une seule lecture de la racine pour tout le registre — le bouton
   // « Ouvrir » de chaque ligne s'en sert, aucun ne la relit
@@ -1292,22 +1310,31 @@ function CarteTous({ docId }: { docId?: string }) {
     if (docId) navigate('/documents/tous')
   }
 
+  // dans un projet, le périmètre n'est PAS un filtre qu'on peut retirer : le
+  // `projetId` du montage l'emporte, et le Select « Projet » disparaît
+  const projetRetenu = projetId || filtreProjet
   const docs = useMemo(() => {
     const cle = fold(recherche)
     return state.registreDocuments
-      .filter((d) => !filtreProjet || d.projetId === filtreProjet)
+      .filter((d) => !projetRetenu || d.projetId === projetRetenu)
       .filter((d) => !filtreCategorie || d.categorie === filtreCategorie)
       .filter((d) => !filtrePhase || d.phase === filtrePhase)
       .filter((d) => !cle || fold(`${d.titre} ${d.nomOriginal} ${d.cheminDrive || ''}`).includes(cle))
       .slice()
       .sort((a, b) => b.recuLe.localeCompare(a.recuLe) || b.id.localeCompare(a.id))
-  }, [state.registreDocuments, recherche, filtreProjet, filtreCategorie, filtrePhase])
+  }, [state.registreDocuments, recherche, projetRetenu, filtreCategorie, filtrePhase])
 
   const projetDe = (d: DocumentRecord): Projet | undefined =>
     state.projets.find((p) => p.id === d.projetId)
 
   return (
-    <Card titre={`Tous les documents — ${state.registreDocuments.length} au registre`}>
+    <Card
+      titre={
+        projetId
+          ? `Registre du projet — ${docs.length} document(s) reçus, tracés, versionnés`
+          : `Tous les documents — ${state.registreDocuments.length} au registre`
+      }
+    >
       {docId && !cible && (
         <div className="pill-note" style={{ marginBottom: 10, borderColor: 'var(--warn)' }}>
           Le document demandé par ce lien n'est plus au registre (supprimé, ou registre d'un autre
@@ -1318,16 +1345,21 @@ function CarteTous({ docId }: { docId?: string }) {
         <Field label="Rechercher">
           <TextInput value={recherche} onChange={setRecherche} placeholder="nom, chemin…" />
         </Field>
-        <Field label="Projet">
-          <Select
-            value={filtreProjet}
-            onChange={setFiltreProjet}
-            options={[
-              { value: '', label: 'Tous' },
-              ...state.projets.map((p) => ({ value: p.id, label: `${p.id} — ${p.nom}` })),
-            ]}
-          />
-        </Field>
+        {/* « le signe qui ne trompe pas » (§2.2) : un sélecteur de projet qu'on
+            règle toujours sur le même projet. Dans la fiche projet, il n'a plus
+            lieu d'être — on y EST. */}
+        {!projetId && (
+          <Field label="Projet">
+            <Select
+              value={filtreProjet}
+              onChange={setFiltreProjet}
+              options={[
+                { value: '', label: 'Tous' },
+                ...state.projets.map((p) => ({ value: p.id, label: `${p.id} — ${p.nom}` })),
+              ]}
+            />
+          </Field>
+        )}
         <Field label="Catégorie">
           <Select
             value={filtreCategorie}
@@ -1350,10 +1382,22 @@ function CarteTous({ docId }: { docId?: string }) {
         <EmptyState>
           {state.registreDocuments.length === 0
             ? 'Le registre est vide — il se remplit à chaque import : CCTP et DPGF analysés, CR générés, photos du journal, dépôts de la boîte d’arrivée.'
-            : 'Aucun document ne correspond à ces filtres.'}
+            : projetId
+              ? 'Aucun document de ce projet ne correspond à ces filtres — le registre se remplit au premier dépôt ci-dessus, et à chaque import rattaché à ce chantier.'
+              : 'Aucun document ne correspond à ces filtres.'}
         </EmptyState>
       ) : (
-        <Table compact head={['Document', 'Catégorie', 'Projet', 'Statut', 'Version', 'Reçu le']}>
+        <Table
+          compact
+          head={[
+            'Document',
+            'Catégorie',
+            ...(projetId ? [] : ['Projet']),
+            'Statut',
+            'Version',
+            'Reçu le',
+          ]}
+        >
           {docs.map((d) => {
             const projet = projetDe(d)
             return (
@@ -1391,7 +1435,9 @@ function CarteTous({ docId }: { docId?: string }) {
                   {d.categorie}
                   {d.phase && <div className="small muted">{d.phase}</div>}
                 </td>
-                <td className="small">{projet ? `${projet.id} — ${projet.nom}` : '—'}</td>
+                {!projetId && (
+                  <td className="small">{projet ? `${projet.id} — ${projet.nom}` : '—'}</td>
+                )}
                 <td>
                   <Badge
                     tone={
@@ -1888,17 +1934,40 @@ function OngletRattacher({ etat }: { etat: EtatCommunications }) {
 // Page
 // ============================================================
 
+// TRANCHE 3 DE LA REFONTE (docs/REFONTE_NAVIGATION.md §3.2, §5).
+//
+// L'ONGLET « TOUS LES DOCUMENTS » N'EXISTE PLUS. C'était le registre du projet
+// avec un sélecteur de projet devant — la signature du morceau exilé (§2.2) :
+// on le réglait toujours sur le même projet. Le registre est devenu une vue de
+// la FICHE PROJET (onglet Documents, `ProjetDocuments` monte `CarteTous` avec
+// son `projetId`), sans qu'aucun onglet y soit ajouté.
+//
+// Ce qui RESTE ici est ce qui n'a pas encore de projet — le premier des trois
+// cas transverses légitimes du §2.2 : la boîte d'arrivée, la file « à
+// vérifier » et la file « à rattacher ». Ces deux dernières sont datées : la
+// tranche 1 les a déjà fait remonter dans l'inventaire de la semaine, et leur
+// compteur se lit dans le Cockpit. Elles gardent leur onglet parce qu'on y
+// TRAVAILLE — la revue séquentielle, la cascade de rattachement et les règles
+// mémorisées ne tiennent pas dans une ligne d'accueil.
+//
+// `#/documents/tous` et `#/documents/tous/<id>` (palette « / », Achats)
+// RÉPONDENT toujours : elles ouvrent le registre transverse, replié en pied
+// d'écran — un repli, pas un endroit.
 const ONGLETS = [
   { id: 'entrants', label: "Boîte d'arrivée" },
   { id: 'verifier', label: 'À vérifier' },
   { id: 'rattacher', label: 'À rattacher' },
-  { id: 'tous', label: 'Tous les documents' },
 ] as const
+
+/** l'ancienne adresse du quatrième onglet : elle n'ouvre plus un onglet, elle
+ *  déplie le registre. Nommée pour qu'on voie qu'elle est encore servie. */
+const SEGMENT_REGISTRE = 'tous'
 
 export default function Documents() {
   const route = useRoute()
   const { state } = useStore()
   const nbAVerifier = documentsATraiter(state).length
+  const registreDemande = route[1] === SEGMENT_REGISTRE
   const tab = ONGLETS.some((o) => o.id === route[1]) ? route[1] : 'entrants'
   // La file « à rattacher » est lue ICI, quel que soit l'onglet ouvert :
   // sans compteur, un message sans projet attendait des jours en silence
@@ -1919,8 +1988,14 @@ export default function Documents() {
   }
   return (
     <Page
-      titre="Documents & arrivées"
-      sousTitre="Tout ce qui arrive — fichiers et messages — tracé : source, projet, version, validation."
+      titre="Arrivées"
+      sousTitre={
+        <>
+          Ce qui arrive et n’a pas encore de projet — fichiers et messages —, tracé : source,
+          projet, version, validation. Le registre d’un chantier se lit dans sa fiche projet,
+          onglet Documents.
+        </>
+      }
     >
       <Tabs
         tabs={ONGLETS.map((o) => ({ id: o.id, label: libelleOnglet(o) }))}
@@ -1935,8 +2010,22 @@ export default function Documents() {
       )}
       {tab === 'verifier' && <CarteAVerifier />}
       {tab === 'rattacher' && <OngletRattacher etat={filesMessages} />}
-      {/* `#/documents/tous/<id>` ouvre la fiche du document (palette « / ») */}
-      {tab === 'tous' && <CarteTous docId={route[2]} />}
+      {/* LE REGISTRE TRANSVERSE, EN REPLI. Il n'est plus un onglet — un
+          quatrième endroit pour lire ce que le projet montre déjà — mais il
+          répond toujours à son adresse : `#/documents/tous` le déplie,
+          `#/documents/tous/<id>` y ouvre la fiche du document (palette « / »).
+          C'est aussi le seul endroit où se lisent les pièces qu'AUCUN projet ne
+          réclame encore : le projet, par construction, ne peut pas les montrer. */}
+      <details open={registreDemande} style={{ marginTop: 8 }}>
+        <summary className="small" style={{ cursor: 'pointer', color: 'var(--accent)' }}>
+          Le registre entier, tous projets confondus ({state.registreDocuments.length} document
+          {state.registreDocuments.length > 1 ? 's' : ''}) — celui d’un chantier se lit dans sa
+          fiche projet
+        </summary>
+        <div style={{ marginTop: 8 }}>
+          <CarteTous docId={registreDemande ? route[2] : undefined} />
+        </div>
+      </details>
     </Page>
   )
 }

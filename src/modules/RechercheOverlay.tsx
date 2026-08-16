@@ -59,6 +59,19 @@ interface Resultat {
 //
 // `detail` dit OÙ l'écran vit dans le menu : la palette apprend le repli au
 // lieu de le contourner — la fois d'après, on sait où cliquer.
+//
+// TRANCHE 3 — ET QUAND IL N'Y A PLUS DE BOUTON, `detail` DIT AUTRE CHOSE.
+// « Situations » et « Documents » ont quitté `NAV` : leur contenu a déménagé,
+// leur route répond toujours, et cette palette est devenue le seul chemin
+// NOMMÉ vers elles. Leur annoncer « groupe Agence (replié) » serait pire que
+// rien : on déplierait le groupe et on n'y trouverait aucune ligne à ce nom.
+// Deux fois de suite, et l'on cesse de croire ce que la palette raconte — y
+// compris pour les neuf entrées où c'est vrai. Leur `detail` dit donc ce
+// qu'elles sont DEVENUES, ce qui apprend le déménagement au lieu de le
+// contourner : la fois d'après, on sait que les situations se lisent chez
+// Entreprises et que le registre d'un chantier est dans sa fiche projet.
+// scripts/test-navigation-repliee.cjs (contrôle n°3) refuse qu'un écran sorti
+// du menu nomme un groupe de `NAV`.
 
 const DANS_MENU = 'Menu'
 const DANS_AGENCE = 'Menu · groupe « Agence » (replié)'
@@ -90,13 +103,23 @@ const ECRANS: { titre: string; detail: string; lien: string; mots: string }[] = 
     lien: '#/ao',
     mots: "appels d'offres AO radar pipeline dossiers consultations acheteurs références veille",
   },
-  // les onze repliées — l'ordre du §3.1
+  // TRANCHE 3 — les deux qui ont quitté le menu. Elles restent indexées sous
+  // leur ANCIEN nom, et c'est voulu : le mot est resté dans la tête de
+  // l'agence même si la ligne a disparu du menu. On cherche « situations »,
+  // pas « la vue situations d'Entreprises ».
   {
     titre: 'Situations',
-    detail: DANS_AGENCE,
+    detail: 'Vue d’Entreprises — les situations se lisent et se valident là',
     lien: '#/situations',
     mots: 'situations de travaux acomptes certificat de paiement à vérifier attendues historique retenues de garantie',
   },
+  {
+    titre: 'Documents',
+    detail: 'Arrivées sans projet — le registre d’un chantier est dans sa fiche projet',
+    lien: '#/documents',
+    mots: 'registre documentaire fichiers pièces drive à rattacher à vérifier classement DCE boîte d’arrivée',
+  },
+  // les neuf repliées — l'ordre du §3.1
   {
     titre: 'Planning',
     detail: DANS_AGENCE,
@@ -110,12 +133,6 @@ const ECRANS: { titre: string; detail: string; lien: string; mots: string }[] = 
     mots: 'heures saisie ma semaine historique feuille de temps pointage chrono',
   },
   { titre: 'Mes tâches', detail: DANS_AGENCE, lien: '#/taches', mots: 'à faire liste rappels responsable échéance' },
-  {
-    titre: 'Documents',
-    detail: DANS_AGENCE,
-    lien: '#/documents',
-    mots: 'registre documentaire fichiers pièces drive à rattacher à vérifier classement DCE',
-  },
   {
     titre: 'Pilotage',
     detail: DANS_AGENCE,

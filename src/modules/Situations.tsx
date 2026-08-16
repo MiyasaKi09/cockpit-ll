@@ -4,6 +4,37 @@
 // ici → vérification humaine (délais contractuels suivis en dur)
 // → visa. Claude propose, l'humain valide.
 // ============================================================
+//
+// TRANCHE 3 DE LA REFONTE (docs/REFONTE_NAVIGATION.md §2.3, §3.2, §5).
+// CE FICHIER N'EST PLUS UN ÉCRAN — il est le MODULE des vues de situation.
+//
+// Il l'était : `#/situations` montait une `Page` à quatre onglets — « À
+// vérifier », « Attendues », « Historique », « Retenues de garantie ». Le plan
+// établit que ces quatre-là répondaient déjà aux colonnes qu'Entreprises
+// affiche : « Attendues » à la statistique « Situations attendues », « RG » à
+// la colonne « RG à libérer », et les deux autres regroupent PAR PROJET — le
+// titre de la carte était littéralement « Historique — par projet », l'aveu
+// d'un morceau de projet exilé dans une destination transverse.
+//
+// CE QUI DISPARAÎT : la destination `#/situations` (retirée de `NAV`) et ses
+// QUATRE onglets. Quatre endroits mesurés en moins, plus une entrée de menu.
+//
+// CE QUI NE DISPARAÎT PAS : rien d'autre. Les quatre cartes sont EXPORTÉES et
+// montées par l'écran Entreprises (liste et fiche) — pas dans une rangée
+// d'onglets neufs, qui aurait rendu d'une main ce que l'autre retirait, mais
+// dans un filtre de la liste existante et des replis. Aucun calcul, aucun
+// geste, aucune donnée ne bouge : c'est le MÊME code, monté ailleurs.
+//
+// ET AUCUNE ADRESSE NE CESSE DE RÉPONDRE. `#/situations`, `#/situations/rg`,
+// `#/situations/attendues`, `#/situations/verifier/<id>` (alerte, `alerts.ts`)
+// et `#/situations/<vue>/chercher/<entreprise>` (palette « / ») sont servies
+// par `<Entreprises />` — App.tsx les route, `ALIAS_SECTION` allume l'entrée
+// « Entreprises », et rien n'a eu à être réécrit chez les émetteurs.
+//
+// `ModalEdition` et `ModalCertificat` NE BOUGENT PAS D'UN OCTET : elles
+// restent définies ici, importées par la fiche entreprise et l'onglet
+// Chantier, et `scripts/test-certificat.cjs` verrouille qu'il n'y ait qu'un
+// seul auteur du certificat de paiement.
 
 import { useEffect, useRef, useState } from 'react'
 import type { AppState, Situation, StatutSituation, TypeGarantie } from '../types'
@@ -21,17 +52,14 @@ import {
   Modal,
   Money,
   NumInput,
-  Page,
   RowMenu,
   Select,
   Table,
-  Tabs,
   TextArea,
   TextInput,
   confirmer,
   navigate,
   toast,
-  useRoute,
   useToday,
 } from '../ui'
 import { clamp, diffDays, fmtDate, fmtMois, fmtMoney, fmtPct, fold, monthKey, ouvrirGmail, uid } from '../util'
@@ -77,11 +105,63 @@ import {
   JOUR_ATTENTE_SITUATION,
   JOUR_RELANCE_SITUATION,
   corpsRelanceSituation,
+  entrepriseDe,
+  marchesDe,
   situationAttendueNonRecue,
   situationDuMois,
   sujetRelanceSituation,
 } from '../entreprise'
 import FicheEntreprise from './FicheEntreprise'
+
+// ------------------------------------------------------------
+// LES ADRESSES DES QUATRE VUES — écrites ICI, une seule fois
+// ------------------------------------------------------------
+//
+// Elles vivent dans ce fichier et non dans Entreprises.tsx pour deux raisons.
+// D'abord le sens des imports : Entreprises MONTE ces cartes, donc il importe
+// ce module ; l'inverse ferait un cycle. Ensuite l'autorité : ce sont les
+// adresses des vues de situation, et c'est ce module qui sait ce qu'est une
+// vue de situation. Entreprises les LIT pour découper sa route, les cartes les
+// ÉCRIVENT pour leurs liens internes — une seule table pour les deux sens.
+
+/** le segment qui, dans `#/entreprises/…`, annonce une vue de situation. Il ne
+ *  peut pas se confondre avec une clé d'entreprise : une clé est un
+ *  identifiant de registre (`ent-…`) ou un nom plié, et le découpage teste ce
+ *  segment AVANT de traiter `route[1]` comme une clé. */
+export const SEGMENT_SITUATIONS = 'situations'
+
+/** les quatre vues, dans l'ordre où elles se lisaient en onglets. Ce ne sont
+ *  plus des onglets : `attendues` et `rg` sont des FILTRES de la liste
+ *  Entreprises, `verifier` et `historique` des replis. */
+// plus exportées depuis la tranche 3 : l'écran Situations n'existe plus, ces
+// deux constantes ne servent qu'aux vues internes de ce module. Un export
+// sans importateur est une promesse que personne ne tient — on la retire.
+const VUES_SITUATION = ['verifier', 'attendues', 'historique', 'rg'] as const
+export type VueSituation = (typeof VUES_SITUATION)[number]
+
+export const estVueSituation = (v: string | undefined): v is VueSituation =>
+  (VUES_SITUATION as readonly string[]).includes(v || '')
+
+/** l'adresse d'une vue de situation — `navigate()` l'accepte telle quelle,
+ *  un `href` la préfixe de « # ». Les segments de suite (`chercher`, un nom
+ *  d'entreprise, un identifiant de situation) sont encodés : un nom porte des
+ *  espaces. */
+const adresseVueSituation = (vue: VueSituation, ...suite: string[]) =>
+  `/entreprises/${SEGMENT_SITUATIONS}/${vue}${suite.map((s) => `/${encodeURIComponent(s)}`).join('')}`
+
+/** l'adresse de la fiche d'une entreprise. Écrite ici parce que c'est ce
+ *  module-ci qui déménage : ses cartes doivent pouvoir y envoyer, et
+ *  Entreprises.tsx l'importe plutôt que d'en garder une seconde copie. */
+export const adresseFicheEntreprise = (cle: string) => `/entreprises/${encodeURIComponent(cle)}`
+
+/** la CLÉ canonique d'une entreprise nommée — `entrepriseDe` (src/entreprise.ts)
+ *  fait autorité sur le rapprochement, `fold` sert de repli exactement comme
+ *  dans `entreprisesSuivies` : un marché saisi avant l'amorce du registre n'a
+ *  qu'un nom, et sa fiche doit s'ouvrir quand même. */
+export function cleEntreprise(state: AppState, nom: string): string {
+  const ent = entrepriseDe(state, nom)
+  return ent ? ent.id : fold(nom)
+}
 
 // ---------- petits helpers locaux ----------
 
@@ -308,7 +388,9 @@ function analyserItems(state: AppState, items: RetourSituation[]): LigneApercu[]
   })
 }
 
-function CarteImport() {
+/** dépannage : coller à la main le retour JSON de la routine. Exportée pour
+ *  rester repliée sous le même `<details>` qu'avant, mais chez Entreprises. */
+export function CarteImport() {
   const { state, update } = useStore()
   const [texte, setTexte] = useState('')
   const [apercu, setApercu] = useState<LigneApercu[] | null>(null)
@@ -838,7 +920,7 @@ export function ModalEdition({ sit, creation, onClose }: { sit: Situation; creat
  *     comme l'Historique le faisait déjà seul.
  *  Les deux formes ne peuvent pas se confondre : aucun identifiant ne vaut
  *  « chercher » (le découpage se fait dans `Situations()`, plus bas). */
-function CarteAVerifier({
+export function CarteAVerifier({
   cibleId = '',
   entrepriseInitiale = '',
 }: {
@@ -1008,7 +1090,12 @@ function CarteAVerifier({
           <Btn small kind="primary" onClick={() => setCertifId(suiteAProposer.id)}>
             Émettre le certificat
           </Btn>
-          <Btn small kind="ghost" onClick={() => setSuiteId(null)} title="Il restera dans l’onglet Historique">
+          <Btn
+            small
+            kind="ghost"
+            onClick={() => setSuiteId(null)}
+            title="Il restera dans l’historique des situations, et sur la fiche de l’entreprise"
+          >
             Plus tard
           </Btn>
         </div>
@@ -1025,7 +1112,7 @@ function CarteAVerifier({
           <Btn
             small
             kind="ghost"
-            onClick={() => navigate('/situations/verifier')}
+            onClick={() => navigate(adresseVueSituation('verifier'))}
             title="Retirer la mise en évidence et revenir à la liste complète"
           >
             Retirer la mise en évidence
@@ -1038,10 +1125,11 @@ function CarteAVerifier({
             <>
               La situation <strong>{cibleAilleurs.entreprise}</strong> ({fmtMois(cibleAilleurs.mois)}) n’est
               plus à vérifier : <BadgeStatutSituation statut={cibleAilleurs.statut} />{' '}
-              <a
-                href={`#/situations/historique/chercher/${encodeURIComponent(cibleAilleurs.entreprise)}`}
-              >
-                la voir dans l’Historique
+              {/* TRANCHE 3 : l'historique d'une entreprise se lit sur SA
+                  fiche, où vivent le certificat et le décompte — pas dans une
+                  liste transverse qu'il fallait refiltrer. */}
+              <a href={`#${adresseFicheEntreprise(cleEntreprise(state, cibleAilleurs.entreprise))}`}>
+                la voir sur la fiche de {cibleAilleurs.entreprise}
               </a>
               .
             </>
@@ -1442,16 +1530,74 @@ export function ModalCertificat({ sit, onClose }: { sit: Situation; onClose: () 
  *  bouton « Certificat de paiement » du 7e lot devenait inatteignable. */
 const PLAFOND_HISTORIQUE = 6
 
-function CarteHistorique({ entrepriseInitiale = '' }: { entrepriseInitiale?: string }) {
+/** TRANCHE 3 — cette carte s'appelait « Historique — par projet », et ce titre
+ *  était l'aveu : elle regroupait par chantier depuis une destination
+ *  transverse. Elle prend donc DEUX restrictions, et c'est tout ce qui change :
+ *
+ *   · `projetId` — l'historique d'UN chantier. C'est la forme que demande le
+ *     §3.2 (« Historique rejoint le projet ») : `<CarteHistorique projetId={p.id} />`
+ *     dans l'onglet Chantier suffit, la carte est prête pour lui.
+ *   · `entrepriseCle` — l'historique d'UNE entreprise, tous ses chantiers.
+ *     C'est ce que monte sa fiche, là où le certificat et le décompte se
+ *     réimpriment. Les marchés retenus viennent de `marchesDe`
+ *     (src/entreprise.ts) : le rapprochement id-puis-nom n'est pas réécrit ici.
+ *
+ *  Sans restriction, elle reste l'historique complet — c'est ce que sert
+ *  l'ancienne adresse `#/situations/historique`, qui ne porte pas de filtre. */
+export function CarteHistorique({
+  entrepriseInitiale = '',
+  projetId,
+  entrepriseCle,
+  titre,
+}: {
+  entrepriseInitiale?: string
+  projetId?: string
+  entrepriseCle?: string
+  titre?: string
+}) {
   const { state, update } = useStore()
   const today = useToday()
+
+  // le périmètre AVANT tout le reste : les filtres de la carte se calculent
+  // sur ce qu'elle montre, sinon le Select proposerait des entreprises
+  // absentes et le compteur « sur N » compterait le cabinet entier
+  const marchesRetenus = entrepriseCle ? marchesDe(state, entrepriseCle) : null
+  const idsMarche = marchesRetenus ? new Set(marchesRetenus.map((m) => m.id)) : null
+  // les noms sous lesquels cette entreprise a pu être écrite : ceux de ses
+  // marchés, ceux du registre, et la clé elle-même quand elle EST un nom plié.
+  // Même trousseau que `marchesDe` — une situation saisie sans marché rattaché
+  // ne porte que le nom, et elle appartient quand même à cette entreprise.
+  const nomsMarche = (() => {
+    if (!marchesRetenus || !entrepriseCle) return null
+    const cles = new Set(marchesRetenus.map((m) => fold(m.entreprise)))
+    cles.add(fold(entrepriseCle))
+    const ent = entrepriseDe(state, entrepriseCle)
+    if (ent) {
+      cles.add(fold(ent.raisonSociale))
+      if (ent.nomCommercial) cles.add(fold(ent.nomCommercial))
+    }
+    cles.delete('')
+    return cles
+  })()
+  /** une situation entre dans le périmètre de cette carte. Le rapprochement
+   *  par le nom plié double celui par `marcheId` pour la même raison que
+   *  `situationDuMois` : une situation arrivée sans marché rattaché existe. */
+  const dansLePerimetre = (s: Situation) => {
+    if (projetId && s.projetId !== projetId) return false
+    if (idsMarche && nomsMarche)
+      return (s.marcheId ? idsMarche.has(s.marcheId) : false) || nomsMarche.has(fold(s.entreprise))
+    return true
+  }
+
+  const toutes = state.situations
+    .filter((s) => s.statut !== 'a_verifier' && dansLePerimetre(s))
+    .sort((a, b) => b.mois.localeCompare(a.mois) || b.dateReception.localeCompare(a.dateReception))
+
   // situation dont on prépare le certificat de paiement (5.19)
   // le filtre porté par la route ne s'applique que s'il désigne une entreprise
   // réellement présente dans l'historique : sinon la carte s'ouvrirait vide
   // sans dire pourquoi, ce qui est pire que de ne pas pré-remplir.
-  const connuIci = state.situations.some(
-    (s) => s.statut !== 'a_verifier' && s.entreprise === entrepriseInitiale,
-  )
+  const connuIci = toutes.some((s) => s.entreprise === entrepriseInitiale)
   const [certifId, setCertifId] = useState<string | null>(null)
   const [filtreMois, setFiltreMois] = useState('')
   const [filtreEntreprise, setFiltreEntreprise] = useState(connuIci ? entrepriseInitiale : '')
@@ -1460,9 +1606,6 @@ function CarteHistorique({ entrepriseInitiale = '' }: { entrepriseInitiale?: str
   const deplier = (pid: string) =>
     setDeplies((prev) => (prev.includes(pid) ? prev.filter((x) => x !== pid) : [...prev, pid]))
 
-  const toutes = state.situations
-    .filter((s) => s.statut !== 'a_verifier')
-    .sort((a, b) => b.mois.localeCompare(a.mois) || b.dateReception.localeCompare(a.dateReception))
   const moisConnus = [...new Set(toutes.map((s) => s.mois))].sort().reverse()
   const entreprisesConnues = [...new Set(toutes.map((s) => s.entreprise))].sort((a, b) => a.localeCompare(b))
   const traitees = toutes.filter(
@@ -1473,7 +1616,16 @@ function CarteHistorique({ entrepriseInitiale = '' }: { entrepriseInitiale?: str
   const projetIds = [...new Set(traitees.map((s) => s.projetId))]
 
   return (
-    <Card titre="Historique — par projet">
+    <Card
+      titre={
+        titre ||
+        (projetId
+          ? 'Historique des situations — ce chantier'
+          : entrepriseCle
+            ? 'Historique des situations — tous ses chantiers'
+            : 'Historique — par projet')
+      }
+    >
       {toutes.length > 0 && (
         <div className="toolbar" style={{ marginTop: 0 }}>
           <Select
@@ -1484,14 +1636,18 @@ function CarteHistorique({ entrepriseInitiale = '' }: { entrepriseInitiale?: str
               ...moisConnus.map((m) => ({ value: m, label: fmtMois(m) })),
             ]}
           />
-          <Select
-            value={filtreEntreprise}
-            onChange={setFiltreEntreprise}
-            options={[
-              { value: '', label: 'Toutes les entreprises' },
-              ...entreprisesConnues.map((e) => ({ value: e, label: e })),
-            ]}
-          />
+          {/* une seule entreprise en périmètre : le Select ne proposerait qu'un
+              choix et son seul effet serait de pouvoir se tromper */}
+          {entreprisesConnues.length > 1 && (
+            <Select
+              value={filtreEntreprise}
+              onChange={setFiltreEntreprise}
+              options={[
+                { value: '', label: 'Toutes les entreprises' },
+                ...entreprisesConnues.map((e) => ({ value: e, label: e })),
+              ]}
+            />
+          )}
           <span className="muted small">
             {traitees.length} situation{traitees.length > 1 ? 's' : ''}
             {filtre ? ` sur ${toutes.length}` : ''}
@@ -1645,7 +1801,7 @@ function CarteHistorique({ entrepriseInitiale = '' }: { entrepriseInitiale?: str
 // ---------- situations attendues (marchés actifs) ----------
 // le critère « situation du mois » vit dans src/entreprise.ts (5.20)
 
-function CarteAttendues() {
+export function CarteAttendues() {
   const { state } = useStore()
   const today = useToday()
   const moisCourant = monthKey(today)
@@ -1780,7 +1936,7 @@ const LIBELLE_RG: Record<StatutRG, { label: string; tone: 'ok' | 'warn' | 'dange
   liberee: { label: 'libérée', tone: 'ok' },
 }
 
-function CarteRetenues() {
+export function CarteRetenues() {
   const { state, update } = useStore()
   const today = useToday()
   const marches = state.marches.filter((m) => (m.tauxRG || 0) > 0)
@@ -1878,79 +2034,22 @@ function CarteRetenues() {
   )
 }
 
-/** T6 — les sous-vues ont une ADRESSE : `#/situations/attendues` ouvre
- *  l'onglet Attendues, comme `#/projets/:id/chantier` ouvre l'onglet
- *  Chantier. En `useState` local, tous les liens venus d'ailleurs (fiche
- *  entreprise, alertes) atterrissaient sur « À vérifier », charge à la
- *  personne de retrouver l'onglet qu'on lui avait promis. */
-const ONGLETS_SITUATIONS = ['verifier', 'attendues', 'historique', 'rg']
-
-export default function Situations() {
-  // quatre tâches distinctes → quatre sous-vues (audit simplification) ;
-  // l'import manuel de la routine devient un dépannage replié
-  const { state } = useStore()
-  const route = useRoute()
-  const vue = ONGLETS_SITUATIONS.includes(route[1] || '') ? route[1] : 'verifier'
-  // Deux routes profondes, distinguées par le SEUL segment `route[2]` — et
-  // elles ne peuvent pas se confondre : aucun identifiant ne vaut « chercher ».
-  //   · `#/situations/<onglet>/chercher/<entreprise>` (palette « / ») : la
-  //     palette envoie déjà sur le BON onglet en portant le nom de
-  //     l'entreprise ; sans cette lecture, l'onglet était bon et le filtre
-  //     vide (T6, parcours 9).
-  //   · `#/situations/<onglet>/<id>` (alerte « situation à vérifier », écrite
-  //     par alerts.ts) : l'identifiant voyageait depuis le début et personne
-  //     ne le lisait — le lien déposait en haut de la liste NON filtrée, à
-  //     retrouver la ligne à l'œil. C'est la carte qui met la ligne en
-  //     évidence, ici on ne fait que découper l'adresse.
-  const entrepriseRoute = route[2] === 'chercher' ? route[3] || '' : ''
-  const idRoute = route[2] && route[2] !== 'chercher' ? route[2] : ''
-  const nbAVerifier = state.situations.filter((s) => s.statut === 'a_verifier').length
-  return (
-    <Page
-      titre="Situations de travaux"
-      sousTitre="Les entreprises envoient à situations@ ; vous vérifiez et visez."
-    >
-      <Tabs
-        tabs={[
-          { id: 'verifier', label: nbAVerifier > 0 ? `À vérifier (${nbAVerifier})` : 'À vérifier' },
-          { id: 'attendues', label: 'Attendues' },
-          { id: 'historique', label: 'Historique' },
-          { id: 'rg', label: 'Retenues de garantie' },
-        ]}
-        actif={vue}
-        onSelect={(id) => navigate(`/situations/${id}`)}
-      />
-      {vue === 'verifier' && (
-        <>
-          <div className="pill-note">
-            La maîtrise d'œuvre porte le risque sur le délai de paiement : la date limite de
-            vérification est calculée d'après le délai du marché (15 j par défaut).
-          </div>
-          {/* `key` : arriver depuis une AUTRE alerte (ou une autre entreprise)
-              repose le filtre et la mise en évidence — sans lui, le second
-              lien laisserait l'état du premier en place */}
-          <CarteAVerifier
-            key={`${idRoute}|${entrepriseRoute}`}
-            cibleId={idRoute}
-            entrepriseInitiale={entrepriseRoute}
-          />
-          <details style={{ marginTop: 8 }}>
-            <summary className="small" style={{ cursor: 'pointer', color: 'var(--accent)' }}>
-              Dépannage — coller à la main le retour JSON de la routine
-            </summary>
-            <div style={{ marginTop: 8 }}>
-              <CarteImport />
-            </div>
-          </details>
-        </>
-      )}
-      {vue === 'attendues' && <CarteAttendues />}
-      {/* `key` : arriver depuis la palette sur une AUTRE entreprise repose le
-          filtre — sans lui, le second lien laisserait le premier filtre en place */}
-      {vue === 'historique' && (
-        <CarteHistorique key={entrepriseRoute} entrepriseInitiale={entrepriseRoute} />
-      )}
-      {vue === 'rg' && <CarteRetenues />}
-    </Page>
-  )
-}
+// ------------------------------------------------------------
+// FIN DU FICHIER — et plus d'écran.
+// ------------------------------------------------------------
+//
+// Il y avait ici un `export default function Situations()` : une `Page`
+// intitulée « Situations de travaux » et un `<Tabs>` de quatre onglets, avec
+// son propre découpage de `#/situations/<onglet>/<suite>`.
+//
+// Les deux ont disparu, et c'est TOUT ce que la tranche 3 retire de ce
+// fichier. Le découpage de la route a déménagé dans Entreprises.tsx, qui sert
+// désormais les deux adresses (`#/entreprises/situations/<vue>` et l'ancienne
+// `#/situations/<vue>`, mot pour mot la même lecture de `chercher` et de
+// l'identifiant d'alerte). Les quatre cartes, elles, sont exportées au-dessus :
+// pas une ligne de leur code n'a changé d'endroit.
+//
+// Ce fichier n'a donc plus d'export par défaut : `App.tsx` ne le charge plus
+// en `lazy` — il n'y a plus d'écran à charger. Ses deux modales contractuelles
+// (`ModalEdition`, `ModalCertificat`) restent importées par la fiche entreprise
+// et l'onglet Chantier, exactement comme avant.

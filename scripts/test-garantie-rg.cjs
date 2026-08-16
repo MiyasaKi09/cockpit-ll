@@ -178,7 +178,11 @@ function etatAvecMarche(surcharge = {}) {
   assert.match(corps('retenueGarantieMarche'), /garantieDuMarche/, 'retenueGarantieMarche doit décider via garantieDuMarche, pas via cautionRG en direct')
 }
 
-// --- l'écran et le formulaire disent la raison du 0 ------------------------
+// --- la carte du décompte et le formulaire disent la raison du 0 -----------
+//
+// TRANCHE 3 : Situations.tsx n'est plus un écran mais le module de ses
+// cartes, montées en repli par Entreprises. La raison du 0 % s'affiche au
+// même endroit du même code ; c'est le mot « écran » qui était périmé.
 
 {
   const situations = lire('src/modules/Situations.tsx')

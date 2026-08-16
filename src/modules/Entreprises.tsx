@@ -17,29 +17,58 @@
 // fiche disent donc littéralement la même chose — impossible qu'elles
 // divergent, elles lisent le même objet.
 //
-// routes_requises (à câbler dans src/App.tsx, hors de portée de ce module) :
+// ==========================================================================
+// TRANCHE 3 DE LA REFONTE — SITUATIONS EST DEVENU UNE VUE DE CET ÉCRAN.
+// (docs/REFONTE_NAVIGATION.md §2.3, §3.2, §5)
+// ==========================================================================
 //
-//     case 'entreprises':
-//       page = <Entreprises />
-//       break
+// Le plan l'établissait, l'analyse l'a vérifié : les quatre onglets de
+// Situations répondaient déjà à ce que CET écran affiche. « Attendues » est la
+// statistique « Situations attendues » ; « Retenues de garantie » est la
+// colonne « RG à libérer » ; « Historique — par projet » portait dans son
+// titre l'aveu qu'il appartenait au chantier.
 //
-//   · `#/entreprises`        → la liste (route[1] absent)
-//   · `#/entreprises/<id>`   → la fiche EN PAGE (route[1] = clé)
+// CE QUI DISPARAÎT : la destination `#/situations` et ses quatre onglets.
+// CE QUI N'EST PAS AJOUTÉ ICI : aucun onglet. Entreprises n'en a jamais eu et
+// n'en gagne aucun — c'eût été rendre d'une main ce que l'autre retirait, et
+// le compte n'aurait pas bougé d'un endroit.
 //
-//   Un SEUL `case` suffit : le découpage se fait ici, sur `route[1]`, comme
-//   `#/projets/<id>` dans Projets.tsx. La clé est l'id du registre quand il
-//   existe, sinon le nom plié (`fold`) — `useRoute()` décode déjà les
-//   segments, et `navigate` encode : un nom à espaces voyage intact.
+// LA FORME RETENUE, la plus économe des trois essayées :
 //
-//   Entrée de MENU souhaitée : « Entreprises », près de « Situations » —
-//   ce sont les deux faces du même suivi (le mois d'un chantier / le
-//   portefeuille d'un titulaire).
+//   1. « Attendues » et « Retenues de garantie » deviennent des FILTRES DE LA
+//      LISTE QUI EXISTE DÉJÀ. La ligne d'une entreprise porte déjà « 2
+//      situations non reçues » et « RG échue 5 500 € » dans sa colonne « Ce
+//      qui crie aujourd'hui » : filtrer la liste sur ce motif rend exactement
+//      la vue de l'onglet, dans le tableau qu'on lisait déjà. Zéro endroit.
+//   2. Les quatre cartes restent atteignables en REPLI (`<details>`), parce
+//      qu'elles portent des gestes que la ligne d'une liste ne peut pas
+//      porter : valider / rejeter une situation, copier le prompt de relance,
+//      saisir la date de réception d'un marché, marquer une RG libérée. Un
+//      repli n'est pas un endroit (§6 du plan : « on replie, on regroupe ») et
+//      le contrôle de surface ne le compte pas — à raison : il ne s'impose pas
+//      à l'œil, il s'ouvre quand on le demande.
+//   3. L'HISTORIQUE quitte le niveau transverse : la fiche d'une entreprise
+//      monte le SIEN, tous ses chantiers, là où le certificat et le décompte
+//      se réimpriment. `#/situations/historique/chercher/<nom>` — écrite par
+//      l'onglet Chantier et par la palette — ouvre donc cette fiche.
+//
+// routes servies par ce module (le `switch` d'App.tsx en route DEUX sections) :
+//
+//   · `#/entreprises`                              → la liste
+//   · `#/entreprises/<clé>`                        → la fiche EN PAGE
+//   · `#/entreprises/situations/<vue>[/…]`         → la liste, vue dépliée
+//   · `#/situations[/<vue>[/…]]`                   → L'ANCIENNE ADRESSE, servie
+//     telle quelle : `ALIAS_SECTION` allume « Entreprises », et pas un seul
+//     émetteur (alerts.ts, la palette, la fiche entreprise, l'onglet Chantier)
+//     n'a eu à être réécrit. Une route qui cesse de répondre est une
+//     régression ; celle-ci répond, et mène là où le contenu vit désormais.
 //
 // ORDRE D'AFFICHAGE : ce qui demande une action d'abord, jamais l'ordre
 // alphabétique. Le barème vit dans `POIDS_MOTIF` (src/entreprise.ts) pour
 // qu'il se discute au même endroit que ce qu'il classe.
 
 import { useState } from 'react'
+import type { ReactNode } from 'react'
 import { useStore } from '../store'
 import {
   Badge,
@@ -59,10 +88,21 @@ import {
 import { fmtMoney, fold } from '../util'
 import { entreprisesSuivies, syntheseEntreprise, type LigneEntreprise } from '../entreprise'
 import { CorpsFicheEntreprise } from './FicheEntreprise'
-
-/** l'adresse d'une entreprise — encodée, parce qu'une clé de repli est un
- *  NOM (« sarl martin btp ») et qu'un nom porte des espaces */
-const adresseFiche = (cle: string) => `/entreprises/${encodeURIComponent(cle)}`
+// TRANCHE 3 — les quatre vues de situation sont MONTÉES, pas recopiées : un
+// second « Valider » ou un second « Marquer libérée » écrits ici feraient deux
+// chemins pour la même écriture, et le figement du décompte n'a qu'un auteur.
+import {
+  CarteAVerifier,
+  CarteAttendues,
+  CarteHistorique,
+  CarteImport,
+  CarteRetenues,
+  SEGMENT_SITUATIONS,
+  adresseFicheEntreprise,
+  cleEntreprise,
+  estVueSituation,
+  type VueSituation,
+} from './Situations'
 
 // ------------------------------------------------------------
 // « Ce qui crie aujourd'hui » — une colonne, pas six
@@ -123,19 +163,109 @@ function motifsDe(l: LigneEntreprise): { tone: 'danger' | 'warn' | 'info'; texte
 }
 
 // ------------------------------------------------------------
+// Le filtre de la liste — deux des quatre ex-onglets tiennent ici
+// ------------------------------------------------------------
+
+/** ce sur quoi la liste se restreint. Ce n'est PAS un jeu d'onglets : c'est
+ *  une bascule sur les lignes du même tableau, dans les mêmes colonnes — le
+ *  filtre déjà présent (« Seulement ce qui demande une action ») gagne deux
+ *  valeurs, il ne se dédouble pas.
+ *
+ *   · `situation` = l'ancien onglet « Attendues » (la statistique du même nom) ;
+ *   · `rg`        = l'ancien onglet « Retenues de garantie » (la colonne du
+ *                   même nom). */
+type Motif = '' | 'action' | 'situation' | 'rg'
+
+const FILTRES: { valeur: Motif; label: string; titre: string }[] = [
+  { valeur: '', label: 'Toutes', titre: 'Toutes les entreprises suivies, action ou pas' },
+  {
+    valeur: 'action',
+    label: 'Qui demandent une action',
+    titre: 'Visa en retard, situation attendue, RG échue, pénalité à décider, désordre GPA',
+  },
+  {
+    valeur: 'situation',
+    label: 'Situation attendue',
+    titre: 'L’ancien onglet « Attendues » — la situation du mois n’est pas arrivée (critère du 10 du mois)',
+  },
+  {
+    valeur: 'rg',
+    label: 'RG à libérer',
+    titre: 'L’ancien onglet « Retenues de garantie » — garantie de parfait achèvement échue, l’argent est à l’entreprise',
+  },
+]
+
+/** la vue portée par la route décide du filtre : arriver par
+ *  `#/situations/attendues` (alerte « situation attendue non reçue ») doit
+ *  montrer les entreprises concernées, pas la liste entière. */
+const MOTIF_DE_VUE: Partial<Record<VueSituation, Motif>> = { attendues: 'situation', rg: 'rg' }
+
+const retenuParMotif = (l: LigneEntreprise, motif: Motif): boolean =>
+  motif === ''
+    ? true
+    : motif === 'action'
+      ? l.poids > 0
+      : motif === 'situation'
+        ? l.urgences.situationsAttendues > 0
+        : l.urgences.rgALibererHT > 0
+
+// ------------------------------------------------------------
+// Un repli — pas un endroit
+// ------------------------------------------------------------
+
+/** `<details>` dont le contenu ne se MONTE qu'ouvert : quatre cartes de
+ *  situation rendues en permanence sous un pli fermé coûteraient le calcul de
+ *  quatre écrans pour rien. L'état est local et le repli répond au clic —
+ *  `open` piloté sans `onToggle` ferait un pli qui se rouvre tout seul. */
+function Repli({
+  resume,
+  ouvertInitial,
+  children,
+}: {
+  resume: ReactNode
+  ouvertInitial: boolean
+  children: ReactNode
+}) {
+  const [ouvert, setOuvert] = useState(ouvertInitial)
+  return (
+    <details
+      open={ouvert}
+      onToggle={(e) => setOuvert((e.currentTarget as HTMLDetailsElement).open)}
+      style={{ marginTop: 8 }}
+    >
+      <summary className="small" style={{ cursor: 'pointer', color: 'var(--accent)' }}>
+        {resume}
+      </summary>
+      {ouvert && <div style={{ marginTop: 8 }}>{children}</div>}
+    </details>
+  )
+}
+
+// ------------------------------------------------------------
 // La liste
 // ------------------------------------------------------------
 
-function ListeEntreprises() {
+function ListeEntreprises({
+  vue,
+  cibleId,
+  entrepriseInitiale,
+}: {
+  /** la vue de situation demandée par l'adresse, `null` sur `#/entreprises` */
+  vue: VueSituation | null
+  /** `#/situations/verifier/<id>` : la situation à mettre en évidence */
+  cibleId: string
+  /** `#/situations/<vue>/chercher/<entreprise>` : le filtre pré-rempli */
+  entrepriseInitiale: string
+}) {
   const { state } = useStore()
   const today = useToday()
   const lignes = entreprisesSuivies(state, today)
   const [recherche, setRecherche] = useState('')
-  const [seulementAction, setSeulementAction] = useState(false)
+  const [motif, setMotif] = useState<Motif>((vue && MOTIF_DE_VUE[vue]) || '')
 
   const q = fold(recherche)
   const visibles = lignes.filter((l) => {
-    if (seulementAction && l.poids === 0) return false
+    if (!retenuParMotif(l, motif)) return false
     if (!q) return true
     // le nom, mais aussi les lots et les chantiers : on cherche autant
     // « Dubois » que « menuiseries » ou le code du chantier
@@ -154,11 +284,19 @@ function ListeEntreprises() {
   const rgTotale = lignes.reduce((s, l) => s + l.urgences.rgALibererHT, 0)
   const situations = lignes.reduce((s, l) => s + l.urgences.situationsAttendues, 0)
   const engagement = lignes.reduce((s, l) => s + l.montantMarchesHT, 0)
+  /** combien de lignes chaque filtre laisserait — un filtre dont on ne sait
+   *  pas s'il rendra quelque chose se clique pour rien */
+  const compte = (m: Motif) => lignes.filter((l) => retenuParMotif(l, m)).length
+
+  // les compteurs des replis : lus ici pour que le pli FERMÉ dise déjà ce qui
+  // attend derrière — un repli muet est un repli qu'on n'ouvre jamais
+  const aVerifier = state.situations.filter((s) => s.statut === 'a_verifier').length
+  const traitees = state.situations.length - aVerifier
 
   return (
     <Page
       titre="Entreprises"
-      sousTitre="Tous chantiers confondus : ce que chaque titulaire nous doit, et ce que nous lui devons."
+      sousTitre="Tous chantiers confondus : ce que chaque titulaire nous doit, et ce que nous lui devons — situations comprises."
     >
       <div className="grid4" style={{ marginBottom: 12 }}>
         <Stat
@@ -196,14 +334,21 @@ function ListeEntreprises() {
               ariaLabel="Filtrer les entreprises"
             />
           </div>
-          <Btn
-            small
-            kind={seulementAction ? 'primary' : 'default'}
-            onClick={() => setSeulementAction(!seulementAction)}
-            title="N’afficher que les entreprises qui demandent un geste aujourd’hui"
-          >
-            {seulementAction ? '✓ ' : ''}Seulement ce qui demande une action
-          </Btn>
+          {/* le filtre de la liste — et non une rangée d'onglets : c'est le
+              MÊME tableau, les mêmes colonnes, moins de lignes */}
+          {FILTRES.map((f) => (
+            <Btn
+              key={f.valeur || 'tout'}
+              small
+              kind={motif === f.valeur ? 'primary' : 'default'}
+              onClick={() => setMotif(f.valeur)}
+              title={f.titre}
+            >
+              {motif === f.valeur ? '✓ ' : ''}
+              {f.label}
+              {f.valeur !== '' && ` (${compte(f.valeur)})`}
+            </Btn>
+          ))}
         </div>
 
         {visibles.length === 0 ? (
@@ -229,7 +374,7 @@ function ListeEntreprises() {
               return (
                 <tr
                   key={l.cle}
-                  {...ligneActivable(() => navigate(adresseFiche(l.cle)))}
+                  {...ligneActivable(() => navigate(adresseFicheEntreprise(l.cle)))}
                   title={`Ouvrir la fiche de ${l.nom}`}
                   style={{ cursor: 'pointer' }}
                 >
@@ -294,6 +439,74 @@ function ListeEntreprises() {
           petit lot qui bloque le chantier.
         </p>
       </Card>
+
+      {/* ───────────── les quatre vues de situation, en repli ─────────────
+          Elles portent les GESTES que la ligne d'une liste ne peut pas porter.
+          Fermées, elles ne coûtent qu'une ligne ; ouvertes, elles sont mot
+          pour mot les cartes de l'ancien écran Situations — même code, même
+          « Valider », même certificat. L'adresse décide de celle qui s'ouvre. */}
+      <Repli
+        ouvertInitial={vue === 'verifier' || Boolean(cibleId)}
+        resume={
+          aVerifier > 0
+            ? `Situations à vérifier (${aVerifier}) — valider, rejeter, imprimer le décompte`
+            : 'Situations à vérifier — aucune en attente'
+        }
+      >
+        <div className="pill-note">
+          La maîtrise d'œuvre porte le risque sur le délai de paiement : la date limite de
+          vérification est calculée d'après le délai du marché (15 j par défaut).
+        </div>
+        {/* `key` : arriver depuis une AUTRE alerte (ou une autre entreprise)
+            repose le filtre et la mise en évidence — sans lui, le second
+            lien laisserait l'état du premier en place */}
+        <CarteAVerifier
+          key={`${cibleId}|${entrepriseInitiale}`}
+          cibleId={cibleId}
+          entrepriseInitiale={vue === 'verifier' ? entrepriseInitiale : ''}
+        />
+        <details style={{ marginTop: 8 }}>
+          <summary className="small" style={{ cursor: 'pointer', color: 'var(--accent)' }}>
+            Dépannage — coller à la main le retour JSON de la routine
+          </summary>
+          <div style={{ marginTop: 8 }}>
+            <CarteImport />
+          </div>
+        </details>
+      </Repli>
+
+      <Repli
+        ouvertInitial={vue === 'attendues'}
+        resume={
+          situations > 0
+            ? `Situations attendues du mois (${situations}) — relancer, marché par marché`
+            : 'Situations attendues du mois — tout est arrivé'
+        }
+      >
+        <CarteAttendues />
+      </Repli>
+
+      <Repli
+        ouvertInitial={vue === 'rg'}
+        resume={
+          rgTotale > 0
+            ? `Retenues de garantie — ${fmtMoney(rgTotale)} échus à rendre`
+            : 'Retenues de garantie — réception, type de garantie, levée'
+        }
+      >
+        <CarteRetenues />
+      </Repli>
+
+      {/* l'historique COMPLET : il ne sert plus que l'adresse qui ne porte
+          aucun filtre. Dès qu'un nom d'entreprise voyage avec elle, c'est la
+          FICHE de cette entreprise qui s'ouvre — l'historique y vit désormais,
+          à côté des marchés qu'il certifie. */}
+      <Repli
+        ouvertInitial={vue === 'historique'}
+        resume={`Historique des situations, tous chantiers (${traitees}) — réimpression du décompte et du certificat`}
+      >
+        <CarteHistorique />
+      </Repli>
     </Page>
   )
 }
@@ -319,15 +532,78 @@ function PageFiche({ cle }: { cle: string }) {
       <Card>
         <CorpsFicheEntreprise nomOuId={cle} enPage />
       </Card>
+      {/* TRANCHE 3 — « Historique — par projet » rejoint le titulaire : c'est
+          ici que le décompte figé se réimprime et que le certificat de
+          paiement s'émet (`ModalCertificat`, un seul auteur). La carte est
+          celle de Situations.tsx, restreinte à cette entreprise par
+          `marchesDe` — aucun rapprochement réécrit.
+          Sans marché, aucune situation n'est possible : la carte ne s'affiche
+          pas plutôt que de dire « rien » sous une fiche qui le dit déjà. */}
+      {syn.marches.length > 0 && <CarteHistorique entrepriseCle={cle} />}
     </Page>
   )
 }
 
+// ------------------------------------------------------------
+// Le découpage de l'adresse
+// ------------------------------------------------------------
+
+/** les segments qui suivent `situations`, quelle que soit la porte empruntée :
+ *  `#/situations/<vue>/…` (ancienne adresse, toujours servie) ou
+ *  `#/entreprises/situations/<vue>/…` (la nouvelle). `null` = ce n'est pas une
+ *  vue de situation, `route[1]` est donc une clé d'entreprise. */
+function segmentsDeSituation(route: string[]): string[] | null {
+  if (route[0] === SEGMENT_SITUATIONS) return route.slice(1)
+  if (route[1] === SEGMENT_SITUATIONS) return route.slice(2)
+  return null
+}
+
 export default function Entreprises() {
   const route = useRoute()
+  const { state } = useStore()
+  const segments = segmentsDeSituation(route)
+
+  if (segments) {
+    // une adresse de situation sans vue lisible vaut « À vérifier », comme
+    // l'ancien écran : `#/situations` tout court y déposait déjà
+    const vue: VueSituation = estVueSituation(segments[0]) ? segments[0] : 'verifier'
+    // Deux routes profondes, distinguées par le SEUL segment qui suit la vue —
+    // et elles ne peuvent pas se confondre : aucun identifiant ne vaut
+    // « chercher ». Cette lecture est celle de l'ancien écran, déplacée d'un
+    // fichier, pas réécrite.
+    //   · `<vue>/chercher/<entreprise>` (palette « / ») : le filtre arrive
+    //     pré-rempli ;
+    //   · `<vue>/<id>` (alerte « situation à vérifier », alerts.ts) : la ligne
+    //     est mise en évidence et ramenée à l'écran.
+    const entrepriseRoute = segments[1] === 'chercher' ? segments[2] || '' : ''
+    const idRoute = segments[1] && segments[1] !== 'chercher' ? segments[1] : ''
+
+    // L'HISTORIQUE D'UNE ENTREPRISE NOMMÉE EST SA FICHE. C'est le déménagement
+    // du §3.2 : le titre « Historique — par projet » disait que ces lignes
+    // appartenaient au chantier et au titulaire, pas à une liste transverse.
+    // L'onglet Chantier et la palette écrivent tous deux cette adresse.
+    if (vue === 'historique' && entrepriseRoute) {
+      const cle = cleEntreprise(state, entrepriseRoute)
+      return <PageFiche key={cle} cle={cle} />
+    }
+
+    return (
+      <ListeEntreprises
+        key={`${vue}|${idRoute}|${entrepriseRoute}`}
+        vue={vue}
+        cibleId={idRoute}
+        entrepriseInitiale={entrepriseRoute}
+      />
+    )
+  }
+
   const cle = route[1] || ''
   // `key` : passer d'une entreprise à l'autre par la barre d'adresse ou la
   // recherche « / » doit REMONTER la fiche, pas garder l'état ouvert de la
   // précédente (même précaution que les cartes de Situations.tsx)
-  return cle ? <PageFiche key={cle} cle={cle} /> : <ListeEntreprises />
+  return cle ? (
+    <PageFiche key={cle} cle={cle} />
+  ) : (
+    <ListeEntreprises vue={null} cibleId="" entrepriseInitiale="" />
+  )
 }

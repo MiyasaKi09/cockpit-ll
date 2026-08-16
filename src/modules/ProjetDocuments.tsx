@@ -4,6 +4,25 @@
 // navigateur (Chrome / Edge). Dépôt → renommage automatique selon
 // la nomenclature → rangement dans le bon sous-dossier ; le suivi
 // des dossiers donne une lecture déterministe de l'avancement.
+//
+// TRANCHE 3 DE LA REFONTE (docs/REFONTE_NAVIGATION.md §2.2, §3.2, §5).
+// LE REGISTRE DOCUMENTAIRE A REJOINT LE PROJET, ET C'EST ICI.
+//
+// « Tous les documents » était un onglet de la destination Documents : le
+// registre du projet avec un sélecteur de projet devant, qu'on réglait
+// toujours sur le même projet — la signature du morceau exilé. L'onglet
+// disparaît ; sa carte est MONTÉE ici, restreinte à ce chantier.
+//
+// Aucun onglet n'est ajouté pour l'accueillir : cette vue est déjà celle du
+// sous-onglet « Tous les documents » de la fiche projet, et le plan exige d'en
+// retirer, pas d'en ajouter.
+//
+// Ce qui disparaît AUSSI : `CarteRegistreProjet`, la carte que ce fichier
+// portait en propre. C'était un second registre — même table, mais sans
+// recherche, sans filtre catégorie/phase, sans bouton « Ouvrir » et sans
+// fiche —, donc deux réponses possibles à « qu'a-t-on reçu sur ce chantier ».
+// On monte désormais LA carte du registre (`CarteTous`, src/modules/
+// Documents.tsx), avec tous ses gestes.
 
 import { useCallback, useEffect, useState } from 'react'
 import type { PhaseCode, Projet } from '../types'
@@ -13,7 +32,6 @@ import { Badge, Btn, Card, EmptyState, Field, Select, Table, TextInput } from '.
 import {
   CATEGORIES_DOC,
   DOSSIER_PAR_CATEGORIE,
-  LIBELLES_STATUT,
   chercherDoublon,
   classerFichier,
   creerDocument,
@@ -21,7 +39,10 @@ import {
   type PropositionClassement,
 } from '../registre'
 import { LIBELLES_PHASES, PHASES_ORDRE } from '../miqcp'
-import { fmtDate, todayISO } from '../util'
+// TRANCHE 3 — LE registre, importé : une seule table, un seul « Ouvrir », une
+// seule fiche de document. Le `projetId` fait le périmètre, et le sélecteur de
+// projet du registre transverse disparaît puisqu'on est dans le projet.
+import { CarteTous } from './Documents'
 import {
   ARBORESCENCE,
   choisirRacine as choisirRacineFS,
@@ -237,14 +258,20 @@ export default function ProjetDocuments({ projet: p }: { projet: Projet }) {
     .sort((a, b) => (b.dernier || '').localeCompare(a.dernier || ''))[0]
 
   if (!supporteFS) {
+    // le rangement ne marche pas sur ce navigateur ; LE REGISTRE, lui, se lit
+    // partout — le priver de sa lecture parce que le dépôt est indisponible
+    // serait perdre l'endroit qu'on vient tout juste de lui donner
     return (
-      <Card titre="Documents du projet">
-        <div className="pill-note">
-          Le rangement automatique nécessite Chrome ou Edge (API File System Access). En attendant :
-          déposez les fichiers dans la <a href="#/documents">boîte d'arrivée</a> (le nom conforme est
-          proposé) et rangez-les via le dossier Drive du projet (onglet Ressources).
-        </div>
-      </Card>
+      <>
+        <Card titre="Documents du projet">
+          <div className="pill-note">
+            Le rangement automatique nécessite Chrome ou Edge (API File System Access). En attendant :
+            déposez les fichiers dans la <a href="#/documents">boîte d'arrivée</a> (le nom conforme est
+            proposé) et rangez-les via le dossier Drive du projet (onglet Ressources).
+          </div>
+        </Card>
+        <CarteTous projetId={p.id} />
+      </>
     )
   }
 
@@ -381,41 +408,11 @@ export default function ProjetDocuments({ projet: p }: { projet: Projet }) {
         </Card>
       )}
 
-      <CarteRegistreProjet projetId={p.id} />
+      {/* LE registre, restreint à ce chantier. Chaque import (CCTP, DPGF, CR,
+          photo, dépôt) y laisse une entrée traçable — cherchable, filtrable par
+          catégorie et par phase, ouvrable dans le Drive, et dont la fiche dit
+          la source, la version et qui a validé. */}
+      <CarteTous projetId={p.id} />
     </>
-  )
-}
-
-/** les documents du registre rattachés à CE projet — chaque import (CCTP,
- *  DPGF, CR, photo, dépôt) laisse une entrée traçable ici */
-function CarteRegistreProjet({ projetId }: { projetId: string }) {
-  const { state } = useStore()
-  const docs = state.registreDocuments
-    .filter((d) => d.projetId === projetId && d.statut !== 'rejete')
-    .slice()
-    .sort((a, b) => b.recuLe.localeCompare(a.recuLe) || b.id.localeCompare(a.id))
-  if (docs.length === 0) return null
-  return (
-    <Card
-      titre={`Registre — ${docs.length} document(s) du projet`}
-      actions={<a className="small" href="#/documents/tous">Tout le registre →</a>}
-    >
-      <Table compact head={['Document', 'Catégorie', 'Statut', 'Reçu le']}>
-        {docs.map((d) => (
-          <tr key={d.id}>
-            <td>
-              {d.titre}
-              {d.cheminDrive && <div className="small muted mono">{d.cheminDrive}</div>}
-            </td>
-            <td>{d.categorie}</td>
-            <td>
-              <Badge tone={d.statut === 'remplace' ? 'muted' : 'ok'}>{LIBELLES_STATUT[d.statut]}</Badge>
-              {d.version > 1 && <> <Badge tone="info">v{d.version}</Badge></>}
-            </td>
-            <td className="small muted">{fmtDate(d.recuLe)}</td>
-          </tr>
-        ))}
-      </Table>
-    </Card>
   )
 }
